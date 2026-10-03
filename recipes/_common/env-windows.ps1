@@ -319,8 +319,16 @@ function Invoke-CvcMsysAutotoolsBuild {
     if ($Jobs -le 0) { $Jobs = 1 }
 
     $bash        = Get-CvcGitBash
-    $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
+    # Install prefix in drive-letter form with forward slashes (C:/...), NOT the
+    # MSYS /c/... form. The toolchain is NATIVE MinGW (mingw-w64-gcc), which
+    # cannot open /c/... at all; `make install` runs the native ranlib on the
+    # installed static archive, and recipes/x264 hit exactly that:
+    #   ranlib /c/.../install/lib/libx264.a  ->  "No such file"
+    # A native-readable prefix needs no translation on any path. MSYS install/
+    # mkdir accept either form, and Invoke-CvcRewriteInstallPaths relocates C:/
+    # in .pc files.
+    $winPrefix   = ($env:CVC_INSTALL_DIR -replace '\\', '/')
     # Put the staged build tools first on PATH. host_tools (m4/autoconf/automake/
     # libtool/the compiler) are staged into the BUILD prefix; link deps and make
     # land in the DEPS prefix — search BOTH, since the old form looked only in
@@ -335,15 +343,23 @@ function Invoke-CvcMsysAutotoolsBuild {
     $msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
     $depsFlag     = if ($msysToolBins) { "export PATH='${msysToolBins}:'`$PATH; " } else { '' }
 
-    # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
-    # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
-    # Without MSYSTEM set, MSYS2's bash defaults to the plain msys
-    # environment where gcc is not present.  MSYS_NO_PATHCONV=1
-    # prevents MSYS from mangling Windows-style arguments passed to
-    # non-MSYS binaries invoked from configure/libtool.
+    # The MinGW-w64 64-bit subsystem: configure then sees build=*-mingw*, which
+    # is how libtool knows it is really running under MSYS and must translate
+    # MSYS paths for the native toolchain. The compiler itself is the pinned
+    # mingw-w64-gcc in the build prefix ($depsFlag), not /mingw64/bin.
+    #
+    # Leave MSYS2's argument path conversion ON (no MSYS_NO_PATHCONV), as every
+    # MSYS2 MinGW package build does: libtool's msys->w32 translation is
+    # `cmd //c echo <path>`, which relies on MSYS turning `//c` into `/c`, and it
+    # runs for every static archive it creates (tool_oldlib) and installs. The
+    # drive-letter --prefix above is untouched by the conversion either way.
     $env:MSYSTEM         = 'MINGW64'
-    $env:MSYS_NO_PATHCONV = '1'
+    Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
     $env:CHERE_INVOKING  = '1'
+    # MSYS2's minimal PATH, never the inherited Windows one: a runner's PATH
+    # carries Strawberry Perl's c\bin (its own x86_64-w64-mingw32-gcc and make)
+    # and MSVC, either of which configure would happily pick up.
+    $env:MSYS2_PATH_TYPE = 'minimal'
 
     # Clear MSVC compiler env inherited from the outer PowerShell
     # session — env-windows.ps1 sets CC=cl / CXX=cl for Invoke-CvcCMakeBuild,
@@ -393,7 +409,7 @@ function Invoke-CvcMsysAutotoolsBuild {
     # Build one big command line for bash; the caller-provided extras
     # win over defaults because they come last.
     $extras   = ($ConfigureArgs -join ' ')
-    $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host='$HostTriple' $sharedFlags $extras"
+    $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$winPrefix' --host='$HostTriple' $sharedFlags $extras"
     Write-Host "cvcpkg: bash -lc `"$cmd`""
     & $bash -lc $cmd
     if ($LASTEXITCODE -ne 0) {
