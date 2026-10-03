@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: m4
   upstream_version: "1.4.19"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -23,7 +23,19 @@ source:
 patches: []
 
 depends:
-  build: []
+  # Windows only: m4 is built for the MSYS subsystem (it runs inside MSYS2's
+  # bash, under autoconf and gmp's configure) by the MSYS gcc of the MSYS2
+  # bootstrap, driven by the cvcpkg make. m4.exe links msys-2.0.dll, so msys2
+  # is also what it needs to run; make is build-only. Unix builds use the host
+  # toolchain, as before.
+  build:
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+  runtime:
+    - name: msys2
+      platforms: [windows]
   host_tools: []
 
 build:
@@ -44,5 +56,6 @@ build:
 
 package:
   files:
-    - bin/m4
+    # bin/m4 on unix, bin/m4.exe on windows.
+    - bin/m4*
     - share/man/man1/m4*

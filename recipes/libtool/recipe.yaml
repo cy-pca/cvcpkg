@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: libtool
   upstream_version: "2.5.4"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -23,7 +23,20 @@ source:
 patches: []
 
 depends:
-  build: []
+  # Windows only: libtool is built for the MSYS subsystem by the MSYS gcc of the
+  # MSYS2 bootstrap, with the cvcpkg make and m4 (host_tools stage only when
+  # cross-compiling, so a native Windows build needs m4 as a real build dep).
+  # Its scripts and libltdl run inside MSYS2, hence msys2 at runtime too.
+  build:
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: m4
+      platforms: [windows]
+  runtime:
+    - name: msys2
+      platforms: [windows]
   host_tools:
     - m4
 

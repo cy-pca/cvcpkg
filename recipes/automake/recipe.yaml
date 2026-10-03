@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: automake
   upstream_version: "1.17"
-  cvc_revision: 10
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -28,7 +28,15 @@ depends:
   runtime: []
   build:
     - autoconf
-    - perl
+    # Windows builds (and runs) automake inside the MSYS subsystem of the MSYS2
+    # bootstrap, with its MSYS perl; the cvcpkg perl there is a native Strawberry
+    # Perl that MSYS-path scripts cannot drive. make drives the Windows build.
+    - name: perl
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
     # automake's configure runs `autoconf` to prove the toolchain works, so a
     # GNU m4 must be present in the build prefix: the (now relocatable) autoconf
     # resolves its m4 as <prefix>/bin/m4. m4 rides in transitively via autoconf,

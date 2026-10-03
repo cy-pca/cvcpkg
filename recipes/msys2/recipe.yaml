@@ -1,30 +1,27 @@
 schema_version: 1
 recipe:
   name: msys2
-  upstream_version: "20250221"
-  cvc_revision: 1
+  upstream_version: "20260927"
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: >-
-    MSYS2 — a software distribution and build platform for Windows.
-    Provides a Unix-like POSIX shell (bash), GNU make, and the
-    MinGW-w64 GCC toolchain.  Required as a host tool for
-    autotools-based and Meson-based builds on Windows.  Use
-    Invoke-CvcMsysAutotoolsBuild or Invoke-CvcMesonBuild in build.ps1.
-    Additional tools (m4, autoconf, automake, libtool, meson, ninja)
-    are managed by their own cvcpkg recipes; declare those as
-    host_tools rather than relying on pacman.
+    MSYS2 bootstrap for Windows autotools builds — the POSIX shell and the
+    MSYS-subsystem C compiler that the MSYS host tools (make, m4, autoconf,
+    automake, libtool) are built with, plus the MSYS perl the autotools run on.
+    Deliberately minimal: the sha256-pinned MSYS2 base archive plus the MSYS
+    gcc, perl and diffutils packages. make, m4, autoconf, automake, libtool and
+    the MinGW-w64 gcc that builds the actual Windows libraries each come from
+    their own cvcpkg recipe — never from pacman here. Declare it under
+    depends.build, scoped to windows, in any recipe whose build.ps1 drives
+    Invoke-CvcMsysHostToolBuild or Invoke-CvcMsysAutotoolsBuild.
   homepage: https://www.msys2.org/
   license: BSD-3-Clause
 
-# MSYS2 is a Windows-native build environment used only at build time.
-# env-windows.ps1's Get-CvcGitBash locates bash.exe by checking (in
-# order): CVC_MSYS2_DIR env var, CVC_DEPS_PREFIX\msys2, C:\msys64,
-# and finally Git Bash.
-
+# The build script downloads the sha256-pinned msys2-base sfx itself (a 7-Zip
+# self-extractor, not an archive cvcpkg's tarball source can unpack).
 source:
-  # The build script handles downloading the MSYS2 installer directly.
   type: prebuilt
 
 patches: []
@@ -41,37 +38,30 @@ build:
       script: build.ps1
 
 package:
-  # We only ship a small version marker; the full MSYS2 tree lives at
-  # C:\msys64 (or the path chosen by --root in the installer).  This
-  # keeps bundle sizes reasonable — MSYS2 is a system prerequisite,
-  # not a library to be bundled with every consumer package.
+  # The whole MSYS2 root, staged at <prefix>\msys2 — where env-windows.ps1's
+  # Get-CvcGitBash looks (build prefix first, then deps prefix) before any
+  # ambient C:\msys64.
   files:
     - msys2/
 
-
 notes:
-  - title: "System-level installation"
+  - title: "What is in the bootstrap"
     platforms: [windows]
     description: >-
-      The build script installs MSYS2 into
-      %CVC_INSTALL_DIR%\msys2 via the official NSIS silent installer.
-      If MSYS2 is already present at that path the installer is
-      skipped and the existing installation is updated instead.
-      Only base-devel (make, patch, diffutils, POSIX utilities) and
-      mingw-w64-x86_64-toolchain (gcc, g++, binutils) are installed
-      via pacman.  Autotools (m4, autoconf, automake, libtool),
-      meson, ninja, and pkg-config come from their own cvcpkg recipes.
-  - title: "Large download (~500 MB)"
+      msys2-base-x86_64-20260927 (sha256-pinned), brought current with
+      `pacman -Syuu`, plus the MSYS packages gcc, perl and diffutils. No make
+      and no autotools: those come from the cvcpkg make/m4/autoconf/automake/
+      libtool recipes, so the recipes' tool probes check the cvcpkg copies
+      rather than being satisfied by ambient ones.
+  - title: "Large download (~300 MB on disk)"
     platforms: [windows]
     description: >-
-      The MSYS2 base installer is ~90 MB; post-install package updates
-      bring the on-disk footprint to ~500 MB.
+      The base archive is ~43 MB; the MSYS gcc toolchain and perl bring the
+      staged tree to a few hundred MB. It is build-time only.
   - title: "bash.exe discovery"
     platforms: [windows]
     description: >-
       env-windows.ps1's Get-CvcGitBash locates bash.exe by checking
-      (1) CVC_MSYS2_DIR env var, (2) CVC_DEPS_PREFIX\msys2 (recipe
-      install path), (3) C:\msys64, (4) Git Bash.  Downstream recipes
-      call Invoke-CvcMsysAutotoolsBuild or Invoke-CvcMesonBuild from
-      their build.ps1 and declare required tools (autoconf, meson,
-      etc.) as host_tools in recipe.yaml.
+      (1) CVC_MSYS2_DIR, (2) CVC_BUILD_PREFIX\msys2, (3) CVC_DEPS_PREFIX\msys2,
+      (4) C:\msys64, (5) Git Bash. A GitHub-hosted image's C:\msys64 is bare
+      (pacman + base only: no gcc, no make), so recipes must declare this one.

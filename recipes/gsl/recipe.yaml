@@ -43,6 +43,12 @@ depends:
       platforms: [windows]
     - name: mingw-w64-gcc
       platforms: [windows]
+    # The shell: the MSYS2 bootstrap (MSYS bash + coreutils). Declared rather
+    # than inherited from an ambient C:\msys64, which on a GitHub-hosted image is
+    # bare (no gcc, no make). It also rides in through m4/make/autoconf/..., but
+    # build.ps1 drives it directly, so say so.
+    - name: msys2
+      platforms: [windows]
   runtime: []
   host_tools: []
 

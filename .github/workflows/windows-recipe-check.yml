@@ -67,6 +67,14 @@ on:
       - "recipes/gmp/**"
       - "recipes/mpfr/**"
       - "recipes/gsl/**"
+      # ...and the toolchain the default gsl build closure builds from source on
+      # the clean runner: the MSYS2 bootstrap and the MSYS host tools.
+      - "recipes/msys2/**"
+      - "recipes/make/**"
+      - "recipes/m4/**"
+      - "recipes/autoconf/**"
+      - "recipes/automake/**"
+      - "recipes/libtool/**"
 
 concurrency:
   group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}
@@ -174,7 +182,8 @@ jobs:
             # --with-deps: build the recipe's whole closure from source first, in
             # topological order. The default gsl (and the other MSYS autotools
             # recipes) need m4/autoconf/automake/libtool/make + mingw-w64-gcc built
-            # and staged into the build prefix -- host_tools stage only when
+            # and staged into the build prefix, on top of the msys2 bootstrap (the
+            # runner's own C:\msys64 is bare: no gcc, no make) -- host_tools stage only when
             # CROSS-compiling, so a native Windows build gets them via depends.build
             # (scoped to windows) and only --with-deps builds those. None of that
             # chain declares a test:, so --with-deps runs no dep smoke tests here
