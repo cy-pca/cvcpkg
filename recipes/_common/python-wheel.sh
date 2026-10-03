@@ -125,15 +125,41 @@ cvc_python_check() {
 
   # sysconfig would report the *interpreter's* own prefix, not the staging dir
   # we just installed into, so locate the staged site-packages directly.  Two
-  # layouts exist: lib/pythonX.Y[t]/site-packages (POSIX) and Lib/site-packages
-  # (Windows).  A glob over exactly those, not `find -print -quit`: -quit is a
-  # GNU findutils extension the *BSD find lacks (it would abort under set -e).
-  libdir=""
-  for libdir in "${CVC_INSTALL_DIR}"/lib/python*/site-packages "${CVC_INSTALL_DIR}"/Lib/site-packages; do
-    [ -d "${libdir}" ] && break; libdir=""
-  done
+  # POSIX layouts exist, ONE PER ABI: a cp313 column belongs in
+  # lib/python3.13/site-packages, a cp313t column in lib/python3.13t/site-packages
+  # (Windows is Lib/site-packages, with no free-threaded split).  Resolve the dir
+  # by this column's EXACT ABI, never a `lib/python*` glob: a bare glob also
+  # matches the *sibling* ABI's dir, so a cp313 package that mislaid itself into
+  # lib/python3.13t/ -- which happens when a free-threaded interpreter shadows
+  # python3.13 in the build prefix at pip-install time -- would still be found,
+  # the import below would still pass, and we would publish an artifact that no
+  # standard-python3.13 consumer can import (it scans only lib/python3.13/).  That
+  # is the pycparser-cp313 mislaid-artifact bug.  Pinning the path turns it into a
+  # loud failure here instead of a silent publish.
+  local _abi="${CVC_PYTHON_ABI:?CVC_PYTHON_ABI must be set}"
+  local _d="${_abi#cp}" _t=""
+  case "${_d}" in *t) _t="t"; _d="${_d%t}" ;; esac
+  local _pymm="${_d:0:1}.${_d:1}"                    # cp313[t] -> 3.13
+  local _sib_t=""                                    # the sibling ABI it must NOT land in
+  if [ -z "${_t}" ]; then _sib_t="t"; fi
+  local _want="${CVC_INSTALL_DIR}/lib/python${_pymm}${_t}/site-packages"
+  local _sibling="${CVC_INSTALL_DIR}/lib/python${_pymm}${_sib_t}/site-packages"
+  if [ -d "${_want}" ]; then
+    libdir="${_want}"
+  elif [ -d "${CVC_INSTALL_DIR}/Lib/site-packages" ]; then
+    libdir="${CVC_INSTALL_DIR}/Lib/site-packages"    # Windows: single scheme, no ABI split
+  else
+    libdir=""
+  fi
   if [ -z "${libdir}" ]; then
-    echo "cvc_python_check: no site-packages found under ${CVC_INSTALL_DIR}" >&2
+    if [ -d "${_sibling}" ]; then
+      echo "cvc_python_check: ${_abi} staged its package under lib/python${_pymm}${_sib_t}/site-packages," >&2
+      echo "  but a ${_abi} column must install under lib/python${_pymm}${_t}/site-packages -- a mislaid" >&2
+      echo "  artifact a standard python${_pymm} consumer cannot import.  A python${_pymm}${_sib_t} interpreter" >&2
+      echo "  shadowed python${_pymm} at pip-install time; check the build prefix's bin/python${_pymm}." >&2
+    else
+      echo "cvc_python_check: no site-packages found under ${CVC_INSTALL_DIR}" >&2
+    fi
     return 1
   fi
   export PYTHONPATH="${libdir}${PYTHONPATH:+:${PYTHONPATH}}"

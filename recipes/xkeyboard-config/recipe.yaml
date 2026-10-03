@@ -1,0 +1,42 @@
+schema_version: 1
+recipe:
+  name: xkeyboard-config
+  upstream_version: "2.48"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.freedesktop.org/wiki/Software/XKeyboardConfig/
+  license: MIT
+  tags: [x11, data]
+  description: >-
+    XKB keyboard configuration data (rules, symbols, types, compat, geometry)
+    installed under share/X11/xkb.  Runtime data for xkbcomp / the X server /
+    libxkbcommon.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/archive/individual/data/xkeyboard-config/xkeyboard-config-2.48.tar.xz
+  sha256: "b77041324f0109f77161ee43743fe04baa485866af8460d31e476ad3f7648fd5"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    - perl
+    - python311
+  runtime: []
+  host_tools: []
+
+package:
+  files:
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh

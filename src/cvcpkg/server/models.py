@@ -8,6 +8,15 @@ from __future__ import annotations
 import datetime
 from enum import Enum
 
+from cvcpkg.optional import require_pydantic
+
+# pydantic lives in the [server] extra and this module imports it at module
+# scope.  Check first so the state-directory commands that get here without
+# ever opening a database — `cvcpkg-server bootstrap`, `token create`, `audit
+# log`, `audit verify`, all of which only want the enums below — name the extra
+# to install instead of dying with "No module named 'pydantic'".
+require_pydantic()
+
 from pydantic import BaseModel, Field
 
 # Moved to the dependency-free cvcpkg.orgs so the CLI can validate slugs

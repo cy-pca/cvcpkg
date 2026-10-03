@@ -1,0 +1,66 @@
+schema_version: 1
+
+recipe:
+  name: sevenzip
+  upstream_version: "26.03"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.7-zip.org/
+  license: LGPL-2.1-or-later AND BSD-3-Clause
+  description: >-
+    7-Zip console — a host tool providing `7z` (and `7zz` on POSIX) for
+    recipes that need to extract .7z / .rar / .iso / .xz archives.  The recipe
+    name is `sevenzip` because recipe names must begin with a letter (`7zip` is
+    not a legal name).  Prebuilt official binaries are staged on
+    linux/macos/windows; the BSDs and Haiku build the console from source.
+  tags: [tools]
+
+source:
+  # The official source tarball is fetched + extracted by cvcpkg (Python lzma),
+  # so the BSDs/Haiku can build from it with no curl/xz/tar in the build env
+  # (OpenBSD base ships none of those).  linux/macos/windows ignore the source
+  # and stage the official PREBUILT binary in their build scripts instead.
+  type: tarball
+  url: https://github.com/ip7z/7zip/releases/download/26.03/7z2603-src.tar.xz
+  sha256: "9cbde5099c6deb73691b0579063da5827522ccbbcba3f0020fd04e8c8c16c0d4"
+  strip_components: 0
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build-posix.sh
+    - platform: macos
+      script: build-posix.sh
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build-src.sh
+    - platform: openbsd
+      script: build-src.sh
+    - platform: netbsd
+      script: build-src.sh
+    - platform: haiku
+      script: build-src.sh
+
+package:
+  files:
+    - bin/7z*
+  cmake_packages: []
+
+notes:
+  - title: "Tool name"
+    description: >-
+      POSIX installs `7zz` (the full 7-Zip console) with a `7z` symlink;
+      Windows installs the full `7z.exe` + `7z.dll` (plus standalone `7za.exe`).
+      All read .rar and .iso; the Windows standalone `7za.exe` alone does not,
+      which is why the full DLL is staged.

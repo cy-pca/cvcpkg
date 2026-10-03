@@ -28,6 +28,14 @@ import datetime
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from cvcpkg.optional import require_sqlalchemy
+
+# sqlalchemy (and greenlet, its asyncio bridge) live in the [server] extra, and
+# this module imports them at module scope.  Check first so a server command on
+# a core install (`CVCPKG_DATABASE_URL=… cvcpkg-server token list`) names the
+# extra to install instead of dying with "No module named 'sqlalchemy'".
+require_sqlalchemy()
+
 from sqlalchemy import (
     BigInteger,
     Boolean,

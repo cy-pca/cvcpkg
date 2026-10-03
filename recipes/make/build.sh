@@ -13,6 +13,17 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
+# Haiku ships no <ar.h>, so src/arscan.c fails to compile ("ar.h: No such
+# file or directory"). NO_ARCHIVES compiles arscan.c (and its callers) as
+# stubs, dropping support for updating .a archive members — a capability a
+# build-tool make never exercises here. Must be defined for every TU, so it
+# goes through CFLAGS.
+case "$(uname -s)" in
+    Haiku)
+        export CFLAGS="${CFLAGS:-} -DNO_ARCHIVES"
+        ;;
+esac
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --disable-nls

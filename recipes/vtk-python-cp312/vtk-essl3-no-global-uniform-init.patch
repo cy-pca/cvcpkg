@@ -1,0 +1,52 @@
+--- a/Rendering/VolumeOpenGL2/vtkVolumeShaderComposer.h
++++ b/Rendering/VolumeOpenGL2/vtkVolumeShaderComposer.h
+@@ -214,19 +214,32 @@
+                  "uniform vec3 in_cellStep["
+               << numInputs << "];\n";
+ 
+-  if (glMapper->GetVolumetricScatteringBlending() > 0.0)
++  // ESSL 3.00 (WebGL2) forbids non-constant global initializers, so declare
++  // these bare and assign them in g_initMatrices(), which BaseInit calls at
++  // the top of initializeRayCast().
++  const bool needEyeToTexture = glMapper->GetVolumetricScatteringBlending() > 0.0;
++  const bool needTexToView = inputs[0].Volume->GetProperty() &&
++    inputs[0].Volume->GetProperty()->GetShade() && !defaultLighting && totalNumberOfLights > 0;
++  if (needEyeToTexture)
+   {
+-
+-    toShaderStr << "mat4 g_eyeToTexture = in_inverseTextureDatasetMatrix[0] *"
++    toShaderStr << "mat4 g_eyeToTexture;\n";
++  }
++  if (needTexToView)
++  {
++    toShaderStr << "mat4 g_texToView;\n";
++  }
++  toShaderStr << "void g_initMatrices(void)\n{\n";
++  if (needEyeToTexture)
++  {
++    toShaderStr << "  g_eyeToTexture = in_inverseTextureDatasetMatrix[0] *"
+                    " in_inverseVolumeMatrix[0] * in_inverseModelViewMatrix;\n";
+   }
+-
+-  if (inputs[0].Volume->GetProperty() && inputs[0].Volume->GetProperty()->GetShade() &&
+-    !defaultLighting && totalNumberOfLights > 0)
++  if (needTexToView)
+   {
+-    toShaderStr << "mat4 g_texToView = in_modelViewMatrix * in_volumeMatrix[0] *"
++    toShaderStr << "  g_texToView = in_modelViewMatrix * in_volumeMatrix[0] *"
+                    "in_textureDatasetMatrix[0];\n";
+   }
++  toShaderStr << "}\n";
+ 
+   toShaderStr << "uniform vec2 in_scalarsRange[" << numInputs * 4
+               << "];\n"
+@@ -388,6 +401,9 @@
+   const int numInputs = static_cast<int>(inputs.size());
+ 
+   std::ostringstream shaderStr;
++  // Assign the shader globals ESSL forbids initializing at global scope
++  // (declared, with this helper, in BaseDeclarationFragment).
++  shaderStr << "\n  g_initMatrices();";
+   if (glMapper->GetCurrentPass() != vtkOpenGLGPUVolumeRayCastMapper::DepthPass &&
+     glMapper->GetUseDepthPass() && glMapper->GetBlendMode() == vtkVolumeMapper::COMPOSITE_BLEND)
+   {

@@ -1,0 +1,66 @@
+schema_version: 1
+recipe:
+  name: nlohmann-json
+  upstream_version: "3.12.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    nlohmann/json — JSON for Modern C++ (header-only). The base library for
+    json-schema-validator, and used by cvc::ariadne's .ari Layer-2 schema
+    validation (docs/roadmap/CVCGL-UI-DSL-ROADMAP.md §15).
+  homepage: https://github.com/nlohmann/json
+  license: MIT
+  tags: [utils, cpp, json]
+
+source:
+  type: tarball
+  url: https://github.com/nlohmann/json/archive/refs/tags/v3.12.0.tar.gz
+  sha256: "4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  # Header-only: no library, just headers + the CMake package config + pkg-config.
+  files:
+    - include/nlohmann/
+    - lib/cmake/nlohmann_json/
+    - lib/pkgconfig/nlohmann_json*
+    - share/pkgconfig/nlohmann_json*
+  cmake_packages:
+    - { name: nlohmann_json, targets: ["nlohmann_json::nlohmann_json"] }
+
+abi:
+  cxx_std: 17

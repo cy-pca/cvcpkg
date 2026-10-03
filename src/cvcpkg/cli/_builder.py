@@ -20,6 +20,7 @@ from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
 from cvcpkg.heartbeat import unwatch as heartbeat_unwatch
 from cvcpkg.heartbeat import watch as heartbeat_watch
+from cvcpkg.optional import require_httpx
 from cvcpkg.semver import version_sort_key
 
 # Written last, inside a fully extracted cross-toolchain cache entry.  Its
@@ -144,7 +145,7 @@ def builder_list(
     server: str, token: str, platform: str | None, arch: str | None, status: str | None
 ):
     """List registered builders."""
-    import httpx
+    httpx = require_httpx("builder")
 
     params: dict[str, str] = {}
     if platform:
@@ -592,7 +593,7 @@ def builder_run(
     import traceback
     import zipfile
 
-    import httpx
+    httpx = require_httpx("builder")
 
     from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
     from cvcpkg.platform import detect_arch, detect_platform
@@ -2263,7 +2264,7 @@ def builder_logs(
     prints the tail of a job's log - a lightweight alternative to the full
     ``cvcpkg builds monitor`` view.
     """
-    import httpx
+    httpx = require_httpx("builder")
 
     params: dict[str, str] = {"limit": str(max(1, limit))}
     if builder_id is not None:

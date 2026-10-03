@@ -1,0 +1,43 @@
+schema_version: 1
+recipe:
+  name: libfontenc
+  upstream_version: "1.1.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [libraries, x11, fonts]
+  description: >-
+    libfontenc — font encoding library used by the X font stack
+    (libXfont2).  Dependency of the hermetic Xvfb virtual X server.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/archive/individual/lib/libfontenc-1.1.9.tar.xz
+  sha256: "9d8392705cb10803d5fe1d27d236cbab3f664e26841ce01916bbbe430cf273e2"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - name: xorgproto
+  runtime:
+    - name: zlib
+  host_tools: []
+
+package:
+  files:
+    - lib/
+    - include/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"

@@ -1,0 +1,46 @@
+schema_version: 1
+recipe:
+  name: xkbcomp
+  upstream_version: "1.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.x.org/
+  license: MIT
+  tags: [x11, tools]
+  description: >-
+    xkbcomp — the XKB keymap compiler.  The X server (Xvfb included) spawns it
+    at runtime to compile keyboard maps; its XKB data comes from the
+    xkeyboard-config package.
+
+source:
+  type: tarball
+  url: https://xorg.freedesktop.org/archive/individual/app/xkbcomp-1.5.0.tar.xz
+  sha256: "2ac31f26600776db6d9cd79b3fcd272263faebac7eb85fb2f33c7141b8486060"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - pkg-config
+    - patchelf
+    - name: xorgproto
+  runtime:
+    - name: libx11
+    - name: libxkbfile
+  host_tools: []
+
+package:
+  files:
+    - bin/
+    - lib/
+    - share/
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
