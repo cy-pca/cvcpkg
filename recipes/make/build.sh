@@ -37,18 +37,30 @@ else
     # No make to build make with. On Windows the MSYS2 bootstrap (recipes/msys2)
     # deliberately ships none -- make comes from THIS recipe -- so use GNU Make's
     # own make-less bootstrap script (it compiles from the configure-generated
-    # build.cfg) and let the fresh make install itself. Dependency tracking
-    # must be off here: config.status bootstraps the .deps fragments by RUNNING
-    # make, and without one it dies "Something went wrong bootstrapping makefile
-    # fragments". Hosts that have a make (every unix builder) never reach this.
+    # build.cfg), then let that make build and install the real one.
+    # Dependency tracking must be off here: config.status bootstraps the .deps
+    # fragments by RUNNING make, and without one it dies "Something went wrong
+    # bootstrapping makefile fragments". Hosts that have a make (every unix
+    # builder) never reach this branch.
     ./configure \
         --prefix="${CVC_INSTALL_DIR}" \
         --disable-nls \
         --disable-dependency-tracking
 
     sh ./build.sh
-    # By ABSOLUTE path: $(MAKE) is argv[0] verbatim on this build, so a
-    # relative ./make breaks the recursive install the moment it cd's into
-    # lib/ ("/bin/sh: ./make: No such file or directory").
-    "$(pwd)/make" install
+
+    # Drive the real build + install with a COPY of the bootstrap binary. The
+    # Makefile relinks make(.exe) in this directory, and on Windows (MSYS/Cygwin)
+    # a process cannot fork once its own image is replaced -- running the fresh
+    # ./make directly died mid-install with "dofork: child -1 - CreateProcessW
+    # failed for ...\make.exe" / "gcc: No such file or directory". Invoke it by
+    # ABSOLUTE path too: $(MAKE) is argv[0] verbatim, so a relative ./make
+    # breaks the recursion as soon as it cd's into lib/.
+    _exe=""
+    [ -f make.exe ] && _exe=".exe"
+    mkdir -p .cvcpkg-bootstrap
+    cp "make${_exe}" ".cvcpkg-bootstrap/make${_exe}"
+    _boot="$(pwd)/.cvcpkg-bootstrap/make"
+    "${_boot}" -j "${CVC_JOBS}"
+    "${_boot}" install
 fi
