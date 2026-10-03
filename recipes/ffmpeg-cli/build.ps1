@@ -9,7 +9,19 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
 $bash       = Get-CvcGitBash
-$msysPrefix = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
+# Install prefix in drive-letter form with forward slashes (C:/...), NOT the
+# MSYS /c/... form -- the same fix recipes/x264 documents. `make install` runs
+# MSYS `install` (happy with either) and then the toolchain's strip/ranlib on
+# the installed files, and those are NATIVE Windows binaries that cannot
+# resolve /c/... (MSYS_NO_PATHCONV=1 below turns off argument conversion).
+# With CVC_LINK=shared every libav* DLL is stripped in place, so the /c/ form
+# built everything and then failed the install:
+#   STRIP   install-libavdevice-shared
+#   ...\prefix\bin\strip.exe: '/c/.../install/bin/avdevice-61.dll': No such file
+#   make: *** [ffbuild/library.mak:120: install-libavdevice-shared] Error 1
+# The static path runs the native ranlib on each installed lib*.a the same way
+# (configure's default LIB_INSTALL_EXTRA_CMD), which is x264's original failure.
+$winPrefix  = ($env:CVC_INSTALL_DIR -replace '\\', '/')
 $msysSource = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
 $msysBuild  = ConvertTo-CvcMsysPath $env:CVC_BUILD_DIR
 $msysDeps   = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
@@ -155,7 +167,7 @@ $linkFlags = if ($env:CVC_LINK -eq 'shared') {
 $configureCmd = @"
 $depsFlag cd '$msysSource' && \
   ./configure \
-    --prefix='$msysPrefix' \
+    --prefix='$winPrefix' \
     --target-os=mingw32 \
     --arch=x86_64 \
     $crossFlag--enable-gpl \
