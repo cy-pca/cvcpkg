@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/wayland/build.sh — build Wayland with Meson (Linux/FreeBSD only).
+# recipes/wayland/build.sh — build Wayland with Meson (Linux and the BSDs).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,7 +15,12 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _default_lib=static
 fi
 
-_rpath_flags="-Wl,-rpath,\$ORIGIN"
+# $ORIGIN for the libraries, $ORIGIN/../lib for bin/wayland-scanner (which links
+# libexpat). One link-time RUNPATH for both, set here rather than patched in
+# afterwards: growing an RPATH with patchelf breaks NetBSD objects (see
+# recipes/curl), and cvcpkg's packager leaves an RPATH that already starts with
+# $ORIGIN and holds only $ORIGIN-relative entries exactly as it is.
+_rpath_flags="-Wl,-rpath,\$ORIGIN:\$ORIGIN/../lib"
 
 cd "${CVC_SOURCE_DIR}"
 
@@ -38,5 +43,20 @@ meson setup "${CVC_BUILD_DIR}" \
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
+
+# meson's pkgconfig module installs .pc files to <prefix>/libdata/pkgconfig on
+# FreeBSD (and <libdir>/pkgconfig everywhere else); wayland's meson.build passes
+# no install_dir to override it. Keep every platform's bundle in the one layout
+# package.files and consumers' PKG_CONFIG_PATH expect. Same depth below the
+# prefix, so cvc_rewrite_install_paths' ${pcfiledir}/../.. anchors still hold.
+if [ -d "${CVC_INSTALL_DIR}/libdata/pkgconfig" ]; then
+    mkdir -p "${CVC_INSTALL_DIR}/lib/pkgconfig"
+    for _pc in "${CVC_INSTALL_DIR}"/libdata/pkgconfig/*.pc; do
+        [ -e "${_pc}" ] || continue
+        mv "${_pc}" "${CVC_INSTALL_DIR}/lib/pkgconfig/"
+    done
+    rmdir "${CVC_INSTALL_DIR}/libdata/pkgconfig"
+    rmdir "${CVC_INSTALL_DIR}/libdata" 2>/dev/null || true
+fi
 
 cvc_rewrite_install_paths
