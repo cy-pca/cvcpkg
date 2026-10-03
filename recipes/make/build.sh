@@ -37,7 +37,7 @@ else
     # No make to build make with. On Windows the MSYS2 bootstrap (recipes/msys2)
     # deliberately ships none -- make comes from THIS recipe -- so use GNU Make's
     # own make-less bootstrap script (it compiles from the configure-generated
-    # build.cfg) and let the fresh ./make install itself. Dependency tracking
+    # build.cfg) and let the fresh make install itself. Dependency tracking
     # must be off here: config.status bootstraps the .deps fragments by RUNNING
     # make, and without one it dies "Something went wrong bootstrapping makefile
     # fragments". Hosts that have a make (every unix builder) never reach this.
@@ -47,5 +47,8 @@ else
         --disable-dependency-tracking
 
     sh ./build.sh
-    ./make install
+    # By ABSOLUTE path: $(MAKE) is argv[0] verbatim on this build, so a
+    # relative ./make breaks the recursive install the moment it cd's into
+    # lib/ ("/bin/sh: ./make: No such file or directory").
+    "$(pwd)/make" install
 fi
