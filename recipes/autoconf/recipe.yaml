@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: autoconf
   upstream_version: "2.72"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -21,9 +21,26 @@ source:
 patches: []
 
 depends:
+  # On Windows autoconf is built (and runs) inside the MSYS subsystem of the
+  # MSYS2 bootstrap, whose MSYS perl it uses -- the cvcpkg perl there is a native
+  # Strawberry Perl that MSYS-path scripts cannot drive, so perl is scoped to
+  # the unix platforms. make drives the Windows build (unix uses the host's).
   build:
     - m4
-    - perl
+    - name: perl
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+  # Explicit, so the build-only make never reaches consumers' required_deps;
+  # unix bundles keep exactly the [m4, perl] they always carried.
+  runtime:
+    - m4
+    - name: perl
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: msys2
+      platforms: [windows]
   host_tools: []
 
 build:

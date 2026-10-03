@@ -1,27 +1,19 @@
-# recipes/autoconf/build.ps1 — build GNU Autoconf from source inside MSYS2.
+# recipes/autoconf/build.ps1 — build GNU Autoconf on Windows, for the MSYS subsystem.
 #
-# Autoconf is a build-time host tool only.  It is built inside the
-# MSYS subsystem so the resulting scripts run correctly in MSYS2 bash.
-# Requires m4 to be built first (declared as host_tools in recipe.yaml).
+# Autoconf is a build-time host tool only: Perl scripts plus m4 macro trees that
+# run inside MSYS2's bash, driving the MSYS perl of the `msys2` bootstrap recipe
+# and the cvcpkg m4. Invoke-CvcMsysHostToolBuild runs this recipe's own build.sh
+# under that shell -- so the Windows bundle gets the same post-install
+# relocation as unix (the tools derive their prefix from $0 instead of baking
+# the ephemeral build prefix; see build.sh).
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-$bash        = Get-CvcGitBash
-$msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
-$msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
-$msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
-$jobs        = if ($env:CVC_JOBS) { [int]$env:CVC_JOBS } else { 4 }
-if ($jobs -le 0) { $jobs = 4 }
+Invoke-CvcMsysHostToolBuild -Require make, m4, perl
 
-$env:MSYSTEM          = 'MSYS'
-$env:MSYS_NO_PATHCONV = '1'
-$env:CHERE_INVOKING   = '1'
-
-$depsFlag = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH " } else { '' }
-$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' && make -j $jobs && make install"
-Write-Host "cvcpkg: bash -lc `"$cmd`""
-& $bash -lc $cmd
-if ($LASTEXITCODE -ne 0) { throw 'autoconf build failed' }
-
-& $bash -lc "$msysPrefix/bin/autoconf --version" | Select-Object -First 1
+$autoconf = Join-Path $env:CVC_INSTALL_DIR 'bin\autoconf'
+if (-not (Test-Path -LiteralPath $autoconf)) { throw "autoconf build produced no $autoconf" }
+$out = & (Get-CvcGitBash) -lc "'$(ConvertTo-CvcMsysPath $autoconf)' --version"
+if ($LASTEXITCODE -ne 0) { throw "installed autoconf failed to run (exit $LASTEXITCODE)" }
+Write-Host ($out | Select-Object -First 1)

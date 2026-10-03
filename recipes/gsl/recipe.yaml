@@ -21,8 +21,36 @@ patches: []
 
 depends:
   build:
-    - cmake
-    - ninja
+    # No cmake/ninja: no gsl build script runs either, on any platform (all of
+    # them are ./configure && make). Declaring them made a Windows --with-deps
+    # build compile CMake's own closure (curl -> openssl -> perl/nasm) just to
+    # build gsl.
+    # gsl builds via autotools (build.sh / build.ps1 both run ./configure && make),
+    # so make is a real build dep — needed on Windows where there is no system make.
+    - make
+    # Windows autotools build (Invoke-CvcMsysAutotoolsBuild in build.ps1) needs the
+    # GNU toolchain in the BUILD closure. cvcpkg stages host_tools only when
+    # CROSS-compiling (target != host), so a native Windows build gets nothing
+    # from host_tools — these must be real build deps that build from source and
+    # stage into the build prefix, where env-windows's $depsFlag puts them on
+    # PATH. Scoped to windows: other platforms build from the shipped ./configure
+    # with the system toolchain and must not pull the mingw cross-compiler.
+    - name: m4
+      platforms: [windows]
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
+    # The shell: the MSYS2 bootstrap (MSYS bash + coreutils). Declared rather
+    # than inherited from an ambient C:\msys64, which on a GitHub-hosted image is
+    # bare (no gcc, no make). It also rides in through m4/make/autoconf/..., but
+    # build.ps1 drives it directly, so say so.
+    - name: msys2
+      platforms: [windows]
   runtime: []
   host_tools: []
 

@@ -239,23 +239,34 @@ function Invoke-CvcRewriteInstallPaths {
 # directly; it links cleanly from MSVC for pure-C libraries with no
 # libgcc/libstdc++ dependencies (which is the case for gmp/mpfr/gsl).
 #
-# The builder is expected to have Git Bash on PATH (as env-wasm.ps1
-# already assumes) plus MSYS2 mingw-w64 gcc + make + m4 + libtool.
-# See vm-provisioning docs for the required MSYS2 packages.
+# The shell comes from the `msys2` cvcpkg recipe (the MSYS bootstrap: a
+# sha256-pinned MSYS2 base plus the MSYS gcc/perl/diffutils it needs), which
+# the autotools recipes declare under depends.build scoped to windows, so it is
+# staged into the BUILD prefix. Everything else -- make, m4, autoconf, automake,
+# libtool, and the MinGW-w64 gcc -- comes from its own cvcpkg recipe. A bare
+# ambient C:\msys64 (all a GitHub-hosted image has: the `base` group, no
+# compiler, no make) is only a last-resort fallback.
 
 function Get-CvcGitBash {
     # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
     # autotools on its PATH.  Priority order:
     #   1. CVC_MSYS2_DIR env var (manual override)
-    #   2. CVC_DEPS_PREFIX\msys2 (installed by the msys2 cvcpkg recipe)
-    #   3. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
-    #   4. Git Bash fallback (no MinGW — usable only for non-compile scripts)
+    #   2. CVC_BUILD_PREFIX\msys2 (the msys2 recipe staged as a BUILD dep --
+    #      where `cvcpkg build --with-deps` and the fleet put it)
+    #   3. CVC_DEPS_PREFIX\msys2 (the msys2 recipe installed into the prefix)
+    #   4. Well-known MSYS2 system paths (C:\msys64, C:\tools\msys64)
+    #   5. Git Bash fallback (no MinGW — usable only for non-compile scripts)
+    #
+    # The build prefix MUST come before C:\msys64: a GitHub-hosted image ships a
+    # bare C:\msys64 (pacman + the `base` group only -- no gcc, no make), and
+    # picking it over the staged bootstrap is exactly how m4's configure ended
+    # up with no working C compiler on a clean runner.
     $candidates = [System.Collections.Generic.List[string]]@()
     if ($env:CVC_MSYS2_DIR) {
         $candidates.Add((Join-Path $env:CVC_MSYS2_DIR 'usr\bin\bash.exe'))
     }
-    if ($env:CVC_DEPS_PREFIX) {
-        $candidates.Add((Join-Path $env:CVC_DEPS_PREFIX 'msys2\usr\bin\bash.exe'))
+    foreach ($root in @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ } | Select-Object -Unique) {
+        $candidates.Add((Join-Path $root 'msys2\usr\bin\bash.exe'))
     }
     $candidates.AddRange([string[]]@(
         'C:\msys64\usr\bin\bash.exe',
@@ -271,7 +282,7 @@ function Get-CvcGitBash {
              Where-Object { $_.Source -notmatch 'System32' } |
              Select-Object -First 1
     if ($found) { return $found.Source }
-    throw 'bash.exe not found (looked under CVC_MSYS2_DIR, CVC_DEPS_PREFIX\msys2\usr\bin\, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
+    throw 'bash.exe not found (looked under CVC_MSYS2_DIR, CVC_BUILD_PREFIX\msys2\usr\bin\, CVC_DEPS_PREFIX\msys2\usr\bin\, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
 }
 
 function ConvertTo-CvcMsysPath {
@@ -308,20 +319,47 @@ function Invoke-CvcMsysAutotoolsBuild {
     if ($Jobs -le 0) { $Jobs = 1 }
 
     $bash        = Get-CvcGitBash
-    $msysPrefix  = ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR
     $msysSource  = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
-    $msysDeps    = if ($env:CVC_DEPS_PREFIX) { ConvertTo-CvcMsysPath $env:CVC_DEPS_PREFIX } else { '' }
-    $depsFlag    = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
+    # Install prefix in drive-letter form with forward slashes (C:/...), NOT the
+    # MSYS /c/... form. The toolchain is NATIVE MinGW (mingw-w64-gcc), which
+    # cannot open /c/... at all; `make install` runs the native ranlib on the
+    # installed static archive, and recipes/x264 hit exactly that:
+    #   ranlib /c/.../install/lib/libx264.a  ->  "No such file"
+    # A native-readable prefix needs no translation on any path. MSYS install/
+    # mkdir accept either form, and Invoke-CvcRewriteInstallPaths relocates C:/
+    # in .pc files.
+    $winPrefix   = ($env:CVC_INSTALL_DIR -replace '\\', '/')
+    # Put the staged build tools first on PATH. host_tools (m4/autoconf/automake/
+    # libtool/the compiler) are staged into the BUILD prefix; link deps and make
+    # land in the DEPS prefix — search BOTH, since the old form looked only in
+    # CVC_DEPS_PREFIX and missed host_tools entirely.
+    #
+    # EXPORT it: `PATH=x cd dir && ./configure` scopes the assignment to the `cd`
+    # builtin alone, so configure/make ran with the ORIGINAL PATH and never saw
+    # the staged tools — silently falling through to ambient C:\msys64. The same
+    # trap recipes/x264 and recipes/ffmpeg-cli document. A trailing `;` lets it
+    # compose in front of any command below.
+    $toolRoots    = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+    $msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+    $depsFlag     = if ($msysToolBins) { "export PATH='${msysToolBins}:'`$PATH; " } else { '' }
 
-    # Force the MinGW-w64 64-bit subsystem so that /mingw64/bin
-    # (gcc, make, libtool, autoconf, m4, ...) is on the shell PATH.
-    # Without MSYSTEM set, MSYS2's bash defaults to the plain msys
-    # environment where gcc is not present.  MSYS_NO_PATHCONV=1
-    # prevents MSYS from mangling Windows-style arguments passed to
-    # non-MSYS binaries invoked from configure/libtool.
+    # The MinGW-w64 64-bit subsystem: configure then sees build=*-mingw*, which
+    # is how libtool knows it is really running under MSYS and must translate
+    # MSYS paths for the native toolchain. The compiler itself is the pinned
+    # mingw-w64-gcc in the build prefix ($depsFlag), not /mingw64/bin.
+    #
+    # Leave MSYS2's argument path conversion ON (no MSYS_NO_PATHCONV), as every
+    # MSYS2 MinGW package build does: libtool's msys->w32 translation is
+    # `cmd //c echo <path>`, which relies on MSYS turning `//c` into `/c`, and it
+    # runs for every static archive it creates (tool_oldlib) and installs. The
+    # drive-letter --prefix above is untouched by the conversion either way.
     $env:MSYSTEM         = 'MINGW64'
-    $env:MSYS_NO_PATHCONV = '1'
+    Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
     $env:CHERE_INVOKING  = '1'
+    # MSYS2's minimal PATH, never the inherited Windows one: a runner's PATH
+    # carries Strawberry Perl's c\bin (its own x86_64-w64-mingw32-gcc and make)
+    # and MSVC, either of which configure would happily pick up.
+    $env:MSYS2_PATH_TYPE = 'minimal'
 
     # Clear MSVC compiler env inherited from the outer PowerShell
     # session — env-windows.ps1 sets CC=cl / CXX=cl for Invoke-CvcCMakeBuild,
@@ -346,20 +384,32 @@ function Invoke-CvcMsysAutotoolsBuild {
         '--enable-shared --enable-static'
     }
 
-    # Pre-flight: verify that required MSYS2/MinGW tools are available.
-    # These should be provided by their own cvcpkg recipes (m4, autoconf,
-    # automake, libtool) declared as host_tools in the calling recipe.
-    # The $depsFlag prepends CVC_DEPS_PREFIX/bin so shim wrappers installed
-    # by those recipes are found before any system copies.
-    $probe = & $bash -lc "$depsFlag command -v m4 >/dev/null && command -v libtool >/dev/null && command -v autoconf >/dev/null && command -v automake >/dev/null && command -v make >/dev/null && echo OK"
-    if ($probe -notmatch 'OK') {
-        throw 'MSYS2 autotools tools (m4, autoconf, automake, libtool, make) not found. Declare them as host_tools in recipe.yaml.'
+    # Pre-flight: verify the MSYS2/MinGW build tools are actually reachable.
+    # These come from their own cvcpkg recipes declared under depends.build
+    # (scoped to windows) — cvcpkg stages host_tools only when cross-compiling, so
+    # a native Windows build must carry the GNU toolchain as real build deps that
+    # stage into the build prefix, which $depsFlag now puts on PATH.
+    #
+    # Probe each tool BY NAME and test a SCALAR boolean. The old guard,
+    # `if ($probe -notmatch 'OK')`, was silently dead: when the probe finds
+    # nothing $probe is AutomationNull, and `$null -notmatch 'OK'` returns an
+    # empty Object[], which `if` treats as false — so a missing toolchain sailed
+    # straight through and configure failed obscurely much later.
+    $required = @('m4', 'libtool', 'autoconf', 'automake', 'make')
+    $missing  = @($required | Where-Object {
+        $found = & $bash -lc "$depsFlag command -v $_ >/dev/null 2>&1 && echo OK"
+        "$found".Trim() -ne 'OK'
+    })
+    if ($missing.Count -gt 0) {
+        throw ("MSYS2 autotools not found on PATH: $($missing -join ', '). " +
+               'Declare m4/autoconf/automake/libtool/make (and mingw-w64-gcc) ' +
+               'under depends.build (scoped to windows) in recipe.yaml.')
     }
 
     # Build one big command line for bash; the caller-provided extras
     # win over defaults because they come last.
     $extras   = ($ConfigureArgs -join ' ')
-    $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host='$HostTriple' $sharedFlags $extras"
+    $cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$winPrefix' --host='$HostTriple' $sharedFlags $extras"
     Write-Host "cvcpkg: bash -lc `"$cmd`""
     & $bash -lc $cmd
     if ($LASTEXITCODE -ne 0) {
@@ -371,10 +421,12 @@ function Invoke-CvcMsysAutotoolsBuild {
         throw "configure failed"
     }
 
-    & $bash -lc "cd '$msysSource' && make -j $Jobs"
+    # make (and the compiler it drives) also need the staged tools on PATH, so
+    # carry $depsFlag here too — not just on the configure line.
+    & $bash -lc "$depsFlag cd '$msysSource' && make -j $Jobs"
     if ($LASTEXITCODE -ne 0) { throw "make failed" }
 
-    & $bash -lc "cd '$msysSource' && make install"
+    & $bash -lc "$depsFlag cd '$msysSource' && make install"
     if ($LASTEXITCODE -ne 0) { throw "make install failed" }
 
     # Post-process installed libraries so MSVC downstream can link:
@@ -401,6 +453,104 @@ function Invoke-CvcMsysAutotoolsBuild {
             }
         }
     }
+}
+
+# ── MSYS-subsystem host-tool helper ─────────────────────────────────
+#
+# GNU make, m4, autoconf, automake and libtool are BUILD tools that run inside
+# the MSYS2 shell, so on Windows they are built for the MSYS subsystem itself
+# (linked against msys-2.0.dll, POSIX paths throughout) -- the way MSYS2 builds
+# its own copies -- by running the recipe's own POSIX build.sh under the
+# bootstrap's bash. One script for every platform also means the Windows bundle
+# gets the same post-install relocation the unix bundles do (autoconf and
+# automake bake their ephemeral build prefix; see recipes/autoconf/build.sh).
+#
+# The C compiler is the MSYS gcc from the `msys2` bootstrap recipe; make, m4,
+# autoconf, ... come from their own cvcpkg recipes staged in the build/deps
+# prefixes. A recipe using this declares `msys2` (plus whichever of make/m4/
+# autoconf its build runs) under depends.build, scoped to windows.
+#
+# Usage (recipes/<tool>/build.ps1):
+#   . "$scriptDir\..\_common\env-windows.ps1"
+#   Invoke-CvcMsysHostToolBuild -Require gcc, make
+function Invoke-CvcMsysHostToolBuild {
+    <#
+    .SYNOPSIS
+      Run a POSIX build script under the MSYS2 bootstrap's MSYS subsystem.
+    .PARAMETER Script
+      The script to run. Defaults to the recipe's own build.sh.
+    .PARAMETER Require
+      Tools that must resolve on the build PATH before the script runs; a
+      missing one fails here, by name, instead of deep inside configure.
+    #>
+    param(
+        [string]$Script = '',
+        [string[]]$Require = @('gcc')
+    )
+    if (-not $Script) { $Script = Join-Path $env:CVC_RECIPE_DIR 'build.sh' }
+    if (-not (Test-Path -LiteralPath $Script)) { throw "build script not found: $Script" }
+
+    $bash = Get-CvcGitBash
+    Write-Host "cvcpkg: MSYS bash: $bash"
+
+    # The MSYS subsystem, with MSYS2's minimal (non-inherited) PATH: the
+    # bootstrap's /usr/bin plus System32. Inheriting the Windows PATH would let
+    # MSVC's cl, Strawberry Perl's gcc/make, or Git's own MSYS runtime (a SECOND
+    # msys-2.0.dll) leak into configure.
+    $env:MSYSTEM         = 'MSYS'
+    $env:MSYS2_PATH_TYPE = 'minimal'
+    $env:CHERE_INVOKING  = '1'
+    Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
+
+    # env-windows.ps1 pins CC=cl/CXX=cl for the MSVC helpers above. Autoconf takes
+    # $CC at face value ("checking for gcc... cl"), and with no cl on the MSYS
+    # PATH every compile then fails: "C compiler cannot create executables" --
+    # m4's failure on a clean runner. Drop the whole MSVC-flavoured toolchain env.
+    foreach ($v in 'CC', 'CXX', 'CPP', 'LD', 'AR', 'NM', 'RANLIB', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS') {
+        Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+    }
+
+    # The build scripts hand these paths to configure/make, so give them MSYS form.
+    $exports = [ordered]@{}
+    foreach ($v in 'CVC_INSTALL_DIR', 'CVC_SOURCE_DIR', 'CVC_BUILD_DIR', 'CVC_PREFIX',
+                   'CVC_DEPS_PREFIX', 'CVC_BUILD_PREFIX', 'CVC_RECIPE_DIR') {
+        $val = [Environment]::GetEnvironmentVariable($v)
+        if ($val) { $exports[$v] = ConvertTo-CvcMsysPath $val }
+    }
+    $exports['CVC_JOBS'] = "$env:CVC_JOBS"
+    # MSYS2's gcc is GCC 15, which defaults to C23: `extern char *getenv ();` now
+    # means (void), so make 4.4.1 and m4 1.4.19's gnulib stop compiling. MSYS2's
+    # own PKGBUILDs pin -std=gnu17 (or patch the sources) for the same reason.
+    $exports['CFLAGS'] = '-O2 -std=gnu17'
+    # gnulib's weak-symbol probe wrongly passes on Cygwin/MSYS (PE has no real
+    # weak undefined symbols); MSYS2 patches m4's threadlib.m4 to force "no".
+    # Pre-seeding the configure cache variable does the same without autoreconf.
+    $exports['gl_cv_have_weak'] = 'no'
+
+    # /usr/bin FIRST: the bootstrap's MSYS gcc/binutils must win over the native
+    # MinGW gcc/binutils that mingw-w64-gcc stages into the same build prefix.
+    # The prefixes follow, for the cvcpkg tools the bootstrap deliberately does
+    # not ship (make, m4, autoconf, automake, libtool).
+    $toolRoots    = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ } | Select-Object -Unique
+    $msysToolBins = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+    $prelude = if ($msysToolBins) { "export PATH='/usr/bin:${msysToolBins}:'`$PATH; " } else { "export PATH=/usr/bin:`$PATH; " }
+    foreach ($k in $exports.Keys) { $prelude += "export $k='$($exports[$k])'; " }
+
+    # Probe each tool BY NAME, testing a scalar (see Invoke-CvcMsysAutotoolsBuild).
+    $missing = @($Require | Where-Object {
+        $found = & $bash -lc "$prelude command -v $_ >/dev/null 2>&1 && echo OK"
+        "$found".Trim() -ne 'OK'
+    })
+    if ($missing.Count -gt 0) {
+        throw ("MSYS build tools not found on PATH (bash: $bash): $($missing -join ', '). " +
+               'Declare msys2 (and make/m4/autoconf as the build needs) under ' +
+               'depends.build, scoped to windows, in recipe.yaml.')
+    }
+
+    $cmd = "$prelude bash '$(ConvertTo-CvcMsysPath $Script)'"
+    Write-Host "cvcpkg: bash -lc `"$cmd`""
+    & $bash -lc $cmd
+    if ($LASTEXITCODE -ne 0) { throw "MSYS build of $env:CVC_COMPONENT failed (exit $LASTEXITCODE)" }
 }
 
 # ── Meson / MSVC helper ─────────────────────────────────────────────
