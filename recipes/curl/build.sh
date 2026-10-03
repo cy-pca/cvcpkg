@@ -70,6 +70,19 @@ if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; the
     esac
 fi
 
+# NetBSD: give libcurl its $ORIGIN RPATH at LINK time, because the post-install
+# patchelf route used on the other ELF platforms produces objects NetBSD's
+# loader rejects (see the patchelf block below and the recipe.yaml 7 -> 8
+# note). GNU ld (NetBSD's /usr/bin/ld) reads LD_RUN_PATH straight from the
+# environment whenever a link has no -rpath of its own -- libcurl's link has
+# none -- so `$ORIGIN` reaches the linker without passing through the
+# configure/make/libtool quoting layers that defeated every LDFLAGS spelling
+# of it (+cvc.1 through +cvc.5). Executables that libtool links with its own
+# -rpath (bin/curl) ignore LD_RUN_PATH; bin/curl is handled at the end.
+if [[ "${CVC_PLATFORM:-}" == "netbsd" && "${CVC_LINK:-shared}" != "static" ]]; then
+    export LD_RUN_PATH='$ORIGIN'
+fi
+
 ./configure "${CONFIGURE_ARGS[@]}"
 make -j "${CVC_JOBS}"
 make install
@@ -97,23 +110,24 @@ make install
 # is ephemeral). patchelf sets a real $ORIGIN here, unlike the LDFLAGS
 # attempts above.
 #
-# NetBSD/Linux/FreeBSD's libtool creates BOTH the real, fully-versioned
-# file (libcurl.so.12.0) AND a shorter SONAME-convention symlink
-# (libcurl.so.12 -> libcurl.so.12.0); a plain `ls libcurl.so.*` glob picks
-# the symlink first (alphabetically, the shorter string sorts before its
-# own longer-with-suffix form). Setting SONAME to that symlink's name
-# reproduced NetBSD's OWN pre-existing (and equally broken) convention:
-# bin/cmake's build failed with "Shared object libcurl.so.12 not found"
-# despite LD_LIBRARY_PATH and RPATH both correctly pointing at the exact
-# directory containing that exact symlink — NetBSD's rtld/ldd did not
-# follow the symlink hop the same way it resolved libssl.so.3 (a REAL file
-# matching its own SONAME, no indirection, which loaded fine in the same
-# ldd check). Using `find -type f` instead of `ls` always selects the real
-# underlying file, so the SONAME we set never requires a symlink hop to
-# resolve — matches what already worked by accident on OpenBSD (whose
-# libtool never created the shorter symlink at all, only the real file).
+# SONAME choice: `find -type f` picks the real, fully-versioned file
+# (libcurl.so.4.8.0 on Linux/FreeBSD, libcurl.so.12.0 on OpenBSD) rather than
+# a shorter symlink that libtool may also install. Keep it: the cmake builds
+# already published for these platforms record that name as DT_NEEDED.
+#
+# NOT on NetBSD. NetBSD's ld.elf_so refuses any object that does not have
+# EXACTLY two PT_LOAD segments (libexec/ld.elf_so/map_object.c: "wrong number of
+# segments (%d != 2)"), and its search loop then reports the file as
+# "Shared object ... not found". NetBSD's GNU ld emits exactly two, aligned at
+# 0x200000; whenever patchelf 0.18 must grow .dynstr/.dynamic (a longer SONAME,
+# an RPATH where there was none) it appends a third -- and the +cvc.7
+# SONAME+RPATH pair also left PT_DYNAMIC outside every PT_LOAD. That, not the
+# libcurl.so.12 -> libcurl.so.12.0 symlink, is why +cvc.6 and +cvc.7 would not
+# load there (the symlink theory recorded for +cvc.7 was wrong). NetBSD's
+# libtool already sets SONAME libcurl.so.12 and installs that symlink, and
+# LD_RUN_PATH above supplies the $ORIGIN RPATH, so libcurl needs no patching.
 case "${CVC_PLATFORM:-}" in
-    linux|freebsd|openbsd|netbsd)
+    linux|freebsd|openbsd)
         _cvc_libcurl_versioned=$(find "${CVC_INSTALL_DIR}/lib" -maxdepth 1 -name 'libcurl.so.*' -type f 2>/dev/null | head -1 || true)
         if [[ -n "${_cvc_libcurl_versioned}" ]]; then
             _cvc_libcurl_name="$(basename "${_cvc_libcurl_versioned}")"
@@ -125,6 +139,52 @@ case "${CVC_PLATFORM:-}" in
             # conventionally expects to find.
             if [[ ! -e "${CVC_INSTALL_DIR}/lib/libcurl.so" ]]; then
                 ln -sf "${_cvc_libcurl_name}" "${CVC_INSTALL_DIR}/lib/libcurl.so"
+            fi
+        fi
+        ;;
+    netbsd)
+        # Fail here rather than publish a library NetBSD cannot load. After
+        # this script, cvcpkg's packager rewrites every lib/*.so* RPATH to
+        # $ORIGIN with patchelf when patchelf is in the prefix (it is: see
+        # recipe.yaml). That rewrite only stays in place, and so leaves the two
+        # PT_LOADs alone, if the RPATH is ALREADY exactly $ORIGIN. If
+        # LD_RUN_PATH did not take (say libtool started passing its own
+        # -rpath), it would grow .dynstr and break the library again.
+        if [[ "${CVC_LINK:-shared}" != "static" ]]; then
+            _cvc_libcurl_versioned=$(find "${CVC_INSTALL_DIR}/lib" -maxdepth 1 -name 'libcurl.so.*' -type f 2>/dev/null | head -1 || true)
+            if [[ -z "${_cvc_libcurl_versioned}" ]]; then
+                echo "curl: no libcurl.so.* file was installed" >&2
+                exit 1
+            fi
+            _cvc_libcurl_rpath="$(patchelf --print-rpath "${_cvc_libcurl_versioned}")"
+            if [[ "${_cvc_libcurl_rpath}" != '$ORIGIN' ]]; then
+                echo "curl: $(basename "${_cvc_libcurl_versioned}") has RPATH '${_cvc_libcurl_rpath}', expected \$ORIGIN from LD_RUN_PATH" >&2
+                exit 1
+            fi
+        fi
+        ;;
+esac
+
+# bin/curl: libtool links the tool with an RPATH to this build job's own
+# install/lib, a scratch directory that is deleted when the job ends. Point it
+# at the bundle's lib/ instead. The new string is shorter than any job path, so
+# patchelf rewrites it IN PLACE and never adds a segment -- which is what makes
+# this edit safe on NetBSD too. The length check enforces that; if it ever
+# fails, the RPATH is left as it was rather than risk a NetBSD-style rewrite.
+# Not on OpenBSD: its ld.so ignores $ORIGIN, and cvcpkg's installer already
+# rewrites bin/ RPATHs there to the absolute <prefix>/lib.
+case "${CVC_PLATFORM:-}" in
+    linux|freebsd|netbsd)
+        _cvc_curl_bin="${CVC_INSTALL_DIR}/bin/curl"
+        if [[ -f "${_cvc_curl_bin}" ]] && command -v patchelf >/dev/null 2>&1; then
+            _cvc_curl_old_rpath="$(patchelf --print-rpath "${_cvc_curl_bin}" 2>/dev/null || true)"
+            _cvc_curl_new_rpath='$ORIGIN/../lib'
+            if [[ "${_cvc_curl_old_rpath}" == "${_cvc_curl_new_rpath}" ]]; then
+                :
+            elif (( ${#_cvc_curl_old_rpath} >= ${#_cvc_curl_new_rpath} )); then
+                patchelf --set-rpath "${_cvc_curl_new_rpath}" "${_cvc_curl_bin}"
+            else
+                echo "curl: bin/curl RPATH '${_cvc_curl_old_rpath}' is shorter than '${_cvc_curl_new_rpath}'; leaving it unchanged" >&2
             fi
         fi
         ;;

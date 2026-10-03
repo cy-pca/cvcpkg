@@ -2,7 +2,17 @@ schema_version: 1
 recipe:
   name: epoll-shim
   upstream_version: "0.0.20240608"
-  cvc_revision: 1
+  # Bumped 1 -> 2: install the .pc files to lib/pkgconfig, the path package.files
+  # and every consumer's PKG_CONFIG_PATH use. Upstream's CMakeLists hard-codes
+  # CMAKE_INSTALL_PKGCONFIGDIR to "libdata/pkgconfig" (the FreeBSD layout) on
+  # every non-Linux system, so +cvc.1 shipped them in libdata/pkgconfig on all
+  # three BSDs, where pkg-config never looked. wayland's meson then only found
+  # epoll-shim through its CMake-package fallback, which wrote a library file
+  # path into wayland-server.pc's Libs.private instead of a Requires on
+  # epoll-shim. Also fill in the empty "Version:" line: upstream's
+  # epoll-shim.pc.cmakein leaves it blank (the CMake project declares no
+  # VERSION), so a versioned pkg-config check could never pass.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

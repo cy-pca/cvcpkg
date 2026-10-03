@@ -44,13 +44,32 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
-# Embed $ORIGIN RPATH so the shared lib is found next to its consumers
-# regardless of the final install prefix.
-export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$ORIGIN"
+# No RPATH: libffi links nothing but libc. (An `-Wl,-rpath,\$ORIGIN` LDFLAGS
+# used to sit here; make expanded its `$O`, so it only ever embedded the
+# CWD-relative RPATH "RIGIN".)
 
 ./configure "${CONFIGURE_ARGS[@]}"
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
+
+# OpenBSD: libffi's libtool links libffi.so.12.1 with no DT_SONAME. A consumer
+# that names the library by full path on its link line -- meson does this for
+# every pkg-config dependency -- then records that whole path as DT_NEEDED, and
+# for a cvcpkg build that path is the job's deleted deps prefix (wayland
+# +cvc.3: NEEDED ".../cvcpkg-job-wayland-.../lib/libffi.so.12.1"). Stamp the
+# file's own name as its SONAME, which OpenBSD's ld.so resolves through its
+# usual libffi.so.<major>.<minor> search. Post-install with patchelf, like
+# curl's OpenBSD SONAME: libtool's link step mangles a -soname passed in
+# LDFLAGS. OpenBSD's lld lays segments out at 4 KiB, where patchelf's added
+# segment loads fine (unlike NetBSD -- see recipes/curl).
+if [ "${CVC_PLATFORM}" = "openbsd" ] && [ "${CVC_LINK:-shared}" != "static" ]; then
+    _cvc_libffi_so=$(find "${CVC_INSTALL_DIR}/lib" -maxdepth 1 -name 'libffi.so.*' -type f | head -1)
+    if [ -z "${_cvc_libffi_so}" ]; then
+        echo "libffi: no libffi.so.* file was installed" >&2
+        exit 1
+    fi
+    patchelf --set-soname "$(basename "${_cvc_libffi_so}")" "${_cvc_libffi_so}"
+fi
 
 # Make installed .pc files relocatable.
 cvc_rewrite_install_paths

@@ -13,7 +13,19 @@ recipe:
   # the new `epoll-shim` dep on the BSDs so libwayland-server's epoll event loop
   # resolves there — the other half of getting wayland to build on FreeBSD/OpenBSD/
   # NetBSD (previously only linux ever published).
-  cvc_revision: 3
+  # Bumped 3 -> 4: (1) rebuild against libffi 3.7.1+cvc.5, whose OpenBSD
+  # libffi.so.12.1 finally has a SONAME. +cvc.3 openbsd recorded DT_NEEDED
+  # ".../cvcpkg-job-wayland-.../lib/libffi.so.12.1" (meson links pkg-config
+  # deps by full path, and a SONAME-less library is recorded by that path), so
+  # libwayland-client/-server could not load anywhere but inside that deleted
+  # build job. (2) FreeBSD: meson's pkgconfig module installs .pc files to
+  # <prefix>/libdata/pkgconfig there; build.sh moves them to lib/pkgconfig, the
+  # path package.files lists and consumers search. (3) RUNPATH is now
+  # "$ORIGIN:$ORIGIN/../lib", so bin/wayland-scanner finds libexpat in the
+  # bundle's lib/ (with only $ORIGIN it searched bin/). Also picks up
+  # epoll-shim +cvc.2's lib/pkgconfig/epoll-shim.pc on the BSDs, so meson finds
+  # epoll-shim through pkg-config instead of its CMake-package fallback.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
