@@ -545,7 +545,7 @@ def _record_self_update(monkeypatch, server, cmds: list | None = None, *, offere
     """Stub the self-update side effects; record the job states when it runs.
 
     The update source is a checkout offering *offered*.  Recorded at its
-    ``git pull`` -- the first step of the deferred update on every platform
+    ``git fetch`` -- the first step of the deferred update on every platform
     (POSIX then re-execs, stubbed here; Windows without the supervisor
     returns) -- so the assertion means the same thing on every OS.  Every
     command it runs is appended to *cmds*, when given; heartbeats the update
@@ -563,12 +563,12 @@ def _record_self_update(monkeypatch, server, cmds: list | None = None, *, offere
 
     installed: list[bool] = []
 
-    def _step(cmd, *, timeout, cwd=None, beat=None, stop=None):
+    def _step(cmd, *, timeout, cwd=None, beat=None, stop=None, finish_on_stop=""):
         if cmds is not None:
             cmds.append(list(cmd))
         with server.lock:
             server.events.append(" ".join(cmd[:2]))
-        if cmd[:2] == ["git", "pull"]:
+        if cmd[:2] == ["git", "fetch"]:
             with server.lock:
                 updates.append(dict(server.jobs))
         if "pip" in cmd:
@@ -673,7 +673,7 @@ def test_self_update_never_installs_an_older_checkout(monkeypatch, tmp_path):
     result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1"])
 
     assert result.exit_code == 0, result.output
-    assert execs, result.output  # it did look (git pull) ...
+    assert execs, result.output  # it did look (git fetch) ...
     assert not [c for c in cmds if "pip" in c], cmds  # ... and installed nothing
     assert "not installing it" in result.output
 
@@ -828,7 +828,7 @@ def test_token_travels_in_the_handshake_header_not_the_url(monkeypatch, tmp_path
 @pytest.mark.parametrize(
     ("source", "why"),
     [
-        pytest.param(None, "no cvcpkg source checkout", id="no-checkout"),
+        pytest.param(None, "no usable cvcpkg source checkout", id="no-checkout"),
         pytest.param("same", "not newer than", id="same-version"),
     ],
 )
@@ -880,8 +880,8 @@ def test_builder_update_heartbeats_before_and_during_the_update(monkeypatch, tmp
 
     assert result.exit_code == 0, result.output
     events = server.events
-    assert "git pull" in events, result.output
-    assert events[events.index("git pull") - 1] == "hb", events
+    assert "git fetch" in events, result.output
+    assert events[events.index("git fetch") - 1] == "hb", events
     pip_at = next(i for i, e in enumerate(events) if e.endswith("-m"))
     assert events[pip_at + 1 : pip_at + 3] == ["hb", "hb"], events
 
@@ -901,7 +901,8 @@ def test_a_stop_during_the_update_is_not_turned_into_a_restart(monkeypatch, tmp_
     so the signal does not reach it, and the handler only sets ``shutdown``:
     the update has to read that flag.  It used to finish, re-exec, and the
     fresh builder took work again -- the stop request lost with the old
-    process image."""
+    process image.  pip itself is let finish (cut short, it can leave no
+    cvcpkg installed at all); the builder then stops instead of restarting."""
     import subprocess
 
     import cvcpkg.cli._builder as builder_mod
@@ -926,7 +927,8 @@ def test_a_stop_during_the_update_is_not_turned_into_a_restart(monkeypatch, tmp_
         if "pip" in cmd:
             handlers[signal.SIGTERM](signal.SIGTERM, None)  # `kill <pid>` mid-pip
             assert stop is not None and stop(), "the step cannot see the stop request"
-            return subprocess.CompletedProcess(cmd, 130, "", "stopped")
+            assert kw.get("finish_on_stop"), "a stop would cut pip short"
+            return subprocess.CompletedProcess(cmd, 0, "", "")  # pip finished
         return recorded(cmd, **kw)
 
     monkeypatch.setattr(builder_mod, "_run_update_step", step)
@@ -934,7 +936,7 @@ def test_a_stop_during_the_update_is_not_turned_into_a_restart(monkeypatch, tmp_
 
     assert result.exit_code == 0, result.output
     assert reexecs == [], result.output
-    assert "pip install did not finish" in result.output
+    assert "is installed; not restarting into it" in result.output
     assert "Shutting down" in result.output
     assert stops and all(s is not None for s in stops)
 

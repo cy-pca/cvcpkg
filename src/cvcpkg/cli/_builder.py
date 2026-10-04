@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import random
 import re
@@ -223,8 +224,9 @@ def _checkout_version(checkout: Path) -> str | None:
 # A pip-installed builder updates itself from a cvcpkg source checkout: it
 # resolves the checkout and the version it would install *before* it stops
 # taking work (an update with nothing newer to install must not drain a busy
-# builder for hours), then, once idle, pulls, pip-installs, checks that the
-# install took, and re-execs.  Any failure leaves it running the code it runs.
+# builder for hours), then, once idle, fetches and fast-forwards, pip-installs,
+# checks that the install took, and re-execs.  Any failure leaves it running
+# the code it runs.
 
 # Explicit checkout to update from; when set, nothing else is searched.
 _SELF_UPDATE_DIR_ENV = "CVCPKG_SELF_UPDATE_DIR"
@@ -246,25 +248,42 @@ _UPDATE_BEAT_SECS = 20.0
 _UPDATE_KILL_GRACE_SECS = 5.0
 # A step that has to end early (timed out, or the builder is stopping) first
 # gets a Ctrl-C (SIGINT to its process group, POSIX) and this long to exit on
-# it -- git removes its lock files on SIGINT, and a SIGKILLed `git pull` leaves
-# .git/index.lock behind to fail every later pull in that checkout; pip removes
-# its temporary build directories -- before its tree is SIGKILLed.
+# it -- git removes its lock files on SIGINT, and a SIGKILLed git leaves
+# .git/index.lock behind to fail every later merge in that checkout; pip
+# removes its temporary build directories -- before its tree is SIGKILLed.
+# Only a timeout ends the two steps that rewrite files (the merge, pip): a
+# stop lets them finish (see _run_update_step's *finish_on_stop*).
 _UPDATE_STOP_GRACE_SECS = 3.0
 # How often a running step checks whether the builder was asked to stop (its
 # `stop` callable).  The steps run in their own session, so the stop signal
 # itself never reaches them: builder_run's handler only sets a flag.
 _UPDATE_STOP_POLL_SECS = 1.0
 _UPDATE_STOPPED_MSG = "stopped: the builder is shutting down"
+# Two `git fetch`es in one checkout at once -- builders sharing it, all told to
+# update by one push -- collide on the remote-tracking ref ("cannot lock ref
+# ... is at <new> but expected <old>"), and the loser fails.  It waits this
+# long (the winner is done by then) and fetches once more; see _git_fetch.
+_UPDATE_FETCH_RETRY_SECS = 2.0
 # Builders that share a checkout -- a pip fleet's workers, or a dev and a prod
 # unit on one host -- each get builder.update from their own server.  This
 # lock (in the checkout's git dir) runs their updates one at a time: two
-# concurrent `git pull`s collide on index.lock, and two concurrent pip
-# installs into one site-packages can leave it broken.  The one that waits
-# finds the version installed already and only restarts.  Waiting is bounded
-# by the longest an update holding it can take (every step has a timeout).
+# concurrent merges collide on index.lock, and two concurrent pip installs
+# into one site-packages can leave it broken.  The one that waits finds the
+# version installed already and only restarts.  Waiting is bounded by the
+# longest an update holding it can take: the steps it runs under the lock --
+# a fetch (twice, on a collision), the merge, the tree check, two version
+# probes and pip (twice, when the --break-system-packages guess was wrong) --
+# each up to its timeout, plus, for each, the grace an ended step gets, plus
+# slack for heartbeats (each can block for its HTTP timeout).
 _UPDATE_LOCK_NAME = "cvcpkg-self-update.lock"
+_UPDATE_LOCKED_STEPS = 8
 _UPDATE_LOCK_TIMEOUT = (
-    _UPDATE_GIT_TIMEOUT + 2 * _UPDATE_PIP_TIMEOUT + 2 * _UPDATE_VERIFY_TIMEOUT + 60.0
+    4 * _UPDATE_GIT_TIMEOUT
+    + _UPDATE_FETCH_RETRY_SECS
+    + 2 * _UPDATE_VERIFY_TIMEOUT
+    + 2 * _UPDATE_PIP_TIMEOUT
+    + _UPDATE_LOCKED_STEPS * (_UPDATE_STOP_GRACE_SECS + 2 * _UPDATE_KILL_GRACE_SECS)
+    + 120.0
 )
 
 # git's network transports otherwise wait on a dead connection for as long as
@@ -444,6 +463,7 @@ def _run_update_step(
     cwd: Path | str | None = None,
     beat: Callable[[], None] | None = None,
     stop: Callable[[], bool] | None = None,
+    finish_on_stop: str = "",
 ):
     """Run one self-update command, heartbeating while it runs.
 
@@ -460,6 +480,17 @@ def _run_update_step(
     only way a builder's stop request reaches it -- builder_run's signal
     handler only sets a flag.  *beat* is still called only every
     _UPDATE_BEAT_SECS.
+
+    *finish_on_stop* is for a step that rewrites files: the merge (the
+    checkout) and pip (site-packages).  A stop never ends one of those --
+    ended part-way, the merge leaves HEAD on the old commit under a tree half
+    from the new one, and pip a half-installed cvcpkg (it rolls its uninstall
+    back only on an Exception, never on Ctrl-C), so the builder cannot even
+    start again.  The step is let finish, still bounded by *timeout*, and
+    *finish_on_stop* (what happens now) is logged once, when the stop is
+    seen.  It is not started once stopping, all the same; and should the
+    builder itself be interrupted (KeyboardInterrupt) while it runs, it is
+    left running, in its own session, to finish there.
     """
     import subprocess
 
@@ -482,8 +513,10 @@ def _run_update_step(
         return subprocess.CompletedProcess(cmd, 127, "", str(exc))
     started = time.monotonic()
     deadline = started + timeout
-    next_beat = started + _UPDATE_BEAT_SECS
-    poll = min(_UPDATE_STOP_POLL_SECS, _UPDATE_BEAT_SECS) if stop is not None else _UPDATE_BEAT_SECS
+    # Nothing to wake up for but the deadline when there is neither a beat to
+    # send nor a stop to poll for (math.inf: never due).
+    next_beat = started + _UPDATE_BEAT_SECS if beat is not None else math.inf
+    poll = _UPDATE_STOP_POLL_SECS if stop is not None else math.inf
     try:
         while True:
             now = time.monotonic()
@@ -493,11 +526,14 @@ def _run_update_step(
                 return subprocess.CompletedProcess(cmd, proc.returncode, out or "", err or "")
             except subprocess.TimeoutExpired:
                 pass
-            if stop is not None and stop():
-                out, err = _end_update_step(proc)
-                return subprocess.CompletedProcess(
-                    cmd, 130, out, f"{err}\n{_UPDATE_STOPPED_MSG}".lstrip("\n")
-                )
+            if poll != math.inf and stop is not None and stop():
+                if not finish_on_stop:
+                    out, err = _end_update_step(proc)
+                    return subprocess.CompletedProcess(
+                        cmd, 130, out, f"{err}\n{_UPDATE_STOPPED_MSG}".lstrip("\n")
+                    )
+                click.echo(f"  self-update: shutdown requested; {finish_on_stop}")
+                poll = math.inf  # seen; from here on only the deadline counts
             now = time.monotonic()
             if now >= deadline:
                 break
@@ -509,6 +545,10 @@ def _run_update_step(
         out, err = _end_update_step(proc)
         return subprocess.CompletedProcess(cmd, 124, out, err + f"\ntimed out after {timeout:.0f}s")
     except BaseException:
+        if finish_on_stop:
+            # A step that rewrites files is never ended part-way (see
+            # *finish_on_stop*): it runs on in its own session and finishes.
+            raise
         # KeyboardInterrupt (or a failing beat) while the step runs: it is in
         # its own session, so nothing else will stop it.  Unconditionally --
         # the step's own process may be gone while what it started is not, and
@@ -585,28 +625,120 @@ def _find_update_checkout() -> Path | None:
     return None
 
 
+def _git_error(stderr: str) -> str:
+    """A git step's stderr, short enough for one log line.
+
+    Its first line says what went wrong ("Your local changes to the
+    following files would be overwritten by merge:"); a list of every file
+    involved, and git's "Aborting", follow.  Keep the first and the last.
+    """
+    lines = [line.strip() for line in stderr.strip().splitlines() if line.strip()]
+    if len(lines) > 2:
+        lines = [lines[0], f"... ({len(lines) - 2} more lines) ...", lines[-1]]
+    text = " ".join(lines)
+    return text if len(text) <= 300 else text[:297] + "..."
+
+
+def _git_fetch(
+    checkout: Path,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+):
+    """``git fetch --prune --quiet`` in *checkout*, as an update step.
+
+    ``--prune``: an upstream branch deleted on the remote must not live on as
+    a stale remote-tracking ref to merge from.  A fetch that lost a race for a
+    ref to another fetch in the same checkout ("cannot lock ref ... is at
+    <new> but expected <old>": builders sharing it, all told to update by one
+    push) is retried once, _UPDATE_FETCH_RETRY_SECS later -- the other fetch
+    has finished by then, so the retry finds everything up to date.  Without
+    it the loser goes by a stale ref and drops the update until the next push.
+    """
+
+    def fetch():
+        return _run_update_step(
+            ["git", "fetch", "--prune", "--quiet"],
+            cwd=checkout,
+            timeout=_UPDATE_GIT_TIMEOUT,
+            beat=beat,
+            stop=stop,
+        )
+
+    fetched = fetch()
+    if fetched.returncode == 0 or "cannot lock ref" not in fetched.stderr:
+        return fetched
+    click.echo(
+        f"  self-update: git fetch in {checkout} collided with another fetch there; "
+        f"retrying in {_UPDATE_FETCH_RETRY_SECS:.0f}s"
+    )
+    until = time.monotonic() + _UPDATE_FETCH_RETRY_SECS
+    while not (stop is not None and stop()):
+        left = until - time.monotonic()
+        if left <= 0:
+            break
+        time.sleep(min(left, _UPDATE_STOP_POLL_SECS))
+    return fetch()  # not started (exit 130) once stopping
+
+
+def _tree_differs_from_head(
+    checkout: Path,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> str:
+    """Why *checkout*'s tracked files are not exactly HEAD's, or "" when they are.
+
+    A self-update installs the working tree, so it has to be a commit.  Local
+    edits are not one; nor is a merge ended part-way through rewriting the
+    tree -- by its timeout, by systemd stopping the unit (SIGTERM to its whole
+    cgroup, the merge included), by the OOM killer.  That leaves HEAD on the
+    old commit under a tree partly from the new one, and pyproject.toml,
+    which sorts before src/, may already say the new version: installing it
+    would put code that matches no commit on the builder, and every later
+    fast-forward refuses ("would be overwritten") until someone cleans up.
+    """
+    diff = _run_update_step(
+        ["git", "diff", "--quiet", "HEAD"],
+        cwd=checkout,
+        timeout=_UPDATE_GIT_TIMEOUT,
+        beat=beat,
+        stop=stop,
+    )
+    if diff.returncode == 0:
+        return ""
+    if diff.returncode == 1:
+        return f"tracked files in {checkout} differ from HEAD (local edits or an interrupted pull)"
+    return (
+        f"cannot tell whether tracked files in {checkout} match HEAD (git diff exit "
+        f"{diff.returncode}: {diff.stderr.strip()[-200:]})"
+    )
+
+
 def _resolve_update_source(
     beat: Callable[[], None] | None = None,
     stop: Callable[[], bool] | None = None,
 ) -> tuple[Path, str] | None:
     """``(checkout, version)`` a self-update would install, or None.
 
-    Must predict what _self_update() -- ``git pull --ff-only``, then pip
-    install of whatever the working tree holds -- will actually install, since
-    the builder drains (stops taking work, possibly for hours) on the strength
-    of it.  So it fetches (``--prune``: an upstream branch deleted on the
-    remote must not live on as a stale remote-tracking ref the pull cannot
-    fetch), and counts on the upstream's version only when the pull can
-    deliver it: the fetch succeeded (a failed one leaves a stale
-    remote-tracking ref), HEAD is an ancestor of the upstream (a diverged
-    branch cannot fast-forward) and no tracked file is modified (local edits
-    can make the pull refuse).  Otherwise the pull would fail or change
-    nothing, and the working tree's version is what gets installed; it logs
-    which case it was.
+    Must predict what _self_update() -- fetch, ``git merge --ff-only`` of the
+    upstream, then pip install of whatever the working tree holds -- will
+    actually install, since the builder drains (stops taking work, possibly
+    for hours) on the strength of it.
 
-    Not detected: an untracked file the pull would have to overwrite, which
-    also makes the pull refuse.  That costs one drain for nothing -- the
-    update then installs the working tree's version only if that is newer.
+    None when tracked files differ from HEAD (local edits, or a pull ended
+    part-way): _self_update() refuses to install from such a tree, so the
+    builder must not drain for it.  Otherwise it fetches (_git_fetch) and
+    counts on the upstream's version only when the merge can deliver it: the
+    fetch succeeded (a failed one leaves a stale remote-tracking ref, and
+    _self_update() does not merge then) and HEAD is an ancestor of the
+    upstream (a diverged branch cannot fast-forward).  Otherwise the merge
+    would fail or change nothing, and the working tree's version is what gets
+    installed; it logs which case it was.
+
+    Not detected: an untracked file the merge would have to overwrite, which
+    also makes it refuse.  That costs one drain for nothing -- the update
+    then installs the working tree's version only if that is newer.
 
     It reads the upstream with ``git show`` and never touches the working
     tree: an editable install runs straight out of the checkout, and jobs are
@@ -633,31 +765,36 @@ def _resolve_update_source(
         )
         return (checkout, local) if local else None
 
-    fetched = git("fetch", "--prune", "--quiet")
+    dirty = _tree_differs_from_head(checkout, beat=beat, stop=stop)
+    if stopping():
+        return None
+    if dirty:
+        click.echo(
+            f"  self-update: {dirty}; a self-update will not install from it - see "
+            + _shell_join(["git", "-C", str(checkout), "status"]),
+            err=True,
+        )
+        return None
+    fetched = _git_fetch(checkout, beat=beat, stop=stop)
     if stopping():
         return None
     if fetched.returncode != 0:
         return working_tree(
-            f"git fetch failed (exit {fetched.returncode}): {fetched.stderr.strip()[-300:]}"
+            f"git fetch failed (exit {fetched.returncode}): {_git_error(fetched.stderr)}"
         )
     ancestor = git("merge-base", "--is-ancestor", "HEAD", "@{upstream}")
     if stopping():
         return None
     if ancestor.returncode == 1:
         return working_tree(
-            "HEAD has commits its upstream does not (diverged), so a fast-forward pull "
+            "HEAD has commits its upstream does not (diverged), so a fast-forward "
             "cannot update it"
         )
     if ancestor.returncode != 0:
         return working_tree(
-            "nothing to pull: a detached HEAD, no upstream branch, or an upstream "
+            "nothing to merge: a detached HEAD, no upstream branch, or an upstream "
             f"deleted on the remote ({ancestor.stderr.strip()[-200:]})"
         )
-    modified = git("diff", "--quiet", "HEAD")
-    if stopping():
-        return None
-    if modified.returncode != 0:
-        return working_tree("tracked files are modified, and the pull may refuse")
     shown = git("show", "@{upstream}:pyproject.toml")
     if stopping():
         return None
@@ -769,8 +906,8 @@ def _fresh_cvcpkg_version(
 
     *version* is None when the import failed, and *error* then says why.
     ``cvcpkg.__version__`` is the installed distribution's metadata, which
-    only a pip install changes -- for an editable install too, whose code a
-    ``git pull`` alone already changes.
+    only a pip install changes -- for an editable install too, whose code the
+    merge alone already changes.
     """
     probe = _run_update_step(
         [sys.executable, "-c", "import cvcpkg; print(cvcpkg.__version__)"],
@@ -1397,11 +1534,19 @@ def _self_update(
     added to the successor's environment, along with ``CVCPKG_TOKEN``.
 
     *stop* says the builder was asked to stop.  Once it returns True the
-    update ends where it is -- a running step is ended (see _run_update_step)
-    -- and it never re-execs: a re-exec would start a fresh builder that
-    takes work again, the stop request lost with the old process image.  It
-    is checked on entry, after the pull, after pip, and right before the
-    re-exec.
+    update goes no further and never re-execs: a re-exec would start a fresh
+    builder that takes work again, the stop request lost with the old process
+    image.  A read-only step that is running then (the fetch, the tree check,
+    a version probe, the wait for the lock) is ended (see _run_update_step);
+    the two that rewrite files -- the merge and pip -- are let finish
+    (bounded by their timeouts), since either one ended part-way can leave
+    the builder unable to start.  It is checked on entry, after every step,
+    and right before the re-exec.
+
+    The update is ``git fetch`` then ``git merge --ff-only @{upstream}`` (a
+    ``git pull``, split so that only its network half can be ended), and it
+    installs only a working tree that matches HEAD exactly
+    (_tree_differs_from_head).
 
     Builders sharing the checkout update one at a time (_self_update_lock),
     and one that finds the version installed already only restarts.
@@ -1459,21 +1604,51 @@ def _self_update(
         with _self_update_lock(checkout, beat=beat, stop=stop) as locked:
             if not locked:
                 return
-            pulled = _run_update_step(
-                ["git", "pull", "--ff-only", "--quiet"],
-                cwd=checkout,
-                timeout=_UPDATE_GIT_TIMEOUT,
-                beat=beat,
-                stop=stop,
-            )
-            if _stop_requested(stop, f"not updating, staying on {running}"):
+            staying = f"not updating, staying on {running}"
+            fetched = _git_fetch(checkout, beat=beat, stop=stop)
+            if _stop_requested(stop, staying):
                 return
-            if pulled.returncode != 0:
+            if fetched.returncode != 0:
+                # As `git pull` would: no merge, the working tree as it is.
                 click.echo(
-                    f"  self-update: git pull failed (exit {pulled.returncode}): "
-                    f"{pulled.stderr.strip()[-300:]}",
+                    f"  self-update: git fetch failed (exit {fetched.returncode}): "
+                    f"{_git_error(fetched.stderr)}",
                     err=True,
                 )
+            else:
+                # Local, and it rewrites the working tree: a stop lets it
+                # finish (see _run_update_step's finish_on_stop).
+                merged = _run_update_step(
+                    ["git", "merge", "--ff-only", "--quiet", "@{upstream}"],
+                    cwd=checkout,
+                    timeout=_UPDATE_GIT_TIMEOUT,
+                    beat=beat,
+                    stop=stop,
+                    finish_on_stop=(
+                        f"letting git merge finish (at most {_UPDATE_GIT_TIMEOUT:.0f} s), "
+                        "no restart"
+                    ),
+                )
+                if _stop_requested(stop, staying):
+                    return
+                if merged.returncode != 0:
+                    click.echo(
+                        f"  self-update: git merge --ff-only failed (exit {merged.returncode}): "
+                        f"{_git_error(merged.stderr)}",
+                        err=True,
+                    )
+            # Whatever the merge did -- or a merge or pull before this one,
+            # killed part-way -- install only a tree that is exactly a commit.
+            dirty = _tree_differs_from_head(checkout, beat=beat, stop=stop)
+            if _stop_requested(stop, staying):
+                return
+            if dirty:
+                click.echo(
+                    f"  self-update: {dirty}; not installing - see "
+                    + _shell_join(["git", "-C", str(checkout), "status"]),
+                    err=True,
+                )
+                return
             # Only ever a NEWER cvcpkg.  An older one -- a stale clone whose
             # upstream no longer moves -- would downgrade the builder on every
             # update request, and the same version would restart it on the code
@@ -1493,7 +1668,7 @@ def _self_update(
             # again would rewrite the files under that builder's feet for
             # nothing.  Not older, either: never downgrade what it installed.
             before, _ = _fresh_cvcpkg_version(beat, stop)
-            if _stop_requested(stop, f"not updating, staying on {running}"):
+            if _stop_requested(stop, staying):
                 return
             if before is not None and not _is_newer_version(found, before):
                 click.echo(
@@ -1565,11 +1740,19 @@ def _pip_install(
     flag = _pip_supports_break_system_packages()
 
     def pip(break_system_packages: bool):
+        # A stop lets pip finish: ended part-way it leaves cvcpkg
+        # half-installed (see _run_update_step's finish_on_stop); the check
+        # right after it then keeps the builder from restarting.  A builder
+        # killed meanwhile (`builder fleet` gives up on a worker after 120 s)
+        # leaves pip running in its own session, where it completes.
         return _run_update_step(
             _pip_install_cmd(checkout, break_system_packages=break_system_packages),
             timeout=_UPDATE_PIP_TIMEOUT,
             beat=beat,
             stop=stop,
+            finish_on_stop=(
+                f"letting pip finish (at most {_UPDATE_PIP_TIMEOUT:.0f} s), no restart"
+            ),
         )
 
     installed = pip(flag)
@@ -1583,14 +1766,10 @@ def _pip_install(
         flag = not flag
         installed = pip(flag)
     if installed.returncode == 130 and _stop_requested(
-        stop, f"pip install did not finish; staying on {running}"
+        stop, f"not installing, staying on {running}"
     ):
-        # Ended mid-install, pip can leave a half-installed cvcpkg behind.
-        click.echo(
-            "  self-update: should the builder then fail to start, reinstall with: "
-            + _shell_join(_pip_install_cmd(checkout, break_system_packages=flag)),
-            err=True,
-        )
+        # Only a pip that was not started comes back as 130 (a stop lets a
+        # running one finish), so nothing was changed.
         return False
     if installed.returncode != 0:
         click.echo(
@@ -1598,6 +1777,16 @@ def _pip_install(
             f"staying on {running}: {installed.stderr.strip()[-500:]}",
             err=True,
         )
+        if installed.returncode == 124:
+            # Timed out: pip was Ctrl-C'd and then killed, possibly in the
+            # middle of replacing cvcpkg -- and it rolls its uninstall back
+            # only on an Exception, never on Ctrl-C.
+            click.echo(
+                "  self-update: pip was ended part-way and may have left cvcpkg "
+                "half-installed; should the builder then fail to start, reinstall with: "
+                + _shell_join(_pip_install_cmd(checkout, break_system_packages=flag)),
+                err=True,
+            )
         return False
     on_disk = f"{found} is installed; not restarting into it (the next start runs it)"
     if _stop_requested(stop, on_disk):
@@ -3495,11 +3684,13 @@ def builder_run(
                                         err=True,
                                     )
                                 elif src is None:
+                                    # No checkout, or one it will not install
+                                    # from (the check logged why).
                                     click.echo(
                                         f"  Server requests update: {__version__} -> "
-                                        f"{server_ver}; ignored: no cvcpkg source "
-                                        "checkout to update from (set "
-                                        f"{_SELF_UPDATE_DIR_ENV})",
+                                        f"{server_ver}; ignored: no usable cvcpkg "
+                                        "source checkout to update from (set "
+                                        f"{_SELF_UPDATE_DIR_ENV} to name one)",
                                         err=True,
                                     )
                                 elif not _is_newer_version(src[1], __version__):
