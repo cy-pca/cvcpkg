@@ -292,14 +292,15 @@ jobs:
           # the VM (see the job comment); the cleanup step removes it whole.
           JOB_DIR="${BASE_DIR}/cvcpkg-standalone-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           REMOTE_DIR="${JOB_DIR}/src"
+          # Record the directory BEFORE creating it, so the always() cleanup
+          # removes it even when the mkdir or the tar sync below fails.
+          echo "job_dir=${JOB_DIR}" >> "$GITHUB_ENV"
+          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
 
           ssh ${SSH_OPTS} "${VM}" "rm -rf ${JOB_DIR} && mkdir -p ${REMOTE_DIR} ${JOB_DIR}/tmp ${JOB_DIR}/pyinstaller"
           tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
             --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
             | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
-
-          echo "job_dir=${JOB_DIR}" >> "$GITHUB_ENV"
-          echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
 
       - name: Install deps + build standalone
         shell: bash
@@ -340,16 +341,24 @@ jobs:
           # the only interpreter used from here on; the system ${PYTHON} only
           # creates the venv.  RENV keeps pip's and PyInstaller's scratch,
           # cache and config inside the job directory too.
+          #
+          # NOPYC (PYTHONDONTWRITEBYTECODE=1) goes on EVERY python run on the
+          # VM, RENV included (PyInstaller's hook subprocesses inherit it): the
+          # venv interpreter imports pip and other system-site modules, and as
+          # root it would otherwise write __pycache__/*.pyc into the system
+          # site -- the tree this job promises not to touch.  A new top-level
+          # __pycache__ there would also trip the fingerprint check below.
           VENV_PY="${job_dir}/venv/bin/python"
-          RENV="TMPDIR=${job_dir}/tmp PYINSTALLER_CONFIG_DIR=${job_dir}/pyinstaller PIP_DISABLE_PIP_VERSION_CHECK=1"
+          NOPYC="PYTHONDONTWRITEBYTECODE=1"
+          RENV="${NOPYC} TMPDIR=${job_dir}/tmp PYINSTALLER_CONFIG_DIR=${job_dir}/pyinstaller PIP_DISABLE_PIP_VERSION_CHECK=1"
           ssh ${SSH_OPTS} "${VM}" "set -e; \
-            ${PYTHON} -m venv --system-site-packages --without-pip ${job_dir}/venv; \
-            ${VENV_PY} -c 'import sys; assert sys.prefix != sys.base_prefix, \"not a venv\"'; \
-            ${VENV_PY} -m pip --version"
+            env ${NOPYC} ${PYTHON} -m venv --system-site-packages --without-pip ${job_dir}/venv; \
+            env ${NOPYC} ${VENV_PY} -c 'import sys; assert sys.prefix != sys.base_prefix, \"not a venv\"'; \
+            env ${NOPYC} ${VENV_PY} -m pip --version"
 
           # Fingerprint the system site-packages so the verify step can prove
           # this job did not change it.
-          ssh ${SSH_OPTS} "${VM}" "${PYTHON} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
+          ssh ${SSH_OPTS} "${VM}" "env ${NOPYC} ${PYTHON} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
             > system-site.before
 
           if [ "${{ matrix.os }}" = "netbsd-x86_64" ]; then
@@ -367,7 +376,7 @@ jobs:
           # a cvcpkg that happens to be installed in the system site.
           ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir}; \
             env ${RENV} ${VENV_PY} -m pip install '.[remote,builder,signing,validate]'; \
-            ${VENV_PY} -c 'import sys, cvcpkg; assert cvcpkg.__file__.startswith(sys.prefix), cvcpkg.__file__'; \
+            env ${NOPYC} ${VENV_PY} -c 'import sys, cvcpkg; assert cvcpkg.__file__.startswith(sys.prefix), cvcpkg.__file__'; \
             env ${RENV} ${VENV_PY} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
 
       - name: Verify + retrieve binary
@@ -385,14 +394,14 @@ jobs:
           # The builder's WebSocket client must be IN the archive (see the
           # hosted build's verify step): a lazy import that falls back to
           # long-poll with one log line is otherwise invisible.
-          ssh ${SSH_OPTS} "${VM}" "${job_dir}/venv/bin/python -m PyInstaller.utils.cliutils.archive_viewer \
+          ssh ${SSH_OPTS} "${VM}" "env PYTHONDONTWRITEBYTECODE=1 ${job_dir}/venv/bin/python -m PyInstaller.utils.cliutils.archive_viewer \
             -r -b ${remote_dir}/dist/cvcpkg" > archive.txt
           grep -Eq '^\s*websockets\.sync\.client$' archive.txt \
             || { echo "::error::websockets is not bundled -- builder run would be long-poll only"; exit 1; }
 
           # The production builders on this VM run from the system site: it
           # must be exactly as this job found it.
-          ssh ${SSH_OPTS} "${VM}" "${{ matrix.python }} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
+          ssh ${SSH_OPTS} "${VM}" "env PYTHONDONTWRITEBYTECODE=1 ${{ matrix.python }} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
             > system-site.after
           if ! cmp -s system-site.before system-site.after; then
             echo "::error::the system site-packages on ${{ steps.vm.outputs.host }} changed during this job -- the build must stay inside its venv"
