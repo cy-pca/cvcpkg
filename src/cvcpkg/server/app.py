@@ -1009,6 +1009,22 @@ async def emit_webhook_event(
 # Maps builder_id -> WebSocket for all connected builders.
 _ws_builders: dict[int, WebSocket] = {}
 
+
+def _ws_forget(builder_id: int, ws: WebSocket) -> None:
+    """Drop *ws* from the registry -- only if it is still the registered one.
+
+    A builder that reconnects registers its new socket while the server may
+    not yet have noticed the old one is dead (a half-open connection is only
+    found by the ping timeout; behind a proxy the backend leg can outlive the
+    client leg).  Popping by builder id alone, when the old one is finally torn
+    down, would unregister the LIVE socket: no job.dispatch or builder.update
+    reaches that builder again, and it never notices, because its own socket
+    is fine.
+    """
+    if _ws_builders.get(builder_id) is ws:
+        _ws_builders.pop(builder_id, None)
+
+
 # How often (seconds) an open builder WebSocket re-verifies its token.  A
 # builder socket authenticates once at connect and then lives for hours; without
 # re-verification a token that is later revoked, expired, or rotated keeps full
@@ -1033,21 +1049,6 @@ def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
     if actor.role not in (TokenRole.publisher, TokenRole.admin):
         return (4003, "insufficient role")
     return None
-
-
-def _ws_forget(builder_id: int, ws: WebSocket) -> None:
-    """Drop *ws* from the registry -- only if it is still the registered one.
-
-    A builder that reconnects registers its new socket while the server may
-    not yet have noticed the old one is dead (a half-open connection is only
-    found by the ping timeout; behind a proxy the backend leg can outlive the
-    client leg).  Popping by builder id alone, when the old one is finally torn
-    down, would unregister the LIVE socket: no job.dispatch or builder.update
-    reaches that builder again, and it never notices, because its own socket
-    is fine.
-    """
-    if _ws_builders.get(builder_id) is ws:
-        _ws_builders.pop(builder_id, None)
 
 
 async def _ws_send(builder_id: int, msg: dict) -> bool:
