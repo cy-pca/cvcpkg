@@ -53,7 +53,12 @@ cvcpkg --env-file /etc/cvcpkg/builder.env builder run \
 
 The builder removes its token -- and every other `CVCPKG_...TOKEN...`
 variable -- from the environment its build scripts inherit, so recipes never
-see a builder credential.
+see a builder credential in their environment. This is hygiene, not a sandbox:
+a build script runs as the builder's user, and a builder started with
+`CVCPKG_TOKEN` still has it in its own initial environment
+(`/proc/<pid>/environ`), which that user can read. See
+[Keeping the token out of `ps`](#keeping-the-token-out-of-ps----env-file), and
+run builders that must not reach each other's credentials as separate users.
 
 ### Key Options
 
@@ -105,18 +110,30 @@ dispatched and are picked up by the restarted builder. The single-file binary
 ignores `builder.update`; replace the binary instead. A builder already at the
 server's version, or ahead of it, ignores it too.
 
-A pip-installed builder updates from a cvcpkg **source checkout**: the one it
-was installed from (pip records it), the checkout it runs from (editable
-install), or `CVCPKG_SELF_UPDATE_DIR`. It decides whether there is anything to
-install *before* it stops taking work: it fetches, and ignores the update
-unless the checkout's upstream is newer than the running version -- so a
-builder with no checkout, or a stale one, is never drained for nothing. Once
+A pip-installed builder updates from a cvcpkg **source checkout**, and only
+from one of these: `CVCPKG_SELF_UPDATE_DIR` if set (then nothing else), the
+directory it was installed from (pip records it), or the checkout it runs from
+(editable install). It never guesses a path, so a builder installed from PyPI
+ignores `builder.update` until `CVCPKG_SELF_UPDATE_DIR` names a checkout -- a
+clean clone of cy-pca/cvcpkg tracking `master`, since the update is
+`git pull --ff-only` on whatever branch it has checked out.
+
+It decides whether there is anything to install *before* it stops taking work:
+it fetches, and counts on the upstream's version only when the pull can
+deliver it (the fetch succeeded, the branch fast-forwards, and no tracked file
+is modified); otherwise it goes by the working tree's version. It ignores the
+update unless that version is newer than the running one -- so a builder with
+no checkout, or a stale or diverged one, is never drained for nothing. Once
 idle it pulls, pip-installs `<checkout>[builder]` (passing
 `--break-system-packages` only to a pip that knows it, 23.0.1+), checks that a
 fresh interpreter imports the new version, and re-execs as
 `python -m cvcpkg builder run ...` with the token in `CVCPKG_TOKEN`. If any
 step fails it logs why and keeps running the version it has. It heartbeats
-throughout, so the server does not mark it offline mid-update.
+throughout, so the server does not mark it offline mid-update, and every step
+has a timeout that kills the step's whole process tree; git runs
+non-interactively, with ssh and http stall limits unless the builder's
+environment or git config sets its own (`GIT_SSH_COMMAND`/`core.sshCommand`,
+`http.lowSpeedLimit`/`http.lowSpeedTime`).
 
 | Environment variable | Default | Meaning |
 |----------------------|---------|---------|
@@ -124,7 +141,7 @@ throughout, so the server does not mark it offline mid-update.
 | `CVCPKG_BUILDER_WS_RETRY_MAX` | `300` | Backoff cap: the longest a builder stays on long-poll once the server accepts sockets again |
 | `CVCPKG_BUILDER_WS_STABLE_SECS` | `60` | A socket that stayed up this long resets the backoff |
 | `CVCPKG_BUILDER_WS_SWEEP_INTERVAL` | `60` | How often a connected builder asks `next-job` for undelivered dispatches |
-| `CVCPKG_SELF_UPDATE_DIR` | (search) | The cvcpkg git checkout a pip-installed builder updates itself from |
+| `CVCPKG_SELF_UPDATE_DIR` | (install source) | The cvcpkg git checkout a pip-installed builder updates itself from; needed for a PyPI install |
 
 `--no-websocket` disables the socket entirely; drain mode
 (`--exit-when-empty`, `--no-register`) never uses it.

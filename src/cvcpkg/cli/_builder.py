@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 import time
 from collections.abc import Callable
@@ -114,26 +115,95 @@ def _newest_first(pkg: dict) -> tuple:
 _SUPERVISOR_RESTART_CODE = 90
 
 
+# PEP 440 (the spec's appendix pattern).  cvcpkg's own versions travel in two
+# spellings: pyproject.toml's as written ("2.5.0-rc1", what a checkout says it
+# is) and the installed metadata's, which the build backend normalises
+# ("2.5.0rc1", what ``cvcpkg.__version__`` and the server report).
+_PEP440_RE = re.compile(
+    r"""^\s*v?
+    (?:(?P<epoch>[0-9]+)!)?
+    (?P<release>[0-9]+(?:\.[0-9]+)*)
+    (?P<pre>[-_.]?(?P<pre_l>alpha|a|beta|b|preview|pre|c|rc)[-_.]?(?P<pre_n>[0-9]+)?)?
+    (?P<post>(?:-(?P<post_n1>[0-9]+))
+        |(?:[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]+)?))?
+    (?P<dev>[-_.]?(?P<dev_l>dev)[-_.]?(?P<dev_n>[0-9]+)?)?
+    (?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?
+    \s*$""",
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _pep440_key(version: str) -> tuple | None:
+    """A PEP 440 ordering key for *version* (equal for equal versions), or None.
+
+    The same order ``packaging.version.Version`` gives, for the forms cvcpkg
+    uses -- ``packaging`` is not a cvcpkg dependency.
+    """
+    m = _PEP440_RE.match(version or "")
+    if not m:
+        return None
+    release = [int(x) for x in m.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    # Slots are (rank, value): rank 0 sorts below any value, 2 above.
+    has_pre, has_post, has_dev = m.group("pre"), m.group("post"), m.group("dev")
+    if has_pre:
+        letter = m.group("pre_l").lower()
+        letter = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}.get(
+            letter, letter
+        )
+        pre: tuple = (1, letter, int(m.group("pre_n") or 0))
+    elif has_dev and not has_post:
+        pre = (0, "", 0)  # 1.0.dev1 < 1.0a1
+    else:
+        pre = (2, "", 0)
+    post = (1, int(m.group("post_n1") or m.group("post_n2") or 0)) if has_post else (0, 0)
+    dev = (1, int(m.group("dev_n") or 0)) if has_dev else (2, 0)
+    local: tuple = ()
+    if m.group("local"):
+        local = tuple(
+            (1, int(p), "") if p.isdigit() else (0, 0, p.lower())
+            for p in re.split(r"[-_.]", m.group("local"))
+        )
+    return (int(m.group("epoch") or 0), tuple(release), pre, post, dev, local)
+
+
 def _is_newer_version(candidate: str, current: str) -> bool:
     """True when cvcpkg version *candidate* is newer than *current*.
 
     ``builder.update`` carries the server's own version.  A builder that is
     already at it, or ahead of it, has nothing to update to: acting on it
     would only drain the builder and restart it on the code it already runs.
-    A version that does not parse falls back to plain inequality.
+    Compared as PEP 440 versions, so the two spellings of one version (see
+    _PEP440_RE) are equal; failing that as SemVer, and failing both by plain
+    inequality.
     """
+    a, b = _pep440_key(candidate), _pep440_key(current)
+    if a is not None and b is not None:
+        return a > b
     from cvcpkg.semver import Version
 
     try:
         return Version.parse(candidate) > Version.parse(current)
     except ValueError:
-        return candidate != current
+        return candidate.strip() != current.strip()
+
+
+def _same_version(a: str, b: str) -> bool:
+    """True when *a* and *b* name the same cvcpkg version (see _is_newer_version)."""
+    ka, kb = _pep440_key(a), _pep440_key(b)
+    if ka is not None and kb is not None:
+        return ka == kb
+    from cvcpkg.semver import Version
+
+    try:
+        return Version.parse(a) == Version.parse(b)
+    except ValueError:
+        return a.strip() == b.strip()
 
 
 def _pyproject_field(text: str, key: str) -> str | None:
     """The first top-level ``key = "value"`` in pyproject.toml *text*."""
-    import re
-
     m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
     return m.group(1) if m else None
 
@@ -168,6 +238,146 @@ _UPDATE_GIT_TIMEOUT = 60.0
 _UPDATE_PIP_TIMEOUT = 300.0
 _UPDATE_VERIFY_TIMEOUT = 60.0
 _UPDATE_BEAT_SECS = 20.0
+# After a timed-out step's process tree is killed: how long to wait for its
+# output pipes to close.  A process that escaped the kill (it started its own
+# session) can hold them open for as long as it lives; past this the step gives
+# up on its output instead of blocking the builder with it.
+_UPDATE_KILL_GRACE_SECS = 5.0
+
+# git's network transports otherwise wait on a dead connection for as long as
+# the kernel lets them.  Applied only where the user has not set their own
+# (see _git_update_env).
+_GIT_SSH_COMMAND = (
+    "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+)
+_GIT_LOW_SPEED = {
+    # env var -> the git config key it overrides
+    "GIT_HTTP_LOW_SPEED_LIMIT": ("http.lowspeedlimit", "1000"),  # bytes/s ...
+    "GIT_HTTP_LOW_SPEED_TIME": ("http.lowspeedtime", "30"),  # ... for this many s
+}
+
+
+def _git_configured_keys(cwd: Path | str | None) -> set[str]:
+    """Which transport settings git's own config sets for *cwd* (lowercase).
+
+    One local ``git config`` read; any failure counts as "none set".
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(  # noqa: S603 - fixed command
+            [
+                "git",
+                "config",
+                "--get-regexp",
+                r"^(core\.sshcommand|http\.lowspeedlimit|http\.lowspeedtime)$",
+            ],
+            cwd=str(cwd) if cwd is not None else None,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.split(None, 1)[0].lower() for line in r.stdout.splitlines() if line.strip()}
+
+
+def _git_update_env(cwd: Path | str | None) -> dict[str, str]:
+    """The environment a self-update's git commands run with.
+
+    Unattended, and bounded: a remote that wants credentials fails the step
+    instead of waiting on a prompt nobody will answer (terminal, or the
+    Windows Git Credential Manager's dialog), and a stalled ssh or http
+    transport gives up instead of holding the step open.  Each bound applies
+    only when neither the environment nor git's config already sets it, so a
+    builder's own ssh command or http limits win.
+    """
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault("GCM_INTERACTIVE", "never")
+    configured = _git_configured_keys(cwd)
+    if not (env.get("GIT_SSH_COMMAND") or env.get("GIT_SSH") or "core.sshcommand" in configured):
+        env["GIT_SSH_COMMAND"] = _GIT_SSH_COMMAND
+    for var, (key, value) in _GIT_LOW_SPEED.items():
+        if not env.get(var) and key not in configured:
+            env[var] = value
+    return env
+
+
+def _update_step_popen_kwargs() -> dict:
+    """Start each step as the leader of its own process group / session.
+
+    So a timed-out step can be killed as a whole tree -- git's ssh and
+    git-remote-https helpers, pip's build backends -- and so a Ctrl-C at the
+    builder's terminal does not reach it half-way.
+    """
+    import subprocess
+
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)}
+    return {"start_new_session": True}
+
+
+def _kill_update_step(proc) -> None:
+    """Kill *proc* and every process it started (best effort)."""
+    import subprocess
+
+    if sys.platform == "win32":
+        try:
+            subprocess.run(  # noqa: S603, S607 - fixed command
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        import signal
+
+        try:
+            # The step leads its own session (start_new_session), so its pid
+            # is its process group id -- never ours.
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:  # ESRCH: the whole group is gone already
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _collect_killed_step(proc) -> tuple[str, str]:
+    """Output of a step whose tree was just killed, without waiting on stragglers.
+
+    ``communicate()`` with no timeout waits for EOF on stdout/stderr, and any
+    descendant that survived the kill and inherited them keeps them open --
+    for a git transport stuck on a dead connection, indefinitely.  So wait a
+    bounded time, then drop the pipes and settle for no output.
+    """
+    import subprocess
+
+    try:
+        out, err = proc.communicate(timeout=_UPDATE_KILL_GRACE_SECS)
+        return out or "", err or ""
+    except subprocess.TimeoutExpired:
+        pass
+    if sys.platform != "win32":
+        # POSIX communicate() read on this thread, so nothing else holds these.
+        # (On Windows its reader threads still do, and closing would block on
+        # them; they are daemon threads and end when the straggler does.)
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                if pipe is not None:
+                    pipe.close()
+            except OSError:
+                pass
+    try:
+        proc.wait(timeout=_UPDATE_KILL_GRACE_SECS)
+    except subprocess.TimeoutExpired:
+        pass
+    return "", "(output lost: a process the step started outlived the kill)"
 
 
 def _run_update_step(
@@ -181,16 +391,13 @@ def _run_update_step(
 
     Returns a ``subprocess.CompletedProcess`` with text stdout/stderr.  A
     command that cannot be started (no git on PATH) comes back as exit 127,
-    and one that overruns *timeout* is killed and comes back as exit 124 --
-    the caller treats both as a failed step, never as an exception.
+    and one that overruns *timeout* is killed -- with everything it started --
+    and comes back as exit 124 within a few seconds of the deadline; the
+    caller treats both as a failed step, never as an exception.
     """
     import subprocess
 
-    env = None
-    if cmd and cmd[0] == "git":
-        # Unattended: a remote that wants credentials fails the step instead
-        # of waiting on a prompt nobody will answer.
-        env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    env = _git_update_env(cwd) if cmd and cmd[0] == "git" else None
     try:
         proc = subprocess.Popen(  # noqa: S603 - fixed commands
             cmd,
@@ -200,24 +407,34 @@ def _run_update_step(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            **_update_step_popen_kwargs(),
         )
     except OSError as exc:
         return subprocess.CompletedProcess(cmd, 127, "", str(exc))
     deadline = time.monotonic() + timeout
-    while True:
-        remaining = deadline - time.monotonic()
-        try:
-            out, err = proc.communicate(timeout=max(0.1, min(_UPDATE_BEAT_SECS, remaining)))
-            return subprocess.CompletedProcess(cmd, proc.returncode, out or "", err or "")
-        except subprocess.TimeoutExpired:
-            if time.monotonic() >= deadline:
-                proc.kill()
-                out, err = proc.communicate()
-                return subprocess.CompletedProcess(
-                    cmd, 124, out or "", (err or "") + f"\ntimed out after {timeout:.0f}s"
-                )
-            if beat is not None:
-                beat()
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            try:
+                out, err = proc.communicate(timeout=max(0.1, min(_UPDATE_BEAT_SECS, remaining)))
+                return subprocess.CompletedProcess(cmd, proc.returncode, out or "", err or "")
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    break
+                if beat is not None:
+                    beat()
+        _kill_update_step(proc)
+        if beat is not None:
+            beat()
+        out, err = _collect_killed_step(proc)
+        return subprocess.CompletedProcess(cmd, 124, out, err + f"\ntimed out after {timeout:.0f}s")
+    except BaseException:
+        # KeyboardInterrupt (or a failing beat) while the step runs: it is in
+        # its own session, so nothing else will stop it.  Unconditionally --
+        # the step's own process may be gone while what it started is not, and
+        # its group id stays reserved (no pid reuse) while any member lives.
+        _kill_update_step(proc)
+        raise
 
 
 def _installed_source_dir() -> Path | None:
@@ -248,7 +465,16 @@ def _installed_source_dir() -> Path | None:
 
 
 def _self_update_candidates() -> list[Path]:
-    """Where to look for the cvcpkg checkout to update from, in order."""
+    """Where to look for the cvcpkg checkout to update from, in order.
+
+    Only checkouts this install is tied to: ``CVCPKG_SELF_UPDATE_DIR`` (and
+    nothing else when it is set), the directory pip installed from, and the
+    checkout this code runs out of.  Never a guessed path such as
+    ``~/src/cvc/cvcpkg``: on a builder host that is as likely a developer's
+    clone on a feature branch, and ``git pull`` + pip install there would put
+    unreviewed code on the builder.  A PyPI install has none of these, so it
+    updates only once ``CVCPKG_SELF_UPDATE_DIR`` names a checkout.
+    """
     explicit = os.environ.get(_SELF_UPDATE_DIR_ENV, "").strip()
     if explicit:
         return [Path(explicit).expanduser()]
@@ -260,12 +486,6 @@ def _self_update_candidates() -> list[Path]:
     parents = Path(__file__).resolve().parents
     if len(parents) > 3:
         out.append(parents[3])
-    try:
-        home = Path.home()
-    except (RuntimeError, KeyError, OSError):  # a service account with no home
-        home = None
-    if home is not None:
-        out += [home / "src" / "cvc" / "cvcpkg", home / "cvcpkg", home / "libcvc-deps"]
     seen: set[Path] = set()
     return [c for c in out if not (c in seen or seen.add(c))]
 
@@ -287,39 +507,50 @@ def _resolve_update_source(
 ) -> tuple[Path, str] | None:
     """``(checkout, version)`` a self-update would install, or None.
 
-    Fetches, then reads the version from the branch's upstream without
-    touching the working tree: an editable install runs straight out of the
-    checkout, and pulling while a job is still building would change the code
-    under it.  The higher of the upstream's and the working tree's version is
-    what ``git pull --ff-only`` + pip install would leave installed.
+    Must predict what _self_update() -- ``git pull --ff-only``, then pip
+    install of whatever the working tree holds -- will actually install, since
+    the builder drains (stops taking work, possibly for hours) on the strength
+    of it.  So it fetches, and counts on the upstream's version only when the
+    pull can deliver it: the fetch succeeded (a failed one leaves a stale
+    remote-tracking ref), HEAD is an ancestor of the upstream (a diverged
+    branch cannot fast-forward) and no tracked file is modified (local edits
+    can make the pull refuse).  Otherwise the pull would fail or change
+    nothing, and the working tree's version is what gets installed.
+
+    It reads the upstream with ``git show`` and never touches the working
+    tree: an editable install runs straight out of the checkout, and jobs are
+    still building.
     """
     checkout = _find_update_checkout()
     if checkout is None:
         return None
-    _run_update_step(
-        ["git", "fetch", "--quiet"], cwd=checkout, timeout=_UPDATE_GIT_TIMEOUT, beat=beat
-    )
-    shown = _run_update_step(
-        ["git", "show", "@{upstream}:pyproject.toml"],
-        cwd=checkout,
-        timeout=_UPDATE_GIT_TIMEOUT,
-        beat=beat,
-    )
-    upstream = _pyproject_field(shown.stdout, "version") if shown.returncode == 0 else None
     local = _checkout_version(checkout)
-    versions = [v for v in (upstream, local) if v]
-    if not versions:
-        return None
-    best = versions[0]
-    for v in versions[1:]:
-        if _is_newer_version(v, best):
-            best = v
-    return checkout, best
+
+    def git(*args: str):
+        return _run_update_step(
+            ["git", *args], cwd=checkout, timeout=_UPDATE_GIT_TIMEOUT, beat=beat
+        )
+
+    fetched = git("fetch", "--quiet")
+    if fetched.returncode != 0:
+        click.echo(
+            f"  self-update: git fetch in {checkout} failed (exit {fetched.returncode}): "
+            f"{fetched.stderr.strip()[-300:]}; going by its working tree only",
+            err=True,
+        )
+        return (checkout, local) if local else None
+    if git("merge-base", "--is-ancestor", "HEAD", "@{upstream}").returncode != 0:
+        # Diverged, no upstream branch, or a detached HEAD: nothing to pull.
+        return (checkout, local) if local else None
+    if git("diff", "--quiet", "HEAD").returncode != 0:
+        return (checkout, local) if local else None
+    shown = git("show", "@{upstream}:pyproject.toml")
+    upstream = _pyproject_field(shown.stdout, "version") if shown.returncode == 0 else None
+    version = upstream or local
+    return (checkout, version) if version else None
 
 
 def _parse_version_tuple(text: str) -> tuple[int, ...] | None:
-    import re
-
     m = re.match(r"\s*(\d+(?:\.\d+)*)", text or "")
     return tuple(int(x) for x in m.group(1).split(".")) if m else None
 
@@ -413,8 +644,11 @@ def _reexec_builder(token: str, extra_env: dict[str, str] | None = None) -> None
     os.execve(argv[0], argv, env)
 
 
-def _fresh_cvcpkg_version(beat: Callable[[], None] | None = None) -> str | None:
-    """The version a freshly started interpreter imports, or None."""
+def _fresh_cvcpkg_version(beat: Callable[[], None] | None = None) -> tuple[str | None, str]:
+    """``(version, error)``: what a freshly started interpreter imports.
+
+    *version* is None when the import failed, and *error* then says why.
+    """
     probe = _run_update_step(
         [sys.executable, "-c", "import cvcpkg; print(cvcpkg.__version__)"],
         # Not the checkout: its directory must not shadow the installed copy.
@@ -423,9 +657,11 @@ def _fresh_cvcpkg_version(beat: Callable[[], None] | None = None) -> str | None:
         beat=beat,
     )
     if probe.returncode != 0:
-        return None
+        return None, probe.stderr.strip()[-300:] or f"exit {probe.returncode}"
     lines = probe.stdout.strip().splitlines()
-    return lines[-1].strip() if lines else None
+    if not lines:
+        return None, "it printed no version"
+    return lines[-1].strip(), ""
 
 
 # _ws_catch_up stops behind a job whose claim has not landed yet (see there).
@@ -1006,11 +1242,19 @@ def _self_update(
         # pip can succeed and still leave the old copy first on sys.path (it
         # installed somewhere else).  Restarting then only comes back on the
         # same code, so check what a fresh interpreter actually imports.
-        fresh = _fresh_cvcpkg_version(beat)
-        if fresh != found:
+        # Compared as versions, not strings: `found` is pyproject.toml's
+        # spelling and `fresh` the installed metadata's (2.5.0-rc1 vs 2.5.0rc1).
+        fresh, why = _fresh_cvcpkg_version(beat)
+        if fresh is None or not _same_version(fresh, found):
+            # pip succeeded, so the new copy is on disk regardless: say so --
+            # whatever restarts this builder next (a reboot, the service
+            # manager) loads whichever copy the interpreter finds.
+            seen = f"imports cvcpkg {fresh}" if fresh else f"cannot import cvcpkg ({why})"
             click.echo(
-                f"  self-update: installed {found}, but a fresh interpreter imports "
-                f"cvcpkg {fresh or '(failed to import)'}; staying on {running}",
+                f"  self-update: pip installed {found} from {checkout}, so it is on "
+                f"disk now, but a fresh {sys.executable} {seen}; not restarting, "
+                f"still running {running}.  The builder's next start runs whatever "
+                "that interpreter imports -- check which copy of cvcpkg it finds.",
                 err=True,
             )
             return

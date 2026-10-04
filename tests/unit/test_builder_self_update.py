@@ -14,6 +14,21 @@ What used to go wrong (each reproduced against a real builder):
   checkout, a stale checkout, the same version) still drained the builder
   first, for as long as its longest job.
 
+And, in this change's own first cut:
+
+* a timed-out step was killed, but ``communicate()`` then waited for EOF on
+  its pipes, which any grandchild holds open -- git's ssh and
+  git-remote-https helpers do.  A fetch stuck on a dead connection blocked
+  the builder's socket thread (no heartbeats, no messages) indefinitely.
+* the checkout search guessed ``~/src/cvc/cvcpkg``, ``~/cvcpkg`` and
+  ``~/libcvc-deps``: on a PyPI install that picked up a developer's clone on a
+  feature branch, which ``git pull`` + pip install then put on the builder.
+* the source check ignored a failed fetch, a diverged branch and a dirty
+  tree, so it could promise an upstream version the pull would never deliver
+  -- and drain the builder for nothing.
+* the post-install check compared pyproject.toml's version string to the
+  installed metadata's, so ``2.5.0-rc1`` vs ``2.5.0rc1`` failed a good install.
+
 The slow steps (git, pip) run through ``_run_update_step``; tests stub it.
 """
 
@@ -23,6 +38,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -114,12 +130,16 @@ def test_reexec_argv_starts_a_working_cvcpkg(tmp_path):
 class _Steps:
     """Stand-in for _run_update_step: records commands, answers per kind."""
 
-    def __init__(self, *, pip_rc=0, pip_err="", fresh=NEWER, pip_answers=None):
+    def __init__(
+        self, *, pip_rc=0, pip_err="", fresh=NEWER, pip_answers=None, probe_rc=0, probe_err=""
+    ):
         self.cmds: list[list[str]] = []
         self.pip_rc = pip_rc
         self.pip_err = pip_err
         self.fresh = fresh
         self.pip_answers = list(pip_answers or [])
+        self.probe_rc = probe_rc
+        self.probe_err = probe_err
 
     def __call__(self, cmd, *, timeout, cwd=None, beat=None):
         self.cmds.append(list(cmd))
@@ -130,6 +150,8 @@ class _Steps:
                 rc, err = self.pip_rc, self.pip_err
             return subprocess.CompletedProcess(cmd, rc, "", err)
         if "-c" in cmd:  # the fresh-interpreter version probe
+            if self.probe_rc:
+                return subprocess.CompletedProcess(cmd, self.probe_rc, "", self.probe_err)
             return subprocess.CompletedProcess(cmd, 0, f"{self.fresh}\n", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
@@ -232,7 +254,52 @@ def test_an_install_a_fresh_interpreter_does_not_see_does_not_restart(
     b._self_update(token="tk")
 
     assert reexecs == []
-    assert "a fresh interpreter imports" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert f"imports cvcpkg {RUNNING}" in err
+    # pip did succeed: the log must not leave the impression nothing changed.
+    assert f"pip installed {NEWER}" in err and "on disk now" in err
+
+
+def test_an_install_reported_in_the_other_spelling_restarts(monkeypatch, update_env):
+    """pyproject.toml says 2.5.0-rc1, the installed metadata says 2.5.0rc1:
+    the same version, so the install took."""
+    _, reexecs = update_env
+    monkeypatch.setattr(b, "_checkout_version", lambda path: "999.0.0-rc1")
+    monkeypatch.setattr(b, "_run_update_step", _Steps(fresh="999.0.0rc1"))
+    b._self_update(token="tk")
+    assert len(reexecs) == 1
+
+
+def test_an_install_that_cannot_be_imported_does_not_restart(monkeypatch, update_env, capsys):
+    _, reexecs = update_env
+    steps = _Steps(probe_rc=1, probe_err="ModuleNotFoundError: No module named 'websockets'")
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    b._self_update(token="tk")
+
+    assert reexecs == []
+    err = capsys.readouterr().err
+    assert "cannot import cvcpkg" in err and "ModuleNotFoundError" in err
+    assert "on disk now" in err
+
+
+@pytest.mark.parametrize(
+    ("a", "b_", "newer", "same"),
+    [
+        ("2.5.0-rc1", "2.5.0rc1", False, True),  # pyproject vs metadata spelling
+        ("2.5.0rc.1", "2.5.0rc1", False, True),
+        ("2.4", "2.4.0", False, True),
+        ("2.5.0rc1", "2.4.0", True, False),
+        ("2.4.0", "2.5.0rc1", False, False),
+        ("2.5.0", "2.5.0rc1", True, False),
+        ("2.5.0rc1", "2.5.0b2", True, False),
+        ("2.5.0a1", "2.5.0.dev1", True, False),
+        ("2.5.0.post1", "2.5.0", True, False),
+        ("2.10.0", "2.9.9", True, False),
+    ],
+)
+def test_version_comparison_is_pep440(a, b_, newer, same):
+    assert b._is_newer_version(a, b_) is newer
+    assert b._same_version(a, b_) is same
 
 
 def test_frozen_binary_never_runs_a_step(monkeypatch, update_env):
@@ -276,6 +343,169 @@ def test_update_step_timeout_and_missing_command():
     assert missing.returncode == 127
 
 
+def _alive(pid: int) -> bool:
+    """True while *pid* runs (a zombie, already dead but unreaped, is not)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+
+def _gone_within(pid: int, secs: float) -> bool:
+    deadline = time.monotonic() + secs
+    while _alive(pid):
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell and process groups")
+
+
+@posix_only
+def test_update_step_timeout_does_not_wait_for_grandchildren():
+    """A grandchild holding the step's pipes (git's ssh / remote-https
+    helper) used to keep the timed-out step blocked for its whole life."""
+    started = time.monotonic()
+    r = b._run_update_step(["sh", "-c", "sleep 30 & sleep 30"], timeout=1)
+    assert r.returncode == 124
+    assert time.monotonic() - started < 10
+
+
+@posix_only
+def test_update_step_timeout_kills_the_whole_tree(tmp_path):
+    pidfile = tmp_path / "bg.pid"
+    started = time.monotonic()
+    r = b._run_update_step(["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"; sleep 30'], timeout=1)
+    assert r.returncode == 124
+    assert _gone_within(int(pidfile.read_text()), 5)
+    assert time.monotonic() - started < 10  # killed, not waited out
+
+
+@posix_only
+def test_update_step_gives_up_on_a_process_that_escaped_the_kill(monkeypatch, tmp_path):
+    """One that left the step's session survives the kill and keeps the pipes;
+    the step still returns, a bounded time after its deadline."""
+    monkeypatch.setattr(b, "_UPDATE_KILL_GRACE_SECS", 0.5)
+    pidfile = tmp_path / "escaped.pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        " start_new_session=True)\n"
+        f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(60)\n"
+    )
+    started = time.monotonic()
+    try:
+        r = b._run_update_step([sys.executable, "-c", script], timeout=2)
+        assert r.returncode == 124 and "output lost" in r.stderr
+        assert time.monotonic() - started < 10
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), 9)  # the exact pid this test started
+            except (ProcessLookupError, ValueError):
+                pass
+
+
+@posix_only
+@pytest.mark.parametrize("tail", ["; sleep 30", ""], ids=["step-running", "step-exited"])
+def test_an_interrupted_update_step_takes_its_tree_with_it(monkeypatch, tmp_path, tail):
+    """The step runs in its own session, so Ctrl-C at the builder does not
+    reach it: the builder has to kill it on the way out -- including what it
+    started when the step's own process has already exited."""
+    monkeypatch.setattr(b, "_UPDATE_BEAT_SECS", 0.2)
+    pidfile = tmp_path / "bg.pid"
+
+    def interrupt():
+        if pidfile.exists() and pidfile.read_text().strip():
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        b._run_update_step(
+            ["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"{tail}'],
+            timeout=30,
+            beat=interrupt,
+        )
+    assert _gone_within(int(pidfile.read_text()), 5)
+
+
+def test_update_steps_run_in_their_own_process_group(monkeypatch):
+    calls: list = []
+
+    def fake_popen(cmd, **kw):
+        calls.append((list(cmd), kw))
+        raise OSError("not really started")
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    assert b._run_update_step(["git", "fetch"], timeout=5).returncode == 127
+    cmd, seen = calls[-1]  # earlier: the `git config` read for the env
+    assert cmd == ["git", "fetch"]
+    if sys.platform == "win32":
+        assert seen["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert seen["start_new_session"] is True
+    assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
+
+@pytest.fixture
+def bare_git_env(monkeypatch, tmp_path):
+    """No git settings from the developer's own environment or config."""
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    for var in (
+        "GIT_SSH_COMMAND",
+        "GIT_SSH",
+        "GIT_HTTP_LOW_SPEED_LIMIT",
+        "GIT_HTTP_LOW_SPEED_TIME",
+        "GCM_INTERACTIVE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    empty = tmp_path / "empty.gitconfig"
+    empty.write_text("")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git("init", "-q", cwd=repo)
+    return repo
+
+
+def test_git_steps_get_transport_bounds(bare_git_env):
+    env = b._git_update_env(bare_git_env)
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
+    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+    assert "ServerAliveInterval" in env["GIT_SSH_COMMAND"]
+    assert env["GIT_HTTP_LOW_SPEED_LIMIT"] == "1000"
+    assert env["GIT_HTTP_LOW_SPEED_TIME"] == "30"
+
+
+def test_a_builders_own_git_settings_win(bare_git_env, monkeypatch):
+    repo = bare_git_env
+    _git("config", "core.sshCommand", "ssh -i /etc/cvcpkg/deploy_key", cwd=repo)
+    _git("config", "http.lowSpeedTime", "600", cwd=repo)
+    monkeypatch.setenv("GCM_INTERACTIVE", "auto")
+    env = b._git_update_env(repo)
+    assert "GIT_SSH_COMMAND" not in env  # would override core.sshCommand
+    assert "GIT_HTTP_LOW_SPEED_TIME" not in env  # would override http.lowSpeedTime
+    assert env["GIT_HTTP_LOW_SPEED_LIMIT"] == "1000"  # not configured: still bounded
+    assert env["GCM_INTERACTIVE"] == "auto"
+
+    monkeypatch.setenv("GIT_SSH_COMMAND", "my-ssh")
+    monkeypatch.setenv("GIT_HTTP_LOW_SPEED_LIMIT", "5")
+    env = b._git_update_env(repo)
+    assert env["GIT_SSH_COMMAND"] == "my-ssh" and env["GIT_HTTP_LOW_SPEED_LIMIT"] == "5"
+
+
 # -- finding the checkout ---------------------------------------------------------
 
 
@@ -313,6 +543,26 @@ def _fake_checkout(path: Path, *, name="cvcpkg", git=True, version="1.0.0") -> P
     if git:
         (path / ".git").mkdir()
     return path
+
+
+def test_update_candidates_never_guess_home_directory_clones(monkeypatch, tmp_path):
+    """A developer's clone (here ~/src/cvc/cvcpkg, on whatever branch) is not
+    where a PyPI-installed builder came from: never update from it."""
+    monkeypatch.delenv("CVCPKG_SELF_UPDATE_DIR", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setattr(b, "_installed_source_dir", lambda: None)
+    guesses = [
+        _fake_checkout(tmp_path / "src" / "cvc" / "cvcpkg"),
+        _fake_checkout(tmp_path / "cvcpkg"),
+        _fake_checkout(tmp_path / "libcvc-deps"),
+    ]
+    assert not set(guesses) & set(b._self_update_candidates())
+    assert b._find_update_checkout() not in guesses
+
+    pip_src = _fake_checkout(tmp_path / "installed-from")
+    monkeypatch.setattr(b, "_installed_source_dir", lambda: pip_src)
+    assert b._self_update_candidates()[0] == pip_src
+    assert b._find_update_checkout() == pip_src
 
 
 def test_find_update_checkout_honours_the_override(monkeypatch, tmp_path):
@@ -365,6 +615,30 @@ def test_resolve_update_source_reads_upstream_without_touching_the_tree(git_chec
     out of the checkout, and jobs are still building."""
     assert b._resolve_update_source() == (git_checkout, NEWER)
     assert b._checkout_version(git_checkout) == RUNNING  # not pulled
+
+
+def test_resolve_update_source_distrusts_a_stale_ref_after_a_failed_fetch(
+    git_checkout, tmp_path, capsys
+):
+    """The remote-tracking ref says NEWER (an earlier fetch), but the remote is
+    unreachable now: the pull will fail, so only the working tree counts."""
+    _git("fetch", "-q", cwd=git_checkout)
+    (tmp_path / "origin").rename(tmp_path / "origin-gone")
+    assert b._resolve_update_source() == (git_checkout, RUNNING)
+    assert "git fetch" in capsys.readouterr().err
+
+
+def test_resolve_update_source_ignores_an_upstream_it_cannot_fast_forward_to(git_checkout):
+    (git_checkout / "local.txt").write_text("local work\n")
+    _git("add", "local.txt", cwd=git_checkout)
+    _git("commit", "-qm", "local", cwd=git_checkout)
+    assert b._resolve_update_source() == (git_checkout, RUNNING)
+
+
+def test_resolve_update_source_ignores_the_upstream_under_local_edits(git_checkout):
+    pyproject = git_checkout / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text() + "# local edit\n")
+    assert b._resolve_update_source() == (git_checkout, RUNNING)
 
 
 def test_self_update_pulls_installs_and_restarts(git_checkout, monkeypatch):
