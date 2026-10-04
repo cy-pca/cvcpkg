@@ -167,6 +167,7 @@ jobs:
   #     venv/         python -m venv --system-site-packages --without-pip
   #     tmp/          TMPDIR for pip and PyInstaller
   #     pyinstaller/  PYINSTALLER_CONFIG_DIR (bootloader/bincache)
+  #     pip-cache/    PIP_CACHE_DIR (pip would otherwise use ~root/.cache/pip)
   #     pyi-src/      the patched PyInstaller source (netbsd)
   #
   # --system-site-packages lets the venv REUSE what the system already has
@@ -339,8 +340,10 @@ jobs:
 
           # The throwaway build environment (see the job comment).  VENV_PY is
           # the only interpreter used from here on; the system ${PYTHON} only
-          # creates the venv.  RENV keeps pip's and PyInstaller's scratch,
-          # cache and config inside the job directory too.
+          # creates the venv.  RENV keeps pip's and PyInstaller's scratch
+          # (TMPDIR), caches (PIP_CACHE_DIR, PyInstaller's bincache) and config
+          # inside the job directory too, so the cleanup step leaves nothing of
+          # this run behind -- not even in ~root/.cache.
           #
           # NOPYC (PYTHONDONTWRITEBYTECODE=1) goes on EVERY python run on the
           # VM, RENV included (PyInstaller's hook subprocesses inherit it): the
@@ -350,7 +353,7 @@ jobs:
           # __pycache__ there would also trip the fingerprint check below.
           VENV_PY="${job_dir}/venv/bin/python"
           NOPYC="PYTHONDONTWRITEBYTECODE=1"
-          RENV="${NOPYC} TMPDIR=${job_dir}/tmp PYINSTALLER_CONFIG_DIR=${job_dir}/pyinstaller PIP_DISABLE_PIP_VERSION_CHECK=1"
+          RENV="${NOPYC} TMPDIR=${job_dir}/tmp PIP_CACHE_DIR=${job_dir}/pip-cache PYINSTALLER_CONFIG_DIR=${job_dir}/pyinstaller PIP_DISABLE_PIP_VERSION_CHECK=1"
           ssh ${SSH_OPTS} "${VM}" "set -e; \
             env ${NOPYC} ${PYTHON} -m venv --system-site-packages --without-pip ${job_dir}/venv; \
             env ${NOPYC} ${VENV_PY} -c 'import sys; assert sys.prefix != sys.base_prefix, \"not a venv\"'; \
