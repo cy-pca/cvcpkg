@@ -151,6 +151,32 @@ jobs:
   # 'cvcpkg-builder' host to internal BSD machines — infra that does not exist
   # in cy-pca.  Gated off by default; set repo variable ENABLE_BSD_BUILDS=true
   # once a cy-pca builder with BSD SSH access is provisioned.
+  #
+  # Those BSD machines are the PRODUCTION BSD builders: their system Python
+  # runs the `cvcpkg builder` processes that serve cvcpkg.org.  So this job
+  # must leave that Python exactly as it found it.  It used to
+  # `pip install --break-system-packages` cvcpkg, websockets and pyinstaller
+  # into it, which put whatever ref was being built (any branch, via
+  # workflow_dispatch) on disk under the running builders -- code they then
+  # ran at their next restart, while the processes already running kept the
+  # old modules in memory.  Everything now goes into a throwaway job
+  # directory instead:
+  #
+  #   <base>/cvcpkg-standalone-<run>-<attempt>/
+  #     src/          the checkout (remote_dir)
+  #     venv/         python -m venv --system-site-packages --without-pip
+  #     tmp/          TMPDIR for pip and PyInstaller
+  #     pyinstaller/  PYINSTALLER_CONFIG_DIR (bootloader/bincache)
+  #     pyi-src/      the patched PyInstaller source (netbsd)
+  #
+  # --system-site-packages lets the venv REUSE what the system already has
+  # (pip itself, and wheels such as cryptography that have no BSD wheel on
+  # PyPI and would need cargo to build) while every install lands in venv/.
+  # --without-pip because some BSD pythons ship without ensurepip; the
+  # system pip, run by the venv interpreter, installs into the venv.  pip
+  # never uninstalls a distribution outside the active venv, so a cvcpkg
+  # already in the system site is shadowed, not replaced.  The whole job
+  # directory is removed in the always() cleanup step.
   build-bsd:
     if: vars.ENABLE_BSD_BUILDS == 'true'
     name: Build (${{ matrix.os }})
@@ -262,13 +288,17 @@ jobs:
             openbsd*) BASE_DIR="/usr/local/tmp" ;;
             *)        BASE_DIR="/tmp" ;;
           esac
-          REMOTE_DIR="${BASE_DIR}/cvcpkg-standalone-$$"
+          # One directory per run attempt holds EVERYTHING this job writes on
+          # the VM (see the job comment); the cleanup step removes it whole.
+          JOB_DIR="${BASE_DIR}/cvcpkg-standalone-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REMOTE_DIR="${JOB_DIR}/src"
 
-          ssh ${SSH_OPTS} "${VM}" "mkdir -p ${REMOTE_DIR}"
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${JOB_DIR} && mkdir -p ${REMOTE_DIR} ${JOB_DIR}/tmp ${JOB_DIR}/pyinstaller"
           tar cf - --exclude='.git' --exclude='build' --exclude='prefix' \
             --exclude='dist' --exclude='__pycache__' --exclude='*.egg-info' . \
             | ssh ${SSH_OPTS} "${VM}" "tar xf - -C ${REMOTE_DIR}"
 
+          echo "job_dir=${JOB_DIR}" >> "$GITHUB_ENV"
           echo "remote_dir=${REMOTE_DIR}" >> "$GITHUB_ENV"
 
       - name: Install deps + build standalone
@@ -305,23 +335,40 @@ jobs:
           # platforms get from PyPI, so every column ships the same version.
           # Submitted upstream; drop this branch once a release carries it.
           PYI_PATCH=recipes/pyinstaller-cp313/netbsd-platform-tables.patch
+
+          # The throwaway build environment (see the job comment).  VENV_PY is
+          # the only interpreter used from here on; the system ${PYTHON} only
+          # creates the venv.  RENV keeps pip's and PyInstaller's scratch,
+          # cache and config inside the job directory too.
+          VENV_PY="${job_dir}/venv/bin/python"
+          RENV="TMPDIR=${job_dir}/tmp PYINSTALLER_CONFIG_DIR=${job_dir}/pyinstaller PIP_DISABLE_PIP_VERSION_CHECK=1"
+          ssh ${SSH_OPTS} "${VM}" "set -e; \
+            ${PYTHON} -m venv --system-site-packages --without-pip ${job_dir}/venv; \
+            ${VENV_PY} -c 'import sys; assert sys.prefix != sys.base_prefix, \"not a venv\"'; \
+            ${VENV_PY} -m pip --version"
+
+          # Fingerprint the system site-packages so the verify step can prove
+          # this job did not change it.
+          ssh ${SSH_OPTS} "${VM}" "${PYTHON} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
+            > system-site.before
+
           if [ "${{ matrix.os }}" = "netbsd-x86_64" ]; then
-            ssh ${SSH_OPTS} "${VM}" "set -e; rm -rf /tmp/pyi-src; \
+            ssh ${SSH_OPTS} "${VM}" "set -e; \
               git clone --quiet --branch v${{ env.PYINSTALLER_VERSION }} --depth 1 \
-                https://github.com/pyinstaller/pyinstaller /tmp/pyi-src; \
-              cd /tmp/pyi-src && patch -p1 < ${remote_dir}/${PYI_PATCH}; \
-              TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages . 2>/dev/null \
-                || ${PYTHON} -m pip install ."
+                https://github.com/pyinstaller/pyinstaller ${job_dir}/pyi-src; \
+              cd ${job_dir}/pyi-src && patch -p1 < ${remote_dir}/${PYI_PATCH}; \
+              env ${RENV} ${VENV_PY} -m pip install ."
           else
             ssh ${SSH_OPTS} "${VM}" "set -e; \
-              TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages 'pyinstaller==${{ env.PYINSTALLER_VERSION }}' 2>/dev/null \
-                || ${PYTHON} -m pip install 'pyinstaller==${{ env.PYINSTALLER_VERSION }}'"
+              env ${RENV} ${VENV_PY} -m pip install 'pyinstaller==${{ env.PYINSTALLER_VERSION }}'"
           fi
 
-          ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
-            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages '.[remote,builder,signing,validate]' 2>/dev/null \
-              || ${PYTHON} -m pip install '.[remote,builder,signing,validate]'; \
-            ${PYTHON} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
+          # The freeze must collect THIS checkout's cvcpkg from the venv, not
+          # a cvcpkg that happens to be installed in the system site.
+          ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir}; \
+            env ${RENV} ${VENV_PY} -m pip install '.[remote,builder,signing,validate]'; \
+            ${VENV_PY} -c 'import sys, cvcpkg; assert cvcpkg.__file__.startswith(sys.prefix), cvcpkg.__file__'; \
+            env ${RENV} ${VENV_PY} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
 
       - name: Verify + retrieve binary
         shell: bash
@@ -338,10 +385,20 @@ jobs:
           # The builder's WebSocket client must be IN the archive (see the
           # hosted build's verify step): a lazy import that falls back to
           # long-poll with one log line is otherwise invisible.
-          ssh ${SSH_OPTS} "${VM}" "${{ matrix.python }} -m PyInstaller.utils.cliutils.archive_viewer \
+          ssh ${SSH_OPTS} "${VM}" "${job_dir}/venv/bin/python -m PyInstaller.utils.cliutils.archive_viewer \
             -r -b ${remote_dir}/dist/cvcpkg" > archive.txt
           grep -Eq '^\s*websockets\.sync\.client$' archive.txt \
             || { echo "::error::websockets is not bundled -- builder run would be long-poll only"; exit 1; }
+
+          # The production builders on this VM run from the system site: it
+          # must be exactly as this job found it.
+          ssh ${SSH_OPTS} "${VM}" "${{ matrix.python }} -c 'import os, sysconfig; d = sysconfig.get_paths()[\"purelib\"]; print(sorted(os.listdir(d)))'" \
+            > system-site.after
+          if ! cmp -s system-site.before system-site.after; then
+            echo "::error::the system site-packages on ${{ steps.vm.outputs.host }} changed during this job -- the build must stay inside its venv"
+            diff system-site.before system-site.after || true
+            exit 1
+          fi
 
           mkdir -p dist
           scp ${SSH_OPTS} "${VM}:${remote_dir}/dist/cvcpkg" \
@@ -351,8 +408,11 @@ jobs:
         if: always()
         shell: bash
         run: |
+          # job_dir is unset when the job died before the sync step; never
+          # run `rm -rf` on an empty path.
+          [ -n "${job_dir:-}" ] || exit 0
           VM="root@${{ steps.vm.outputs.host }}"
-          ssh ${SSH_OPTS} "${VM}" "rm -rf ${remote_dir}" || true
+          ssh ${SSH_OPTS} "${VM}" "rm -rf ${job_dir}" || true
 
       - uses: actions/upload-artifact@v4
         with:
