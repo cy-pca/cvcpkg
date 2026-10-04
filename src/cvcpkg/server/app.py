@@ -1035,6 +1035,21 @@ def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
     return None
 
 
+def _ws_forget(builder_id: int, ws: WebSocket) -> None:
+    """Drop *ws* from the registry -- only if it is still the registered one.
+
+    A builder that reconnects registers its new socket while the server may
+    not yet have noticed the old one is dead (a half-open connection is only
+    found by the ping timeout; behind a proxy the backend leg can outlive the
+    client leg).  Popping by builder id alone, when the old one is finally torn
+    down, would unregister the LIVE socket: no job.dispatch or builder.update
+    reaches that builder again, and it never notices, because its own socket
+    is fine.
+    """
+    if _ws_builders.get(builder_id) is ws:
+        _ws_builders.pop(builder_id, None)
+
+
 async def _ws_send(builder_id: int, msg: dict) -> bool:
     """Send a JSON message to a connected builder.  Returns True on success."""
     ws = _ws_builders.get(builder_id)
@@ -1044,20 +1059,20 @@ async def _ws_send(builder_id: int, msg: dict) -> bool:
         await ws.send_json(msg)
         return True
     except Exception:
-        _ws_builders.pop(builder_id, None)
+        _ws_forget(builder_id, ws)
         return False
 
 
 async def _ws_broadcast(msg: dict) -> None:
     """Send a JSON message to all connected builders."""
-    dead: list[int] = []
-    for bid, ws in _ws_builders.items():
+    dead: list[tuple[int, WebSocket]] = []
+    for bid, ws in list(_ws_builders.items()):
         try:
             await ws.send_json(msg)
         except Exception:
-            dead.append(bid)
-    for bid in dead:
-        _ws_builders.pop(bid, None)
+            dead.append((bid, ws))
+    for bid, ws in dead:
+        _ws_forget(bid, ws)
 
 
 # ── Build scheduler background task ────────────────────────────
@@ -9525,8 +9540,15 @@ def create_app(
         ``job.claim``, ``job.log``, ``job.complete``, ``job.fail``,
         ``heartbeat``, and ``pong`` messages.
         """
-        # Authenticate via query param
-        token_value = websocket.query_params.get("token", "")
+        # Authenticate: the Authorization header, as on every HTTP endpoint;
+        # the ``token`` query parameter is the fallback for older builders.  A
+        # query string is written to every proxy access log on the way.
+        token_value = ""
+        _authz = websocket.headers.get("authorization", "")
+        if _authz[:7].lower() == "bearer ":
+            token_value = _authz[7:].strip()
+        if not token_value:
+            token_value = websocket.query_params.get("token", "")
         if not token_value:
             await websocket.close(code=4001, reason="missing token")
             return
@@ -9738,7 +9760,7 @@ def create_app(
         except Exception:
             logger.exception("builder %d WebSocket error", builder_id)
         finally:
-            _ws_builders.pop(builder_id, None)
+            _ws_forget(builder_id, websocket)
 
     # ── Recipe distribution endpoints ───────────────────────
 

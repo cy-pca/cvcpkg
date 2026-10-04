@@ -113,6 +113,35 @@ def _newest_first(pkg: dict) -> tuple:
 # windows/cvcpkg-builder-supervisor.cmd in the vm-provisioning repo.
 _SUPERVISOR_RESTART_CODE = 90
 
+
+def _is_newer_version(candidate: str, current: str) -> bool:
+    """True when cvcpkg version *candidate* is newer than *current*.
+
+    ``builder.update`` carries the server's own version.  A builder that is
+    already at it, or ahead of it, has nothing to update to: acting on it
+    would only drain the builder and restart it on the code it already runs.
+    A version that does not parse falls back to plain inequality.
+    """
+    from cvcpkg.semver import Version
+
+    try:
+        return Version.parse(candidate) > Version.parse(current)
+    except ValueError:
+        return candidate != current
+
+
+def _checkout_version(checkout: Path) -> str | None:
+    """The ``version`` a cvcpkg source checkout's pyproject.toml declares."""
+    import re
+
+    try:
+        text = (checkout / "pyproject.toml").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return m.group(1) if m else None
+
+
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
 _RECIPE_DIR_TTL_SECS = 24 * 60 * 60
@@ -911,6 +940,15 @@ def builder_run(
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
+    # Version a server-pushed ``builder.update`` asked for, while it waits for
+    # in-flight jobs to finish.  _self_update() os.execv()s on POSIX, which
+    # kills every job thread mid-build; the re-exec'd builder re-registers the
+    # same row and heartbeats, so the offline reaper never frees those jobs and
+    # they sit "running" -- blocking their DAG -- until the build timeout.  So
+    # the update is deferred until the builder is idle, and no new job is
+    # admitted meanwhile (jobs dispatched to us stay dispatched and are picked
+    # up by the restarted builder's connect-time catch-up poll).
+    pending_update: str | None = None
 
     # Per-job namespace context. A builder may serve several namespaces (see
     # --serve), and jobs from different namespaces run concurrently in separate
@@ -1895,6 +1933,19 @@ def builder_run(
                 capture_output=True,
                 timeout=60,
             )
+            # Never install an OLDER cvcpkg than the one running: a stale
+            # fallback checkout (an old clone whose upstream no longer moves)
+            # would otherwise downgrade the builder on every update request.
+            from cvcpkg import __version__ as _running
+
+            _found = _checkout_version(cvcpkg_dir)
+            if _found and _is_newer_version(_running, _found):
+                click.echo(
+                    f"  self-update: {cvcpkg_dir} is at {_found}, older than the "
+                    f"running {_running}; not installing it",
+                    err=True,
+                )
+                return
             # Pip install
             subprocess.run(
                 [
@@ -1932,20 +1983,45 @@ def builder_run(
         except Exception as exc:
             click.echo(f"  self-update failed: {exc}", err=True)
 
+    def _apply_pending_update() -> None:
+        """Run a deferred ``builder.update`` once no job is in flight.
+
+        See ``pending_update``.  _self_update() does not return when it
+        re-execs; when it does return (nothing to update from, or Windows
+        without the supervisor) the builder resumes taking jobs.
+        """
+        nonlocal pending_update
+        if not pending_update:
+            return
+        with jobs_lock:
+            if current_jobs:
+                return
+        target, pending_update = pending_update, None
+        click.echo(f"  self-update: no job in flight, updating to {target}")
+        _self_update()
+
     # -- WebSocket helpers -----------------------------------
 
     def _ws_url() -> str:
-        """Build WebSocket URL from the HTTP base URL."""
+        """Build WebSocket URL from the HTTP base URL.
+
+        No ``?token=``: the bearer token goes in the handshake's Authorization
+        header (see _run_ws_loop).  A query string lands in every access log on
+        the way -- cvcpkg.org's Apache logs the full request line -- and the
+        builder now retries the socket every few minutes for as long as it is
+        down, so a token in the URL would be written there hundreds of times a
+        day per builder.
+        """
         scheme = "wss" if base.startswith("https") else "ws"
         rest = base.split("://", 1)[1] if "://" in base else base
-        return f"{scheme}://{rest}/v1/builders/{builder_id}/ws?token={token}"
+        return f"{scheme}://{rest}/v1/builders/{builder_id}/ws"
 
     def _ws_error_text(exc: BaseException) -> str:
         """``str(exc)`` with the bearer token masked.
 
-        The socket URL carries the token as a query parameter (the server
-        authenticates the upgrade from it), and some handshake errors quote
-        the URL they failed on.
+        The token now travels in the handshake's Authorization header, not
+        the URL, but an error may still quote request headers; mask it
+        wherever it appears.
         """
         text = str(exc) or type(exc).__name__
         return text.replace(token, "***") if token else text
@@ -1963,7 +2039,7 @@ def builder_run(
         running here (its claim not landed yet) comes back too; _admit_job
         refuses that one, so a job seen on both paths still runs once.
         """
-        while not shutdown:
+        while not shutdown and not pending_update:
             with jobs_lock:
                 if current_jobs >= max_jobs:
                     return
@@ -1979,7 +2055,14 @@ def builder_run(
                 return
             if resp.status_code != 200:
                 return  # 204: nothing waiting.  Errors: the next sweep retries.
-            job = resp.json()
+            try:
+                job = resp.json()
+            except ValueError:
+                # A 200 that is not JSON (a proxy error page): runs on the
+                # socket's thread, so raising here would tear the session down.
+                return
+            if not isinstance(job, dict) or "id" not in job:
+                return
             with jobs_lock:
                 slot_id = _admit_job(job)
             if slot_id is None:
@@ -2006,7 +2089,7 @@ def builder_run(
         The caller covers every non-"stopped" outcome with HTTP long-poll and
         schedules the next attempt (see the main loop).
         """
-        nonlocal shutdown, current_jobs, last_heartbeat, last_gc
+        nonlocal shutdown, current_jobs, last_heartbeat, last_gc, pending_update
         try:
             import websockets.sync.client as ws_sync
         except ImportError:
@@ -2017,7 +2100,12 @@ def builder_run(
         connected_at: float | None = None
         lost = ""
         try:
-            with ws_sync.connect(_ws_url(), open_timeout=10, close_timeout=5) as ws:
+            with ws_sync.connect(
+                _ws_url(),
+                additional_headers={"Authorization": f"Bearer {token}"},
+                open_timeout=10,
+                close_timeout=5,
+            ) as ws:
                 connected_at = time.time()
                 click.echo("WebSocket connected.")
                 # No ws.settimeout(): the sync client has no such method (that
@@ -2025,6 +2113,14 @@ def builder_run(
                 # handshake, so no session ever survived it).  Reads are
                 # bounded by recv(timeout=...) below.
                 last_sweep = 0.0  # catch up at once: see _ws_catch_up
+                # A job.dispatch dropped because every slot was busy.  The
+                # server frees our slot when the job reports complete/fail, but
+                # this thread still holds it through the job's cleanup (rmtree
+                # of the job tree), so the scheduler's next dispatch -- often
+                # the dependent the completion just unblocked -- routinely lands
+                # in that window.  Catch up as soon as a slot frees instead of
+                # leaving it for the periodic sweep (up to ws_sweep_interval).
+                missed_push = False
                 while not shutdown:
                     # Wall-clock budget: stop claiming, drain in-flight, exit.
                     if _past_deadline():
@@ -2060,7 +2156,16 @@ def builder_run(
                         _run_periodic_gc()
                         last_gc = now
 
-                    if now - last_sweep >= ws_sweep_interval:
+                    _apply_pending_update()
+
+                    with jobs_lock:
+                        # Not while an update is pending: _ws_catch_up admits
+                        # nothing then, and clearing missed_push here would
+                        # leave the dropped push to the periodic sweep once
+                        # the update returns without a restart.
+                        slot_free = current_jobs < max_jobs and not pending_update
+                    if now - last_sweep >= ws_sweep_interval or (missed_push and slot_free):
+                        missed_push = False
                         _ws_catch_up()
                         last_sweep = time.time()
 
@@ -2084,9 +2189,12 @@ def builder_run(
                         if job is None:
                             continue
                         with jobs_lock:
-                            if current_jobs >= max_jobs:
+                            if current_jobs >= max_jobs or pending_update:
                                 # Dropped here, but it stays dispatched to us:
-                                # _ws_catch_up starts it once a slot frees.
+                                # _ws_catch_up starts it once a slot frees
+                                # (or the restarted builder's connect-time
+                                # catch-up does, after a self-update).
+                                missed_push = True
                                 continue
                             slot_id = _admit_job(job)
                         if slot_id is None:
@@ -2123,8 +2231,29 @@ def builder_run(
                         from cvcpkg import __version__
 
                         if server_ver and server_ver != __version__:
-                            click.echo(f"  Server requests update: {__version__} -> {server_ver}")
-                            _self_update()
+                            if not _is_newer_version(server_ver, __version__):
+                                click.echo(
+                                    f"  Server is at {server_ver}, not newer than "
+                                    f"this builder's {__version__}; update ignored"
+                                )
+                            elif getattr(sys, "frozen", False):
+                                # The single-file binary cannot pip-install
+                                # itself, and os.execv(sys.executable,
+                                # [sys.executable] + sys.argv) would hand it its
+                                # own path as the first argument.
+                                click.echo(
+                                    f"  Server requests update: {__version__} -> "
+                                    f"{server_ver}; ignored (single-file binary)",
+                                    err=True,
+                                )
+                            else:
+                                click.echo(
+                                    f"  Server requests update: {__version__} -> "
+                                    f"{server_ver} (once in-flight jobs finish; "
+                                    "taking no new jobs meanwhile)"
+                                )
+                                pending_update = server_ver
+                                _apply_pending_update()
 
                     elif msg_type == "job.timeout":
                         job_id = msg.get("job_id")
@@ -2258,7 +2387,10 @@ def builder_run(
                         f"  using HTTP long-poll; retrying WebSocket in {delay:.0f}s",
                         err=True,
                     )
-                continue
+                # No `continue`: fall through to one long-poll round, so the
+                # builder takes work between attempts whatever the backoff is
+                # (CVCPKG_BUILDER_WS_RETRY_MIN=0 used to retry the handshake in
+                # a hot loop and never poll at all).
 
             # Heartbeat
             now = time.time()
@@ -2270,10 +2402,14 @@ def builder_run(
                 _run_periodic_gc()
                 last_gc = now
 
+            # A builder.update received on a socket that has since dropped
+            # still applies once the builder is idle.
+            _apply_pending_update()
+
             # Check capacity
             with jobs_lock:
                 available = max_jobs - current_jobs
-            if available <= 0:
+            if available <= 0 or pending_update:
                 time.sleep(poll_interval)
                 continue
 

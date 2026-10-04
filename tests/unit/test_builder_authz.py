@@ -283,3 +283,43 @@ class TestWebSocketOwnership:
         bid = _register(client, t["alice"], "mine").json()["id"]
         with client.websocket_connect(f"/v1/builders/{bid}/ws?token={t['alice']}") as ws:
             assert ws is not None
+
+
+class TestWebSocketReconnect:
+    def test_old_socket_closing_late_keeps_the_reconnected_one(self, authz_server):
+        """A builder reconnects before the server has noticed its old socket
+        died (half-open, or a proxy's backend leg outliving the client leg).
+        When the old handler finally exits it must not unregister the new,
+        live socket -- the builder would never notice, and no job.dispatch or
+        builder.update would reach it again."""
+        import time
+
+        from cvcpkg.server import app as app_mod
+
+        client, t = authz_server
+        bid = _register(client, t["alice"], "mine").json()["id"]
+        url = f"/v1/builders/{bid}/ws?token={t['alice']}"
+        old_cm = client.websocket_connect(url)
+        old_ws = old_cm.__enter__()
+        old_ws.send_json({"type": "heartbeat", "current_jobs": 0})
+        old_ws.receive_json()
+        with client.websocket_connect(url) as new_ws:
+            # The reconnect: registered while the old socket is still open.
+            new_ws.send_json({"type": "heartbeat", "current_jobs": 0})
+            new_ws.receive_json()
+            old_cm.__exit__(None, None, None)  # the server notices only now
+            deadline = time.time() + 2
+            while time.time() < deadline and bid in app_mod._ws_builders:
+                time.sleep(0.02)
+            assert bid in app_mod._ws_builders
+
+    def test_token_in_the_authorization_header(self, authz_server):
+        """The builder sends its token in the handshake header, not the URL
+        (a query string is written to every proxy access log)."""
+        client, t = authz_server
+        bid = _register(client, t["alice"], "mine").json()["id"]
+        with client.websocket_connect(
+            f"/v1/builders/{bid}/ws", headers={"Authorization": f"Bearer {t['alice']}"}
+        ) as ws:
+            ws.send_json({"type": "heartbeat", "current_jobs": 0})
+            assert ws.receive_json()["type"] == "heartbeat_ack"

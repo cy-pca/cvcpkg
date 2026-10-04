@@ -509,3 +509,285 @@ def test_push_dropped_while_full_is_picked_up_when_a_slot_frees(monkeypatch, tmp
     assert result.exit_code == 0, result.output
     assert server.claims == {1: 1, 2: 1}, result.output
     assert server.recipe_fetches == {1: 1, 2: 1}, result.output
+
+
+def test_push_dropped_while_full_starts_as_soon_as_the_slot_frees(monkeypatch, tmp_path):
+    """Same drop, at the DEFAULT sweep interval (60 s): the server frees our
+    slot on complete/fail while the job thread still holds it through cleanup,
+    so the next dispatch -- often the dependent that completion unblocked --
+    lands in that window.  It must start once the slot frees, not up to a
+    minute later on the periodic sweep."""
+    monkeypatch.delenv("CVCPKG_BUILDER_WS_SWEEP_INTERVAL", raising=False)
+
+    def on_connect(server, conn, index):
+        def later():
+            time.sleep(0.1)  # after the connect-time catch-up poll
+            server.dispatch(1)
+            server.dispatch(2)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+            conn.push({"type": "job.dispatch", "job": server.job(2)})
+
+        threading.Thread(target=later, daemon=True).start()
+
+    server = _FakeServer(claim_latency=0.5, on_connect=on_connect)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "4"])
+
+    assert result.exit_code == 0, result.output
+    assert server.claims == {1: 1, 2: 1}, result.output
+
+
+def _record_self_update(monkeypatch, server, cmds: list | None = None):
+    """Stub the self-update side effects; record the job states when it runs.
+
+    Recorded at its ``git pull`` -- the first thing _self_update() does on
+    every platform (POSIX then os.execv()s; Windows without the supervisor
+    returns) -- so the assertion means the same thing on every OS.  Every
+    command it runs is appended to *cmds*, when given.
+    """
+    import os
+    import subprocess
+
+    updates: list[dict] = []
+
+    def _run(cmd, *a, **k):
+        if cmds is not None:
+            cmds.append(list(cmd))
+        if cmd and cmd[0] == "git":
+            with server.lock:
+                updates.append(dict(server.jobs))
+
+    monkeypatch.delenv("CVCPKG_BUILDER_SUPERVISED", raising=False)
+    monkeypatch.setattr(subprocess, "run", _run)
+    monkeypatch.setattr(os, "execv", lambda *a: None)
+    return updates
+
+
+def test_builder_update_waits_for_in_flight_jobs(monkeypatch, tmp_path):
+    """builder.update arrives while job 1 is mid-flight.  _self_update()
+    os.execv()s, which would kill the job thread and leave the job "running"
+    on the server until the build timeout -- so it must wait until the job is
+    done, and admit nothing new meanwhile."""
+
+    def on_connect(server, conn, index):
+        def later():
+            time.sleep(0.1)
+            server.dispatch(1)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+            time.sleep(0.3)  # job 1 is claiming (claim_latency below)
+            conn.push({"type": "builder.update", "version": "999.0.0"})
+            server.dispatch(2)
+            conn.push({"type": "job.dispatch", "job": server.job(2)})
+
+        threading.Thread(target=later, daemon=True).start()
+
+    server = _FakeServer(claim_latency=1.5, on_connect=on_connect)
+    execs = _record_self_update(monkeypatch, server)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "4"], max_jobs=2)
+
+    assert result.exit_code == 0, result.output
+    assert execs, "the deferred update never ran:\n" + result.output
+    at_update = execs[0]
+    assert at_update.get(1) not in ("dispatched", "running"), result.output
+    assert at_update.get(2) == "dispatched", "admitted a new job while an update was pending"
+    # os.execv is stubbed, so the update returns -- as it does when there is
+    # nothing to update from.  The builder then takes work again, starting the
+    # push it dropped meanwhile without waiting for the 60 s periodic sweep.
+    assert server.claims.get(2) == 1, result.output
+
+
+def test_builder_update_is_ignored_by_the_single_file_binary(monkeypatch, tmp_path):
+    def on_connect(server, conn, index):
+        conn.push({"type": "builder.update", "version": "999.0.0"})
+
+    server = _FakeServer(on_connect=on_connect)
+    execs = _record_self_update(monkeypatch, server)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert not execs
+    assert "ignored (single-file binary)" in result.output
+
+
+def test_builder_update_from_a_server_not_ahead_is_ignored(monkeypatch, tmp_path):
+    """builder.update carries the server's own version.  A builder already
+    ahead of it has nothing to update to: draining it and restarting it on
+    the code it already runs would only cost it its throughput."""
+
+    def on_connect(server, conn, index):
+        conn.push({"type": "builder.update", "version": "0.0.1"})
+        server.dispatch(1)
+        conn.push({"type": "job.dispatch", "job": server.job(1)})
+
+    server = _FakeServer(on_connect=on_connect)
+    execs = _record_self_update(monkeypatch, server)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert not execs, result.output
+    assert "update ignored" in result.output
+    assert server.claims == {1: 1}, result.output
+
+
+def test_self_update_never_installs_an_older_checkout(monkeypatch, tmp_path):
+    """The source-checkout fallbacks can be a stale clone whose upstream no
+    longer moves; installing it would downgrade the builder."""
+    import cvcpkg.cli._builder as builder_mod
+
+    def on_connect(server, conn, index):
+        conn.push({"type": "builder.update", "version": "999.0.0"})
+
+    server = _FakeServer(on_connect=on_connect)
+    cmds: list[list[str]] = []
+    execs = _record_self_update(monkeypatch, server, cmds)
+    monkeypatch.setattr(builder_mod, "_checkout_version", lambda path: "0.0.1")
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert execs, result.output  # it did look (git pull) ...
+    assert not [c for c in cmds if "pip" in c], cmds  # ... and installed nothing
+    assert "not installing it" in result.output
+
+
+@pytest.mark.parametrize(
+    ("candidate", "current", "newer"),
+    [
+        ("2.4.0", "2.3.2", True),
+        ("2.4.0", "2.4.0", False),
+        ("2.3.2", "2.4.0", False),
+        ("2.10.0", "2.9.9", True),  # numerically, not as strings
+        ("2.4.0", "2.4.0-rc.1", True),
+        ("weird", "2.4.0", True),  # unparseable: plain inequality
+        ("weird", "weird", False),
+    ],
+)
+def test_is_newer_version(candidate, current, newer):
+    from cvcpkg.cli._builder import _is_newer_version
+
+    assert _is_newer_version(candidate, current) is newer
+
+
+def test_checkout_version_reads_pyproject(tmp_path):
+    from cvcpkg.cli._builder import _checkout_version
+
+    assert _checkout_version(tmp_path) is None
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.poetry]\nname = "cvcpkg"\nversion = "2.4.0"\n\n'
+        '[tool.poetry.dependencies]\nclick = { version = "^8.1" }\n'
+    )
+    assert _checkout_version(tmp_path) == "2.4.0"
+
+
+def test_catch_up_poll_with_a_non_json_body_keeps_the_socket(monkeypatch, tmp_path):
+    """A 200 that is not JSON (a proxy error page) on the catch-up poll must
+    not tear the WebSocket session down."""
+    server = _FakeServer()
+    cls = server.client_cls()
+
+    class _Bad(_Resp):
+        def json(self):
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    orig_get = cls.get
+
+    def get(self, url, params=None, **k):
+        if url.endswith("/next-job") and (params or {}).get("timeout") == "1":
+            return _Bad(200)
+        return orig_get(self, url, params=params, **k)
+
+    cls.get = get
+    monkeypatch.setattr(httpx, "Client", cls)
+    for mod_name, mod in server.websockets_modules().items():
+        monkeypatch.setitem(sys.modules, mod_name, mod)
+    monkeypatch.setenv("CVCPKG_BUILDER_WS_SWEEP_INTERVAL", "0.2")
+    result = CliRunner().invoke(
+        builder_run,
+        [
+            "--server",
+            "http://test",
+            "--token",
+            TOKEN,
+            "--name",
+            "ws-probe",
+            "--platform",
+            "linux",
+            "--arch",
+            "x86_64",
+            "--no-auto-capabilities",
+            "--no-free-disk",
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--recipe-cache-dir",
+            str(tmp_path / "rc"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
+            "--max-runtime",
+            "1.5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(server.ws_connects) == 1, result.output
+    assert "connection lost" not in result.output
+
+
+def test_zero_retry_delay_still_long_polls_between_attempts(monkeypatch, tmp_path):
+    """CVCPKG_BUILDER_WS_RETRY_MIN=0 against a server that refuses every
+    handshake: the builder must still take work over long-poll between
+    attempts, not retry the handshake in a hot loop."""
+    monkeypatch.setenv("CVCPKG_BUILDER_WS_RETRY_MIN", "0")
+    server = _FakeServer(ws_failures=10**9)
+    server.dispatch(1)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1.5"])
+
+    assert result.exit_code == 0, result.output[-2000:]
+    assert server.claims == {1: 1}, f"ws attempts={server.ws_attempts}"
+
+
+def test_token_travels_in_the_handshake_header_not_the_url(monkeypatch, tmp_path):
+    """A token in the socket URL is written to every proxy access log (and the
+    builder retries the socket every few minutes while it is down)."""
+    seen: list[tuple[str, dict]] = []
+    server = _FakeServer()
+    mods = server.websockets_modules()
+    real_connect = mods["websockets.sync.client"].connect
+
+    def connect(uri, **kwargs):
+        seen.append((uri, dict(kwargs.get("additional_headers") or {})))
+        return real_connect(uri, **kwargs)
+
+    mods["websockets.sync.client"].connect = connect
+    monkeypatch.setattr(httpx, "Client", server.client_cls())
+    for mod_name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, mod_name, mod)
+    result = CliRunner().invoke(
+        builder_run,
+        [
+            "--server",
+            "http://test",
+            "--token",
+            TOKEN,
+            "--name",
+            "ws-probe",
+            "--platform",
+            "linux",
+            "--arch",
+            "x86_64",
+            "--no-auto-capabilities",
+            "--no-free-disk",
+            "--work-dir",
+            str(tmp_path / "wd"),
+            "--recipe-cache-dir",
+            str(tmp_path / "rc"),
+            "--pidfile",
+            str(tmp_path / "b.pid"),
+            "--max-runtime",
+            "0.5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen, result.output
+    uri, hdrs = seen[0]
+    assert TOKEN not in uri
+    assert hdrs.get("Authorization") == f"Bearer {TOKEN}"
