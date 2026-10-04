@@ -877,6 +877,58 @@ class BuildJobAlreadyClaimedError(Exception):
         super().__init__(f"build job {job_id} is already claimed by {who}")
 
 
+class BuildJobNotActiveError(Exception):
+    """A complete/fail report reached a job that is not active.
+
+    Only an *active* job -- dispatched to a builder or claimed and running --
+    can be finished.  Anything else is refused and the row is left exactly as
+    it was: a terminal job (succeeded, failed, cancelled, timed out,
+    unschedulable) keeps its outcome, and a job nobody holds (pending, paused)
+    is not finished by a report from nowhere.
+
+    Before this guard the last report won.  When one job ran twice, the copy
+    that finished second overwrote the first copy's outcome, and a late
+    ``fail`` on a job that had already succeeded flipped it to failed and
+    cascade-cancelled every dependent that was waiting on it.
+
+    *status* is the job's current status and *attempted* the status the report
+    asked for.  ``is_repeat`` marks a repeat of the report that already
+    finished the job (a retry after a lost response, the duplicate copy of a
+    job): the caller answers that as a harmless no-op, not a conflict.  *info*
+    carries the job as it stands so that answer needs no second read.
+
+    Lives here rather than in db_stores for the same reason as
+    BuildJobAlreadyClaimedError.
+    """
+
+    def __init__(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        attempted: str,
+        info: BuildJobInfo | None = None,
+    ):
+        self.job_id = job_id
+        self.status = str(getattr(status, "value", status))
+        self.attempted = str(getattr(attempted, "value", attempted))
+        self.info = info
+        verb = "complete" if self.attempted == BuildJobStatus.succeeded.value else "fail"
+        if self.is_repeat:
+            msg = f"build job {job_id} is already {self.status}"
+        else:
+            msg = (
+                f"build job {job_id} is {self.status}; a {verb} report only applies "
+                "to a dispatched or running job"
+            )
+        super().__init__(msg)
+
+    @property
+    def is_repeat(self) -> bool:
+        """True when the job already holds the outcome this report asked for."""
+        return self.status == self.attempted
+
+
 class BuildJobInfo(BaseModel):
     """Public representation of a build job."""
 

@@ -460,6 +460,9 @@ class TestDbBuildJobStore:
                 submitted_by="ci",
             )
             assert await store.is_dag_complete("d1") is False
+            # Only a claimed (or dispatched) job can be completed or failed.
+            await store.claim(jobs[0].id, None, claimant="w")
+            await store.claim(jobs[1].id, None, claimant="w")
             await store.complete(jobs[0].id)
             await store.fail(jobs[1].id, error_message="boom")
             assert await store.is_dag_complete("d1") is True
@@ -540,6 +543,7 @@ class TestDbBuildJobStore:
             dep, app = jobs[0], jobs[1]
             ready = await store.find_ready_jobs()
             assert {j.recipe_name for j in ready} == {"dep"}  # app blocked
+            await store.claim(dep.id, b.id)
             await store.complete(dep.id)
             ready2 = await store.find_ready_jobs()
             assert {j.recipe_name for j in ready2} == {"app"}
@@ -764,6 +768,7 @@ class TestDbBuildJobStore:
             store = DbBuildJobStore()
             j = await store.create("a", "linux", "x86_64", "ci")
             await store.append_log(j.id, "data", logs_dir=logs)
+            await store.claim(j.id, None, claimant="w")
             await store.complete(j.id)
             old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)
             await _set_job(j.id, finished_at=old)
@@ -775,6 +780,7 @@ class TestDbBuildJobStore:
 
             # A second finished job, then purge_old_jobs deletes the row entirely.
             j2 = await store.create("b", "linux", "x86_64", "ci")
+            await store.claim(j2.id, None, claimant="w")
             await store.complete(j2.id)
             await _set_job(j2.id, finished_at=old)
             purged = await store.purge_old_jobs(older_than_days=1, logs_dir=logs)
