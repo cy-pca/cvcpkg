@@ -45,7 +45,18 @@ recipe:
   # Haiku build toolchain can be published as a cvcpkg package instead of relying
   # on the flaky HaikuPorts pkgman mirror. Bootstraps from source on the Haiku
   # box with the libuv + arc4random Haiku ports.
-  cvc_revision: 6
+  #
+  # Bumped 6 -> 7: relocatable RPATH on linux/freebsd/netbsd. +cvc.6's
+  # bin/{cmake,ctest,cpack,ccmake} there carried the builder's deleted job
+  # prefix ("/tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib") as RPATH/RUNPATH:
+  # build.sh set it as CMAKE_INSTALL_RPATH, and CMake's own
+  # CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON would have added it anyway. They
+  # now link with RPATH $ORIGIN/../lib (where the curl/openssl runtime deps
+  # sit in an installed prefix) and no link-path entries, set by the linker,
+  # not patchelf (NetBSD). build.sh fails the build if the installed
+  # programs carry any other RPATH. openbsd (no RPATH; the installer bakes
+  # one), macos, windows and haiku are unchanged.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
