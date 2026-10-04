@@ -8,7 +8,7 @@
 #
 #   client (default) — the CLI (install / build / validate). Omits the server
 #     extra (fastapi/uvicorn/...) to stay lean.
-#       pip install -e ".[remote,signing,validate]" pyinstaller
+#       pip install -e ".[remote,builder,signing,validate]" pyinstaller
 #       pyinstaller --clean --noconfirm packaging/cvcpkg.spec
 #       ./dist/cvcpkg --version && ./dist/cvcpkg validate recipes
 #
@@ -47,7 +47,10 @@ datas += copy_metadata("cvcpkg")
 # closure, so leaving them out silently ships a `cvcpkg` whose publish /
 # builder / signing / validate commands all report a missing extra.  All three
 # must also be installed in the build env (`pip install
-# '.[remote,signing,validate]'`).
+# '.[remote,builder,signing,validate]'`).  websockets needs no entry here --
+# `import websockets.sync.client` is a plain import statement modulegraph
+# follows -- but it is bundled only if [builder] is in the build env; without
+# it the frozen `builder run` silently falls back to HTTP long-poll.
 hiddenimports = [
     "jsonschema",
     "httpx",
