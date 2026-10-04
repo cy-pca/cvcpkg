@@ -79,14 +79,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller==${{ env.PYINSTALLER_VERSION }}
-          # [remote,signing,validate]: a standalone binary is a fixed closure,
-          # so httpx, cryptography and jsonschema must be in the build env to
-          # be bundled at all. jsonschema comes via the [validate] extra — it
+          # [remote,builder,signing,validate]: a standalone binary is a fixed
+          # closure, so httpx, websockets, cryptography and jsonschema must be
+          # in the build env to be bundled at all. websockets comes via
+          # [builder]: the binary also runs `cvcpkg builder run`, whose push
+          # channel (job dispatch, builder.update) is a WebSocket -- without it
+          # a frozen builder is long-poll only and no self-update reaches it.
+          # jsonschema comes via the [validate] extra — it
           # is pinned there below the Rust rewrite (see pyproject.toml). Do not
           # install it explicitly: an unbounded `pip install jsonschema`
           # resolves to >=4.18 and drags rpds-py/cargo in, which does not
           # build on the BSD VMs.
-          pip install '.[remote,signing,validate]'
+          pip install '.[remote,builder,signing,validate]'
 
       - name: Build standalone binary
         shell: bash
@@ -117,6 +121,14 @@ jobs:
           # customer's airgapped box.
           cd "$RUNNER_TEMP"
           "$BIN" validate recipes/zlib
+          # The builder's WebSocket client must be IN the archive: the import
+          # is lazy and falls back to long-poll with only a log line, so a
+          # binary built without [builder] looks healthy everywhere else.
+          # (Listing to a file, not a pipe: grep -q exiting early would SIGPIPE
+          # the viewer and fail the step under pipefail.)
+          python -m PyInstaller.utils.cliutils.archive_viewer -r -b "$BIN" > archive.txt
+          grep -Eq '^\s*websockets\.sync\.client$' archive.txt \
+            || { echo "::error::websockets is not bundled -- builder run would be long-poll only"; exit 1; }
 
       - name: Rename artifact
         shell: bash
@@ -271,9 +283,11 @@ jobs:
           # cvcpkg's .dist-info — keep this in step with the `build` job rather
           # than maintaining a second, drifting flag list here.
           #
-          # [remote,signing,validate]: a standalone binary is a fixed closure,
-          # so httpx, cryptography and jsonschema must be in the build env to
-          # be bundled. jsonschema comes via the [validate] extra (pinned
+          # [remote,builder,signing,validate]: a standalone binary is a fixed
+          # closure, so httpx, websockets, cryptography and jsonschema must be
+          # in the build env to be bundled. websockets ([builder]) is the
+          # builder's push channel -- these binaries run `cvcpkg builder run`
+          # too. jsonschema comes via the [validate] extra (pinned
           # below the Rust rewrite there). Installing it explicitly would
           # resolve to >=4.18, whose rpds-py needs cargo — which these VMs do
           # not have.
@@ -305,8 +319,8 @@ jobs:
           fi
 
           ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
-            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages '.[remote,signing,validate]' 2>/dev/null \
-              || ${PYTHON} -m pip install '.[remote,signing,validate]'; \
+            TMPDIR=/usr/local/tmp ${PYTHON} -m pip install --break-system-packages '.[remote,builder,signing,validate]' 2>/dev/null \
+              || ${PYTHON} -m pip install '.[remote,builder,signing,validate]'; \
             ${PYTHON} -m PyInstaller --clean --noconfirm packaging/cvcpkg.spec"
 
       - name: Verify + retrieve binary
@@ -320,6 +334,14 @@ jobs:
           ssh ${SSH_OPTS} "${VM}" "set -e; cd ${remote_dir} && \
             chmod +x dist/cvcpkg && ./dist/cvcpkg --version && \
             BIN=\$(pwd)/dist/cvcpkg && cd /tmp && \$BIN validate recipes/zlib"
+
+          # The builder's WebSocket client must be IN the archive (see the
+          # hosted build's verify step): a lazy import that falls back to
+          # long-poll with one log line is otherwise invisible.
+          ssh ${SSH_OPTS} "${VM}" "${{ matrix.python }} -m PyInstaller.utils.cliutils.archive_viewer \
+            -r -b ${remote_dir}/dist/cvcpkg" > archive.txt
+          grep -Eq '^\s*websockets\.sync\.client$' archive.txt \
+            || { echo "::error::websockets is not bundled -- builder run would be long-poll only"; exit 1; }
 
           mkdir -p dist
           scp ${SSH_OPTS} "${VM}:${remote_dir}/dist/cvcpkg" \
