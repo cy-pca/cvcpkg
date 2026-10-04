@@ -88,7 +88,13 @@ def test_reexec_builder_execs_python_dash_m_with_the_token_in_env(monkeypatch):
 
 
 def test_reexec_argv_starts_a_working_cvcpkg(tmp_path):
-    """For real: the new argv starts; the old ``[python, __main__.py]`` did not."""
+    """For real: the successor's argv starts a working cvcpkg.
+
+    (The old ``[python, .../cvcpkg/__main__.py]`` died on the ``platform``
+    shadowing -- but not when something imported the stdlib ``platform``
+    first, e.g. pytest-cov's .pth hook under ``--cov``, so that half is not
+    asserted here.)
+    """
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     new = subprocess.run(
         b._reexec_argv(["--version"]),
@@ -100,17 +106,6 @@ def test_reexec_argv_starts_a_working_cvcpkg(tmp_path):
     )
     assert new.returncode == 0, new.stderr
     assert RUNNING in new.stdout
-
-    main_py = Path(b.__file__).resolve().parents[1] / "__main__.py"
-    old = subprocess.run(
-        [sys.executable, str(main_py), "--version"],
-        capture_output=True,
-        text=True,
-        cwd=tmp_path,
-        env=env,
-        timeout=120,
-    )
-    assert old.returncode != 0  # the bug this replaces
 
 
 # -- _self_update ----------------------------------------------------------------
