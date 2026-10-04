@@ -46,7 +46,10 @@ jobs:
           if [ "${{ matrix.variant }}" = "combined" ]; then
             pip install -e ".[production,signing,validate]" pyinstaller
           else
-            pip install -e ".[remote,signing,validate]" pyinstaller
+            # [builder] brings websockets: the binary also runs `cvcpkg builder
+            # run`, whose push channel (job dispatch, builder.update) is a
+            # WebSocket; without it a frozen builder is long-poll only.
+            pip install -e ".[remote,builder,signing,validate]" pyinstaller
           fi
 
       - name: Build binary
