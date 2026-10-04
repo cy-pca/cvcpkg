@@ -68,3 +68,10 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   or shadow the public catalogue. Only *build execution* is shared.
 - Tokens should come from `token_env` (or systemd `EnvironmentFile`), not be
   written literally into the config file.
+- `ExecStart` may point at a pip-installed `cvcpkg` or at the single-file
+  binary (`packaging/cvcpkg.spec`). Either way the supervisor starts each
+  worker with the same cvcpkg it is running itself: `python -m cvcpkg builder
+  run ...` from a pip install, `<binary> builder run ...` from the binary
+  (each binary worker unpacks its own copy). A server-pushed self-update only
+  applies to a pip install; to update a binary fleet, replace the binary and
+  restart the unit.
