@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import time
 from collections.abc import Callable
@@ -115,6 +116,41 @@ _SUPERVISOR_RESTART_CODE = 90
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
 _RECIPE_DIR_TTL_SECS = 24 * 60 * 60
+
+
+class _ReconnectBackoff:
+    """Capped exponential backoff, with jitter, for the builder's WebSocket.
+
+    ``next_delay()`` yields ``minimum``, ``2 * minimum``, ``4 * minimum`` ...
+    up to ``maximum``, each scaled by a random factor in ``[1 - jitter,
+    1 + jitter]`` (and never above ``maximum``) so builders that lost the
+    server together do not all retry in the same second.  ``reset()`` starts
+    the sequence over, after a connection that stayed up.
+    """
+
+    def __init__(
+        self,
+        minimum: float,
+        maximum: float,
+        *,
+        jitter: float = 0.2,
+        rand: Callable[[], float] = random.random,
+    ) -> None:
+        self.minimum = max(0.0, minimum)
+        self.maximum = max(self.minimum, maximum)
+        self.jitter = min(max(jitter, 0.0), 1.0)
+        self._rand = rand
+        self._next = self.minimum
+
+    def reset(self) -> None:
+        self._next = self.minimum
+
+    def next_delay(self) -> float:
+        step = self._next
+        self._next = min(self._next * 2, self.maximum)
+        scaled = step * (1.0 + self.jitter * (2.0 * self._rand() - 1.0))
+        return min(max(scaled, 0.0), self.maximum)
+
 
 # -- Builder commands --------------------------------------------
 
@@ -867,6 +903,11 @@ def builder_run(
     # tree.  Guarded by jobs_lock; added when the root is created and removed in
     # the same finally that rmtree's it.
     active_job_roots: set[Path] = set()
+    # Server job ids this process is executing right now.  A job id can be
+    # handed to us more than once while we are still running it -- see
+    # _admit_job -- and must never start a second thread.  Guarded by
+    # jobs_lock; added by _admit_job, removed in _run_job_guarded's finally.
+    inflight_job_ids: set[int] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -895,10 +936,38 @@ def builder_run(
         current_jobs = len(active_jobs)
         return _job_seq
 
-    def _release_slot(slot_id: int) -> None:
+    def _admit_job(job: dict) -> int | None:
+        """Reserve a slot for *job*, or return None if we are already running it.
+
+        The server hands a job out until it is claimed, and the claim happens
+        inside the job thread.  ``next-job`` returns a job for as long as it is
+        still ``dispatched`` (``next-claimable`` while it is ``pending``), and
+        the poll loop polls again the moment it has started a job thread -- so
+        with a free slot it is routinely handed the SAME job before its own
+        claim has landed.  The server cannot refuse that second claim: a
+        re-claim by the job's own builder (or ``--name`` claimant) is
+        idempotent on purpose, so a builder whose claim response was lost can
+        retry.  Admitting it anyway ran most jobs on a max-jobs >= 2 builder
+        two (once three) times concurrently, each in its own job tree and each
+        publishing the same variant (populate-server runs 36933340879,
+        37099829036, 37106564280).  The job id is what a repeated hand-out has
+        in common with the first, so dedupe on it here.
+
+        Call under jobs_lock.
+        """
+        job_id = job.get("id")
+        if job_id is not None:
+            if job_id in inflight_job_ids:
+                return None
+            inflight_job_ids.add(job_id)
+        return _claim_slot()
+
+    def _release_slot(slot_id: int, job_id: int | None = None) -> None:
         nonlocal current_jobs
         with jobs_lock:
             active_jobs.discard(slot_id)
+            if job_id is not None:
+                inflight_job_ids.discard(job_id)
             current_jobs = len(active_jobs)
 
     def _handle_signal(signum, frame):
@@ -1756,18 +1825,19 @@ def builder_run(
     def _run_job_guarded(job: dict, slot_id: int) -> None:
         """Thread entry point: run a job and ALWAYS release its slot.
 
-        The caller reserves the slot (``_claim_slot``) before starting the
-        thread; this wrapper's finally releases it no matter how
-        ``_execute_job`` exits — normal return, exception, or the early
-        ``return`` in its claim step.  Previously the release lived inside
-        ``_execute_job``'s try/finally, which a failed-claim early return
+        The caller reserves the slot (``_admit_job``) before starting the
+        thread; this wrapper's finally releases it, along with the job id's
+        in-flight mark, no matter how ``_execute_job`` exits — normal return,
+        exception, or the early ``return`` in its claim step.  Previously the
+        release lived inside ``_execute_job``'s try/finally, which a
+        failed-claim early return
         skipped, permanently leaking a slot (a max-jobs=2 builder wedged at
         2/2 after two failed claims and stopped taking work).
         """
         try:
             _execute_job(job)
         finally:
-            _release_slot(slot_id)
+            _release_slot(slot_id, job.get("id"))
 
     # -- Self-update helper ---------------------------------
 
@@ -1870,25 +1940,91 @@ def builder_run(
         rest = base.split("://", 1)[1] if "://" in base else base
         return f"{scheme}://{rest}/v1/builders/{builder_id}/ws?token={token}"
 
-    def _run_ws_loop():
-        """Run the WebSocket event loop.
+    def _ws_error_text(exc: BaseException) -> str:
+        """``str(exc)`` with the bearer token masked.
 
-        Connects to the server, sends heartbeats, receives
-        dispatched jobs and recipe pushes.  Falls back to HTTP
-        long-poll on any connection failure.
+        The socket URL carries the token as a query parameter (the server
+        authenticates the upgrade from it), and some handshake errors quote
+        the URL they failed on.
+        """
+        text = str(exc) or type(exc).__name__
+        return text.replace(token, "***") if token else text
+
+    def _ws_catch_up() -> None:
+        """Start jobs dispatched to us that the socket will never push.
+
+        ``job.dispatch`` is pushed exactly once, at dispatch time, and only if
+        our socket is registered on the server at that moment.  A job
+        dispatched while we were on long-poll or mid-handshake, or pushed while
+        every slot here was full (the dispatch handler drops it), stays
+        ``dispatched`` to this builder with nothing left to deliver it until
+        the build timeout reaps it.  ``next-job`` still returns such a job, so
+        ask it -- on every (re)connect and then periodically.  A job already
+        running here (its claim not landed yet) comes back too; _admit_job
+        refuses that one, so a job seen on both paths still runs once.
+        """
+        while not shutdown:
+            with jobs_lock:
+                if current_jobs >= max_jobs:
+                    return
+            try:
+                with httpx.Client(timeout=15) as client:
+                    resp = client.get(
+                        f"{base}/v1/builders/{builder_id}/next-job",
+                        headers=headers,
+                        params={"timeout": "1"},
+                    )
+            except Exception as exc:
+                click.echo(f"  catch-up poll error: {exc}", err=True)
+                return
+            if resp.status_code != 200:
+                return  # 204: nothing waiting.  Errors: the next sweep retries.
+            job = resp.json()
+            with jobs_lock:
+                slot_id = _admit_job(job)
+            if slot_id is None:
+                # Already running it; anything queued behind it is picked up
+                # by the next sweep, once our claim has moved it on.
+                return
+            click.echo(f"  [{job.get('id')}] picked up a dispatch the socket did not deliver")
+            threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True).start()
+
+    def _run_ws_loop() -> tuple[str, float]:
+        """Run one WebSocket session: connect, then serve until it ends.
+
+        While connected, sends heartbeats and receives dispatched jobs,
+        recipe pushes and ``builder.update`` (fleet self-update, which only
+        this path carries).  Returns ``(outcome, connected_seconds)``:
+
+        - ``"unavailable"``: the websockets library is not installed.  Not
+          worth retrying in this process.
+        - ``"failed"``: the handshake failed -- refused, a 404 from a proxy or
+          server that does not pass the upgrade, DNS, timeout.
+        - ``"lost"``: connected, then the connection dropped.
+        - ``"stopped"``: shutdown was requested or --max-runtime was reached.
+
+        The caller covers every non-"stopped" outcome with HTTP long-poll and
+        schedules the next attempt (see the main loop).
         """
         nonlocal shutdown, current_jobs, last_heartbeat, last_gc
         try:
             import websockets.sync.client as ws_sync
         except ImportError:
             click.echo("  websockets not installed - using HTTP long-poll", err=True)
-            return False
+            return "unavailable", 0.0
 
         click.echo("Connecting via WebSocket...")
+        connected_at: float | None = None
+        lost = ""
         try:
-            with ws_sync.connect(_ws_url(), close_timeout=5) as ws:
+            with ws_sync.connect(_ws_url(), open_timeout=10, close_timeout=5) as ws:
+                connected_at = time.time()
                 click.echo("WebSocket connected.")
-                ws.settimeout(5)  # non-blocking reads with 5s timeout
+                # No ws.settimeout(): the sync client has no such method (that
+                # call raised AttributeError right after every successful
+                # handshake, so no session ever survived it).  Reads are
+                # bounded by recv(timeout=...) below.
+                last_sweep = 0.0  # catch up at once: see _ws_catch_up
                 while not shutdown:
                     # Wall-clock budget: stop claiming, drain in-flight, exit.
                     if _past_deadline():
@@ -1916,19 +2052,25 @@ def builder_run(
                         try:
                             ws.send(json.dumps(_hb))
                             last_heartbeat = now
-                        except Exception:
+                        except Exception as exc:
+                            lost = _ws_error_text(exc)
                             break  # connection lost
 
                     if gc_interval > 0 and now - last_gc >= gc_interval:
                         _run_periodic_gc()
                         last_gc = now
 
+                    if now - last_sweep >= ws_sweep_interval:
+                        _ws_catch_up()
+                        last_sweep = time.time()
+
                     # Try to receive a message
                     try:
                         raw = ws.recv(timeout=2)
                     except TimeoutError:
                         continue
-                    except Exception:
+                    except Exception as exc:
+                        lost = _ws_error_text(exc)
                         break  # connection lost
 
                     try:
@@ -1943,8 +2085,16 @@ def builder_run(
                             continue
                         with jobs_lock:
                             if current_jobs >= max_jobs:
+                                # Dropped here, but it stays dispatched to us:
+                                # _ws_catch_up starts it once a slot frees.
                                 continue
-                            slot_id = _claim_slot()
+                            slot_id = _admit_job(job)
+                        if slot_id is None:
+                            click.echo(
+                                f"  [{job.get('id')}] already running here, "
+                                "ignoring the repeated dispatch"
+                            )
+                            continue
                         t = threading.Thread(
                             target=_run_job_guarded, args=(job, slot_id), daemon=True
                         )
@@ -1964,7 +2114,8 @@ def builder_run(
                     elif msg_type == "ping":
                         try:
                             ws.send(json.dumps({"type": "pong"}))
-                        except Exception:
+                        except Exception as exc:
+                            lost = _ws_error_text(exc)
                             break
 
                     elif msg_type == "builder.update":
@@ -1982,20 +2133,42 @@ def builder_run(
                             err=True,
                         )
 
-            return True  # ran successfully (normal shutdown)
-
         except Exception as exc:
-            click.echo(
-                f"  WebSocket connection failed: {exc} - falling back to HTTP long-poll",
-                err=True,
-            )
-            return False
+            if connected_at is None:
+                click.echo(f"  WebSocket connection failed: {_ws_error_text(exc)}", err=True)
+                return "failed", 0.0
+            lost = lost or _ws_error_text(exc)
+
+        connected_for = time.time() - connected_at
+        if shutdown:
+            return "stopped", connected_for
+        click.echo(
+            f"  WebSocket connection lost after {connected_for:.0f}s"
+            + (f": {lost}" if lost else ""),
+            err=True,
+        )
+        return "lost", connected_for
 
     # -- Main loop -------------------------------------------
 
     last_heartbeat = 0.0
     heartbeat_interval = 60.0
     poll_interval = 5.0  # seconds between next-job polls
+
+    # WebSocket reconnect schedule.  A failed handshake or a dropped socket
+    # puts the builder on HTTP long-poll, and the socket is retried on a
+    # capped exponential backoff (jittered, so a fleet that lost the server
+    # together does not come back in lockstep) until it connects again.  The
+    # cap bounds how long a builder stays on long-poll after the server side
+    # starts accepting upgrades again.  A session that stayed up for
+    # ws_stable_secs resets the backoff; one that drops straight after
+    # connecting keeps escalating it.
+    ws_retry_min = float(os.environ.get("CVCPKG_BUILDER_WS_RETRY_MIN", "5"))
+    ws_retry_max = float(os.environ.get("CVCPKG_BUILDER_WS_RETRY_MAX", "300"))
+    ws_stable_secs = float(os.environ.get("CVCPKG_BUILDER_WS_STABLE_SECS", "60"))
+    # How often a connected builder asks next-job for dispatches the socket
+    # did not deliver (see _ws_catch_up).
+    ws_sweep_interval = float(os.environ.get("CVCPKG_BUILDER_WS_SWEEP_INTERVAL", "60"))
 
     # Periodic disk reclamation.  The startup sweep above catches orphans from
     # a previous incarnation; this is the safety net for a builder that stays
@@ -2044,21 +2217,23 @@ def builder_run(
     drain_settle_secs = float(os.environ.get("CVCPKG_DRAIN_SETTLE_SECS", "20"))
     drain_empty_since: float | None = None
 
-    try:
-        # Try WebSocket first (unless disabled).  Drain mode (--exit-when-empty)
-        # needs the HTTP long-poll path: it returns 204 on an empty queue, which
-        # is the signal to exit; the WebSocket path is push-only and never tells
-        # us the queue is empty.
-        use_ws = not no_websocket and not exit_when_empty
-        if use_ws and not shutdown:
-            ws_ok = _run_ws_loop()
-            if ws_ok:
-                # WebSocket ran until shutdown - skip HTTP loop
-                use_ws = True
-            else:
-                use_ws = False
+    # Prefer the WebSocket whenever it can be had (unless disabled).  Drain
+    # mode (--exit-when-empty) needs the HTTP long-poll path: it returns 204 on
+    # an empty queue, which is the signal to exit; the WebSocket path is
+    # push-only and never tells us the queue is empty.  An unregistered
+    # builder has no builder id to open a socket for.
+    ws_wanted = not no_websocket and not exit_when_empty and builder_id is not None
+    ws_backoff = _ReconnectBackoff(ws_retry_min, ws_retry_max)
+    ws_next_attempt = 0.0  # first attempt straight away
 
-        # HTTP long-poll fallback
+    try:
+        # One loop for both transports.  While a socket is up, _run_ws_loop
+        # serves it and returns when it ends; every other iteration is one
+        # HTTP long-poll round, so a builder whose socket is down keeps
+        # taking work and retries the socket when its backoff comes due.
+        # Earlier, one failed handshake (or one dropped connection) left the
+        # builder on long-poll until it was restarted -- and long-poll never
+        # sees builder.update, so fleet self-update could not reach it either.
         while not shutdown:
             # Wall-clock budget: stop claiming, drain in-flight, exit.
             if _past_deadline():
@@ -2067,6 +2242,23 @@ def builder_run(
                     "stopping claims, finishing in-flight jobs..."
                 )
                 break
+
+            if ws_wanted and time.time() >= ws_next_attempt:
+                outcome, connected_for = _run_ws_loop()
+                if outcome == "stopped" or shutdown:
+                    break
+                if outcome == "unavailable":
+                    ws_wanted = False
+                else:
+                    if outcome == "lost" and connected_for >= ws_stable_secs:
+                        ws_backoff.reset()
+                    delay = ws_backoff.next_delay()
+                    ws_next_attempt = time.time() + delay
+                    click.echo(
+                        f"  using HTTP long-poll; retrying WebSocket in {delay:.0f}s",
+                        err=True,
+                    )
+                continue
 
             # Heartbeat
             now = time.time()
@@ -2154,7 +2346,13 @@ def builder_run(
                 # NOT `token`: this runs in builder_run's own scope, so binding
                 # the slot id to that name replaced the bearer credential every
                 # nested closure reads -- publishes then sent "Bearer 1".
-                slot_id = _claim_slot()
+                slot_id = _admit_job(job)
+            if slot_id is None:
+                # The server handed back a job we are already running: our own
+                # claim, sent from the job thread, has not landed yet.  It will
+                # within a round trip; don't spin on the poll meanwhile.
+                time.sleep(1.0)
+                continue
 
             # Run in a thread so we can keep heartbeating & polling.  The
             # guarded wrapper releases the slot on any exit path.
