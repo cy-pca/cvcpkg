@@ -56,25 +56,37 @@ recipe:
   # all four ELF platforms (linux/freebsd/openbsd/netbsd), since the
   # LDFLAGS rpath was silently broken everywhere, not just OpenBSD.
   #
-  # Bumped 6 -> 7: NetBSD's cmake build failed at a NEW stage — bin/cmake
-  # (self-built during cmake's own bootstrap) couldn't be invoked during
-  # `make install`: "Shared object libcurl.so.12 not found", despite
-  # LD_LIBRARY_PATH and RPATH both correctly pointing at the exact
-  # directory containing that exact filename (confirmed via cmake's own
-  # build.sh debug ldd check, which resolved libssl.so.3 from the same
-  # directory just fine in the same run). Root cause: NetBSD's (and
-  # Linux/FreeBSD's) libtool ALSO creates a shorter SONAME-convention
-  # symlink (libcurl.so.12 -> libcurl.so.12.0) alongside the real
-  # fully-versioned file; v6's `ls libcurl.so.*` glob picked that symlink
-  # (alphabetically first) and set SONAME to a name that itself requires a
-  # symlink hop to resolve. NetBSD's rtld/ldd apparently doesn't follow that
-  # hop via LD_LIBRARY_PATH/RPATH lookup, unlike a SONAME that matches a
-  # real file directly (openssl's libssl.so.3 has no such indirection and
-  # loaded fine). Switched to `find -type f` so the real, non-symlink file
-  # is always selected and SONAME never requires symlink resolution — this
-  # is what OpenBSD was already doing by accident (its libtool never
-  # created the shorter symlink in the first place).
-  cvc_revision: 7
+  # Bumped 6 -> 7: switched the post-install SONAME target from the
+  # libcurl.so.12 symlink to the real libcurl.so.12.0 file (`find -type f`).
+  # CORRECTION (2026-10-03, see 7 -> 8): the reasoning recorded here at the
+  # time -- "NetBSD's rtld doesn't follow the libcurl.so.12 -> libcurl.so.12.0
+  # symlink hop" -- was WRONG, and the change did not fix NetBSD. ld.elf_so
+  # opens symlinks like any other file. The real cause of both the +cvc.6
+  # "Shared object libcurl.so.12 not found" and the +cvc.7 "libcurl.so.12.0
+  # not found" was patchelf itself; the SONAME choice was irrelevant.
+  #
+  # Bumped 7 -> 8: stop running patchelf on libcurl on NetBSD. NetBSD's
+  # ld.elf_so refuses any object without EXACTLY two PT_LOAD segments
+  # (map_object.c: "wrong number of segments (%d != 2)") and then reports the
+  # file as "Shared object ... not found". NetBSD's GNU ld emits exactly two,
+  # aligned at 0x200000. Any patchelf 0.18 edit that has to GROW .dynstr or
+  # .dynamic (a longer SONAME, an RPATH where there was none) appends a third
+  # PT_LOAD, and the +cvc.7 SONAME+RPATH pair also left PT_DYNAMIC (vaddr
+  # 0x600000) outside every PT_LOAD. So cmake could not be built on NetBSD,
+  # which blocked epoll-shim and wayland there. Reproduced off-box by running
+  # the same patchelf 0.18 commands on the untouched +cvc.1 NetBSD libcurl.
+  # NetBSD now gets its RPATH at LINK time from GNU ld's LD_RUN_PATH (an
+  # environment variable, so no libtool/make quoting can mangle `$ORIGIN`),
+  # and keeps libtool's own SONAME libcurl.so.12, which needs no patching.
+  # Linux/FreeBSD/OpenBSD keep the post-install patchelf step unchanged: their
+  # linkers align segments at 4 KiB and the patched result loads there. Their
+  # SONAME stays the fully-versioned file name, which the cmake builds already
+  # published for those platforms record as DT_NEEDED.
+  # Also on Linux/FreeBSD/NetBSD: bin/curl's RPATH, which libtool pointed at
+  # the build job's deleted install/lib, becomes `$ORIGIN/../lib`. That edit
+  # is only made in place (the new string is shorter), so it never adds a
+  # segment.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -100,7 +112,8 @@ depends:
     # passed through libtool's own -Wl, LDFLAGS handling instead (comma-
     # split argument re-classification quirk). patchelf operates on the
     # already-linked artifact and never touches libtool's argument
-    # handling.
+    # handling. On NetBSD it only rewrites bin/curl's RPATH in place;
+    # libcurl itself is never patched there (see the 7 -> 8 note).
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
   runtime:
