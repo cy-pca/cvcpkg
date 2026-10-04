@@ -58,6 +58,7 @@ from cvcpkg.server.models import (
     BuilderStatus,
     BuildJobAlreadyClaimedError,
     BuildJobInfo,
+    BuildJobNotActiveError,
     BuildJobStatus,
     MirrorInfo,
     OrgInfo,
@@ -4082,69 +4083,101 @@ class DbBuildJobStore:
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
+    # The states a job can be completed or failed from: dispatched to a
+    # builder, or claimed and running.  The same set list_active_by_builder
+    # and the builder's current_jobs reconciliation count as "active".
+    # ``dispatched`` has to be here because the scheduler fails the
+    # dispatched-but-unclaimed jobs of a builder that went offline.
+    _FINISHABLE_STATUSES = (BuildJobStatus.dispatched, BuildJobStatus.running)
+
     async def complete(self, job_id: int, *, result_archive_url: str = "") -> BuildJobInfo | None:
-        """Mark a job as succeeded and reconcile builder job count."""
-        now = datetime.datetime.now(datetime.timezone.utc)
-        async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            builder_id = row.builder_id
-            row.status = BuildJobStatus.succeeded
-            row.finished_at = now
-            row.error_message = ""
-            if result_archive_url:
-                row.result_archive_url = result_archive_url
-            # Reconcile builder's current_jobs from actual DB state
-            if builder_id is not None:
-                active = (
-                    await session.execute(
-                        select(sa_func.count())
-                        .select_from(BuildJobRow)
-                        .where(BuildJobRow.builder_id == builder_id)
-                        .where(
-                            BuildJobRow.status.in_(
-                                [BuildJobStatus.dispatched, BuildJobStatus.running]
-                            )
-                        )
-                    )
-                ).scalar() or 0
-                builder_row = (
-                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
-                ).scalar()
-                if builder_row is not None:
-                    builder_row.current_jobs = active
-            dep_ids = await self._load_dep_ids(session, job_id)
-            return self._row_to_info(row, dep_ids)
+        """Mark an active job as succeeded and reconcile builder job count.
+
+        Returns None if the job does not exist.  Raises
+        BuildJobNotActiveError -- leaving the row untouched -- if the job is
+        not dispatched or running; see :meth:`_finish`.
+        """
+        values: dict = {"error_message": ""}
+        if result_archive_url:
+            values["result_archive_url"] = result_archive_url
+        return await self._finish(job_id, BuildJobStatus.succeeded, values)
 
     async def fail(self, job_id: int, *, error_message: str = "") -> BuildJobInfo | None:
-        """Mark a job as failed and reconcile builder job count."""
+        """Mark an active job as failed and reconcile builder job count.
+
+        Returns None if the job does not exist.  Raises
+        BuildJobNotActiveError -- leaving the row untouched -- if the job is
+        not dispatched or running; see :meth:`_finish`.  The caller cascades
+        to dependents (:meth:`cancel_downstream`) only after a fail that
+        actually landed.
+        """
+        values: dict = {}
+        if error_message:
+            values["error_message"] = error_message
+        return await self._finish(job_id, BuildJobStatus.failed, values)
+
+    async def _finish(
+        self, job_id: int, status: BuildJobStatus, values: dict
+    ) -> BuildJobInfo | None:
+        """Move an active job to the terminal *status*, once.
+
+        The transition is a single conditional UPDATE with the active-state
+        predicate in the WHERE clause -- the same shape as :meth:`claim` --
+        so two reports racing for one job are serialized by the database and
+        exactly one of them lands.
+
+        Previously this read the row and overwrote its status whatever it
+        was, so the last report won.  A job that ran twice (two copies on one
+        builder, see the builder's in-flight dedupe) had its outcome decided
+        by whichever copy reported last, and a late ``fail`` on a job that had
+        already succeeded flipped it to failed -- whose caller then
+        cascade-cancelled the dependents.  A complete arriving after a
+        timeout, a force-cancel or the reaper's fail likewise resurrected a
+        job whose dependents had already been cancelled.
+
+        A refused report raises BuildJobNotActiveError carrying the job as it
+        stands; ``is_repeat`` on it tells a harmless repeat of the same
+        outcome from a conflicting one.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(
+                    BuildJobRow.id == job_id,
+                    BuildJobRow.status.in_(self._FINISHABLE_STATUSES),
+                )
+                .values(status=status, finished_at=now, **values)
+                .execution_options(synchronize_session=False)
+            )
+            # populate_existing: the UPDATE bypassed the ORM, so refresh the
+            # identity-mapped instance rather than reading back stale values.
             row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+                await session.execute(
+                    select(BuildJobRow)
+                    .where(BuildJobRow.id == job_id)
+                    .execution_options(populate_existing=True)
+                )
             ).scalar()
             if row is None:
                 return None
-            builder_id = row.builder_id
-            row.status = BuildJobStatus.failed
-            row.finished_at = now
-            if error_message:
-                row.error_message = error_message
+            dep_ids = await self._load_dep_ids(session, job_id)
+            if result.rowcount == 0:
+                raise BuildJobNotActiveError(
+                    job_id,
+                    status=row.status,
+                    attempted=status,
+                    info=self._row_to_info(row, dep_ids),
+                )
             # Reconcile builder's current_jobs from actual DB state
+            builder_id = row.builder_id
             if builder_id is not None:
                 active = (
                     await session.execute(
                         select(sa_func.count())
                         .select_from(BuildJobRow)
                         .where(BuildJobRow.builder_id == builder_id)
-                        .where(
-                            BuildJobRow.status.in_(
-                                [BuildJobStatus.dispatched, BuildJobStatus.running]
-                            )
-                        )
+                        .where(BuildJobRow.status.in_(self._FINISHABLE_STATUSES))
                     )
                 ).scalar() or 0
                 builder_row = (
@@ -4152,7 +4185,6 @@ class DbBuildJobStore:
                 ).scalar()
                 if builder_row is not None:
                     builder_row.current_jobs = active
-            dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids)
 
     async def find_ready_jobs(self) -> list[BuildJobInfo]:
