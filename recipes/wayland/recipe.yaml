@@ -25,7 +25,23 @@ recipe:
   # bundle's lib/ (with only $ORIGIN it searched bin/). Also picks up
   # epoll-shim +cvc.2's lib/pkgconfig/epoll-shim.pc on the BSDs, so meson finds
   # epoll-shim through pkg-config instead of its CMake-package fallback.
-  cvc_revision: 4
+  # Bumped 4 -> 5: NetBSD support (netbsd-support.patch; no NetBSD wayland was
+  # ever published). Upstream's meson.build pulls in epoll-shim only on FreeBSD
+  # and OpenBSD and assumes native epoll/signalfd everywhere else, so the
+  # NetBSD configure stopped at "SFD_CLOEXEC is needed to compile Wayland
+  # libraries". The patch (1) adds netbsd to that epoll-shim list (its
+  # include/libepoll-shim provides sys/epoll.h and sys/signalfd.h there; NetBSD
+  # 10 has timerfd natively); (2) defines _NETBSD_SOURCE on NetBSD, where
+  # upstream's -D_POSIX_C_SOURCE=200809L otherwise hides SOCK_CLOEXEC,
+  # MSG_CMSG_CLOEXEC, accept4 and LOCAL_PEEREID; (3) gives wayland-os.c a
+  # NetBSD peer-credential path (LOCAL_PEEREID) -- NetBSD has no SO_PEERCRED,
+  # so upstream hits #error "Don't know how to read ucred on this platform";
+  # (4) casts scanner.c's ctype arguments to unsigned char, which pkgsrc
+  # carries because wayland-scanner crashes on NetBSD on non-ASCII protocol
+  # text. (3) and (4) are guarded or behaviour-neutral elsewhere, so linux and
+  # the other BSDs rebuild to the same code. pkgsrc devel/wayland carries
+  # equivalents of (1), (2) and (4).
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,7 +59,11 @@ source:
   sha256: "864fb2a8399e2d0ec39d56e9d9b753c093775beadc6022ce81f441929a81e5ed"
   strip_components: 1
 
-patches: []
+patches:
+  # NetBSD: epoll-shim + _NETBSD_SOURCE (meson.build), LOCAL_PEEREID peer
+  # credentials (src/wayland-os.c), unsigned-char ctype args (src/scanner.c).
+  # See the cvc_revision 5 note above.
+  - netbsd-support.patch
 
 depends:
   build:
@@ -55,9 +75,11 @@ depends:
       version: "^3.4"
     - name: expat
       version: "^2.6"
-    # BSD event loop: libwayland-server's event loop uses epoll, which the BSDs
-    # have no native equivalent for. wayland's meson requires the `epoll-shim`
-    # pkg-config package on non-Linux (meson.build: dependency('epoll-shim')).
+    # BSD event loop: libwayland-server's event loop uses epoll (and signalfd),
+    # which the BSDs have no native equivalent for. wayland's meson requires
+    # the `epoll-shim` pkg-config package there (meson.build:
+    # dependency('epoll-shim'); upstream lists freebsd/openbsd, and
+    # netbsd-support.patch adds netbsd).
     - name: epoll-shim
       platforms: [freebsd, openbsd, netbsd]
   host_tools: []
@@ -102,8 +124,9 @@ abi:
   cxx_std: 17
 
 notes:
-  - title: "Linux and FreeBSD only"
-    platforms: [linux, freebsd]
+  - title: "Linux and the BSDs only"
+    platforms: [linux, freebsd, openbsd, netbsd]
     description: >-
-      Wayland is a Linux/FreeBSD-specific display protocol.
-      macOS and Windows use their native display servers.
+      Wayland is built for Linux, FreeBSD, OpenBSD and NetBSD (the BSDs
+      through epoll-shim). macOS and Windows use their native display
+      servers.
