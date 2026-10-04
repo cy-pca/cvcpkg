@@ -331,3 +331,54 @@ def test_supervisor_spawns_python_dash_m_from_a_pip_install(monkeypatch):
     for _, env in spawned:
         assert "CVCPKG_ENTRY" not in env
         assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+
+
+def test_supervisor_reaps_the_process_group_of_an_exited_worker(monkeypatch):
+    """The frozen binary runs a worker as launcher + interpreter.  If the
+    launcher dies alone, the interpreter keeps building and holds the worker's
+    pidfile, so every respawn would exit on the single-instance guard.  The
+    supervisor starts each worker in its own group and stops that group before
+    respawning."""
+    import os
+    import signal
+    import subprocess
+
+    from cvcpkg.builder_fleet import FleetConfig, FleetServer
+    from cvcpkg.cli import _builder
+
+    killed: list = []
+    monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False)
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
+    spawns: list = []
+
+    class _Proc:
+        def __init__(self, pid, rc):
+            self.pid, self.returncode = pid, rc
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _sig):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            pass
+
+    def _popen(argv, env=None, **kw):
+        spawns.append(kw)
+        if len(spawns) == 1:
+            return _Proc(5001, -9)  # its launcher is already gone
+        handlers[signal.SIGTERM](signal.SIGTERM, None)  # stop after the respawn
+        return _Proc(5002, None)
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    fs = FleetServer(server="https://a.example", token="t", serve=("",), name="a")
+    _builder._supervise_fleet(FleetConfig(name="f", servers=[fs]), restart_delay=0.0)
+
+    assert killed == [(5001, signal.SIGTERM)]
+    assert len(spawns) == 2
+    assert all(kw.get("start_new_session") for kw in spawns)

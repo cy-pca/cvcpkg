@@ -106,13 +106,15 @@ def cpkg_deps(
             cmd += ["--release", release]
         if arch:
             cmd += ["--arch", arch]
-        if token:
-            cmd += ["--token", token]
         if require_signatures:
             cmd += ["--require-signatures"]
         # Let install's own progress/errors go to stderr so stdout stays a
         # clean, parseable Lua/JSON document for the cpkg.lua shim.
         env = cvcpkg_env()
+        if token:
+            # Through the environment, which install also reads, rather than
+            # argv, where any local user can read it in ps / /proc/*/cmdline.
+            env["CVCPKG_TOKEN"] = token
         if server:
             # `cvcpkg install` has no --server flag (it would reject one); it
             # reads the server from the environment.

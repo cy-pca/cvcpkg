@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from cvcpkg.selfexec import cvcpkg_argv, cvcpkg_env, is_frozen
+from cvcpkg.selfexec import cvcpkg_argv, cvcpkg_env, is_frozen, restore_library_path
 
 _REAL_PYTHON = sys.executable
 _FAKE_BINARY = "/opt/cvcpkg/bin/cvcpkg"
@@ -59,7 +59,7 @@ def test_source_install_env_is_an_unmodified_copy(source_install, monkeypatch):
     monkeypatch.delenv("CVCPKG_ENTRY", raising=False)
     monkeypatch.delenv("PYINSTALLER_RESET_ENVIRONMENT", raising=False)
     base = {"PATH": "/bin", "KEEP": "1"}
-    env = cvcpkg_env(base, independent=True)
+    env = cvcpkg_env(base)
     assert env == base
     assert env is not base
     # Default base is the live environment.
@@ -72,14 +72,15 @@ def test_frozen_env_pins_client_entry(frozen):
     # Overrides an inherited server entry: the children are all client commands.
     assert env["CVCPKG_ENTRY"] == "client"
     assert env["PATH"] == "/bin"
-    # A short child the parent waits for shares the parent's unpack.
-    assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+    # Every frozen child is its own instance: the parent's _MEIPASS is off the
+    # library path after restore_library_path(), so it cannot be shared.
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     # The caller's mapping is not modified.
     assert base["CVCPKG_ENTRY"] == "server"
 
 
-def test_frozen_independent_child_unpacks_its_own_copy(frozen):
-    env = cvcpkg_env({}, independent=True)
+def test_frozen_child_unpacks_its_own_copy(frozen):
+    env = cvcpkg_env({})
     assert env == {"CVCPKG_ENTRY": "client", "PYINSTALLER_RESET_ENVIRONMENT": "1"}
 
 
@@ -117,7 +118,7 @@ def test_fake_frozen_binary_accepts_new_argv_and_rejects_dash_m(tmp_path, monkey
 
     ok = subprocess.run(
         cvcpkg_argv("builder", "run", "--help"),
-        env=cvcpkg_env(independent=True),
+        env=cvcpkg_env(),
         capture_output=True,
         text=True,
         timeout=120,
@@ -227,8 +228,6 @@ def test_cpkg_deps_installs_through_the_same_cvcpkg(mode, tmp_path, monkeypatch)
         "v1",
         "--arch",
         "x86_64",
-        "--token",
-        "tok",
         "--require-signatures",
     ]
     # Every flag must be one `cvcpkg install` accepts ...
@@ -237,7 +236,33 @@ def test_cpkg_deps_installs_through_the_same_cvcpkg(mode, tmp_path, monkeypatch)
     # ... so the server travels the way install reads it: the environment.
     env = kwargs["env"]
     assert env["CVCPKG_SERVER_URL"] == "https://pkg.example"
+    # The token travels the same way, never on a command line.
+    assert env["CVCPKG_TOKEN"] == "tok"
+    assert "tok" not in cmd
     if mode == "frozen":
         assert env["CVCPKG_ENTRY"] == "client"
     else:
         assert "CVCPKG_ENTRY" not in env
+
+
+# ── the bootloader's LD_LIBRARY_PATH ────────────────────────────
+
+
+def test_restore_library_path_puts_back_the_callers_value(frozen, monkeypatch):
+    monkeypatch.setattr(sys, "_MEIPASS", "/tmp/_MEIabc", raising=False)
+    env = {"LD_LIBRARY_PATH": "/tmp/_MEIabc:/opt/lib", "LD_LIBRARY_PATH_ORIG": "/opt/lib"}
+    restore_library_path(env)
+    assert env == {"LD_LIBRARY_PATH": "/opt/lib"}
+
+
+def test_restore_library_path_drops_a_bootloader_created_value(frozen, monkeypatch):
+    monkeypatch.setattr(sys, "_MEIPASS", "/tmp/_MEIabc", raising=False)
+    env = {"LD_LIBRARY_PATH": "/tmp/_MEIabc", "PATH": "/bin"}
+    restore_library_path(env)
+    assert env == {"PATH": "/bin"}
+
+
+def test_restore_library_path_is_a_noop_for_a_source_install(source_install):
+    env = {"LD_LIBRARY_PATH": "/x", "LD_LIBRARY_PATH_ORIG": "/y"}
+    restore_library_path(env)
+    assert env == {"LD_LIBRARY_PATH": "/x", "LD_LIBRARY_PATH_ORIG": "/y"}

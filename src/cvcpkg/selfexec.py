@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 
 # The combined client+server binary (packaging/cvcpkg_launcher.py) picks the
 # server or client CLI from the program name or this variable.
@@ -37,10 +37,37 @@ _ENTRY_ENV = "CVCPKG_ENTRY"
 # variable tells the child to ignore them and start as an independent instance.
 _PYI_RESET_ENV = "PYINSTALLER_RESET_ENVIRONMENT"
 
+# The onefile bootloader prepends its unpack directory (``sys._MEIPASS``) to the
+# dynamic linker's search path and keeps the caller's value as ``<VAR>_ORIG``
+# (unset when the caller had none).  ELF platforms use LD_LIBRARY_PATH, AIX
+# LIBPATH; macOS and Windows are not modified by the bootloader.
+_LIBPATH_VARS = ("LD_LIBRARY_PATH", "LIBPATH")
+
 
 def is_frozen() -> bool:
     """True when running from the PyInstaller single-file binary."""
     return bool(getattr(sys, "frozen", False))
+
+
+def restore_library_path(env: MutableMapping[str, str]) -> None:
+    """Undo the frozen bootloader's library-path change in *env*, in place.
+
+    Called on ``os.environ`` at frozen startup, so every program cvcpkg runs --
+    build scripts, compilers, git, ssh, a child cvcpkg -- gets the caller's
+    library path instead of the binary's bundled libssl/libz/libtinfo/... in
+    front of the system's.  This process is unaffected: the dynamic linker read
+    LD_LIBRARY_PATH when it was exec'd, and later dlopen()s keep using that.
+    No-op for a pip/source install.
+    """
+    if not is_frozen():
+        return
+    meipass = getattr(sys, "_MEIPASS", "")
+    for var in _LIBPATH_VARS:
+        orig = env.pop(f"{var}_ORIG", None)
+        if orig is not None:
+            env[var] = orig
+        elif meipass and env.get(var, "").split(os.pathsep)[0] == meipass:
+            del env[var]  # the caller had none; the bootloader created it
 
 
 def cvcpkg_argv(*args: str) -> list[str]:
@@ -54,11 +81,7 @@ def cvcpkg_argv(*args: str) -> list[str]:
     return [sys.executable, "-m", "cvcpkg", *args]
 
 
-def cvcpkg_env(
-    base: Mapping[str, str] | None = None,
-    *,
-    independent: bool = False,
-) -> dict[str, str]:
+def cvcpkg_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
     """The environment for a child started with :func:`cvcpkg_argv`.
 
     A copy of ``base`` (default: ``os.environ``).  For a pip/source install
@@ -67,17 +90,15 @@ def cvcpkg_env(
     * ``CVCPKG_ENTRY=client`` -- the child runs the *client* CLI even when this
       is the combined binary and its file name (which is what the child sees as
       its program name) would otherwise route it to ``cvcpkg-server``.
-    * ``independent=True`` adds ``PYINSTALLER_RESET_ENVIRONMENT=1`` so the child
-      unpacks its own copy instead of borrowing the parent's ``_MEIPASS``.  Use
-      it for long-lived children such as builder workers: they must not depend
-      on the parent's temporary directory staying in place, and a worker
-      restarted after the binary was replaced on disk must not mix the new
-      binary's Python code with the old one's unpacked libraries and recipes.
-      A short child the parent waits for can leave it off and skip the unpack.
+    * ``PYINSTALLER_RESET_ENVIRONMENT=1`` -- the child unpacks its own copy
+      instead of borrowing this process's ``_MEIPASS``.  A borrowed unpack only
+      works while ``_MEIPASS`` is on the library path, which
+      :func:`restore_library_path` deliberately undoes at startup; a long-lived
+      child (a fleet worker) must also not depend on this process's temporary
+      directory, nor mix a replaced binary's code with the old unpack.
     """
     env = dict(os.environ if base is None else base)
     if is_frozen():
         env[_ENTRY_ENV] = "client"
-        if independent:
-            env[_PYI_RESET_ENV] = "1"
+        env[_PYI_RESET_ENV] = "1"
     return env

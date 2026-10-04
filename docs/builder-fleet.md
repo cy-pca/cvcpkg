@@ -75,3 +75,8 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   (each binary worker unpacks its own copy). A server-pushed self-update only
   applies to a pip install; to update a binary fleet, replace the binary and
   restart the unit.
+- From the binary, the supervisor and every worker each unpack the binary into
+  `$TMPDIR` (about 85 MB apiece for the combined build) and remove it on exit.
+  A worker killed with SIGKILL leaves its copy behind, so give the unit a
+  `TimeoutStopSec=` above the supervisor's 120 s drain (e.g. `150`) rather than
+  the systemd default of 90 s.

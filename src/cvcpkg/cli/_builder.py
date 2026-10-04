@@ -336,8 +336,23 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
         # than borrowing this process's.
         argv = cvcpkg_argv(*worker_argv(fs))
         return subprocess.Popen(  # noqa: S603 - argv built from config
-            argv, env=cvcpkg_env(independent=True)
+            argv,
+            env=cvcpkg_env(),
+            # POSIX: each worker leads its own process group.  The frozen
+            # binary runs as a launcher + interpreter pair and only the
+            # launcher is ours to wait on; if it dies alone, the interpreter
+            # (the PID in the worker's pidfile) keeps building and holds the
+            # single-instance guard, so every respawn would exit at once.
+            start_new_session=hasattr(os, "killpg"),
         )
+
+    def _reap(p) -> None:
+        """Stop whatever outlived worker *p*'s launcher in its process group."""
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     def _handle_signal(signum, _frame):
         stopping.set()
@@ -361,6 +376,7 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
         for fs in fleet.servers:
             p = procs[fs.name]
             if p.poll() is not None and not stopping.is_set():
+                _reap(p)
                 click.echo(
                     f"worker {fs.name} exited (code {p.returncode}); "
                     f"restarting in {restart_delay:g}s"
