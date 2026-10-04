@@ -81,6 +81,18 @@ class TestCoreDependencies:
         assert "cryptography" in extras["signing"]
         assert {"sqlalchemy", "greenlet"} <= set(extras["server"])
 
+    def test_server_and_builder_extras_carry_a_websocket_library(self):
+        """uvicorn ships no WebSocket protocol; without one /ws answers 404.
+
+        The production image is built from [production]; with neither
+        websockets nor wsproto in it, every builder WebSocket on the public
+        server was served as plain HTTP (see test_server_websocket_transport).
+        The builder agent connects with websockets.sync.client.
+        """
+        extras = _load_pyproject()["tool"]["poetry"]["extras"]
+        for extra in ("server", "production", "builder", "all"):
+            assert "websockets" in extras[extra], extra
+
     def test_validate_extra_carries_jsonschema(self):
         """`cvcpkg validate` is a recipe-maintainer role, not part of the client."""
         extras = _load_pyproject()["tool"]["poetry"]["extras"]
