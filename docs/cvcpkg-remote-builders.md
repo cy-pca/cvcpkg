@@ -119,21 +119,42 @@ clean clone of cy-pca/cvcpkg tracking `master`, since the update is
 `git pull --ff-only` on whatever branch it has checked out.
 
 It decides whether there is anything to install *before* it stops taking work:
-it fetches, and counts on the upstream's version only when the pull can
-deliver it (the fetch succeeded, the branch fast-forwards, and no tracked file
-is modified); otherwise it goes by the working tree's version. It ignores the
-update unless that version is newer than the running one -- so a builder with
-no checkout, or a stale or diverged one, is never drained for nothing. Once
-idle it pulls, pip-installs `<checkout>[builder]` (passing
-`--break-system-packages` only to a pip that knows it, 23.0.1+), checks that a
-fresh interpreter imports the new version, and re-execs as
-`python -m cvcpkg builder run ...` with the token in `CVCPKG_TOKEN`. If any
-step fails it logs why and keeps running the version it has. It heartbeats
-throughout, so the server does not mark it offline mid-update, and every step
-has a timeout that kills the step's whole process tree; git runs
-non-interactively, with ssh and http stall limits unless the builder's
-environment or git config sets its own (`GIT_SSH_COMMAND`/`core.sshCommand`,
-`http.lowSpeedLimit`/`http.lowSpeedTime`).
+it fetches (with `--prune`, so an upstream branch deleted on the remote does not
+linger as a stale ref), and counts on the upstream's version only when the pull
+can deliver it (the fetch succeeded, the branch fast-forwards, and no tracked
+file is modified); otherwise it goes by the working tree's version and logs
+which of these was the reason. It ignores the update unless that version is
+newer than the running one -- so a builder with no checkout, or a stale or
+diverged one, is never drained for nothing. (An untracked file the pull would
+have to overwrite is not detected; that costs one drain, after which the
+builder installs the working tree's version only if it is newer.) Once idle it
+pulls, pip-installs `<checkout>[builder]` (passing `--break-system-packages`
+only to a pip that knows it, 23.0.1+), checks that a fresh interpreter imports
+the new version, and re-execs as `python -m cvcpkg builder run ...` with the
+token in `CVCPKG_TOKEN`. If any step fails it logs why and keeps running the
+version it has. It heartbeats throughout, so the server does not mark it
+offline mid-update, and every step has a timeout; a step that overruns gets a
+Ctrl-C (SIGINT to its process group, so git can remove its lock files and pip
+its temporary directories) and, 3 s later, its whole process tree is killed.
+git runs non-interactively, with ssh and http stall limits unless the
+builder's environment or git config sets its own
+(`GIT_SSH_COMMAND`/`core.sshCommand`, `http.lowSpeedLimit`/`http.lowSpeedTime`).
+
+A stop request wins over an update. The update's git and pip steps run in a
+session of their own, so a signal sent to the builder -- Ctrl-C, `kill <pid>`,
+`builder fleet` draining a worker -- does not reach them; instead the builder
+ends the running step within about a second, the same way as a timed-out one,
+and never re-execs (which would start a fresh builder that takes work again).
+An update still waiting for jobs to finish is dropped. If the stop ends pip
+part-way through installing, the builder logs the `pip install` command to run
+should it then fail to start.
+
+Builders that share a checkout -- a fleet's workers, or a dev and a prod unit
+on one host -- update one at a time: each holds an exclusive lock
+(`.git/cvcpkg-self-update.lock` in the checkout, released when the process
+exits or re-execs) for its pull, install and check, and heartbeats while it
+waits for it. One that finds the version already installed by another only
+restarts, without running pip again.
 
 | Environment variable | Default | Meaning |
 |----------------------|---------|---------|

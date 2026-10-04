@@ -559,7 +559,11 @@ def _record_self_update(monkeypatch, server, cmds: list | None = None, *, offere
     updates: list[dict] = []
     checkout = Path("/nonexistent/cvcpkg-checkout")
 
-    def _step(cmd, *, timeout, cwd=None, beat=None):
+    from cvcpkg import __version__
+
+    installed: list[bool] = []
+
+    def _step(cmd, *, timeout, cwd=None, beat=None, stop=None):
         if cmds is not None:
             cmds.append(list(cmd))
         with server.lock:
@@ -567,16 +571,19 @@ def _record_self_update(monkeypatch, server, cmds: list | None = None, *, offere
         if cmd[:2] == ["git", "pull"]:
             with server.lock:
                 updates.append(dict(server.jobs))
-        if "pip" in cmd and beat is not None:
-            beat()  # a long install: the builder must keep beating
-            beat()
-        out = f"{offered}\n" if "-c" in cmd else ""
+        if "pip" in cmd:
+            if beat is not None:
+                beat()  # a long install: the builder must keep beating
+                beat()
+            installed.append(True)
+        # The fresh-interpreter probe: the running version until pip ran.
+        out = f"{offered if installed else __version__}\n" if "-c" in cmd else ""
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
     monkeypatch.delenv("CVCPKG_BUILDER_SUPERVISED", raising=False)
     monkeypatch.setattr(builder_mod, "_run_update_step", _step)
     monkeypatch.setattr(
-        builder_mod, "_resolve_update_source", lambda beat=None: (checkout, offered)
+        builder_mod, "_resolve_update_source", lambda beat=None, stop=None: (checkout, offered)
     )
     monkeypatch.setattr(builder_mod, "_find_update_checkout", lambda: checkout)
     monkeypatch.setattr(builder_mod, "_checkout_version", lambda path: offered)
@@ -850,7 +857,7 @@ def test_builder_update_with_nothing_newer_to_install_does_not_drain(
     cmds: list[list[str]] = []
     execs = _record_self_update(monkeypatch, server, cmds)
     offer = None if source is None else (Path("/src/cvcpkg"), __version__)
-    monkeypatch.setattr(builder_mod, "_resolve_update_source", lambda beat=None: offer)
+    monkeypatch.setattr(builder_mod, "_resolve_update_source", lambda beat=None, stop=None: offer)
     result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1.5"])
 
     assert result.exit_code == 0, result.output
@@ -877,6 +884,116 @@ def test_builder_update_heartbeats_before_and_during_the_update(monkeypatch, tmp
     assert events[events.index("git pull") - 1] == "hb", events
     pip_at = next(i for i, e in enumerate(events) if e.endswith("-m"))
     assert events[pip_at + 1 : pip_at + 3] == ["hb", "hb"], events
+
+
+# -- builder.update vs a stop request ----------------------------------------------
+
+
+def _capture_signal_handlers(monkeypatch) -> dict:
+    """builder_run's own SIGINT/SIGTERM handlers, recorded instead of installed."""
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    return handlers
+
+
+def test_a_stop_during_the_update_is_not_turned_into_a_restart(monkeypatch, tmp_path):
+    """SIGTERM reaches the builder while pip runs.  pip is in its own session,
+    so the signal does not reach it, and the handler only sets ``shutdown``:
+    the update has to read that flag.  It used to finish, re-exec, and the
+    fresh builder took work again -- the stop request lost with the old
+    process image."""
+    import subprocess
+
+    import cvcpkg.cli._builder as builder_mod
+
+    handlers = _capture_signal_handlers(monkeypatch)
+
+    def on_connect(server, conn, index):
+        conn.push({"type": "builder.update", "version": "999.0.0"})
+
+    server = _FakeServer(on_connect=on_connect)
+    _record_self_update(monkeypatch, server)
+    reexecs: list = []
+    monkeypatch.setattr(
+        builder_mod, "_reexec_builder", lambda token, extra_env=None: reexecs.append(token)
+    )
+    recorded = builder_mod._run_update_step  # _record_self_update's stub
+    stops: list = []
+
+    def step(cmd, **kw):
+        stop = kw.get("stop")
+        stops.append(stop)
+        if "pip" in cmd:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)  # `kill <pid>` mid-pip
+            assert stop is not None and stop(), "the step cannot see the stop request"
+            return subprocess.CompletedProcess(cmd, 130, "", "stopped")
+        return recorded(cmd, **kw)
+
+    monkeypatch.setattr(builder_mod, "_run_update_step", step)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert reexecs == [], result.output
+    assert "pip install did not finish" in result.output
+    assert "Shutting down" in result.output
+    assert stops and all(s is not None for s in stops)
+
+
+def test_a_pending_update_is_dropped_on_shutdown(monkeypatch, tmp_path):
+    """The stop arrives while the update waits for a job to finish: once the
+    job is done the builder stops, and does not update (and restart) first."""
+    handlers = _capture_signal_handlers(monkeypatch)
+
+    def on_connect(server, conn, index):
+        def later():
+            time.sleep(0.1)
+            server.dispatch(1)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+            time.sleep(0.3)  # job 1 is claiming (claim_latency below)
+            conn.push({"type": "builder.update", "version": "999.0.0"})
+            time.sleep(0.3)
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+        threading.Thread(target=later, daemon=True).start()
+
+    server = _FakeServer(claim_latency=1.5, on_connect=on_connect)
+    cmds: list[list[str]] = []
+    execs = _record_self_update(monkeypatch, server, cmds)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "6"])
+
+    assert result.exit_code == 0, result.output
+    assert "once in-flight jobs finish" in result.output  # it was deferred ...
+    assert not execs and not cmds, result.output  # ... and never ran
+    assert "dropping the update" in result.output
+
+
+def test_an_update_check_that_raises_keeps_the_socket(monkeypatch, tmp_path):
+    """An exception out of the update check used to end the socket session
+    (and drop the update with it).  It is logged; the session goes on."""
+    import cvcpkg.cli._builder as builder_mod
+
+    def on_connect(server, conn, index):
+        def later():
+            time.sleep(0.2)
+            conn.push({"type": "builder.update", "version": "999.0.0"})
+            time.sleep(0.2)
+            server.dispatch(1)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+
+        threading.Thread(target=later, daemon=True).start()
+
+    def broken(beat=None, stop=None):
+        raise UnicodeDecodeError("utf-8", b"\xe9", 0, 1, "invalid continuation byte")
+
+    server = _FakeServer(on_connect=on_connect)
+    _record_self_update(monkeypatch, server)
+    monkeypatch.setattr(builder_mod, "_resolve_update_source", broken)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1.5"])
+
+    assert result.exit_code == 0, result.output
+    assert "the update check failed (UnicodeDecodeError" in result.output
+    assert len(server.ws_connects) == 1, result.output  # never lost the socket
+    assert server.claims == {1: 1}, result.output
 
 
 def test_catch_up_starts_every_missed_dispatch_not_one_per_sweep(monkeypatch, tmp_path):

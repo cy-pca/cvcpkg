@@ -29,6 +29,23 @@ And, in this change's own first cut:
 * the post-install check compared pyproject.toml's version string to the
   installed metadata's, so ``2.5.0-rc1`` vs ``2.5.0rc1`` failed a good install.
 
+And in its second cut:
+
+* the steps run in their own session, so a stop signal meant for the builder
+  (Ctrl-C, ``kill <pid>``) no longer reached git or pip -- and builder_run's
+  handler only sets a flag, which nothing on the update path read.  The step
+  finished and the builder re-exec'd into a fresh builder that took work
+  again: the stop request was lost with the old process image.
+* ``git fetch`` without ``--prune`` kept the remote-tracking ref of an
+  upstream branch deleted on the remote, so the source check promised a
+  version the pull could not fetch.
+* step output was decoded strictly: one non-UTF-8 byte from git or pip raised
+  UnicodeDecodeError -- out of the ``builder.update`` handler, ending the
+  builder's socket session.
+* builders sharing a checkout (a fleet's workers, a dev and a prod unit)
+  updated it concurrently: two ``git pull``s, two pip installs into one
+  site-packages.
+
 The slow steps (git, pip) run through ``_run_update_step``; tests stub it.
 """
 
@@ -48,6 +65,8 @@ from cvcpkg import __version__
 
 RUNNING = __version__
 NEWER = "999.0.0"
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell and process groups")
 
 
 # -- the re-exec ----------------------------------------------------------------
@@ -128,35 +147,64 @@ def test_reexec_argv_starts_a_working_cvcpkg(tmp_path):
 
 
 class _Steps:
-    """Stand-in for _run_update_step: records commands, answers per kind."""
+    """Stand-in for _run_update_step: records commands, answers per kind.
+
+    The fresh-interpreter probe answers *before* (the version installed
+    before this update) until a pip install succeeded, then *fresh*.
+    *on_step*, when given, is called with each command first (a test's way to
+    have something happen "during" a step).
+    """
 
     def __init__(
-        self, *, pip_rc=0, pip_err="", fresh=NEWER, pip_answers=None, probe_rc=0, probe_err=""
+        self,
+        *,
+        pip_rc=0,
+        pip_err="",
+        fresh=NEWER,
+        before=RUNNING,
+        pip_answers=None,
+        probe_rc=0,
+        probe_err="",
+        on_step=None,
     ):
         self.cmds: list[list[str]] = []
+        self.stops: list = []
         self.pip_rc = pip_rc
         self.pip_err = pip_err
         self.fresh = fresh
+        self.before = before
+        self.installed = False
         self.pip_answers = list(pip_answers or [])
         self.probe_rc = probe_rc
         self.probe_err = probe_err
+        self.on_step = on_step
 
-    def __call__(self, cmd, *, timeout, cwd=None, beat=None):
+    def __call__(self, cmd, *, timeout, cwd=None, beat=None, stop=None):
         self.cmds.append(list(cmd))
+        self.stops.append(stop)
+        if self.on_step is not None:
+            self.on_step(cmd)
+        if stop is not None and stop():
+            return subprocess.CompletedProcess(cmd, 130, "", b._UPDATE_STOPPED_MSG)
         if "pip" in cmd:
             if self.pip_answers:
                 rc, err = self.pip_answers.pop(0)
             else:
                 rc, err = self.pip_rc, self.pip_err
+            self.installed = self.installed or rc == 0
             return subprocess.CompletedProcess(cmd, rc, "", err)
         if "-c" in cmd:  # the fresh-interpreter version probe
-            if self.probe_rc:
+            if self.probe_rc and self.installed:
                 return subprocess.CompletedProcess(cmd, self.probe_rc, "", self.probe_err)
-            return subprocess.CompletedProcess(cmd, 0, f"{self.fresh}\n", "")
+            version = self.fresh if self.installed else self.before
+            return subprocess.CompletedProcess(cmd, 0, f"{version}\n", "")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     def pips(self):
         return [c for c in self.cmds if "pip" in c]
+
+    def probes(self):
+        return [c for c in self.cmds if "-c" in c]
 
 
 @pytest.fixture
@@ -166,7 +214,7 @@ def update_env(monkeypatch, tmp_path):
     monkeypatch.delenv("CVCPKG_BUILDER_SUPERVISED", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     checkout = tmp_path / "cvcpkg"
-    checkout.mkdir()
+    (checkout / ".git").mkdir(parents=True)  # where the self-update lock goes
     monkeypatch.setattr(b, "_find_update_checkout", lambda: checkout)
     monkeypatch.setattr(b, "_checkout_version", lambda path: NEWER)
     reexecs: list = []
@@ -321,6 +369,303 @@ def test_no_checkout_installs_nothing(monkeypatch, update_env, capsys):
     assert "CVCPKG_SELF_UPDATE_DIR" in capsys.readouterr().err
 
 
+# -- a stop request during the update ---------------------------------------------
+
+
+class _Flag:
+    def __init__(self):
+        self.up = False
+
+    def __call__(self) -> bool:
+        return self.up
+
+
+def test_a_stop_before_the_update_runs_nothing(monkeypatch, update_env, capsys):
+    _, reexecs = update_env
+    steps = _Steps()
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    b._self_update(token="tk", stop=lambda: True)
+    assert steps.cmds == [] and reexecs == []
+    assert "shutdown requested" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("after", ["git pull", "probe", "pip", "verify"])
+def test_a_stop_after_any_step_prevents_the_restart(monkeypatch, update_env, capsys, after):
+    """The stop arrives as step *after* finishes (successfully).  The update
+    goes no further, and above all does not re-exec: that would start a fresh
+    builder taking work, the stop request lost with the old process image."""
+    _, reexecs = update_env
+    flag = _Flag()
+    steps = _Steps()
+
+    def kind(cmd):
+        if cmd[:2] == ["git", "pull"]:
+            return "git pull"
+        if "pip" in cmd:
+            return "pip"
+        return "verify" if steps.installed else "probe"
+
+    def step(cmd, **kw):
+        k = kind(cmd)
+        r = steps(cmd, **kw)
+        if k == after:
+            flag.up = True
+        return r
+
+    monkeypatch.setattr(b, "_run_update_step", step)
+    b._self_update(token="tk", stop=flag)
+
+    assert reexecs == []
+    ran = [kind(c) for c in steps.cmds]
+    assert ran[-1] == after, ran  # nothing after the stop
+    assert all(s is flag for s in steps.stops)  # every step can be stopped too
+    out = capsys.readouterr().out
+    assert "shutdown requested" in out
+    if after in ("pip", "verify"):
+        assert "is installed; not restarting into it" in out
+
+
+def test_a_stop_that_ends_pip_says_how_to_repair(monkeypatch, update_env, capsys):
+    _, reexecs = update_env
+    flag = _Flag()
+
+    def during_pip(cmd):
+        if "pip" in cmd:
+            flag.up = True
+
+    monkeypatch.setattr(b, "_run_update_step", _Steps(on_step=during_pip))
+    b._self_update(token="tk", stop=flag)
+
+    assert reexecs == []
+    captured = capsys.readouterr()
+    assert "pip install did not finish" in captured.out
+    assert "reinstall with" in captured.err and "[builder]" in captured.err
+
+
+@posix_only
+def test_a_stop_ends_a_running_pip_and_the_builder_does_not_restart(monkeypatch, update_env):
+    """pip runs (for real: a 5 s stand-in) when the stop arrives.  The update
+    returns within a couple of seconds -- not after pip -- and never re-execs."""
+    _, reexecs = update_env
+    monkeypatch.setattr(
+        b, "_pip_install_cmd", lambda checkout, break_system_packages: ["sh", "-c", "sleep 5"]
+    )
+    real_step = b._run_update_step
+    fake = _Steps()
+    monkeypatch.setattr(
+        b,
+        "_run_update_step",
+        lambda cmd, **kw: real_step(cmd, **kw) if cmd[0] == "sh" else fake(cmd, **kw),
+    )
+    started = time.monotonic()
+    b._self_update(token="tk", stop=lambda: time.monotonic() - started > 0.5)
+    assert time.monotonic() - started < 3
+    assert reexecs == []
+
+
+_SIGINT_HARNESS = """
+import json, os, signal, sys, threading, time
+from pathlib import Path
+import cvcpkg.cli._builder as b
+
+stop = {"flag": False}
+signal.signal(signal.SIGINT, lambda *a: stop.__setitem__("flag", True))  # builder_run's kind
+
+reexecs = []
+b._reexec_builder = lambda token, extra_env=None: reexecs.append(token)
+checkout = Path(sys.argv[1])
+b._find_update_checkout = lambda: checkout
+b._checkout_version = lambda p: "999.0.0"
+b._fresh_cvcpkg_version = lambda beat=None, stop=None: ("0.0.1", "")
+b._pip_install_cmd = lambda checkout, break_system_packages: ["sh", "-c", "sleep 5"]
+real = b._run_update_step
+def step(cmd, **kw):
+    if cmd[:2] == ["git", "pull"]:
+        return __import__("subprocess").CompletedProcess(cmd, 0, "", "")
+    return real(cmd, **kw)
+b._run_update_step = step
+
+def ctrl_c():
+    time.sleep(0.7)
+    os.killpg(os.getpgrp(), signal.SIGINT)  # what a terminal's Ctrl-C does
+threading.Thread(target=ctrl_c, daemon=True).start()
+started = time.monotonic()
+b._self_update(token="tk", stop=lambda: stop["flag"])
+print(json.dumps({"stopped": stop["flag"], "reexecs": len(reexecs),
+                  "secs": time.monotonic() - started}))
+"""
+
+
+@posix_only
+def test_a_real_ctrl_c_during_pip_is_not_turned_into_a_restart(tmp_path):
+    """SIGINT to the builder's process group, under a handler that only sets
+    a flag (as builder_run's does).  pip runs in its own session, so the
+    signal never reaches it: the flag has to.  In a process (and session) of
+    its own, so the SIGINT reaches nothing else."""
+    checkout = tmp_path / "cvcpkg"
+    (checkout / ".git").mkdir(parents=True)
+    script = tmp_path / "harness.py"
+    script.write_text(_SIGINT_HARNESS)
+    # The cvcpkg this session tests, not whichever one the interpreter finds.
+    src = str(Path(b.__file__).resolve().parents[2])
+    pythonpath = os.pathsep.join(p for p in (src, os.environ.get("PYTHONPATH", "")) if p)
+    r = subprocess.run(
+        [sys.executable, str(script), str(checkout)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        start_new_session=True,
+        env=dict(os.environ, PYTHONPATH=pythonpath),
+    )
+    assert r.returncode == 0, r.stderr
+    import json
+
+    result = json.loads(r.stdout.strip().splitlines()[-1])
+    assert result["stopped"] is True
+    assert result["reexecs"] == 0, r.stdout
+    assert result["secs"] < 3, r.stdout
+
+
+# -- builders sharing a checkout ----------------------------------------------------
+
+
+def test_a_version_installed_meanwhile_is_not_reinstalled(monkeypatch, update_env, capsys):
+    """Another builder sharing the checkout and interpreter installed it
+    (while this one waited for the lock): restart, but no second pip run."""
+    _, reexecs = update_env
+    steps = _Steps(before=NEWER)
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    b._self_update(token="tk")
+    assert steps.pips() == []
+    assert reexecs == [("tk", None)]
+    assert "not reinstalling" in capsys.readouterr().out
+
+
+def test_never_downgrades_what_another_builder_installed(monkeypatch, update_env):
+    _, reexecs = update_env
+    steps = _Steps(before="1000.0.0")  # newer than the checkout's NEWER
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    b._self_update(token="tk")
+    assert steps.pips() == []
+    assert len(reexecs) == 1
+
+
+_LOCK_HOLDER = (
+    "import fcntl, sys, time\n"
+    "f = open(sys.argv[1], 'a')\n"
+    "fcntl.flock(f, fcntl.LOCK_EX)\n"
+    "print('locked', flush=True)\n"
+    "time.sleep(float(sys.argv[2]))\n"
+)
+
+
+@pytest.fixture
+def lock_holder(update_env):
+    """Another builder's update, holding the checkout's lock for *secs*."""
+    checkout, _ = update_env
+    procs: list = []
+
+    def hold(secs: float):
+        p = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _LOCK_HOLDER,
+                str(checkout / ".git" / b._UPDATE_LOCK_NAME),
+                str(secs),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        procs.append(p)
+        assert p.stdout.readline().strip() == "locked"
+        return p
+
+    yield hold
+    for p in procs:  # only the processes this fixture started
+        p.kill()
+        p.wait()
+
+
+@posix_only
+def test_builders_sharing_a_checkout_update_one_at_a_time(
+    monkeypatch, update_env, lock_holder, capsys
+):
+    """The lock is held elsewhere: wait (heartbeating), then update."""
+    _, reexecs = update_env
+    monkeypatch.setattr(b, "_UPDATE_BEAT_SECS", 0.2)
+    monkeypatch.setattr(b, "_UPDATE_STOP_POLL_SECS", 0.05)
+    started = time.monotonic()
+    first_step: list[float] = []
+    steps = _Steps(on_step=lambda cmd: first_step or first_step.append(time.monotonic()))
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    beats: list = []
+    lock_holder(1.5)
+    b._self_update(token="tk", beat=lambda: beats.append(1))
+
+    assert first_step and first_step[0] - started >= 1.0, "did not wait for the lock"
+    assert len(beats) >= 3, "no heartbeat while waiting for the lock"
+    assert len(steps.pips()) == 1 and len(reexecs) == 1
+    assert "waiting for it to finish" in capsys.readouterr().out
+
+
+@posix_only
+def test_a_stop_while_waiting_for_the_lock_ends_the_wait(monkeypatch, update_env, lock_holder):
+    _, reexecs = update_env
+    monkeypatch.setattr(b, "_UPDATE_STOP_POLL_SECS", 0.05)
+    steps = _Steps()
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    lock_holder(30)
+    started = time.monotonic()
+    b._self_update(token="tk", stop=lambda: time.monotonic() - started > 0.3)
+    assert time.monotonic() - started < 3
+    assert steps.cmds == [] and reexecs == []
+
+
+@posix_only
+def test_waiting_for_the_lock_is_bounded(monkeypatch, update_env, lock_holder, capsys):
+    _, reexecs = update_env
+    monkeypatch.setattr(b, "_UPDATE_LOCK_TIMEOUT", 0.3)
+    monkeypatch.setattr(b, "_UPDATE_STOP_POLL_SECS", 0.05)
+    steps = _Steps()
+    monkeypatch.setattr(b, "_run_update_step", steps)
+    lock_holder(30)
+    b._self_update(token="tk")
+    assert steps.cmds == [] and reexecs == []
+    assert "giving up on this update" in capsys.readouterr().err
+
+
+def test_the_lock_is_released_after_the_update(monkeypatch, update_env):
+    checkout, reexecs = update_env
+    monkeypatch.setattr(b, "_run_update_step", _Steps(pip_rc=1))
+    b._self_update(token="tk")
+    fd = os.open(checkout / ".git" / b._UPDATE_LOCK_NAME, os.O_RDWR)
+    try:
+        assert b._try_lock(fd)
+        b._unlock(fd)
+    finally:
+        os.close(fd)
+
+
+def test_an_unusable_lock_does_not_block_the_update(monkeypatch, update_env, capsys):
+    """No writable git dir to put the lock in: update unlocked, as before."""
+    checkout, reexecs = update_env
+    (checkout / ".git").rmdir()
+    monkeypatch.setattr(b, "_run_update_step", _Steps())
+    b._self_update(token="tk")
+    assert len(reexecs) == 1
+    assert "updating unlocked" in capsys.readouterr().err
+
+
+def test_git_dir_follows_a_linked_worktree(git_checkout, tmp_path):
+    worktree = tmp_path / "wt"
+    _git("worktree", "add", "-q", str(worktree), cwd=git_checkout)
+    assert b._git_dir(git_checkout) == git_checkout / ".git"
+    gitdir = b._git_dir(worktree)
+    assert gitdir.is_dir()
+    assert os.path.samefile(gitdir.parent, git_checkout / ".git" / "worktrees")
+
+
 # -- _run_update_step -----------------------------------------------------------
 
 
@@ -367,13 +712,11 @@ def _gone_within(pid: int, secs: float) -> bool:
     return True
 
 
-posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell and process groups")
-
-
 @posix_only
-def test_update_step_timeout_does_not_wait_for_grandchildren():
+def test_update_step_timeout_does_not_wait_for_grandchildren(monkeypatch):
     """A grandchild holding the step's pipes (git's ssh / remote-https
     helper) used to keep the timed-out step blocked for its whole life."""
+    monkeypatch.setattr(b, "_UPDATE_STOP_GRACE_SECS", 0.5)  # `sleep &` ignores SIGINT
     started = time.monotonic()
     r = b._run_update_step(["sh", "-c", "sleep 30 & sleep 30"], timeout=1)
     assert r.returncode == 124
@@ -381,7 +724,8 @@ def test_update_step_timeout_does_not_wait_for_grandchildren():
 
 
 @posix_only
-def test_update_step_timeout_kills_the_whole_tree(tmp_path):
+def test_update_step_timeout_kills_the_whole_tree(monkeypatch, tmp_path):
+    monkeypatch.setattr(b, "_UPDATE_STOP_GRACE_SECS", 0.5)  # `sleep &` ignores SIGINT
     pidfile = tmp_path / "bg.pid"
     started = time.monotonic()
     r = b._run_update_step(["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"; sleep 30'], timeout=1)
@@ -395,6 +739,7 @@ def test_update_step_gives_up_on_a_process_that_escaped_the_kill(monkeypatch, tm
     """One that left the step's session survives the kill and keeps the pipes;
     the step still returns, a bounded time after its deadline."""
     monkeypatch.setattr(b, "_UPDATE_KILL_GRACE_SECS", 0.5)
+    monkeypatch.setattr(b, "_UPDATE_STOP_GRACE_SECS", 0.5)
     pidfile = tmp_path / "escaped.pid"
     script = (
         "import subprocess, sys, time\n"
@@ -423,6 +768,7 @@ def test_an_interrupted_update_step_takes_its_tree_with_it(monkeypatch, tmp_path
     reach it: the builder has to kill it on the way out -- including what it
     started when the step's own process has already exited."""
     monkeypatch.setattr(b, "_UPDATE_BEAT_SECS", 0.2)
+    monkeypatch.setattr(b, "_UPDATE_STOP_GRACE_SECS", 0.5)  # `sleep &` ignores SIGINT
     pidfile = tmp_path / "bg.pid"
 
     def interrupt():
@@ -436,6 +782,87 @@ def test_an_interrupted_update_step_takes_its_tree_with_it(monkeypatch, tmp_path
             beat=interrupt,
         )
     assert _gone_within(int(pidfile.read_text()), 5)
+
+
+@posix_only
+def test_update_step_is_ended_when_stop_turns_true(monkeypatch, tmp_path):
+    monkeypatch.setattr(b, "_UPDATE_STOP_GRACE_SECS", 0.5)
+    pidfile = tmp_path / "bg.pid"
+    started = time.monotonic()
+    r = b._run_update_step(
+        ["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"; sleep 30'],
+        timeout=60,
+        stop=lambda: time.monotonic() - started > 0.5,
+    )
+    assert r.returncode == 130 and b._UPDATE_STOPPED_MSG in r.stderr
+    assert time.monotonic() - started < 5
+    assert _gone_within(int(pidfile.read_text()), 5)  # its whole tree
+
+
+def test_update_step_is_not_started_once_stopping(monkeypatch):
+    def no_popen(*a, **k):
+        raise AssertionError("started a step although the builder is stopping")
+
+    monkeypatch.setattr(subprocess, "Popen", no_popen)
+    r = b._run_update_step(["git", "pull"], timeout=5, stop=lambda: True)
+    assert r.returncode == 130
+
+
+def test_polling_for_a_stop_does_not_multiply_heartbeats(monkeypatch):
+    """stop is polled often; the server still gets one beat per interval."""
+    monkeypatch.setattr(b, "_UPDATE_STOP_POLL_SECS", 0.05)
+    monkeypatch.setattr(b, "_UPDATE_BEAT_SECS", 0.5)
+    polls: list = []
+    beats: list = []
+    r = b._run_update_step(
+        [sys.executable, "-c", "import time; time.sleep(1.3)"],
+        timeout=30,
+        beat=lambda: beats.append(1),
+        stop=lambda: polls.append(1) or False,
+    )
+    assert r.returncode == 0
+    assert len(polls) >= 10
+    assert 1 <= len(beats) <= 3
+
+
+@posix_only
+def test_a_step_ended_early_gets_a_ctrl_c_first(tmp_path):
+    """git removes its lock files on SIGINT (a SIGKILLed pull leaves
+    .git/index.lock to fail every later pull) and pip its temp dirs."""
+    marker = tmp_path / "cleaned"
+    script = (
+        "import signal, sys, time\n"
+        "def on_int(*a):\n"
+        f"    open({str(marker)!r}, 'w').write('yes')\n"
+        "    sys.exit(3)\n"
+        "signal.signal(signal.SIGINT, on_int)\n"
+        "print('ready', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+    started = time.monotonic()
+    r = b._run_update_step([sys.executable, "-c", script], timeout=1.5)
+    assert r.returncode == 124
+    assert marker.read_text() == "yes"
+    assert "ready" in r.stdout  # its output is kept
+    assert time.monotonic() - started < 1.5 + b._UPDATE_STOP_GRACE_SECS
+
+
+def test_update_step_output_that_is_not_utf8_does_not_raise():
+    """Localized git/pip messages in another encoding used to raise
+    UnicodeDecodeError -- out of the builder.update handler, ending the
+    builder's socket session."""
+    r = b._run_update_step(
+        [sys.executable, "-c", "import sys; sys.stderr.buffer.write(bytes([99, 97, 102, 0xE9]))"],
+        timeout=30,
+    )
+    assert r.returncode == 0 and r.stderr.startswith("caf")
+
+
+def test_git_config_in_another_encoding_does_not_raise(bare_git_env):
+    config = bare_git_env / ".git" / "config"
+    config.write_bytes(config.read_bytes() + b"[core]\n\tsshCommand = ssh -i /home/j\xf6rg/key\n")
+    assert "core.sshcommand" in b._git_configured_keys(bare_git_env)
+    assert "GIT_SSH_COMMAND" not in b._git_update_env(bare_git_env)
 
 
 def test_update_steps_run_in_their_own_process_group(monkeypatch):
@@ -628,17 +1055,42 @@ def test_resolve_update_source_distrusts_a_stale_ref_after_a_failed_fetch(
     assert "git fetch" in capsys.readouterr().err
 
 
-def test_resolve_update_source_ignores_an_upstream_it_cannot_fast_forward_to(git_checkout):
+def test_resolve_update_source_ignores_an_upstream_it_cannot_fast_forward_to(git_checkout, capsys):
     (git_checkout / "local.txt").write_text("local work\n")
     _git("add", "local.txt", cwd=git_checkout)
     _git("commit", "-qm", "local", cwd=git_checkout)
     assert b._resolve_update_source() == (git_checkout, RUNNING)
+    assert "diverged" in capsys.readouterr().err  # says why it ignored the upstream
 
 
-def test_resolve_update_source_ignores_the_upstream_under_local_edits(git_checkout):
+def test_resolve_update_source_ignores_the_upstream_under_local_edits(git_checkout, capsys):
     pyproject = git_checkout / "pyproject.toml"
     pyproject.write_text(pyproject.read_text() + "# local edit\n")
     assert b._resolve_update_source() == (git_checkout, RUNNING)
+    assert "tracked files are modified" in capsys.readouterr().err
+
+
+def test_resolve_update_source_forgets_an_upstream_deleted_on_the_remote(
+    git_checkout, tmp_path, capsys
+):
+    """The remote-tracking ref says NEWER (an earlier fetch), then the branch
+    is deleted on the remote.  A plain fetch succeeds and keeps the stale ref,
+    yet the pull cannot fetch it: only the working tree counts."""
+    origin = tmp_path / "origin"
+    _git("fetch", "-q", cwd=git_checkout)
+    _git("checkout", "-q", "-b", "other", cwd=origin)
+    _git("branch", "-q", "-D", "master", cwd=origin)
+
+    assert b._resolve_update_source() == (git_checkout, RUNNING)
+    assert "nothing to pull" in capsys.readouterr().err
+    pull = subprocess.run(
+        ["git", "pull", "--ff-only", "--quiet"], cwd=git_checkout, capture_output=True
+    )
+    assert pull.returncode != 0  # what the resolve has to predict
+
+
+def test_resolve_update_source_returns_nothing_once_stopping(git_checkout):
+    assert b._resolve_update_source(stop=lambda: True) is None
 
 
 def test_self_update_pulls_installs_and_restarts(git_checkout, monkeypatch):

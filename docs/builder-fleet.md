@@ -110,6 +110,15 @@ ExecStart=/usr/local/bin/cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml
 TimeoutStopSec=150
 ```
 
+A pip-installed worker that self-updates re-execs onto the new code, but the
+supervisor keeps running the code it started with until its unit restarts --
+including how it starts workers. A supervisor from before this isolation (2.4.0
+or older) passes each worker `--token` on the command line and the whole fleet
+environment; a new worker drops `CVCPKG_...TOKEN...` names and its own token
+from what its builds see, but cannot know a custom-named `token_env` variable.
+So after an update that changes the supervisor, restart the fleet unit
+(`systemctl restart cvcpkg-builder`) for the isolation above to apply.
+
 This is hygiene, not a sandbox: the supervisor and all its workers run as one
 user, and a build script can read any same-user process's environment and
 memory. Servers (or orgs) that must not be able to reach each other's
