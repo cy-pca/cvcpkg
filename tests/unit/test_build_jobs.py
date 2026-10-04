@@ -427,7 +427,18 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.claim(job.id, builder.id)
-            await store.fail(job.id, error_message="cmake error")
+            # A stale message on a job that is still running (a complete after
+            # a *fail* is now refused -- see test_build_job_status_guard.py).
+            from sqlalchemy import update
+
+            from cvcpkg.server.db import BuildJobRow, get_session
+
+            async with get_session() as session:
+                await session.execute(
+                    update(BuildJobRow)
+                    .where(BuildJobRow.id == job.id)
+                    .values(error_message="cmake error")
+                )
             completed = await store.complete(job.id, result_archive_url="/v1/download/zlib.tar.zst")
             assert completed.status == BuildJobStatus.succeeded
             assert completed.error_message == ""
@@ -497,6 +508,7 @@ class TestDbBuildJobStore:
             )
 
             # Complete zlib
+            await store.claim(j1.id, None, claimant="test-worker")
             await store.complete(j1.id)
 
             ready = await store.find_ready_jobs()
@@ -571,6 +583,7 @@ class TestDbBuildJobStore:
             ]
             infos = await store.create_dag(jobs, "dag-ds", "admin")
             # Fail job a
+            await store.claim(infos[0].id, None, claimant="test-worker")
             await store.fail(infos[0].id, error_message="build error")
             # Cancel downstream
             count = await store.cancel_downstream(infos[0].id)
@@ -886,6 +899,7 @@ class TestDbBuildJobStore:
                 arch="x86_64",
                 submitted_by="admin",
             )
+            await store.claim(job.id, None, claimant="test-worker")
             await store.complete(job.id)
             result = await store.cancel(job.id)
             assert result.status == BuildJobStatus.succeeded
@@ -953,6 +967,7 @@ class TestDbBuildJobStore:
                 arch="x86_64",
                 submitted_by="admin",
             )
+            await store.claim(job.id, None, claimant="test-worker")
             await store.complete(job.id)
             result = await store.cancel(job.id, force=True)
             assert result.status == BuildJobStatus.succeeded
@@ -1186,6 +1201,7 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
                 depends_on=[j1.id],
             )
+            await store.claim(j1.id, None, claimant="test-worker")
             await store.fail(j1.id, error_message="error")
             ready = await store.find_ready_jobs()
             assert len(ready) == 0
@@ -1243,6 +1259,7 @@ class TestDbBuildJobStore:
                 depends_on=[j1.id, j2.id],
             )
             # Complete only zlib, leave openssl pending
+            await store.claim(j1.id, None, claimant="test-worker")
             await store.complete(j1.id)
             ready = await store.find_ready_jobs()
             # curl should NOT be ready; openssl should be
@@ -1398,6 +1415,7 @@ class TestDbBuildJobStore:
                 {"recipe_name": "D", "platform": "linux", "arch": "x86_64", "depends_on": [1, 2]},
             ]
             infos = await store.create_dag(jobs, "diamond-ds", "admin")
+            await store.claim(infos[0].id, None, claimant="test-worker")
             await store.fail(infos[0].id, error_message="fail")
             count = await store.cancel_downstream(infos[0].id)
             assert count == 3
@@ -1444,6 +1462,7 @@ class TestDbBuildJobStore:
             infos = await store.create_dag(jobs, "ds-skip", "admin")
             # Start B running before A fails
             await store.claim(infos[1].id, builder.id)
+            await store.claim(infos[0].id, None, claimant="test-worker")
             await store.fail(infos[0].id, error_message="fail")
             count = await store.cancel_downstream(infos[0].id)
             assert count == 0  # B is running, not cancelled
@@ -2537,6 +2556,14 @@ class TestBuildJobEndpoints:
         assert resp.status_code == 200
         jobs = resp.json()["jobs"]
         job_a = jobs[0]["id"]
+
+        # Only a claimed (or dispatched) job can be failed.
+        resp = client.post(
+            f"/v1/builds/{job_a}/claim",
+            json={"claimant": "test-worker"},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
 
         resp = client.post(
             f"/v1/builds/{job_a}/fail",

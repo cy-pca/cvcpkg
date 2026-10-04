@@ -83,6 +83,7 @@ from cvcpkg.server.models import (
     BuildJobFailRequest,
     BuildJobInfo,
     BuildJobListResponse,
+    BuildJobNotActiveError,
     BuildJobStatus,
     BuildJobSubmitRequest,
     BuildLogAppendRequest,
@@ -1051,6 +1052,43 @@ def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
     return None
 
 
+def _log_refused_job_report(exc: BuildJobNotActiveError, via: str) -> None:
+    """Leave a trace of a complete/fail report the store refused.
+
+    A refused report changes nothing, so it writes no audit entry and sends no
+    webhook -- and the builder ignores the response code.  Without this line a
+    conflicting report (the second copy of a duplicated job failing after the
+    first succeeded, a success arriving after a timeout or force-cancel) would
+    leave no evidence anywhere.
+    """
+    if exc.is_repeat:
+        logger.info("build job %d: repeated %s report ignored (%s)", exc.job_id, exc.attempted, via)
+    else:
+        logger.warning(
+            "build job %d: %s report refused (%s): %s", exc.job_id, exc.attempted, via, exc
+        )
+
+
+def _ws_refused_ack(ack_type: str, exc: BuildJobNotActiveError) -> dict:
+    """The ack for a ``job.complete``/``job.fail`` frame the store refused.
+
+    ``status`` is the job's status as it stands (unchanged by the frame) and
+    ``noop`` says nothing happened.  ``conflict`` is False for a harmless
+    repeat of the outcome the job already has, and True when the frame
+    contradicts it (a fail after success, a complete after a fail/cancel/
+    timeout) or the job was never handed out -- the WebSocket mirror of the
+    HTTP endpoints' 200-vs-409.
+    """
+    return {
+        "type": ack_type,
+        "job_id": exc.job_id,
+        "status": exc.status,
+        "noop": True,
+        "conflict": not exc.is_repeat,
+        "detail": str(exc),
+    }
+
+
 async def _ws_send(builder_id: int, msg: dict) -> bool:
     """Send a JSON message to a connected builder.  Returns True on success."""
     ws = _ws_builders.get(builder_id)
@@ -1349,7 +1387,13 @@ async def _build_scheduler_loop() -> None:
                         f"builder #{builder.id} ({builder.name}) went offline "
                         f"(no heartbeat for >180s) while job was {job.status}"
                     )
-                    failed = await _db_build_jobs.fail(job.id, error_message=err)
+                    try:
+                        failed = await _db_build_jobs.fail(job.id, error_message=err)
+                    except BuildJobNotActiveError:
+                        # The job finished (or was cancelled) between the
+                        # listing and this fail: that outcome stands, and its
+                        # dependents are not ours to cancel.
+                        continue
                     if failed is None:
                         continue
                     await _db_build_jobs.cancel_downstream(job.id)
@@ -9299,6 +9343,22 @@ def create_app(
         )
         return info
 
+    def _refused_job_report(exc: BuildJobNotActiveError) -> BuildJobInfo:
+        """Answer a complete/fail report the store refused.
+
+        A repeat of the report that already finished the job -- a builder
+        retrying after a lost response, or the second copy of a job that ran
+        twice -- is harmless: 200 with the job as it stands, and no second
+        webhook, cascade or audit entry.  Anything else is a 409 and changes
+        nothing: a fail after the job succeeded, a complete after it failed,
+        timed out or was cancelled, or a report for a job nobody has been
+        dispatched or has claimed.
+        """
+        _log_refused_job_report(exc, "http")
+        if exc.is_repeat and exc.info is not None:
+            return exc.info
+        raise HTTPException(409, str(exc)) from None
+
     @app.post(
         "/v1/builds/{job_id}/complete",
         response_model=BuildJobInfo,
@@ -9309,16 +9369,27 @@ def create_app(
         body: BuildJobCompleteRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Report a build job as completed successfully."""
+        """Report a build job as completed successfully.
+
+        Only a dispatched or running job can be completed.  Repeating the
+        report for a job that already succeeded answers 200 and changes
+        nothing; a report for any other job (failed, cancelled, timed out,
+        unschedulable, or never handed out) is a 409 and changes nothing.
+        """
         _require_db_build_jobs()
         _existing = await _db_build_jobs.get(job_id)
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        async with _audit_txn(AuditAction.build_complete, actor.name, str(job_id)):
-            info = await _db_build_jobs.complete(job_id, result_archive_url=body.result_archive_url)
-            if info is None:
-                raise HTTPException(404, f"build job {job_id} not found")
+        try:
+            async with _audit_txn(AuditAction.build_complete, actor.name, str(job_id)):
+                info = await _db_build_jobs.complete(
+                    job_id, result_archive_url=body.result_archive_url
+                )
+                if info is None:
+                    raise HTTPException(404, f"build job {job_id} not found")
+        except BuildJobNotActiveError as exc:
+            return _refused_job_report(exc)
         await emit_webhook_event(
             "build.completed",
             {
@@ -9352,24 +9423,34 @@ def create_app(
         body: BuildJobFailRequest,
         actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
     ):
-        """Report a build job as failed."""
+        """Report a build job as failed, cascade-cancelling its dependents.
+
+        Only a dispatched or running job can be failed.  Repeating the report
+        for a job that already failed answers 200 and changes nothing; a
+        report for any other job is a 409, changes nothing and cancels no
+        dependents -- above all a late fail for a job that already succeeded.
+        """
         _require_db_build_jobs()
         _existing = await _db_build_jobs.get(job_id)
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        async with _audit_txn(
-            AuditAction.build_fail,
-            actor.name,
-            str(job_id),
-            body.error_message[:200] if body.error_message else "",
-        ):
-            info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
-            if info is None:
-                raise HTTPException(404, f"build job {job_id} not found")
-            # Cascade-cancel downstream dependents in the same transaction
-            # (parity with the WS job.fail path).
-            cascaded = await _db_build_jobs.cancel_downstream(job_id)
+        try:
+            async with _audit_txn(
+                AuditAction.build_fail,
+                actor.name,
+                str(job_id),
+                body.error_message[:200] if body.error_message else "",
+            ):
+                info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
+                if info is None:
+                    raise HTTPException(404, f"build job {job_id} not found")
+                # Cascade-cancel downstream dependents in the same transaction
+                # (parity with the WS job.fail path).  Only a fail that landed
+                # gets here: a refused one raised above and cascades nothing.
+                cascaded = await _db_build_jobs.cancel_downstream(job_id)
+        except BuildJobNotActiveError as exc:
+            return _refused_job_report(exc)
         await emit_webhook_event(
             "build.failed",
             {
@@ -9683,9 +9764,17 @@ def create_app(
                     job_id = data.get("job_id")
                     archive_url = data.get("archive_url", "")
                     if job_id is not None:
-                        result = await _db_build_jobs.complete(
-                            job_id, result_archive_url=archive_url
-                        )
+                        try:
+                            result = await _db_build_jobs.complete(
+                                job_id, result_archive_url=archive_url
+                            )
+                        except BuildJobNotActiveError as exc:
+                            # Refused: the job is not active (already
+                            # finished, cancelled, or never handed out).
+                            # Nothing changed, so no webhook either.
+                            _log_refused_job_report(exc, f"ws builder {builder_id}")
+                            await websocket.send_json(_ws_refused_ack("job.complete_ack", exc))
+                            continue
                         await websocket.send_json(
                             {
                                 "type": "job.complete_ack",
@@ -9719,7 +9808,15 @@ def create_app(
                     job_id = data.get("job_id")
                     error = data.get("error", "")
                     if job_id is not None:
-                        result = await _db_build_jobs.fail(job_id, error_message=error[:4096])
+                        try:
+                            result = await _db_build_jobs.fail(job_id, error_message=error[:4096])
+                        except BuildJobNotActiveError as exc:
+                            # Refused: above all, a late fail on a job that
+                            # already succeeded must not cascade-cancel its
+                            # dependents.
+                            _log_refused_job_report(exc, f"ws builder {builder_id}")
+                            await websocket.send_json(_ws_refused_ack("job.fail_ack", exc))
+                            continue
                         await websocket.send_json(
                             {
                                 "type": "job.fail_ack",
