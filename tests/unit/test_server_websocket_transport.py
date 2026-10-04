@@ -146,6 +146,29 @@ class TestBuilderWebSocketOverUvicorn:
         status = _handshake_status(port, f"/v1/builders/{builder_id}/ws?token={admin}")
         assert " 101 " in status, status
 
+    def test_builder_client_authenticates_with_the_header(self, seeded_server):
+        """The builder's own client call: websockets.sync.client with the token
+        in the Authorization header and none in the URL (a query string lands
+        in every proxy access log).  The handshake is accepted and the session
+        carries frames both ways."""
+        ws_sync = pytest.importorskip("websockets.sync.client")
+        port, admin = seeded_server
+        builder_id = _register_builder(port, admin)
+        with ws_sync.connect(
+            f"ws://127.0.0.1:{port}/v1/builders/{builder_id}/ws",
+            additional_headers={"Authorization": f"Bearer {admin}"},
+            open_timeout=10,
+            close_timeout=5,
+        ) as ws:
+            ws.send(json.dumps({"type": "heartbeat", "status": "online", "current_jobs": 0}))
+            assert json.loads(ws.recv(timeout=10))["type"] == "heartbeat_ack"
+
+    def test_handshake_without_any_token_is_refused(self, seeded_server):
+        port, admin = seeded_server
+        builder_id = _register_builder(port, admin)
+        status = _handshake_status(port, f"/v1/builders/{builder_id}/ws")
+        assert " 403 " in status, status
+
 
 class TestWebSocketLibraryDetection:
     def test_the_server_closure_carries_a_websocket_library(self):

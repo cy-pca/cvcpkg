@@ -67,6 +67,50 @@ cvcpkg builder run \
 | `--arch` | Override auto-detected architecture |
 | `--cross-platform` | Advertise a cross-compilation target (repeatable) |
 
+### WebSocket and HTTP long-poll
+
+A registered builder prefers a persistent WebSocket
+(`/v1/builders/{id}/ws`): jobs are pushed to it the moment they are
+dispatched, and it is the only path that carries `builder.update`, so fleet
+self-update reaches a builder only while its socket is up. HTTP long-poll
+(`/v1/builders/{id}/next-job`) is the fallback, and the builder uses it
+whenever the socket is down: when the handshake fails (no `websockets`
+package on the builder, a server whose uvicorn has no WebSocket library, a
+proxy that does not pass the `Upgrade`) or when a connected socket drops.
+The handshake carries the bearer token in its `Authorization` header, not in
+the URL, so it stays out of proxy access logs; the server still accepts the
+`?token=` query parameter from older builders (a builder from this release
+gets a 403 from a server that predates it, and stays on long-poll).
+
+While it is on long-poll the builder keeps retrying the socket on a capped,
+jittered exponential backoff, and switches back as soon as one connects; a
+socket that stayed up for a while resets the backoff. On every connect, and
+periodically while connected, it also asks `next-job` once for anything
+dispatched to it that the socket did not deliver (dispatched while it was
+reconnecting, or pushed while every slot was busy -- then it asks again as
+soon as a slot frees). A job that reaches the
+builder over both paths runs once: the builder ignores a job id it is already
+running.
+
+A `builder.update` waits for the builder to be idle: the builder stops taking
+new jobs, lets the in-flight ones finish, and only then updates and restarts
+(a restart kills every job thread, and the server would otherwise keep those
+jobs `running` until the build timeout). Jobs dispatched to it meanwhile stay
+dispatched and are picked up by the restarted builder. The single-file binary
+ignores `builder.update`; replace the binary instead. A builder already at the
+server's version, or ahead of it, ignores it too, and the update never installs
+a source checkout older than the running cvcpkg.
+
+| Environment variable | Default | Meaning |
+|----------------------|---------|---------|
+| `CVCPKG_BUILDER_WS_RETRY_MIN` | `5` | First retry delay (seconds) after a failed handshake or a dropped socket |
+| `CVCPKG_BUILDER_WS_RETRY_MAX` | `300` | Backoff cap: the longest a builder stays on long-poll once the server accepts sockets again |
+| `CVCPKG_BUILDER_WS_STABLE_SECS` | `60` | A socket that stayed up this long resets the backoff |
+| `CVCPKG_BUILDER_WS_SWEEP_INTERVAL` | `60` | How often a connected builder asks `next-job` for undelivered dispatches |
+
+`--no-websocket` disables the socket entirely; drain mode
+(`--exit-when-empty`, `--no-register`) never uses it.
+
 ## Ephemeral / drain builds (no persistent builder)
 
 Sometimes you don't want a standing builder — you want to spin one up, have it
