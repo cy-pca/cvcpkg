@@ -1036,6 +1036,23 @@ def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
     return None
 
 
+def _log_refused_job_report(exc: BuildJobNotActiveError, via: str) -> None:
+    """Leave a trace of a complete/fail report the store refused.
+
+    A refused report changes nothing, so it writes no audit entry and sends no
+    webhook -- and the builder ignores the response code.  Without this line a
+    conflicting report (the second copy of a duplicated job failing after the
+    first succeeded, a success arriving after a timeout or force-cancel) would
+    leave no evidence anywhere.
+    """
+    if exc.is_repeat:
+        logger.info("build job %d: repeated %s report ignored (%s)", exc.job_id, exc.attempted, via)
+    else:
+        logger.warning(
+            "build job %d: %s report refused (%s): %s", exc.job_id, exc.attempted, via, exc
+        )
+
+
 def _ws_refused_ack(ack_type: str, exc: BuildJobNotActiveError) -> dict:
     """The ack for a ``job.complete``/``job.fail`` frame the store refused.
 
@@ -9321,6 +9338,7 @@ def create_app(
         timed out or was cancelled, or a report for a job nobody has been
         dispatched or has claimed.
         """
+        _log_refused_job_report(exc, "http")
         if exc.is_repeat and exc.info is not None:
             return exc.info
         raise HTTPException(409, str(exc)) from None
@@ -9731,6 +9749,7 @@ def create_app(
                             # Refused: the job is not active (already
                             # finished, cancelled, or never handed out).
                             # Nothing changed, so no webhook either.
+                            _log_refused_job_report(exc, f"ws builder {builder_id}")
                             await websocket.send_json(_ws_refused_ack("job.complete_ack", exc))
                             continue
                         await websocket.send_json(
@@ -9772,6 +9791,7 @@ def create_app(
                             # Refused: above all, a late fail on a job that
                             # already succeeded must not cascade-cancel its
                             # dependents.
+                            _log_refused_job_report(exc, f"ws builder {builder_id}")
                             await websocket.send_json(_ws_refused_ack("job.fail_ack", exc))
                             continue
                         await websocket.send_json(

@@ -400,7 +400,8 @@ def _audit_count(client, admin_tok, action, job_id):
 
 
 class TestHttpGuard:
-    def test_late_fail_after_complete_is_409_and_does_not_cascade(self, http_env):
+    def test_late_fail_after_complete_is_409_and_does_not_cascade(self, http_env, caplog):
+        caplog.set_level("INFO", logger="cvcpkg.server")
         client, admin, pub = http_env
         a, b, c = _submit_dag(client, pub, "late-fail")
         _claim(client, pub, a)
@@ -421,6 +422,11 @@ class TestHttpGuard:
         assert late.status_code == 409, late.text
         assert "succeeded" in late.json()["detail"]
         emit.assert_not_called()
+        # Refused, so not audited -- but not invisible either.
+        assert any(
+            r.levelname == "WARNING" and f"build job {a}: failed report refused" in r.getMessage()
+            for r in caplog.records
+        )
 
         after = _get(client, pub, a)
         assert after["status"] == "succeeded"
@@ -607,3 +613,161 @@ class TestWebSocketGuard:
         after = _get(client, pub, a)
         assert after["status"] == "failed"
         assert after["error_message"] == "OOM killed"
+
+
+# ── The other writers: timeout reaper, force-cancel, offline reaper ─────────
+
+
+def _land_complete_mid_write(monkeypatch, job_id):
+    """Commit a builder's ``complete`` for *job_id* inside another writer.
+
+    Wraps the next store session so that, right after that writer's first
+    statement (the SELECT that sees the job still ``running``), the success
+    commits on a separate connection -- before the writer's own UPDATE.  A
+    single-worker server opens exactly that window at every ``await``.  (A
+    writer that starts with its conditional UPDATE has no such window; the
+    success then lands just before it.)
+    """
+    from contextlib import asynccontextmanager
+
+    import cvcpkg.server.db_stores as ds
+
+    real_get_session = ds.get_session
+    fired = {"done": False}
+
+    @asynccontextmanager
+    async def wrapped():
+        async with real_get_session() as session:
+            real_execute = session.execute
+
+            async def land():
+                fired["done"] = True
+                monkeypatch.setattr(ds, "get_session", real_get_session)
+                landed = await asyncio.ensure_future(
+                    ds.DbBuildJobStore().complete(job_id, result_archive_url="/v1/packages/a")
+                )
+                assert landed.status == "succeeded"
+
+            async def execute(stmt, *a, **kw):
+                # A writer whose first statement is already its (conditional)
+                # write has no read-then-write window: land just before it.
+                if not fired["done"] and not getattr(stmt, "is_select", False):
+                    await land()
+                result = await real_execute(stmt, *a, **kw)
+                if not fired["done"]:
+                    await land()  # right after the read that saw "running"
+                return result
+
+            session.execute = execute
+            yield session
+
+    monkeypatch.setattr(ds, "get_session", wrapped)
+    return fired
+
+
+@pytest.mark.usefixtures("store_env")
+class TestOtherWritersRespectAFinishedJob:
+    def test_timeout_reaper_does_not_overwrite_a_success_that_lands_mid_reap(self, monkeypatch):
+        import datetime
+
+        from sqlalchemy import update
+
+        from cvcpkg.server.db import BuildJobRow, get_session
+
+        async def _t():
+            builders, jobs = await _stores()
+            b = await builders.register("bx", "linux", "x86_64", "root")
+            dag = await _dag(jobs)
+            await jobs.claim(dag[0].id, b.id)
+            old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+            async with get_session() as session:
+                await session.execute(
+                    update(BuildJobRow).where(BuildJobRow.id == dag[0].id).values(started_at=old)
+                )
+            fired = _land_complete_mid_write(monkeypatch, dag[0].id)
+            reaped = await jobs.reap_timed_out()
+            assert fired["done"]
+            # The success stands; the reaper reports nothing, so its caller
+            # cascades nothing.
+            assert reaped == []
+            assert (await jobs.get(dag[0].id)).status == "succeeded"
+
+        run(_t())
+
+    def test_force_cancel_does_not_overwrite_a_success_that_lands_mid_cancel(self, monkeypatch):
+        async def _t():
+            builders, jobs = await _stores()
+            b = await builders.register("bx", "linux", "x86_64", "root")
+            j = await jobs.create("a", "linux", "x86_64", "ci")
+            await jobs.claim(j.id, b.id)
+            fired = _land_complete_mid_write(monkeypatch, j.id)
+            info = await jobs.cancel(j.id, force=True)
+            assert fired["done"]
+            # cancel answers with the job as it stands (the endpoint then
+            # treats it as a no-op and cascades nothing).
+            assert info.status == "succeeded"
+            assert (await jobs.get(j.id)).status == "succeeded"
+
+        run(_t())
+
+    def test_scheduler_offline_reaper_skips_a_job_that_finished_after_listing(self, monkeypatch):
+        """Drive one tick of the real scheduler loop through the race."""
+        import cvcpkg.server.app as app_mod
+
+        async def _t():
+            builders, jobs = await _stores()
+            b = await builders.register("bx", "linux", "x86_64", "root")
+            dag = await _dag(jobs)
+            await jobs.claim(dag[0].id, b.id)
+            # A second job the offline builder really did abandon.
+            x = await jobs.create("x", "linux", "x86_64", "ci")
+            await jobs.claim(x.id, b.id)
+
+            async def reap_stale(max_age_seconds=180):
+                return [await builders.get(b.id)]
+
+            real_list = jobs.list_active_by_builder
+
+            async def list_then_complete(builder_id):
+                listed = await real_list(builder_id)
+                await jobs.complete(dag[0].id)  # lands between list and fail
+                # The finished job first, so a refused fail that escaped
+                # would abort the tick before the abandoned one is handled.
+                return sorted(listed, key=lambda j: j.id != dag[0].id)
+
+            monkeypatch.setattr(builders, "reap_stale", reap_stale)
+            monkeypatch.setattr(jobs, "list_active_by_builder", list_then_complete)
+            cascade = AsyncMock(wraps=jobs.cancel_downstream)
+            monkeypatch.setattr(jobs, "cancel_downstream", cascade)
+            monkeypatch.setattr(app_mod, "_use_db", True)
+            monkeypatch.setattr(app_mod, "_db_builders", builders)
+            monkeypatch.setattr(app_mod, "_db_build_jobs", jobs)
+
+            ticks = {"n": 0}
+
+            async def one_tick(_secs):
+                ticks["n"] += 1
+                if ticks["n"] > 1:
+                    raise asyncio.CancelledError
+
+            monkeypatch.setattr(asyncio, "sleep", one_tick)
+            emit = AsyncMock()
+            monkeypatch.setattr(app_mod, "emit_webhook_event", emit)
+            with pytest.raises(asyncio.CancelledError):
+                await app_mod._build_scheduler_loop()
+
+            assert (await jobs.get(dag[0].id)).status == "succeeded"
+            failed_events = [
+                c.args[1]["job_id"] for c in emit.call_args_list if c.args[0] == "build.failed"
+            ]
+            assert dag[0].id not in failed_events
+            assert all(c.args[0] != dag[0].id for c in cascade.call_args_list)
+            assert (await jobs.get(dag[1].id)).status in ("pending", "dispatched")
+            # ... and the same tick still fails the job that was abandoned
+            # (reap_stale will not hand this builder back on the next tick).
+            abandoned = await jobs.get(x.id)
+            assert abandoned.status == "failed"
+            assert "went offline" in abandoned.error_message
+            assert any(c.args and c.args[0] == x.id for c in cascade.call_args_list)
+
+        run(_t())

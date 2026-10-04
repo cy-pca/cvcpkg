@@ -3808,20 +3808,32 @@ class DbBuildJobStore:
         :meth:`cancel_downstream` to propagate the cancellation.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
-        allowed = {BuildJobStatus.pending, BuildJobStatus.dispatched}
+        allowed = [BuildJobStatus.pending, BuildJobStatus.dispatched]
         if force:
-            allowed = allowed | {BuildJobStatus.running}
+            allowed.append(BuildJobStatus.running)
         async with get_session() as session:
+            # One conditional UPDATE, like claim() and _finish(): reading the
+            # row and then writing it let a complete that committed in between
+            # be overwritten -- a succeeded job flipped to cancelled, and the
+            # force path then cascade-cancelled its dependents.
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(BuildJobRow.id == job_id, BuildJobRow.status.in_(allowed))
+                .values(status=BuildJobStatus.cancelled, finished_at=now)
+                .execution_options(synchronize_session=False)
+            )
             row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
+                await session.execute(
+                    select(BuildJobRow)
+                    .where(BuildJobRow.id == job_id)
+                    .execution_options(populate_existing=True)
+                )
             ).scalar()
             if row is None:
                 return None
-            if row.status not in allowed:
+            if result.rowcount == 0:
                 return self._row_to_info(row)
             builder_id = row.builder_id
-            row.status = BuildJobStatus.cancelled
-            row.finished_at = now
             if force and builder_id is not None:
                 # Reconcile builder's current_jobs from actual DB state
                 active = (
@@ -4265,12 +4277,37 @@ class DbBuildJobStore:
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=datetime.timezone.utc)
                 deadline = started + datetime.timedelta(seconds=timeout)
-                if now > deadline:
-                    row.status = BuildJobStatus.timed_out
-                    row.finished_at = now
-                    row.error_message = f"exceeded {timeout}s timeout"
-                    dep_ids = await self._load_dep_ids(session, row.id)
-                    reaped.append(self._row_to_info(row, dep_ids))
+                if now <= deadline:
+                    continue
+                # Conditional on still running, like claim() and _finish(): a
+                # complete or fail that committed after the SELECT above wins,
+                # and the job is not reported, so the caller cascades nothing.
+                # An unconditional write here turned a just-succeeded job into
+                # timed_out and cancelled everything downstream of it.
+                result = await session.execute(
+                    update(BuildJobRow)
+                    .where(
+                        BuildJobRow.id == row.id,
+                        BuildJobRow.status == BuildJobStatus.running,
+                    )
+                    .values(
+                        status=BuildJobStatus.timed_out,
+                        finished_at=now,
+                        error_message=f"exceeded {timeout}s timeout",
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if result.rowcount == 0:
+                    continue
+                fresh = (
+                    await session.execute(
+                        select(BuildJobRow)
+                        .where(BuildJobRow.id == row.id)
+                        .execution_options(populate_existing=True)
+                    )
+                ).scalar()
+                dep_ids = await self._load_dep_ids(session, row.id)
+                reaped.append(self._row_to_info(fresh, dep_ids))
             return reaped
 
     async def reap_unschedulable(
