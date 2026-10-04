@@ -1263,7 +1263,7 @@ def test_resolve_update_source_refuses_a_tree_that_differs_from_head(git_checkou
     assert b._resolve_update_source() is None
     err = capsys.readouterr().err
     assert "differ from HEAD" in err and "will not install from it" in err
-    assert f"git -C {git_checkout} status" in err
+    assert b._shell_join(["git", "-C", str(git_checkout), "status"]) in err
 
 
 def test_resolve_update_source_forgets_an_upstream_deleted_on_the_remote(
@@ -1344,7 +1344,7 @@ def test_a_tree_that_differs_from_head_is_never_installed(real_git, capsys):
     err = capsys.readouterr().err
     assert "git merge --ff-only failed" in err
     assert "differ from HEAD" in err and "not installing" in err
-    assert f"git -C {git_checkout} status" in err
+    assert b._shell_join(["git", "-C", str(git_checkout), "status"]) in err
 
 
 def test_a_tree_that_differs_from_head_after_a_failed_fetch_is_not_installed_either(
