@@ -314,3 +314,79 @@ def test_claim_whose_answer_is_lost_is_retried(monkeypatch, tmp_path):
     r = CliRunner().invoke(builder_run, _args(tmp_path, ["--no-websocket", "--max-runtime", "2"]))
     assert r.exit_code == 0, r.output
     assert srv.recipe_fetches.get("r42", 0) == 1, r.output
+
+
+def test_http_loop_survives_a_thread_that_cannot_start(monkeypatch, tmp_path):
+    """Long-poll path: ``Thread.start()`` raising (a thread or process limit)
+    must not end the main loop -- a BSD builder started from ``@reboot`` has
+    no supervisor and would stay down until the next reboot.  The job stays
+    dispatched and a later poll runs it, once."""
+    srv = _MultiServer([42], claim_latency=0.0)
+    monkeypatch.setattr(httpx, "Client", srv.client_cls())
+    monkeypatch.setattr(time, "sleep", lambda s, _real=time.sleep: _real(min(s, 0.05)))
+    real_start = threading.Thread.start
+    calls = {"n": 0}
+
+    def flaky_start(self):
+        if "_run_job_guarded" in getattr(getattr(self, "_target", None), "__name__", ""):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("can't start new thread")
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", flaky_start)
+    r = CliRunner().invoke(builder_run, _args(tmp_path, ["--no-websocket", "--max-runtime", "1.5"]))
+    assert r.exit_code == 0, (r.output, repr(r.exception))
+    assert "could not start a job thread" in r.output
+    assert calls["n"] >= 2, r.output
+    assert srv.ok_claims[42] == 1, r.output
+    assert srv.recipe_fetches.get("r42", 0) == 1, r.output
+
+
+class _LostClaimServer(_MultiServer):
+    """Every claim answer is lost, though the first one lands; GET
+    /v1/builds/{id} reports the job's row as the server holds it."""
+
+    def __init__(self, *, holder):
+        super().__init__([42], claim_latency=0.0)
+        self.holder = holder
+        self.gets = 0
+
+    def client_cls(self):
+        server = self
+        base_cls = super().client_cls()
+
+        class _C(base_cls):
+            def post(self, url, **k):
+                r = super().post(url, **k)
+                if url.endswith("/v1/builds/42/claim"):
+                    raise httpx.ReadTimeout("response lost")
+                return r
+
+            def get(self, url, **k):
+                if url.endswith("/v1/builds/42"):
+                    with server.lock:
+                        server.gets += 1
+                        row = server._job(42)
+                    row["builder_id"] = server.holder
+                    return _Resp(200, row)
+                return super().get(url, **k)
+
+        return _C
+
+
+@pytest.mark.parametrize(("holder", "built"), [(7, True), (99, False)], ids=["ours", "theirs"])
+def test_claim_lost_on_every_attempt_checks_who_holds_the_job(monkeypatch, tmp_path, holder, built):
+    """The last claim attempt failing in transport does not mean no attempt
+    landed.  next-job never hands a running job back, so a landed claim with
+    nothing building it would sit "running" until the 2 h build timeout.  The
+    builder asks the server and builds the job only if it holds it."""
+    srv = _LostClaimServer(holder=holder)
+    monkeypatch.setattr(httpx, "Client", srv.client_cls())
+    monkeypatch.setattr(time, "sleep", lambda s, _real=time.sleep: _real(min(s, 0.05)))
+    r = CliRunner().invoke(builder_run, _args(tmp_path, ["--no-websocket", "--max-runtime", "1.5"]))
+    assert r.exit_code == 0, r.output
+    assert srv.claims[42] == 3, r.output  # every attempt was made ...
+    assert srv.gets >= 1, r.output  # ... then the job's holder looked up
+    assert (srv.recipe_fetches.get("r42", 0) == 1) is built, r.output
+    assert ("running under this builder" in r.output) is built

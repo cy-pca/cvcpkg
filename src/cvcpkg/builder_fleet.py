@@ -10,9 +10,19 @@ a single machine driven by one config file and one service unit.
 
 Rather than rewrite the (thread-heavy, single-server) ``cvcpkg builder run``
 agent to juggle N servers in-process, a *supervisor* runs one single-server
-worker per configured server. That keeps the proven agent untouched and gives
-**secret isolation for free**: each worker process holds only its own server's
-token and never sees another server/org's credentials or build outputs.
+worker per configured server. That keeps the proven agent untouched.
+
+Tokens: each worker is handed only its own server's token, as ``CVCPKG_TOKEN``
+in its environment (see :func:`worker_env`) -- never on its command line, where
+``ps`` and ``/proc/<pid>/cmdline`` show it to every local user.  The other
+servers' token variables are removed from the worker's environment, and the
+worker removes its own from the environment its build scripts inherit (see
+``cvcpkg.tokenenv``), so a recipe built for one server cannot read another
+server's token from its environment.  That is hygiene, not a security
+boundary: every worker runs as the supervisor's uid, and a build script can
+read any same-uid process's environment and memory.  Servers or orgs that must
+not be able to reach each other's credentials need one uid per worker (a
+separate ``cvcpkg builder run`` service per server), not one fleet.
 
 Config schema (``fleet.yaml``)::
 
@@ -43,6 +53,7 @@ Config schema (``fleet.yaml``)::
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
@@ -59,7 +70,9 @@ class FleetServer:
     """One (server, credentials, served-namespaces) target in a fleet."""
 
     server: str
-    token: str
+    # Never in repr(): a FleetServer in a log line or a traceback must not
+    # print the credential.
+    token: str = field(repr=False)
     serve: tuple[str, ...]
     name: str
     max_jobs: int = 1
@@ -73,6 +86,10 @@ class FleetServer:
     cross_platforms: tuple[str, ...] = ()
     auto_capabilities: bool = True
     advertise_free_disk: bool = True
+    # The environment variable the token was read from (``token_env``), or ""
+    # for a literal ``token``.  The supervisor drops every server's variable
+    # from every worker's environment; see worker_env.
+    token_env: str = ""
 
     @property
     def host(self) -> str:
@@ -91,17 +108,18 @@ def _slug_host(url: str) -> str:
     return "".join(c if (c.isalnum() or c in "-_") else "-" for c in host)
 
 
-def _resolve_token(entry: dict, where: str) -> str:
+def _resolve_token(entry: dict, where: str) -> tuple[str, str]:
     """Resolve a server's token from a literal ``token`` or a ``token_env``.
 
     ``token_env`` is preferred in practice so the secret stays out of the file;
     a literal ``token`` is accepted for convenience. Exactly one must yield a
-    non-empty value.
+    non-empty value.  Returns ``(token, token_env)``; ``token_env`` is the
+    variable's name, or "" for a literal.
     """
     literal = str(entry.get("token", "") or "")
     env_name = str(entry.get("token_env", "") or "")
     if literal:
-        return literal
+        return literal, ""
     if env_name:
         val = os.environ.get(env_name, "")
         if not val:
@@ -109,7 +127,7 @@ def _resolve_token(entry: dict, where: str) -> str:
                 f"{where}: token_env {env_name!r} is set but the environment "
                 f"variable is empty or undefined"
             )
-        return val
+        return val, env_name
     raise FleetConfigError(f"{where}: each server needs a 'token' or 'token_env'")
 
 
@@ -163,7 +181,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
         if server in seen_servers:
             raise FleetConfigError(f"{where}: duplicate server {server!r}")
         seen_servers.add(server)
-        token = _resolve_token(entry, where)
+        token, token_env = _resolve_token(entry, where)
         serve = _normalize_serve(entry.get("serve"))
         name = str(entry.get("name", "") or "")
         if not name:
@@ -191,6 +209,7 @@ def parse_fleet_config(data: dict) -> FleetConfig:
                 ),
                 auto_capabilities=bool(entry.get("auto_capabilities", default_auto_caps)),
                 advertise_free_disk=bool(entry.get("advertise_free_disk", default_free_disk)),
+                token_env=token_env,
             )
         )
     return FleetConfig(name=fleet_name, servers=servers)
@@ -208,12 +227,48 @@ def load_fleet_config(path: str | Path) -> FleetConfig:
     return parse_fleet_config(data)
 
 
+def worker_env(
+    fs: FleetServer,
+    servers: list[FleetServer] | tuple[FleetServer, ...],
+    base: Mapping[str, str],
+) -> dict[str, str]:
+    """The environment for *fs*'s worker: *base* with only *fs*'s token in it.
+
+    Starting from *base* (the supervisor's environment, as ``cvcpkg_env()``
+    returns it), removes every server's ``token_env`` variable, every
+    ``CVCPKG_...TOKEN...`` variable and any variable holding any fleet token,
+    then sets ``CVCPKG_TOKEN`` -- which ``builder run --token`` reads -- to
+    *fs*'s token.  The token never goes on the worker's argv, where any local
+    user can read it in ``ps`` / ``/proc/<pid>/cmdline``.
+
+    The worker also gets the ``token_env`` names in
+    :data:`cvcpkg.tokenenv.SCRUB_NAMES_ENV`: it loads the default env files at
+    startup (``/etc/cvcpkg/env`` ...), which may define them again, and drops
+    them -- and its own ``CVCPKG_TOKEN`` -- from the environment its build
+    scripts inherit (``builder run``).
+    """
+    from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env
+
+    names = sorted({s.token_env for s in servers if s.token_env})
+    env = dict(base)
+    scrub_token_env(env, names=names, secrets=[s.token for s in servers])
+    env["CVCPKG_TOKEN"] = fs.token
+    if names:
+        env[SCRUB_NAMES_ENV] = ",".join(names)
+    else:
+        env.pop(SCRUB_NAMES_ENV, None)
+    return env
+
+
 def worker_argv(fs: FleetServer) -> list[str]:
     """Build the ``cvcpkg builder run`` argv for a single-server worker.
 
     The served set maps to ``--org <serve[0]> --serve <rest…>`` — the agent
     always serves its ``--org`` and unions in each ``--serve``, so the worker
     reconstructs exactly ``fs.serve`` on the server.
+
+    No ``--token``: the worker reads its token from ``CVCPKG_TOKEN``, which
+    :func:`worker_env` sets.
     """
     serve = fs.serve or ("",)
     home, extras = serve[0], serve[1:]
@@ -222,8 +277,6 @@ def worker_argv(fs: FleetServer) -> list[str]:
         "run",
         "--server",
         fs.server,
-        "--token",
-        fs.token,
         "--name",
         fs.name,
         "--org",

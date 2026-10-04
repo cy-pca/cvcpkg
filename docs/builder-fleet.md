@@ -13,8 +13,9 @@ machine driven by one config file and one service unit.
    of namespaces via `--org` (home) plus repeatable `--serve`:
 
    ```bash
-   # One builder on cvcpkg.org that takes BOTH public and cvc-org jobs:
-   cvcpkg builder run --server https://cvcpkg.org --token "$TOK" \
+   # One builder on cvcpkg.org that takes BOTH public and cvc-org jobs
+   # (token from CVCPKG_TOKEN / an env file, not argv):
+   cvcpkg builder run --server https://cvcpkg.org \
        --name catx-03 --org "" --serve cvc
    ```
 
@@ -24,8 +25,8 @@ machine driven by one config file and one service unit.
 
 2. **Multiple servers (the fleet supervisor).** `cvcpkg builder fleet` runs one
    `builder run` worker per server listed in a config file, under one process
-   and one unit. Each worker holds only its own server's token — so credentials
-   and build outputs are isolated per server by construction.
+   and one unit. Each worker is handed only its own server's token (see
+   [Tokens](#tokens)).
 
 ## Consolidating the dev + prod fleets
 
@@ -80,3 +81,37 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   A worker killed with SIGKILL leaves its copy behind, so give the unit a
   `TimeoutStopSec=` above the supervisor's 120 s drain (e.g. `150`) rather than
   the systemd default of 90 s.
+- A worker that exits is restarted after `--restart-delay` (default 5 s). One
+  that keeps dying within a minute of starting -- a revoked token, a stuck
+  pidfile -- waits twice as long each time, up to 5 minutes, so a crash loop
+  does not unpack a fresh 85 MB binary every few seconds; a worker that ran
+  for a minute or more starts over at `--restart-delay`.
+- Windows: each worker runs in its own console process group and is stopped
+  with Ctrl+Break, which `builder run` drains on like Ctrl+C. A worker still
+  running after the 120 s drain is killed with its whole process tree
+  (`taskkill /T /F`).
+
+## Tokens
+
+The supervisor resolves every server's token, then starts each worker with
+**only its own**, as `CVCPKG_TOKEN` in the worker's environment. The token is
+never on a worker's command line (`ps` and `/proc/<pid>/cmdline` show argv to
+every local user). Every server's `token_env` variable, every
+`CVCPKG_...TOKEN...` variable and any variable holding a fleet token are
+removed from each worker's environment, and the worker in turn drops its own
+token from the environment its build scripts inherit -- a recipe built for one
+server cannot read any server's token from its environment.
+
+```ini
+# cvcpkg-builder.service (excerpt)
+[Service]
+EnvironmentFile=/etc/cvcpkg/fleet.env     # CVCPKG_TOKEN_PROD=..., CVCPKG_TOKEN_DEV=...; 0600 root
+ExecStart=/usr/local/bin/cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml
+TimeoutStopSec=150
+```
+
+This is hygiene, not a sandbox: the supervisor and all its workers run as one
+user, and a build script can read any same-user process's environment and
+memory. Servers (or orgs) that must not be able to reach each other's
+credentials need **one user per server** -- separate `builder run` services
+under separate accounts -- rather than one fleet.

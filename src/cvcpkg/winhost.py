@@ -603,7 +603,10 @@ def run_winhost_build(
         )
         _log(header)
 
+        from cvcpkg.tokenenv import scrub_token_env
+
         env = os.environ.copy()
+        scrub_token_env(env)  # the host build runs recipe scripts
         env.update(io["env"])
         rc = _stream_host_process(
             [

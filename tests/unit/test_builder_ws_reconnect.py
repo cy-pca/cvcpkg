@@ -99,6 +99,8 @@ class _FakeServer:
         self.ws_sent: list[dict] = []
         self.on_connect = on_connect
         self.conn = None
+        # Ordered log of HTTP heartbeats ("hb") and self-update steps.
+        self.events: list[str] = []
 
     def dispatch(self, job_id: int) -> None:
         with self.lock:
@@ -151,6 +153,9 @@ class _FakeServer:
                     with server.lock:
                         server.jobs[job_id] = "failed" if url.endswith("/fail") else "succeeded"
                         return _Resp(200, server.job(job_id))
+                if url.endswith("/heartbeat"):
+                    with server.lock:
+                        server.events.append("hb")
                 return _Resp(200, {})  # heartbeat
 
             def patch(self, url, json=None, **k):
@@ -536,29 +541,46 @@ def test_push_dropped_while_full_starts_as_soon_as_the_slot_frees(monkeypatch, t
     assert server.claims == {1: 1, 2: 1}, result.output
 
 
-def _record_self_update(monkeypatch, server, cmds: list | None = None):
+def _record_self_update(monkeypatch, server, cmds: list | None = None, *, offered="999.0.0"):
     """Stub the self-update side effects; record the job states when it runs.
 
-    Recorded at its ``git pull`` -- the first thing _self_update() does on
-    every platform (POSIX then os.execv()s; Windows without the supervisor
+    The update source is a checkout offering *offered*.  Recorded at its
+    ``git pull`` -- the first step of the deferred update on every platform
+    (POSIX then re-execs, stubbed here; Windows without the supervisor
     returns) -- so the assertion means the same thing on every OS.  Every
-    command it runs is appended to *cmds*, when given.
+    command it runs is appended to *cmds*, when given; heartbeats the update
+    sends land in ``server.events`` next to them.
     """
-    import os
     import subprocess
+    from pathlib import Path
+
+    import cvcpkg.cli._builder as builder_mod
 
     updates: list[dict] = []
+    checkout = Path("/nonexistent/cvcpkg-checkout")
 
-    def _run(cmd, *a, **k):
+    def _step(cmd, *, timeout, cwd=None, beat=None):
         if cmds is not None:
             cmds.append(list(cmd))
-        if cmd and cmd[0] == "git":
+        with server.lock:
+            server.events.append(" ".join(cmd[:2]))
+        if cmd[:2] == ["git", "pull"]:
             with server.lock:
                 updates.append(dict(server.jobs))
+        if "pip" in cmd and beat is not None:
+            beat()  # a long install: the builder must keep beating
+            beat()
+        out = f"{offered}\n" if "-c" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, out, "")
 
     monkeypatch.delenv("CVCPKG_BUILDER_SUPERVISED", raising=False)
-    monkeypatch.setattr(subprocess, "run", _run)
-    monkeypatch.setattr(os, "execv", lambda *a: None)
+    monkeypatch.setattr(builder_mod, "_run_update_step", _step)
+    monkeypatch.setattr(
+        builder_mod, "_resolve_update_source", lambda beat=None: (checkout, offered)
+    )
+    monkeypatch.setattr(builder_mod, "_find_update_checkout", lambda: checkout)
+    monkeypatch.setattr(builder_mod, "_checkout_version", lambda path: offered)
+    monkeypatch.setattr(builder_mod, "_reexec_builder", lambda token, extra_env=None: None)
     return updates
 
 
@@ -589,9 +611,9 @@ def test_builder_update_waits_for_in_flight_jobs(monkeypatch, tmp_path):
     at_update = execs[0]
     assert at_update.get(1) not in ("dispatched", "running"), result.output
     assert at_update.get(2) == "dispatched", "admitted a new job while an update was pending"
-    # os.execv is stubbed, so the update returns -- as it does when there is
-    # nothing to update from.  The builder then takes work again, starting the
-    # push it dropped meanwhile without waiting for the 60 s periodic sweep.
+    # The re-exec is stubbed, so the update returns -- as it does when a step
+    # fails.  The builder then takes work again, starting the push it dropped
+    # meanwhile without waiting for the 60 s periodic sweep.
     assert server.claims.get(2) == 1, result.output
 
 
@@ -791,3 +813,83 @@ def test_token_travels_in_the_handshake_header_not_the_url(monkeypatch, tmp_path
     uri, hdrs = seen[0]
     assert TOKEN not in uri
     assert hdrs.get("Authorization") == f"Bearer {TOKEN}"
+
+
+# -- builder.update: decide before draining, keep beating -----------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "why"),
+    [
+        pytest.param(None, "no cvcpkg source checkout", id="no-checkout"),
+        pytest.param("same", "not newer than", id="same-version"),
+    ],
+)
+def test_builder_update_with_nothing_newer_to_install_does_not_drain(
+    monkeypatch, tmp_path, source, why
+):
+    """A site-packages install with no checkout, or a checkout that is not
+    ahead of the running version: there is nothing to install, so the builder
+    must not stop taking work (the drain can last as long as an llvm build)."""
+    from pathlib import Path
+
+    import cvcpkg.cli._builder as builder_mod
+    from cvcpkg import __version__
+
+    def on_connect(server, conn, index):
+        def later():
+            time.sleep(0.2)  # after the connect-time catch-up
+            conn.push({"type": "builder.update", "version": "999.0.0"})
+            time.sleep(0.2)
+            server.dispatch(1)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+
+        threading.Thread(target=later, daemon=True).start()
+
+    server = _FakeServer(on_connect=on_connect)
+    cmds: list[list[str]] = []
+    execs = _record_self_update(monkeypatch, server, cmds)
+    offer = None if source is None else (Path("/src/cvcpkg"), __version__)
+    monkeypatch.setattr(builder_mod, "_resolve_update_source", lambda beat=None: offer)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1.5"])
+
+    assert result.exit_code == 0, result.output
+    assert why in result.output
+    assert not execs and not cmds, cmds
+    assert server.claims == {1: 1}, "drained for an update that was never going to run"
+
+
+def test_builder_update_heartbeats_before_and_during_the_update(monkeypatch, tmp_path):
+    """The server marks a builder silent for 180 s offline and fails what it
+    dispatched to it; git + pip can take that long.  A heartbeat goes out right
+    before the update starts and keeps going while its steps run."""
+
+    def on_connect(server, conn, index):
+        conn.push({"type": "builder.update", "version": "999.0.0"})
+
+    server = _FakeServer(on_connect=on_connect)
+    _record_self_update(monkeypatch, server)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "1"])
+
+    assert result.exit_code == 0, result.output
+    events = server.events
+    assert "git pull" in events, result.output
+    assert events[events.index("git pull") - 1] == "hb", events
+    pip_at = next(i for i, e in enumerate(events) if e.endswith("-m"))
+    assert events[pip_at + 1 : pip_at + 3] == ["hb", "hb"], events
+
+
+def test_catch_up_starts_every_missed_dispatch_not_one_per_sweep(monkeypatch, tmp_path):
+    """Three jobs dispatched before the socket was up, three free slots.
+    next-job hands back the lowest-id dispatched job, so the job just started
+    (claim in flight) hides the others; the catch-up must wait for that claim
+    instead of leaving each further job to the next sweep, a minute apart."""
+    monkeypatch.delenv("CVCPKG_BUILDER_WS_SWEEP_INTERVAL", raising=False)  # 60 s
+    server = _FakeServer(claim_latency=0.3)
+    for job_id in (1, 2, 3):
+        server.dispatch(job_id)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "3"], max_jobs=3)
+
+    assert result.exit_code == 0, result.output
+    assert server.claims == {1: 1, 2: 1, 3: 1}, result.output
+    assert server.recipe_fetches == {1: 1, 2: 1, 3: 1}, result.output
