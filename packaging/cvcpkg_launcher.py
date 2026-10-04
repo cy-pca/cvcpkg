@@ -27,6 +27,9 @@ def _want_server() -> bool:
 
 
 def main() -> int:
+    from cvcpkg.selfexec import restore_library_path
+
+    restore_library_path(os.environ)
     if _want_server():
         from cvcpkg.server.cli import server_cli
 
