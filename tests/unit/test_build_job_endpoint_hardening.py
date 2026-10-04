@@ -10,7 +10,8 @@
   cancels dependents a first, unforced cancel left behind.
 * pause/resume: report "no-op" when the job was not in a state to move.
 * complete/fail: a report naming a builder (or claimant) that no longer holds
-  the job is a 409 and changes nothing.
+  the job is a 409 and changes nothing -- unless nobody holds it any more
+  because an admin deleted the holder mid-job, when the report still lands.
 """
 
 from __future__ import annotations
@@ -259,3 +260,21 @@ class TestReporterOverHttp:
         assert _claim(client, pub, a, builder_id=bid).status_code == 200
         ok = client.post(f"/v1/builds/{a}/complete", json={}, headers=_h(pub))
         assert ok.status_code == 200 and ok.json()["status"] == "succeeded"
+
+    def test_report_from_a_builder_deleted_mid_job_lands(self, env):
+        client, admin, pub = env
+        a, _b, _c = _chain(client, pub, "deleted-holder")
+        bid = _register(client, pub, "doomed")
+        assert _claim(client, pub, a, builder_id=bid).status_code == 200
+        r = client.delete(f"/v1/builders/{bid}", headers=_h(admin))
+        assert r.status_code == 200, r.text
+        assert _get(client, pub, a)["builder_id"] is None
+
+        ok = client.post(
+            f"/v1/builds/{a}/complete",
+            json={"result_archive_url": "/v1/packages/a", "builder_id": bid},
+            headers=_h(pub),
+        )
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["status"] == "succeeded"
+        assert _audit_count(client, admin, "build_complete", a) == 1

@@ -21,7 +21,7 @@ from cvcpkg.optional import require_sqlalchemy
 # See cvcpkg.server.db: this module is also reachable before db.py is imported.
 require_sqlalchemy()
 
-from sqlalchemy import distinct, or_, select, update
+from sqlalchemy import and_, distinct, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
@@ -4243,12 +4243,27 @@ class DbBuildJobStore:
         attempt; it raises BuildJobNotHeldError.  Callers that name no
         reporter (older builders, the scheduler's offline reaper) are checked
         on status alone, as before.
+
+        A job whose holder no longer exists has no holder to compare with:
+        deleting a builder (``DELETE /v1/builders/{id}``) while it is building
+        sets the job's builder_id to NULL (the foreign key is ON DELETE SET
+        NULL).  That builder's report still names its old id, and refusing it
+        would leave the job running until the build timeout reaps it -- so a
+        report naming a builder lands on such an orphan, as it did before the
+        holder check existed.  If that claim also recorded a claimant, the
+        report has to name the same one.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         claimant = (claimant or "").strip()
         where = [BuildJobRow.id == job_id, BuildJobRow.status.in_(self._FINISHABLE_STATUSES)]
         if builder_id is not None:
-            where.append(BuildJobRow.builder_id == builder_id)
+            where.append(
+                or_(
+                    BuildJobRow.builder_id == builder_id,
+                    # Orphaned by an admin deleting the holder mid-job.
+                    and_(BuildJobRow.builder_id.is_(None), BuildJobRow.claimed_by == claimant),
+                )
+            )
         elif claimant:
             where.append(BuildJobRow.claimed_by == claimant)
         async with get_session() as session:

@@ -243,6 +243,16 @@ jobs:
           pip install poetry
           poetry install --with dev --extras server
 
+      # Blocking, unlike the full ruff run below (which carries style debt):
+      # an undefined name is a runtime NameError, never style.  Two PRs that
+      # each pass on their own can merge cleanly into one -- a closure still
+      # spreading a local that the other PR moved into a helper -- and a
+      # NameError raised inside an `except Exception: pass` shows up nowhere
+      # but in the jobs it silently strands.
+      - name: Ruff undefined names (blocking)
+        working-directory: .
+        run: poetry run ruff check --select F821,F822,F823 src/ tests/
+
       - name: Ruff check
         working-directory: .
         run: poetry run ruff check src/ tests/

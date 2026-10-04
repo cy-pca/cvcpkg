@@ -1149,8 +1149,9 @@ _REPORTER_BUILDER_ID_DOC = (
     "The registered builder reporting, as it claimed the job.  When set, the "
     "report only lands while the job is still held by this builder: a stale "
     "report from a previous holder (after a pause/resume re-dispatched the "
-    "job elsewhere) is refused with 409.  Omitted by older builders, which "
-    "keeps their behaviour unchanged."
+    "job elsewhere) is refused with 409.  A job left with no holder because "
+    "its builder was deleted mid-build still accepts the report.  Omitted by "
+    "older builders, which keeps their behaviour unchanged."
 )
 _REPORTER_CLAIMANT_DOC = (
     "The unregistered worker reporting, as named in its claim.  Checked like "

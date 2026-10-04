@@ -1078,11 +1078,11 @@ def _log_refused_job_report(exc: BuildJobNotActiveError, via: str) -> None:
 # the first: they checked only that the token owned the *builder*, never that
 # it could see the *job*, wrote no audit entry, and so let any publisher with a
 # builder claim, write the log of, and fail a private org's job
-# (cascade-cancelling its dependents).  Keeping one path for job-state changes keeps one place for org
-# visibility, holder checks, the status guard, auditing and webhooks, so a
-# future rule cannot be added to one path and missed on the other.  The socket
-# stays what the builders use it for: dispatch/cancel/update pushes in,
-# heartbeats out.
+# (cascade-cancelling its dependents).  Keeping one path for job-state changes
+# keeps one place for org visibility, holder checks, the status guard, auditing
+# and webhooks, so a future rule cannot be added to one path and missed on the
+# other.  The socket stays what the builders use it for: dispatch/cancel/update
+# pushes in, heartbeats out.
 _WS_HTTP_ONLY_JOB_FRAMES: dict[str, str] = {
     "job.claim": "POST /v1/builds/{job_id}/claim",
     "job.log": "PATCH /v1/builds/{job_id}/log",

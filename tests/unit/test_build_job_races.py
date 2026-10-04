@@ -491,6 +491,49 @@ class TestReporterMustHoldTheJob:
 
         run_on(backend, tmp_path, monkeypatch, _t)
 
+    def test_report_from_a_deleted_holder_still_lands(self, backend, tmp_path, monkeypatch):
+        # An admin deleting a builder mid-job leaves the job with no holder
+        # (builder_id SET NULL).  The builder's own report still names its old
+        # id; refusing it would strand the job until the build timeout.
+        from cvcpkg.server.models import BuildJobNotHeldError
+
+        async def _t():
+            builders, jobs = await _stores()
+            ba = await builders.register("ba", "linux", "x86_64", "root")
+            j = await jobs.create("a", "linux", "x86_64", "ci")
+            await jobs.dispatch(j.id, ba.id)
+            await jobs.claim(j.id, ba.id)
+            assert await builders.unregister(ba.id)
+            orphan = await jobs.get(j.id)
+            assert orphan.status == "running" and orphan.builder_id is None
+
+            # A claimant-only report does not match a job claimed by id.
+            with pytest.raises(BuildJobNotHeldError):
+                await jobs.fail(j.id, claimant="someone-else", error_message="x")
+            done = await jobs.complete(j.id, builder_id=ba.id, result_archive_url="/v1/p/a")
+            assert done.status == "succeeded"
+
+        run_on(backend, tmp_path, monkeypatch, _t)
+
+    def test_a_claimant_recorded_with_the_claim_must_match_on_an_orphan(
+        self, backend, tmp_path, monkeypatch
+    ):
+        from cvcpkg.server.models import BuildJobNotHeldError
+
+        async def _t():
+            builders, jobs = await _stores()
+            ba = await builders.register("ba", "linux", "x86_64", "root")
+            j = await jobs.create("a", "linux", "x86_64", "ci")
+            await jobs.claim(j.id, ba.id, claimant="ba-run-7")
+            assert await builders.unregister(ba.id)
+            with pytest.raises(BuildJobNotHeldError):
+                await jobs.fail(j.id, builder_id=ba.id, claimant="ba-run-6")
+            assert (await jobs.get(j.id)).status == "running"
+            done = await jobs.fail(j.id, builder_id=ba.id, claimant="ba-run-7")
+            assert done.status == "failed"
+
+        run_on(backend, tmp_path, monkeypatch, _t)
+
     def test_a_report_naming_nobody_is_checked_on_status_alone(
         self, backend, tmp_path, monkeypatch
     ):

@@ -1068,6 +1068,15 @@ def builder_run(
         builder_id = info["id"]
         click.echo(f"Registered builder #{builder_id} ({name}) - {platform}/{arch}{cross_msg}")
 
+    # Who this worker is, to the server: the identity it claims jobs with and
+    # names itself by in each job's complete/fail report, so the server can
+    # refuse a report about a job that has since moved to another holder.
+    # Defined once here, in builder_run's scope, because every job-reporting
+    # closure must send the same identity the claim used.
+    job_identity: dict = (
+        {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
+    )
+
     shutdown = False
     # ``current_jobs`` is derived from the set of in-flight job tokens so it
     # can never desync: a token is added under the lock when a job thread is
@@ -1976,7 +1985,7 @@ def builder_run(
                 client.post(
                     f"{base}/v1/builds/{job_id}/complete",
                     headers=headers,
-                    json={"result_archive_url": result_url, **claim_body},
+                    json={"result_archive_url": result_url, **job_identity},
                 )
             click.echo(f"  [{job_id}] Completed: {recipe_name}")
 
@@ -1989,7 +1998,7 @@ def builder_run(
                     client.post(
                         f"{base}/v1/builds/{job_id}/fail",
                         headers=headers,
-                        json={"error_message": error_message[:4096], **claim_body},
+                        json={"error_message": error_message[:4096], **job_identity},
                     )
             except Exception:
                 pass
