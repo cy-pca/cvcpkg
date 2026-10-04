@@ -57,6 +57,13 @@ click = "^8.1"
 tqdm = { version = "^4.66", optional = true }
 fastapi = { version = ">=0.100", optional = true }
 uvicorn = { version = ">=0.20", optional = true }
+# uvicorn ships no WebSocket protocol of its own: without `websockets` (or
+# wsproto) importable it logs "Unsupported upgrade request" and serves the
+# handshake as plain HTTP, so the builder WebSocket (/v1/builders/{id}/ws)
+# answers 404 and every builder silently falls back to HTTP long-poll — and a
+# server-pushed `builder.update` reaches nobody.  Same library on the client
+# side: `cvcpkg builder run` connects with websockets.sync.client (>= 11).
+websockets = { version = ">=13.0", optional = true }
 pydantic = { version = "^2.0", optional = true }
 python-multipart = { version = ">=0.0.5", optional = true }
 sqlalchemy = { version = "^2.0", optional = true }
@@ -111,8 +118,10 @@ remote = ["httpx"]
 publish = ["httpx"]
 
 # The builder agent (`cvcpkg builder run/list/logs`), which claims jobs from
-# the server and streams build logs back.
-builder = ["httpx"]
+# the server and streams build logs back; websockets is its push channel
+# (job dispatch, recipe pushes, `builder.update`) — without it the agent
+# falls back to HTTP long-poll.
+builder = ["httpx", "websockets"]
 
 # Recipe authoring: `cvcpkg validate` checks recipe.yaml / components.yaml
 # against the bundled JSON-Schemas, which is the one thing in the recipe
@@ -128,12 +137,15 @@ validate = ["jsonschema"]
 # both opt-in and off by default).
 signing = ["cryptography"]
 
-# Running cvcpkg-server: the ASGI stack, the SQLAlchemy layer (greenlet is
-# SQLAlchemy's asyncio bridge, not a direct import of ours), and httpx for the
-# server's own outbound calls — webhook delivery, mirror sync, OIDC.
+# Running cvcpkg-server: the ASGI stack (websockets is uvicorn's WebSocket
+# protocol — the builder /ws endpoint 404s without it), the SQLAlchemy layer
+# (greenlet is SQLAlchemy's asyncio bridge, not a direct import of ours), and
+# httpx for the server's own outbound calls — webhook delivery, mirror sync,
+# OIDC.
 server = [
     "fastapi",
     "uvicorn",
+    "websockets",
     "pydantic",
     "python-multipart",
     "sqlalchemy",
@@ -151,6 +163,7 @@ db-all = ["asyncpg", "aiosqlite", "aiomysql", "alembic", "sqlalchemy", "greenlet
 production = [
     "fastapi",
     "uvicorn",
+    "websockets",
     "pydantic",
     "python-multipart",
     "asyncpg",
@@ -174,6 +187,7 @@ all = [
     "tqdm",
     "fastapi",
     "uvicorn",
+    "websockets",
     "pydantic",
     "python-multipart",
     "sqlalchemy",

@@ -25,6 +25,25 @@ from pathlib import Path
 import click
 
 
+def _websocket_library() -> str | None:
+    """Name the WebSocket implementation uvicorn will auto-select, or None.
+
+    uvicorn ships no WebSocket protocol of its own: ``--ws auto`` picks
+    ``websockets``, else ``wsproto``.  With neither importable it logs
+    "Unsupported upgrade request" and serves the handshake as plain HTTP, so
+    the builder WebSocket (``/v1/builders/{id}/ws``) answers ``404`` and every
+    builder silently falls back to HTTP long-poll -- and a server-pushed
+    ``builder.update`` then reaches nobody.  ``run`` says so at startup
+    instead of leaving it to be rediscovered from a 404.
+    """
+    import importlib.util
+
+    for name in ("websockets", "wsproto"):
+        if importlib.util.find_spec(name) is not None:
+            return name
+    return None
+
+
 @click.group()
 @click.version_option(prog_name="cvcpkg-server")
 def server_cli() -> None:
@@ -180,6 +199,17 @@ def run(
         ) from None
 
     click.echo(f"cvcpkg-server: starting on {host}:{port}")
+    ws_lib = _websocket_library()
+    if ws_lib is None:
+        click.echo(
+            "cvcpkg-server: WARNING: no WebSocket library (websockets or wsproto) is "
+            "installed -- the builder WebSocket /v1/builders/{id}/ws will answer 404 "
+            "and builders fall back to HTTP long-poll. "
+            "Install it with: pip install 'cvcpkg[server]'",
+            err=True,
+        )
+    else:
+        click.echo(f"cvcpkg-server: builder WebSocket: {ws_lib}")
     click.echo(f"cvcpkg-server: state directory: {Path(state_dir).resolve()}")
     if database_url:
         # Mask the password in log output
