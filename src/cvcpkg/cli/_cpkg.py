@@ -24,6 +24,7 @@ import click
 
 from cvcpkg import cpkg as _cpkg
 from cvcpkg.cli import cli
+from cvcpkg.selfexec import cvcpkg_argv, cvcpkg_env
 
 
 @cli.group("cpkg")
@@ -98,20 +99,25 @@ def cpkg_deps(
     if not no_install:
         if not components:
             raise click.ClickException("no components given (use --no-install to scan only)")
-        cmd = [sys.executable, "-m", "cvcpkg", "install", *components, "--prefix", str(prefix_path)]
+        # The same cvcpkg as this process: `python -m cvcpkg` from a pip
+        # install, the binary itself from the single-file build.
+        cmd = cvcpkg_argv("install", *components, "--prefix", str(prefix_path))
         if release:
             cmd += ["--release", release]
         if arch:
             cmd += ["--arch", arch]
-        if server:
-            cmd += ["--server", server]
         if token:
             cmd += ["--token", token]
         if require_signatures:
             cmd += ["--require-signatures"]
         # Let install's own progress/errors go to stderr so stdout stays a
         # clean, parseable Lua/JSON document for the cpkg.lua shim.
-        result = subprocess.run(cmd, stdout=sys.stderr.fileno())
+        env = cvcpkg_env()
+        if server:
+            # `cvcpkg install` has no --server flag (it would reject one); it
+            # reads the server from the environment.
+            env["CVCPKG_SERVER_URL"] = server
+        result = subprocess.run(cmd, stdout=sys.stderr.fileno(), env=env)
         if result.returncode != 0:
             raise click.ClickException(
                 f"cvcpkg install failed (exit {result.returncode}) for: {', '.join(components)}"
