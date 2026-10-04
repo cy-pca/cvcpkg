@@ -383,18 +383,41 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
     """
     import signal
     import subprocess
-    import sys
     import threading
     import time
 
     from cvcpkg.builder_fleet import worker_argv
+    from cvcpkg.selfexec import cvcpkg_argv, cvcpkg_env
 
     stopping = threading.Event()
     procs: dict[str, subprocess.Popen] = {}
 
     def _spawn(fs):
-        argv = [sys.executable, "-m", "cvcpkg", *worker_argv(fs)]
-        return subprocess.Popen(argv)  # noqa: S603 - argv built from config
+        # `python -m cvcpkg builder run ...` from a pip install, but
+        # `<binary> builder run ...` from the single-file binary, which would
+        # reject `-m` as an unknown option and crash-loop every worker.
+        # A worker is long-lived and may be respawned after the binary on
+        # disk was replaced, so a frozen worker unpacks its own copy rather
+        # than borrowing this process's.
+        argv = cvcpkg_argv(*worker_argv(fs))
+        return subprocess.Popen(  # noqa: S603 - argv built from config
+            argv,
+            env=cvcpkg_env(),
+            # POSIX: each worker leads its own process group.  The frozen
+            # binary runs as a launcher + interpreter pair and only the
+            # launcher is ours to wait on; if it dies alone, the interpreter
+            # (the PID in the worker's pidfile) keeps building and holds the
+            # single-instance guard, so every respawn would exit at once.
+            start_new_session=hasattr(os, "killpg"),
+        )
+
+    def _reap(p) -> None:
+        """Stop whatever outlived worker *p*'s launcher in its process group."""
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
 
     def _handle_signal(signum, _frame):
         stopping.set()
@@ -418,6 +441,7 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
         for fs in fleet.servers:
             p = procs[fs.name]
             if p.poll() is not None and not stopping.is_set():
+                _reap(p)
                 click.echo(
                     f"worker {fs.name} exited (code {p.returncode}); "
                     f"restarting in {restart_delay:g}s"
@@ -480,6 +504,130 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
             click.echo("    cvcpkg " + " ".join(masked))
         return
     _supervise_fleet(fleet, restart_delay)
+
+
+def _self_update() -> None:
+    """Pip-install the latest cvcpkg from the local git repo and re-exec.
+
+    Looks for a libcvc-deps checkout by walking up from the
+    installed package location.  Falls back to a ``git pull``
+    in known paths.
+    """
+    import subprocess
+
+    # The single-file binary cannot update itself this way: `sys.executable`
+    # is cvcpkg, not Python, so `-m pip` is rejected as a cvcpkg option, and
+    # `sys.argv[0]` is the binary itself, so the re-exec below would hand the
+    # binary its own path as a subcommand and exit.  Keep running on the
+    # current version; replacing the binary and restarting is the update.
+    # Checked before the Windows supervisor hand-off too: that wrapper
+    # updates with pip, so a frozen builder would only be relaunched on the
+    # same version, be asked to update again, and exit again.
+    from cvcpkg.selfexec import is_frozen
+
+    if is_frozen():
+        click.echo(
+            "  self-update: skipped - this is the single-file cvcpkg binary, "
+            "which cannot pip-install itself; replace the binary and restart "
+            "the builder to update.",
+            err=True,
+        )
+        return
+
+    # When running under the Windows supervisor wrapper, hand the whole
+    # update+restart cycle back to it: exit with a sentinel code so the
+    # supervisor pulls the latest cvcpkg and relaunches us on fresh code.
+    # This is what makes a server-pushed update apply without a manual
+    # restart on Windows -- os.execv() cannot replace the process in
+    # place there, and the freshly installed code otherwise only takes
+    # effect on the next builder start.  The outer try/finally still runs
+    # (in-flight jobs drain, builder unregisters, pidfile is removed) so
+    # the successor starts clean past the single-instance guard.
+    if sys.platform == "win32" and os.environ.get("CVCPKG_BUILDER_SUPERVISED"):
+        click.echo(
+            f"  self-update: requesting supervisor restart (exit {_SUPERVISOR_RESTART_CODE})."
+        )
+        raise SystemExit(_SUPERVISOR_RESTART_CODE)
+
+    # Find the cvcpkg project root (where pyproject.toml lives)
+    pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
+    setup_dir = pkg_dir.parent  # src/
+    # Walk up to find pyproject.toml
+    candidates = [
+        setup_dir.parent,  # repo root
+        Path.home() / "libcvc-deps",
+        Path("/root/libcvc-deps"),
+    ]
+    cvcpkg_dir: Path | None = None
+    for c in candidates:
+        if (c / "pyproject.toml").is_file():
+            cvcpkg_dir = c
+            break
+
+    if cvcpkg_dir is None:
+        click.echo("  self-update: cannot find cvcpkg source dir", err=True)
+        return
+
+    click.echo(f"  self-update: updating from {cvcpkg_dir}")
+    try:
+        # Pull latest code
+        repo_root = cvcpkg_dir
+        subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+            timeout=60,
+        )
+        # Never install an OLDER cvcpkg than the one running: a stale
+        # fallback checkout (an old clone whose upstream no longer moves)
+        # would otherwise downgrade the builder on every update request.
+        from cvcpkg import __version__ as _running
+
+        _found = _checkout_version(cvcpkg_dir)
+        if _found and _is_newer_version(_running, _found):
+            click.echo(
+                f"  self-update: {cvcpkg_dir} is at {_found}, older than the "
+                f"running {_running}; not installing it",
+                err=True,
+            )
+            return
+        # Pip install
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--quiet",
+                "--break-system-packages",
+                str(cvcpkg_dir),
+            ],
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+        if sys.platform == "win32":
+            # Windows has no in-place exec.  os.execv() here would spawn a
+            # *new* process (CRT _P_OVERLAY semantics) and - because the
+            # builder is launched via the ``cvcpkg.exe`` console-script -
+            # re-exec ``python.exe cvcpkg.exe builder run ...``, which is
+            # wrong and a source of stray/duplicate cvcpkg processes.  The
+            # freshly pip-installed code is already on disk; it takes
+            # effect the next time the scheduled task starts the builder.
+            # Keep this single instance running on the current code rather
+            # than spawning a broken successor.
+            click.echo(
+                "  self-update: installed; new code applies on the next "
+                "builder restart (Windows).",
+            )
+            return
+        click.echo("  self-update: installed, restarting...")
+        # POSIX: replace the process image in place - same PID, no new
+        # process, so the single-instance pidfile stays valid.
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as exc:
+        click.echo(f"  self-update failed: {exc}", err=True)
 
 
 @builder_group.command("run")
@@ -1877,112 +2025,6 @@ def builder_run(
         finally:
             _release_slot(slot_id, job.get("id"))
 
-    # -- Self-update helper ---------------------------------
-
-    def _self_update() -> None:
-        """Pip-install the latest cvcpkg from the local git repo and re-exec.
-
-        Looks for a libcvc-deps checkout by walking up from the
-        installed package location.  Falls back to a ``git pull``
-        in known paths.
-        """
-        import subprocess
-
-        # When running under the Windows supervisor wrapper, hand the whole
-        # update+restart cycle back to it: exit with a sentinel code so the
-        # supervisor pulls the latest cvcpkg and relaunches us on fresh code.
-        # This is what makes a server-pushed update apply without a manual
-        # restart on Windows -- os.execv() cannot replace the process in
-        # place there, and the freshly installed code otherwise only takes
-        # effect on the next builder start.  The outer try/finally still runs
-        # (in-flight jobs drain, builder unregisters, pidfile is removed) so
-        # the successor starts clean past the single-instance guard.
-        if sys.platform == "win32" and os.environ.get("CVCPKG_BUILDER_SUPERVISED"):
-            click.echo(
-                f"  self-update: requesting supervisor restart (exit {_SUPERVISOR_RESTART_CODE})."
-            )
-            raise SystemExit(_SUPERVISOR_RESTART_CODE)
-
-        # Find the cvcpkg project root (where pyproject.toml lives)
-        pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
-        setup_dir = pkg_dir.parent  # src/
-        # Walk up to find pyproject.toml
-        candidates = [
-            setup_dir.parent,  # repo root
-            Path.home() / "libcvc-deps",
-            Path("/root/libcvc-deps"),
-        ]
-        cvcpkg_dir: Path | None = None
-        for c in candidates:
-            if (c / "pyproject.toml").is_file():
-                cvcpkg_dir = c
-                break
-
-        if cvcpkg_dir is None:
-            click.echo("  self-update: cannot find cvcpkg source dir", err=True)
-            return
-
-        click.echo(f"  self-update: updating from {cvcpkg_dir}")
-        try:
-            # Pull latest code
-            repo_root = cvcpkg_dir
-            subprocess.run(
-                ["git", "pull", "--ff-only"],
-                cwd=repo_root,
-                check=False,
-                capture_output=True,
-                timeout=60,
-            )
-            # Never install an OLDER cvcpkg than the one running: a stale
-            # fallback checkout (an old clone whose upstream no longer moves)
-            # would otherwise downgrade the builder on every update request.
-            from cvcpkg import __version__ as _running
-
-            _found = _checkout_version(cvcpkg_dir)
-            if _found and _is_newer_version(_running, _found):
-                click.echo(
-                    f"  self-update: {cvcpkg_dir} is at {_found}, older than the "
-                    f"running {_running}; not installing it",
-                    err=True,
-                )
-                return
-            # Pip install
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "--quiet",
-                    "--break-system-packages",
-                    str(cvcpkg_dir),
-                ],
-                check=False,
-                capture_output=True,
-                timeout=120,
-            )
-            if sys.platform == "win32":
-                # Windows has no in-place exec.  os.execv() here would spawn a
-                # *new* process (CRT _P_OVERLAY semantics) and - because the
-                # builder is launched via the ``cvcpkg.exe`` console-script -
-                # re-exec ``python.exe cvcpkg.exe builder run ...``, which is
-                # wrong and a source of stray/duplicate cvcpkg processes.  The
-                # freshly pip-installed code is already on disk; it takes
-                # effect the next time the scheduled task starts the builder.
-                # Keep this single instance running on the current code rather
-                # than spawning a broken successor.
-                click.echo(
-                    "  self-update: installed; new code applies on the next "
-                    "builder restart (Windows).",
-                )
-                return
-            click.echo("  self-update: installed, restarting...")
-            # POSIX: replace the process image in place - same PID, no new
-            # process, so the single-instance pidfile stays valid.
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as exc:
-            click.echo(f"  self-update failed: {exc}", err=True)
-
     def _apply_pending_update() -> None:
         """Run a deferred ``builder.update`` once no job is in flight.
 
@@ -2229,6 +2271,7 @@ def builder_run(
                     elif msg_type == "builder.update":
                         server_ver = msg.get("version", "")
                         from cvcpkg import __version__
+                        from cvcpkg.selfexec import is_frozen
 
                         if server_ver and server_ver != __version__:
                             if not _is_newer_version(server_ver, __version__):
@@ -2236,11 +2279,11 @@ def builder_run(
                                     f"  Server is at {server_ver}, not newer than "
                                     f"this builder's {__version__}; update ignored"
                                 )
-                            elif getattr(sys, "frozen", False):
-                                # The single-file binary cannot pip-install
-                                # itself, and os.execv(sys.executable,
-                                # [sys.executable] + sys.argv) would hand it its
-                                # own path as the first argument.
+                            elif is_frozen():
+                                # _self_update() would skip it too (it cannot
+                                # pip-install the single-file binary); decided
+                                # here so the builder does not first stop taking
+                                # work and drain for an update that never runs.
                                 click.echo(
                                     f"  Server requests update: {__version__} -> "
                                     f"{server_ver}; ignored (single-file binary)",

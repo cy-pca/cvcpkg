@@ -23,43 +23,48 @@ CMAKE_FLAGS=(
 if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     CMAKE_FLAGS+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
     CMAKE_FLAGS+=(-DOPENSSL_ROOT_DIR="${CVC_DEPS_PREFIX}")
-    # Embed RPATH so the cmake binary (and any helpers) can find
-    # recipe-built shared libs (libcurl, libssl) at build-time AND
-    # install-time without relying on LD_LIBRARY_PATH alone.
+    # RPATH of the installed bin/{cmake,ctest,cpack,ccmake}. They link libcurl,
+    # libssl and libcrypto from CVC_DEPS_PREFIX, which is this job's scratch
+    # prefix (cvcpkg-job-cmake-<id>/cvcpkg-prefix-cmake-<id>/) and is deleted
+    # when the job ends. CMake's own CMakeLists caches
+    # CMAKE_INSTALL_RPATH_USE_LINK_PATH=ON and CMAKE_BUILD_WITH_INSTALL_RPATH=ON,
+    # so by default that scratch lib dir is linked into the binaries as their
+    # RPATH: +cvc.6 linux/freebsd/netbsd all shipped
+    # "/tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib". At run time that dir is
+    # gone, libcurl came from LD_LIBRARY_PATH (every consuming recipe exports
+    # its own deps prefix) or from a system copy, and every run searched a dead
+    # path under the world-writable /tmp.
     #
-    # NOT on OpenBSD: CVC_DEPS_PREFIX is an ephemeral, job-specific scratch
-    # directory (cvcpkg-job-cmake-<id>/cvcpkg-prefix-cmake-<id>/) that is
-    # deleted once THIS build finishes. Baking it as an absolute RPATH means
-    # every LATER job that installs the packaged cmake as a build-tool
-    # dependency ships a binary whose rpath points at a directory that no
-    # longer exists — e.g. lerc/libjpeg-turbo failed with
-    # "ld.so: cmake: can't load library '.../cvcpkg-job-cmake-.../lib/
-    # libcurl.so.12.0'" (exit 137). On Linux/macOS/FreeBSD/NetBSD this is
-    # silently masked (a system copy of libcurl, or a loader that falls back
-    # to LD_LIBRARY_PATH — set two lines below — even when RPATH is present
-    # but unsatisfied). OpenBSD's ld.so does not fall back once an RPATH
-    # entry exists, confirmed empirically: exporting LD_LIBRARY_PATH in
-    # env-openbsd.sh alone did not fix this, only removing the dangling
-    # RPATH did. So on OpenBSD, skip embedding it and rely entirely on
-    # LD_LIBRARY_PATH (which every consuming job re-exports to ITS OWN
-    # current, valid deps prefix — see env-openbsd.sh).
-    #
-    # Merely omitting -DCMAKE_INSTALL_RPATH is NOT enough on its own: CMake's
-    # find_package(CURL)-derived imported target carries the exact path
-    # libcurl.so was found at (this same ephemeral CVC_DEPS_PREFIX), and
-    # CMAKE_INSTALL_RPATH_USE_LINK_PATH defaults ON, so CMake AUTOMATICALLY
-    # re-derives and embeds that same dangling directory as an install rpath
-    # regardless of what CMAKE_INSTALL_RPATH itself is set to (empirically
-    # confirmed: the previous commit only removed the explicit flags and the
-    # exact same dangling-rpath failure persisted on a freshly rebuilt cmake).
-    # -DCMAKE_SKIP_INSTALL_RPATH=ON suppresses BOTH the explicit and the
-    # automatic link-path rpath, forcing 100% reliance on LD_LIBRARY_PATH.
-    if [[ "${CVC_PLATFORM:-}" == "openbsd" ]]; then
-        CMAKE_FLAGS+=(-DCMAKE_SKIP_INSTALL_RPATH=ON)
-    else
-        CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
-        CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
-    fi
+    # The bundle ships no lib/ of its own: libcurl/libssl/libcrypto come from
+    # the curl + openssl runtime deps, installed into the same prefix, so
+    # <prefix>/bin/cmake finds them at $ORIGIN/../lib.
+    #   linux/freebsd/netbsd: link-time RPATH $ORIGIN/../lib, and no link-path
+    #     entries (CMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF). It is written by the
+    #     linker, never patched afterwards: patchelf breaks NetBSD objects (see
+    #     recipes/curl). With CMAKE_BUILD_WITH_INSTALL_RPATH left ON the
+    #     build-tree binaries carry the same RPATH and find the deps through the
+    #     LD_LIBRARY_PATH exported below; nothing is rewritten at install.
+    #     The check after `make install` fails the build if any other RPATH
+    #     reaches bin/.
+    #   openbsd: its ld.so does not expand $ORIGIN, so no RPATH at all
+    #     (CMAKE_SKIP_INSTALL_RPATH also drops the link-path entries); the
+    #     cvcpkg installer bakes the absolute <prefix>/lib into it at install.
+    #   macos: unchanged (absolute deps-prefix LC_RPATH).
+    case "${CVC_PLATFORM:-}" in
+        linux|freebsd|netbsd)
+            CMAKE_FLAGS+=(
+                "-DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib"
+                -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
+            )
+            ;;
+        openbsd)
+            CMAKE_FLAGS+=(-DCMAKE_SKIP_INSTALL_RPATH=ON)
+            ;;
+        *)
+            CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
+            CMAKE_FLAGS+=(-DCMAKE_INSTALL_RPATH="${CVC_DEPS_PREFIX}/lib")
+            ;;
+    esac
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     # On BSDs with static OpenSSL, cmake's bundled libarchive (cmlibarchive)
@@ -108,3 +113,31 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
 fi
 
 make install
+
+# The installed programs must carry exactly the relocatable RPATH set above. A
+# build-prefix path here is the +cvc.6 defect; fail instead of packaging it.
+case "${CVC_PLATFORM:-}" in
+    linux|freebsd|netbsd)
+        if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+            if ! command -v readelf >/dev/null 2>&1; then
+                echo "cmake build.sh: readelf is required to check the installed RPATH" >&2
+                exit 1
+            fi
+            if [[ ! -f "${CVC_INSTALL_DIR}/bin/cmake" ]]; then
+                echo "cmake build.sh: ${CVC_INSTALL_DIR}/bin/cmake was not installed" >&2
+                exit 1
+            fi
+            _rpath_bad=0
+            for _exe in "${CVC_INSTALL_DIR}"/bin/*; do
+                [[ -f "${_exe}" && ! -L "${_exe}" ]] || continue
+                _rpath=$(readelf -d "${_exe}" | sed -n 's/.*R\(UN\)\{0,1\}PATH.*\[\(.*\)\].*/\2/p')
+                echo "=== cmake build.sh: ${_exe##*/} RPATH: ${_rpath:-<none>}"
+                if [[ "${_rpath}" != '$ORIGIN/../lib' ]]; then
+                    echo "cmake build.sh: ${_exe##*/} RPATH is '${_rpath}', expected '\$ORIGIN/../lib'" >&2
+                    _rpath_bad=1
+                fi
+            done
+            [[ "${_rpath_bad}" == 0 ]] || exit 1
+        fi
+        ;;
+esac

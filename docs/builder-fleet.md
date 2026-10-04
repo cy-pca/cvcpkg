@@ -68,3 +68,15 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   or shadow the public catalogue. Only *build execution* is shared.
 - Tokens should come from `token_env` (or systemd `EnvironmentFile`), not be
   written literally into the config file.
+- `ExecStart` may point at a pip-installed `cvcpkg` or at the single-file
+  binary (`packaging/cvcpkg.spec`). Either way the supervisor starts each
+  worker with the same cvcpkg it is running itself: `python -m cvcpkg builder
+  run ...` from a pip install, `<binary> builder run ...` from the binary
+  (each binary worker unpacks its own copy). A server-pushed self-update only
+  applies to a pip install; to update a binary fleet, replace the binary and
+  restart the unit.
+- From the binary, the supervisor and every worker each unpack the binary into
+  `$TMPDIR` (about 85 MB apiece for the combined build) and remove it on exit.
+  A worker killed with SIGKILL leaves its copy behind, so give the unit a
+  `TimeoutStopSec=` above the supervisor's 120 s drain (e.g. `150`) rather than
+  the systemd default of 90 s.
