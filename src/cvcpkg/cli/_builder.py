@@ -1732,17 +1732,34 @@ def builder_run(
             f"({job_platform}/{job_arch}/{job_config}/{job_link})"
         )
 
-        # 1. Claim the job
+        # 1. Claim the job.  A claim whose answer never arrives (a timeout, a
+        # dropped connection, a proxy 502/503/504) may still have landed, and
+        # then the job sits "running" under this builder with nothing building
+        # it until the build timeout reaps it -- next-job never hands a running
+        # job back.  Re-claiming a job we hold is idempotent on the server for
+        # exactly this reason, so ask again before giving up.
         try:
             claim_body: dict = (
                 {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
             )
-            with httpx.Client(timeout=30) as client:
-                resp = client.post(
-                    f"{base}/v1/builds/{job_id}/claim",
-                    headers=headers,
-                    json=claim_body,
-                )
+            for _attempt in range(3):
+                if _attempt:
+                    time.sleep(2.0 * _attempt)
+                try:
+                    with httpx.Client(timeout=30) as client:
+                        resp = client.post(
+                            f"{base}/v1/builds/{job_id}/claim",
+                            headers=headers,
+                            json=claim_body,
+                        )
+                except httpx.TransportError as exc:
+                    if _attempt == 2:
+                        raise
+                    click.echo(f"  [{job_id}] claim error: {exc}; retrying", err=True)
+                    continue
+                if resp.status_code not in (502, 503, 504) or _attempt == 2:
+                    break
+                click.echo(f"  [{job_id}] claim answered {resp.status_code}; retrying", err=True)
             if resp.status_code == 409:
                 # Someone else got there first (unregistered workers select by
                 # platform, so two can see the same job).  Not an error.
@@ -1951,6 +1968,23 @@ def builder_run(
         finally:
             _release_slot(slot_id, job.get("id"))
 
+    def _start_job(job: dict, slot_id: int) -> None:
+        """Start *job*'s thread, undoing its admission if the thread can't start.
+
+        _admit_job marks the job id in flight and only the thread's own
+        finally clears it.  A thread that never starts (``RuntimeError: can't
+        start new thread`` under a thread/process limit) would leave the mark
+        set for the life of the process, and since ``next-job`` keeps handing
+        that still-dispatched job back first, the poll loop would refuse it
+        forever and take no other work while heartbeating "online".
+        """
+        t = threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True)
+        try:
+            t.start()
+        except BaseException:
+            _release_slot(slot_id, job.get("id"))
+            raise
+
     # -- WebSocket helpers -----------------------------------
 
     def _ws_url() -> str:
@@ -2028,7 +2062,7 @@ def builder_run(
 
                     if msg_type == "job.dispatch":
                         job = msg.get("job")
-                        if job is None:
+                        if not isinstance(job, dict) or job.get("id") is None:
                             continue
                         with jobs_lock:
                             if current_jobs >= max_jobs:
@@ -2040,10 +2074,7 @@ def builder_run(
                                 "ignoring the repeated dispatch"
                             )
                             continue
-                        t = threading.Thread(
-                            target=_run_job_guarded, args=(job, slot_id), daemon=True
-                        )
-                        t.start()
+                        _start_job(job, slot_id)
 
                     elif msg_type == "recipe.push":
                         recipe = msg.get("recipe", {})
@@ -2243,7 +2274,17 @@ def builder_run(
                 time.sleep(poll_interval)
                 continue
 
-            job = resp.json()
+            try:
+                job = resp.json()
+            except ValueError:
+                job = None
+            if not isinstance(job, dict) or job.get("id") is None:
+                # A 200 that is not a job (a proxy page, a truncated body).
+                # _admit_job runs in this loop, so letting it through would
+                # raise here and stop the whole builder.
+                click.echo("  poll returned a 200 that is not a job; ignoring", err=True)
+                time.sleep(poll_interval)
+                continue
             drain_empty_since = None  # got work; restart the settle window
             with jobs_lock:
                 # NOT `token`: this runs in builder_run's own scope, so binding
@@ -2259,8 +2300,7 @@ def builder_run(
 
             # Run in a thread so we can keep heartbeating & polling.  The
             # guarded wrapper releases the slot on any exit path.
-            t = threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True)
-            t.start()
+            _start_job(job, slot_id)
 
     finally:
         # Wait for in-flight jobs

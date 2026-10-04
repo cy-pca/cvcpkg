@@ -522,7 +522,7 @@ class TestDbDownloadStore:
             daily = await store.get_daily_downloads(days=7)
             assert len(daily) == 7  # zero-filled window
             assert sum(d["count"] for d in daily) == 2
-            today = datetime.date.today().isoformat()
+            today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
             assert any(d["date"] == today and d["count"] == 2 for d in daily)
             bw = await store.get_bandwidth(days=7)
             assert len(bw["daily"]) == 7
