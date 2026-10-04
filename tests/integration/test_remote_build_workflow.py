@@ -730,7 +730,11 @@ class TestRemoteBuildWorkflow:
     # ── test: WebSocket heartbeat and job ops ───────────────
 
     def test_12_websocket_heartbeat_and_complete(self, server):
-        """Use WebSocket to heartbeat, claim, log, and complete a job."""
+        """Heartbeat over the WebSocket while the job runs over HTTP.
+
+        Job-state changes are HTTP-only: a job frame on the socket is refused
+        and changes nothing, and the socket stays up for heartbeats.
+        """
         c, tok = server["client"], server["admin_token"]
 
         self._push_recipe(c, tok, "ws-full")
@@ -745,26 +749,30 @@ class TestRemoteBuildWorkflow:
             ack = ws.receive_json()
             assert ack["type"] == "heartbeat_ack"
 
-            # Claim via WebSocket
+            # A claim frame is refused...
             ws.send_json({"type": "job.claim", "job_id": job_id})
             ack = ws.receive_json()
-            assert ack["type"] == "job.claim_ack"
-            assert ack["status"] == BuildJobStatus.running
+            assert ack["type"] == "error"
+            assert ack["rejected"] == "job.claim"
+            resp = c.get(f"/v1/builds/{job_id}", headers=_auth(tok))
+            assert resp.json()["status"] == BuildJobStatus.pending
 
-            # Stream log via WebSocket
-            ws.send_json({"type": "job.log", "job_id": job_id, "data": "WS build log\n"})
-
-            # Complete via WebSocket
-            ws.send_json(
-                {
-                    "type": "job.complete",
-                    "job_id": job_id,
-                    "archive_url": "/v1/packages/ws-full",
-                }
+            # ...the builder claims, logs and completes over HTTP...
+            resp = c.post(
+                f"/v1/builds/{job_id}/claim", headers=_auth(tok), json={"builder_id": builder_id}
             )
-            ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == BuildJobStatus.succeeded
+            assert resp.json()["status"] == BuildJobStatus.running
+            c.patch(f"/v1/builds/{job_id}/log", headers=_auth(tok), json={"data": "build log\n"})
+            resp = c.post(
+                f"/v1/builds/{job_id}/complete",
+                headers=_auth(tok),
+                json={"result_archive_url": "/v1/packages/ws-full", "builder_id": builder_id},
+            )
+            assert resp.json()["status"] == BuildJobStatus.succeeded
+
+            # ...and the socket is still alive.
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 0})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
 
         # Verify via REST
         resp = c.get(f"/v1/builds/{job_id}", headers=_auth(tok))
@@ -773,33 +781,39 @@ class TestRemoteBuildWorkflow:
         # Verify log was written
         resp = c.get(f"/v1/builds/{job_id}/log", headers=_auth(tok))
         assert resp.status_code == 200
-        assert "WS build log" in resp.text
+        assert "build log" in resp.text
 
     # ── test: WebSocket fail via WS ─────────────────────────
 
     def test_13_websocket_fail_job(self, server):
-        """Fail a job entirely via WebSocket."""
+        """A job.fail frame is refused; the HTTP fail is what lands."""
         c, tok = server["client"], server["admin_token"]
 
         self._push_recipe(c, tok, "ws-fail")
         builder = self._register_builder(c, tok, "ws-fail-builder")
         job = self._submit_job(c, tok, "ws-fail")
+        resp = c.post(
+            f"/v1/builds/{job['id']}/claim",
+            headers=_auth(tok),
+            json={"builder_id": builder["id"]},
+        )
+        assert resp.json()["status"] == BuildJobStatus.running
 
         with c.websocket_connect(f"/v1/builders/{builder['id']}/ws?token={tok}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": job["id"]})
-            ws.receive_json()
-
-            ws.send_json(
-                {
-                    "type": "job.fail",
-                    "job_id": job["id"],
-                    "error": "OOM killed",
-                }
-            )
+            ws.send_json({"type": "job.fail", "job_id": job["id"], "error": "OOM killed"})
             ack = ws.receive_json()
-            assert ack["type"] == "job.fail_ack"
-            assert ack["status"] == BuildJobStatus.failed
+            assert ack["type"] == "error"
+            assert ack["rejected"] == "job.fail"
 
+        resp = c.get(f"/v1/builds/{job['id']}", headers=_auth(tok))
+        assert resp.json()["status"] == BuildJobStatus.running
+
+        resp = c.post(
+            f"/v1/builds/{job['id']}/fail",
+            headers=_auth(tok),
+            json={"error_message": "OOM killed", "builder_id": builder["id"]},
+        )
+        assert resp.json()["status"] == BuildJobStatus.failed
         resp = c.get(f"/v1/builds/{job['id']}", headers=_auth(tok))
         assert resp.json()["error_message"] == "OOM killed"
 
@@ -1148,12 +1162,12 @@ class TestBuilderRecovery:
         job = self._submit_job(c, tok, "ws-crash-lib")
         jid = job["id"]
 
-        # Connect via WebSocket, claim via WS, write log via REST, then drop
+        # Connect via WebSocket, claim via REST, write log via REST, then drop
         with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": jid})
-            ack = ws.receive_json()
-            assert ack["type"] == "job.claim_ack"
-            assert ack["status"] == BuildJobStatus.running
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 0})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
+            resp = c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": bid})
+            assert resp.json()["status"] == BuildJobStatus.running
             # WebSocket closes here (context manager exit)
 
         # Write log via REST (reliable, synchronous)
@@ -1319,11 +1333,12 @@ class TestBuilderRecovery:
         job = self._submit_job(c, tok, "reconnect-lib")
         jid = job["id"]
 
-        # First WS session — claim via WS, log via REST, then disconnect
+        # First WS session — claim via REST, log via REST, then disconnect
         with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": jid})
-            ack = ws.receive_json()
-            assert ack["status"] == BuildJobStatus.running
+            resp = c.post(f"/v1/builds/{jid}/claim", headers=_auth(tok), json={"builder_id": bid})
+            assert resp.json()["status"] == BuildJobStatus.running
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 1})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
             # disconnect
 
         # Write log via REST (reliable across WS disconnect)
@@ -1337,19 +1352,17 @@ class TestBuilderRecovery:
         resp = c.get(f"/v1/builds/{jid}", headers=_auth(tok))
         assert resp.json()["status"] == BuildJobStatus.running
 
-        # Second WS session — pick up where we left off
+        # Second WS session — pick up where we left off (job ops over REST)
         with c.websocket_connect(f"/v1/builders/{bid}/ws?token={tok}") as ws:
-            ws.send_json({"type": "job.log", "job_id": jid, "data": "phase 2 done\n"})
-            ws.send_json(
-                {
-                    "type": "job.complete",
-                    "job_id": jid,
-                    "archive_url": "/v1/packages/reconnect-lib",
-                }
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 1})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
+            c.patch(f"/v1/builds/{jid}/log", headers=_auth(tok), json={"data": "phase 2 done\n"})
+            resp = c.post(
+                f"/v1/builds/{jid}/complete",
+                headers=_auth(tok),
+                json={"result_archive_url": "/v1/packages/reconnect-lib", "builder_id": bid},
             )
-            ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == BuildJobStatus.succeeded
+            assert resp.json()["status"] == BuildJobStatus.succeeded
 
         # Log contains both phases
         resp = c.get(f"/v1/builds/{jid}/log", headers=_auth(tok))

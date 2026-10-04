@@ -1968,12 +1968,15 @@ def builder_run(
 
             result_url = f"{base}/v1/packages/{recipe_name}"
 
-            # 5. Report completion
+            # 5. Report completion.  Name ourselves as we did in the claim, so
+            # the server can refuse this report if the job has since moved to
+            # another holder (paused and re-dispatched); an older server
+            # ignores the extra fields.
             with httpx.Client(timeout=30) as client:
                 client.post(
                     f"{base}/v1/builds/{job_id}/complete",
                     headers=headers,
-                    json={"result_archive_url": result_url},
+                    json={"result_archive_url": result_url, **claim_body},
                 )
             click.echo(f"  [{job_id}] Completed: {recipe_name}")
 
@@ -1986,7 +1989,7 @@ def builder_run(
                     client.post(
                         f"{base}/v1/builds/{job_id}/fail",
                         headers=headers,
-                        json={"error_message": error_message[:4096]},
+                        json={"error_message": error_message[:4096], **claim_body},
                     )
             except Exception:
                 pass

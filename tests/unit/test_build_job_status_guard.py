@@ -16,7 +16,8 @@ The rule these tests pin down:
   the second copy of a duplicated job) is a harmless 200 no-op with no second
   webhook, cascade or audit entry.
 
-Covered at the store, the HTTP endpoints and the builder WebSocket.
+Covered at the store and the HTTP endpoints; the builder WebSocket refuses
+complete/fail frames outright (job-state changes are HTTP-only).
 """
 
 from __future__ import annotations
@@ -550,6 +551,12 @@ class TestHttpGuard:
 
 
 class TestWebSocketGuard:
+    """complete/fail frames over the builder WebSocket are refused outright.
+
+    Job-state changes are HTTP-only, so the guard above is the only one; a
+    frame can neither finish a job nor bypass it.
+    """
+
     def _builder(self, client, tok):
         resp = client.post(
             "/v1/builders/register",
@@ -559,55 +566,43 @@ class TestWebSocketGuard:
         assert resp.status_code == 200, resp.text
         return resp.json()["id"]
 
-    def test_late_fail_after_complete_is_refused_without_cascade(self, http_env):
+    def test_late_fail_frame_after_complete_changes_nothing(self, http_env):
         client, _admin, pub = http_env
         bid = self._builder(client, pub)
         a, b, c = _submit_dag(client, pub, "ws-late-fail")
-        with client.websocket_connect(f"/v1/builders/{bid}/ws?token={pub}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": a})
-            assert ws.receive_json()["status"] == "running"
-            ws.send_json({"type": "job.complete", "job_id": a, "archive_url": "/v1/packages/a"})
-            ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == "succeeded"
-            assert "noop" not in ack
-
-            # A repeat is a harmless no-op.
-            ws.send_json({"type": "job.complete", "job_id": a, "archive_url": "/v1/packages/a"})
-            ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == "succeeded"
-            assert ack["noop"] is True
-            assert ack["conflict"] is False
-
-            # A late fail is refused and does not cascade.
-            ws.send_json({"type": "job.fail", "job_id": a, "error": "duplicate copy"})
-            ack = ws.receive_json()
-            assert ack["type"] == "job.fail_ack"
-            assert ack["status"] == "succeeded"
-            assert ack["noop"] is True
-            assert ack["conflict"] is True
-            assert "succeeded" in ack["detail"]
+        _claim(client, pub, a)
+        ok = client.post(
+            f"/v1/builds/{a}/complete",
+            json={"result_archive_url": "/v1/packages/a"},
+            headers=_h(pub),
+        )
+        assert ok.status_code == 200, ok.text
+        with patch("cvcpkg.server.app.emit_webhook_event", new_callable=AsyncMock) as emit:
+            with client.websocket_connect(f"/v1/builders/{bid}/ws?token={pub}") as ws:
+                ws.send_json({"type": "job.fail", "job_id": a, "error": "duplicate copy"})
+                ack = ws.receive_json()
+                assert ack["type"] == "error"
+                assert ack["rejected"] == "job.fail"
+        emit.assert_not_called()
         assert _get(client, pub, a)["status"] == "succeeded"
         assert _get(client, pub, b)["status"] in ("pending", "dispatched")
         assert _get(client, pub, c)["status"] == "pending"
 
-    def test_complete_after_fail_is_refused(self, http_env):
+    def test_complete_frame_after_fail_changes_nothing(self, http_env):
         client, _admin, pub = http_env
         bid = self._builder(client, pub)
         a, _b, _c = _submit_dag(client, pub, "ws-complete-after-fail")
+        _claim(client, pub, a)
+        failed = client.post(
+            f"/v1/builds/{a}/fail", json={"error_message": "OOM killed"}, headers=_h(pub)
+        )
+        assert failed.status_code == 200, failed.text
         with client.websocket_connect(f"/v1/builders/{bid}/ws?token={pub}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": a})
-            ws.receive_json()
-            ws.send_json({"type": "job.fail", "job_id": a, "error": "OOM killed"})
-            assert ws.receive_json()["status"] == "failed"
             ws.send_json({"type": "job.complete", "job_id": a, "archive_url": "/v1/packages/a"})
             ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == "failed"
-            assert ack["noop"] is True
-            assert ack["conflict"] is True
-            # The socket survives a refused report.
+            assert ack["type"] == "error"
+            assert ack["rejected"] == "job.complete"
+            # The socket survives a refused frame.
             ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 0})
             assert ws.receive_json()["type"] == "heartbeat_ack"
         after = _get(client, pub, a)

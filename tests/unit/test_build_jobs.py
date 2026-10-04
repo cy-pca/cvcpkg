@@ -1150,7 +1150,10 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.dispatch(job.id, b1.id)
-            result = await store.dispatch(job.id, b2.id)
+            # Not pending any more: nothing is dispatched (None), and the
+            # job stays with the builder it was first dispatched to.
+            assert await store.dispatch(job.id, b2.id) is None
+            result = await store.get(job.id)
             assert result.status == BuildJobStatus.dispatched
             assert result.builder_id == b1.id
 
@@ -1175,7 +1178,8 @@ class TestDbBuildJobStore:
                 submitted_by="admin",
             )
             await store.claim(job.id, builder.id)
-            result = await store.dispatch(job.id, builder.id)
+            assert await store.dispatch(job.id, builder.id) is None
+            result = await store.get(job.id)
             assert result.status == BuildJobStatus.running
 
         self._run(_test())

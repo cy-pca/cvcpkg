@@ -116,7 +116,20 @@ block (they are read by the server process, not baked at build time).
 The backend container binds to `127.0.0.1:8420`. Configure your reverse
 proxy to terminate TLS and proxy to `localhost:8420`.
 
+The proxy must also **forward WebSocket upgrades**.  Builders hold a
+WebSocket open to `/v1/builders/{id}/ws` for job dispatch, force-cancel and
+`builder.update` pushes.  A proxy that does not pass the `Upgrade` handshake
+through hands the backend a plain `GET` on a WebSocket-only route, which
+answers `404` — builders then fall back to HTTP long-poll, and
+`POST /v1/admin/update-builders` (run by every production deploy) reaches no
+builder at all.  Both snippets below forward upgrades; the check after them
+confirms it.
+
 ### Apache2 (with Let's Encrypt)
+
+Apache **2.4.47 or newer** tunnels WebSockets through `mod_proxy_http`
+itself with `upgrade=websocket` on the worker (`apache2 -v` shows the
+version):
 
 ```apache
 <VirtualHost *:443>
@@ -126,16 +139,42 @@ proxy to terminate TLS and proxy to `localhost:8420`.
     SSLCertificateKeyFile /etc/letsencrypt/live/pkg.example.com/privkey.pem
 
     ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:8420/
+    # upgrade=websocket: tunnel the builder WebSocket (/v1/builders/{id}/ws).
+    ProxyPass / http://127.0.0.1:8420/ upgrade=websocket
     ProxyPassReverse / http://127.0.0.1:8420/
 
     Header always set Strict-Transport-Security "max-age=63072000"
 </VirtualHost>
 ```
 
+On an older Apache, enable `mod_proxy_wstunnel` and `mod_rewrite`
+(`a2enmod proxy_wstunnel rewrite`) and route upgrade requests to a `ws://`
+backend ahead of the plain `ProxyPass`:
+
+```apache
+    RewriteEngine on
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/(.*) ws://127.0.0.1:8420/$1 [P,L]
+
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:8420/
+    ProxyPassReverse / http://127.0.0.1:8420/
+```
+
+Run `apache2ctl configtest` before `systemctl reload apache2`: a vhost that
+fails the test takes every site on the server down at the next restart.
+
 ### Nginx
 
 ```nginx
+# Forward the client's Upgrade intent; plain requests keep a normal
+# keep-alive Connection header.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
 server {
     listen 443 ssl;
     server_name pkg.example.com;
@@ -151,9 +190,34 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket upgrade for the builder socket (/v1/builders/{id}/ws).
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # A builder socket is idle between heartbeats; do not let nginx's
+        # default 60s read timeout cut it.
+        proxy_read_timeout 3600s;
     }
 }
 ```
+
+### Checking the WebSocket route
+
+Send an RFC 6455 handshake with no token through the public URL:
+
+```bash
+curl --http1.1 -sS -o /dev/null -w '%{http_code}\n' --max-time 15 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://pkg.example.com/v1/builders/0/ws
+```
+
+`403` (or `401`) is correct: the handshake reached the WebSocket route,
+which refuses it for the missing token.  `404` means the upgrade never
+reached it — the proxy is not forwarding upgrades, or the server image has
+no WebSocket library (`websockets`; it is part of the `server` and
+`production` extras).  `deploy-prod` runs this check after every deploy.
 
 ## Database Migrations
 

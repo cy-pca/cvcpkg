@@ -42,20 +42,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve target SHA
+      # Check out the commit being deployed.  `inputs.sha` used to be only a
+      # LABEL (the prod-<sha> image tag): the checkout above is the dispatched
+      # ref's HEAD, and that is what rsync shipped -- so a dispatch meant to
+      # deploy or roll back to an older commit deployed something else under
+      # that commit's name.  Resolve it to a full commit (short SHAs are
+      # accepted), refuse anything that is not on prod or master (reviewed
+      # code only), and move the workspace there before anything reads it.
+      - name: Resolve and check out target SHA
         id: target
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          if [[ -n "${{ inputs.sha }}" ]]; then
-            sha="${{ inputs.sha }}"
-          else
-            sha="${{ github.sha }}"
-          fi
+          set -euo pipefail
+          sha="${INPUT_SHA:-$EVENT_SHA}"
           if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
             echo "::error::invalid sha: $sha"
             exit 1
           fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Deploying sha: $sha"
+          if ! full=$(git rev-parse --verify --quiet "${sha}^{commit}"); then
+            echo "::error::commit $sha not found in cy-pca/cvcpkg"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$full" origin/prod 2>/dev/null \
+             && ! git merge-base --is-ancestor "$full" origin/master 2>/dev/null; then
+            echo "::error::$full is on neither prod nor master; push it to prod to deploy it"
+            exit 1
+          fi
+          git checkout --quiet --force --detach "$full"
+          test "$(git rev-parse HEAD)" = "$full"
+          echo "sha=$full" >> "$GITHUB_OUTPUT"
+          echo "Deploying sha: $full"
 
       # ── Deploy to cvcpkg.org (primary) via SSH ──────────────
       - name: Deploy to cvcpkg.org
@@ -438,6 +456,44 @@ jobs:
             fi
           done
           echo "Recipes: $ok ok, $fail failed"
+
+      # ── Builder WebSocket route, through the public proxy ─────
+      # /healthz above runs INSIDE the container, so it cannot see the two
+      # things that silently turn the builder socket into a 404: a server
+      # image with no WebSocket library, and a reverse proxy that does not
+      # forward the Upgrade handshake (docs/deployment-guide.md, "TLS
+      # Configuration").  Either way builders drop to long-poll and the
+      # notify-builders step below reaches nobody.  An unauthenticated
+      # handshake must reach the route and be refused there: 403 (or 401).
+      # 404 means it never arrived.  Failing here skips notify-builders,
+      # which could not have reached anyone anyway.
+      - name: Check the builder WebSocket route
+        run: |
+          set -uo pipefail
+          SERVER="${{ vars.CVCPKG_SERVER_URL }}"
+          [ -n "$SERVER" ] || SERVER="https://cvcpkg.org"
+          url="${SERVER%/}/v1/builders/0/ws"
+          code=000
+          for attempt in 1 2 3 4 5; do
+            code=$(curl --http1.1 -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+                     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+                     -H 'Sec-WebSocket-Version: 13' \
+                     -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+                     "$url" 2>/dev/null) || true
+            case "$code" in
+              401|403)
+                echo "WebSocket route reachable at $url (HTTP $code without a token, as expected)."
+                exit 0 ;;
+            esac
+            echo "attempt $attempt: HTTP $code"
+            sleep 5
+          done
+          case "$code" in
+            404) echo "::error::$url answered 404 to a WebSocket handshake: the proxy is not forwarding Upgrade (Apache: ProxyPass ... upgrade=websocket; nginx: Upgrade/Connection headers) or the image lacks websockets. Builders cannot connect." ;;
+            101) echo "::error::$url ACCEPTED an unauthenticated WebSocket handshake" ;;
+            *)   echo "::error::$url answered HTTP $code to a WebSocket handshake (expected 403)" ;;
+          esac
+          exit 1
 
 
   # ── Notify builders to self-update ──────────────────────────────

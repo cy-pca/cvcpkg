@@ -551,9 +551,10 @@ class TestDbBuildJobStore:
             assert await store.dispatch(9999, b.id) is None
             disp = await store.dispatch(app.id, b.id)
             assert disp.status == "dispatched"
-            # dispatch of a non-pending job returns it unchanged.
-            same = await store.dispatch(app.id, b.id)
-            assert same.status == "dispatched"
+            # dispatch of a non-pending job dispatches nothing (None) and
+            # leaves it unchanged.
+            assert await store.dispatch(app.id, b.id) is None
+            assert (await store.get(app.id)).status == "dispatched"
 
         run(_t())
 

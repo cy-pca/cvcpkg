@@ -535,138 +535,102 @@ class TestBuilderWebSocket:
             with client.websocket_connect(f"/v1/builders/{builder_id}/ws") as ws:
                 ws.receive_json()
 
-    def test_ws_job_claim_ack(self, db_server_env):
-        """Builder can claim a job via WebSocket and get ack."""
-        client, token, tmp_path = db_server_env
-
-        builder = self._register_builder(client, token)
-        builder_id = builder["id"]
-
-        # Push recipe and submit a job
-        bundle = _make_recipe_bundle("wslib")
+    def _submit(self, client, token, name):
+        bundle = _make_recipe_bundle(name)
         client.post(
-            "/v1/recipes/wslib",
+            f"/v1/recipes/{name}",
             headers=_auth(token),
             params={"version": "1.0.0"},
-            files={"file": ("wslib.tar.gz", bundle, "application/gzip")},
+            files={"file": (f"{name}.tar.gz", bundle, "application/gzip")},
         )
         resp = client.post(
             "/v1/builds",
             headers=_auth(token),
-            json={
-                "recipe_name": "wslib",
-                "platform": "linux",
-                "arch": "x86_64",
-                "config": "release",
-                "link": "shared",
-            },
+            json={"recipe_name": name, "platform": "linux", "arch": "x86_64"},
         )
         assert resp.status_code == 200
-        job_id = resp.json()["id"]
+        return resp.json()["id"]
+
+    def test_ws_job_claim_is_refused(self, db_server_env):
+        """A job.claim frame is answered with an error and claims nothing.
+
+        Job-state changes are HTTP-only (org visibility, holder check, audit);
+        the builder claims over POST /v1/builds/{id}/claim.
+        """
+        client, token, tmp_path = db_server_env
+        builder_id = self._register_builder(client, token)["id"]
+        job_id = self._submit(client, token, "wslib")
 
         with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
-            # Send claim via WebSocket
             ws.send_json({"type": "job.claim", "job_id": job_id})
             resp_data = ws.receive_json()
-            assert resp_data["type"] == "job.claim_ack"
+            assert resp_data["type"] == "error"
+            assert resp_data["rejected"] == "job.claim"
             assert resp_data["job_id"] == job_id
+            assert "/v1/builds/{job_id}/claim" in resp_data["message"]
 
-    def test_ws_log_and_complete(self, db_server_env):
-        """Builder can stream logs and complete a job via WebSocket."""
+        resp = client.get(f"/v1/builds/{job_id}", headers=_auth(token))
+        assert resp.json()["status"] == BuildJobStatus.pending
+
+    def test_ws_log_and_complete_are_refused(self, db_server_env):
+        """job.log / job.complete frames change nothing; HTTP does the job."""
         client, token, tmp_path = db_server_env
-
-        builder = self._register_builder(client, token)
-        builder_id = builder["id"]
-
-        # Push recipe and submit job
-        bundle = _make_recipe_bundle("wslib2")
-        client.post(
-            "/v1/recipes/wslib2",
-            headers=_auth(token),
-            params={"version": "1.0.0"},
-            files={"file": ("wslib2.tar.gz", bundle, "application/gzip")},
+        builder_id = self._register_builder(client, token)["id"]
+        job_id = self._submit(client, token, "wslib2")
+        claim = client.post(
+            f"/v1/builds/{job_id}/claim", headers=_auth(token), json={"builder_id": builder_id}
         )
-        resp = client.post(
-            "/v1/builds",
-            headers=_auth(token),
-            json={
-                "recipe_name": "wslib2",
-                "platform": "linux",
-                "arch": "x86_64",
-            },
-        )
-        job_id = resp.json()["id"]
+        assert claim.status_code == 200
 
         with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
-            # Claim
-            ws.send_json({"type": "job.claim", "job_id": job_id})
-            ws.receive_json()  # ack
-
-            # Send log
             ws.send_json({"type": "job.log", "job_id": job_id, "data": "building...\n"})
-
-            # Complete
+            assert ws.receive_json()["rejected"] == "job.log"
             ws.send_json(
-                {
-                    "type": "job.complete",
-                    "job_id": job_id,
-                    "archive_url": "/v1/packages/wslib2",
-                }
+                {"type": "job.complete", "job_id": job_id, "archive_url": "/v1/packages/wslib2"}
             )
             ack = ws.receive_json()
-            assert ack["type"] == "job.complete_ack"
-            assert ack["status"] == BuildJobStatus.succeeded
+            assert ack["type"] == "error"
+            assert ack["rejected"] == "job.complete"
+            # The socket survives the refusals.
+            ws.send_json({"type": "heartbeat", "status": "online", "current_jobs": 1})
+            assert ws.receive_json()["type"] == "heartbeat_ack"
 
-        # Verify job is succeeded
         resp = client.get(f"/v1/builds/{job_id}", headers=_auth(token))
-        assert resp.status_code == 200
-        assert resp.json()["status"] == BuildJobStatus.succeeded
+        assert resp.json()["status"] == BuildJobStatus.running
+        assert client.get(f"/v1/builds/{job_id}/log", headers=_auth(token)).status_code == 404
 
-    def test_ws_fail_job(self, db_server_env):
-        """Builder can fail a job via WebSocket."""
+        # The HTTP path the builder actually uses still works.
+        client.patch(
+            f"/v1/builds/{job_id}/log", headers=_auth(token), json={"data": "building...\n"}
+        )
+        done = client.post(
+            f"/v1/builds/{job_id}/complete",
+            headers=_auth(token),
+            json={"result_archive_url": "/v1/packages/wslib2", "builder_id": builder_id},
+        )
+        assert done.status_code == 200
+        assert done.json()["status"] == BuildJobStatus.succeeded
+
+    def test_ws_fail_is_refused(self, db_server_env):
+        """A job.fail frame neither fails the job nor cascades."""
         client, token, tmp_path = db_server_env
-
-        builder = self._register_builder(client, token)
-        builder_id = builder["id"]
-
-        bundle = _make_recipe_bundle("wslib3")
+        builder_id = self._register_builder(client, token)["id"]
+        job_id = self._submit(client, token, "wslib3")
         client.post(
-            "/v1/recipes/wslib3",
-            headers=_auth(token),
-            params={"version": "1.0.0"},
-            files={"file": ("wslib3.tar.gz", bundle, "application/gzip")},
+            f"/v1/builds/{job_id}/claim", headers=_auth(token), json={"builder_id": builder_id}
         )
-        resp = client.post(
-            "/v1/builds",
-            headers=_auth(token),
-            json={
-                "recipe_name": "wslib3",
-                "platform": "linux",
-                "arch": "x86_64",
-            },
-        )
-        job_id = resp.json()["id"]
 
         with client.websocket_connect(f"/v1/builders/{builder_id}/ws?token={token}") as ws:
-            ws.send_json({"type": "job.claim", "job_id": job_id})
-            ws.receive_json()
-
             ws.send_json(
-                {
-                    "type": "job.fail",
-                    "job_id": job_id,
-                    "error": "compile error: missing header",
-                }
+                {"type": "job.fail", "job_id": job_id, "error": "compile error: missing header"}
             )
             ack = ws.receive_json()
-            assert ack["type"] == "job.fail_ack"
-            assert ack["status"] == BuildJobStatus.failed
+            assert ack["type"] == "error"
+            assert ack["rejected"] == "job.fail"
 
-        resp = client.get(f"/v1/builds/{job_id}", headers=_auth(token))
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == BuildJobStatus.failed
-        assert "compile error" in data.get("error_message", "")
+        data = client.get(f"/v1/builds/{job_id}", headers=_auth(token)).json()
+        assert data["status"] == BuildJobStatus.running
+        assert "compile error" not in (data.get("error_message") or "")
 
     def test_ws_unknown_message_type(self, db_server_env):
         """Unknown message types return an error response."""
