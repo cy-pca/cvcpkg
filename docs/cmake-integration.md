@@ -101,3 +101,12 @@ options above set `PKG_CONFIG_PATH`, so Meson/Autotools consumers work too:
 source ./deps/bin/activate
 pkg-config --cflags --libs zlib
 ```
+
+## WebAssembly
+
+For Emscripten cross-builds (`wasm` / `wasm-mt` platforms) the deps prefix
+resolves via `CMAKE_FIND_ROOT_PATH` instead of `CMAKE_PREFIX_PATH`, and the
+app targets need the browser-side link fixes. The reusable boilerplate is
+[`cmake/cvcpkg-wasm-app.cmake`](../cmake/cvcpkg-wasm-app.cmake) (`cvcpkg_wasm_deps()` / `cvcpkg_wasm_threads()` / `cvcpkg_wasm_app()`),
+and the full build + packaging flow is in
+[docs/wasm-packaging.md](wasm-packaging.md).
