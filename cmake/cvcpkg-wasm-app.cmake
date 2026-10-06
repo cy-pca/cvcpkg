@@ -12,7 +12,7 @@
 #   find_package(cvcGL REQUIRED)               # resolved via CMAKE_FIND_ROOT_PATH
 #
 #   add_executable(myapp main.cpp)
-#   target_link_libraries(myapp PRIVATE cvcGL::cvcGL)
+#   target_link_libraries(myapp PRIVATE cvc::cvcGL)
 #   cvcpkg_wasm_app(myapp PTHREADS ON)          # opt into the browser-side fixes
 #
 # Every function is a NO-OP unless the build is running under Emscripten

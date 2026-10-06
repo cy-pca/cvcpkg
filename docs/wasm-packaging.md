@@ -132,7 +132,7 @@ cvcpkg_wasm_threads()              # wasm-mt only; no-op natively / single-threa
 find_package(cvcGL REQUIRED)        # resolves from the deps prefix
 
 add_executable(myapp src/main.cpp)
-target_link_libraries(myapp PRIVATE cvcGL::cvcGL)
+target_link_libraries(myapp PRIVATE cvc::cvcGL)
 cvcpkg_wasm_app(myapp)             # the browser-side link fixes; no-op natively
 ```
 
@@ -229,7 +229,7 @@ from the library:
 find_package(cvcGL REQUIRED)
 
 add_executable(myapp src/main.cpp)
-target_link_libraries(myapp PRIVATE cvcGL::cvcGL)
+target_link_libraries(myapp PRIVATE cvc::cvcGL)
 cvcgl_wasm_app(myapp)      # cvcGL: state shim, mimalloc, frame-yield lock
 cvcpkg_wasm_app(myapp)    # generic: asyncify, memory growth, -pthread, pre-js
 ```
@@ -353,6 +353,10 @@ with COOP/COEP when threaded) inside the bundle's `bin/`; that is the
    `EM_CACHE`; if the emsdk prefix belongs to another user, point
    `EM_CACHE` at a writable dir (the note in `cvc_wasm_run.sh` describes
    exactly this failure mode).
+9. **`emsdk_env.sh` under POSIX `sh`**: the script self-locates only in
+   bash/zsh/ksh; sourced from a dash script it fails with "unable to
+   determine 'emsdk' directory". Source it from a `bash -c '…'`
+   subshell, or run it from within the emsdk dir.
 
 ## Where things live
 
