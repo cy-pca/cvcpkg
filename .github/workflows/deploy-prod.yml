@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Commit SHA to deploy (defaults to prod HEAD)"
+        description: "Commit to deploy: a sha (7-40 hex) on prod's or master's history; empty = the dispatched ref's HEAD"
         required: false
         type: string
 
@@ -42,20 +42,38 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Resolve target SHA
+      # Check out the commit being deployed.  `inputs.sha` used to be only a
+      # LABEL (the prod-<sha> image tag): the checkout above is the dispatched
+      # ref's HEAD, and that is what rsync shipped -- so a dispatch meant to
+      # deploy or roll back to an older commit deployed something else under
+      # that commit's name.  Resolve it to a full commit (short SHAs are
+      # accepted), refuse anything that is not on prod or master (reviewed
+      # code only), and move the workspace there before anything reads it.
+      - name: Resolve and check out target SHA
         id: target
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          EVENT_SHA: ${{ github.sha }}
         run: |
-          if [[ -n "${{ inputs.sha }}" ]]; then
-            sha="${{ inputs.sha }}"
-          else
-            sha="${{ github.sha }}"
-          fi
+          set -euo pipefail
+          sha="${INPUT_SHA:-$EVENT_SHA}"
           if ! [[ "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
             echo "::error::invalid sha: $sha"
             exit 1
           fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Deploying sha: $sha"
+          if ! full=$(git rev-parse --verify --quiet "${sha}^{commit}"); then
+            echo "::error::commit $sha not found in cy-pca/cvcpkg"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$full" origin/prod 2>/dev/null \
+             && ! git merge-base --is-ancestor "$full" origin/master 2>/dev/null; then
+            echo "::error::$full is on neither prod nor master; push it to prod to deploy it"
+            exit 1
+          fi
+          git checkout --quiet --force --detach "$full"
+          test "$(git rev-parse HEAD)" = "$full"
+          echo "sha=$full" >> "$GITHUB_OUTPUT"
+          echo "Deploying sha: $full"
 
       # ── Deploy to cvcpkg.org (primary) via SSH ──────────────
       - name: Deploy to cvcpkg.org
