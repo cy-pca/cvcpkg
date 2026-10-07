@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Commit SHA to deploy (defaults to prod HEAD)"
+        description: "Commit to deploy: a sha (7-40 hex) on prod's or master's history; empty = the dispatched ref's HEAD"
         required: false
         type: string
 

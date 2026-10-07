@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
 import os
 import random
+import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import click
@@ -114,33 +117,949 @@ def _newest_first(pkg: dict) -> tuple:
 _SUPERVISOR_RESTART_CODE = 90
 
 
+# PEP 440 (the spec's appendix pattern).  cvcpkg's own versions travel in two
+# spellings: pyproject.toml's as written ("2.5.0-rc1", what a checkout says it
+# is) and the installed metadata's, which the build backend normalises
+# ("2.5.0rc1", what ``cvcpkg.__version__`` and the server report).
+_PEP440_RE = re.compile(
+    r"""^\s*v?
+    (?:(?P<epoch>[0-9]+)!)?
+    (?P<release>[0-9]+(?:\.[0-9]+)*)
+    (?P<pre>[-_.]?(?P<pre_l>alpha|a|beta|b|preview|pre|c|rc)[-_.]?(?P<pre_n>[0-9]+)?)?
+    (?P<post>(?:-(?P<post_n1>[0-9]+))
+        |(?:[-_.]?(?P<post_l>post|rev|r)[-_.]?(?P<post_n2>[0-9]+)?))?
+    (?P<dev>[-_.]?(?P<dev_l>dev)[-_.]?(?P<dev_n>[0-9]+)?)?
+    (?:\+(?P<local>[a-z0-9]+(?:[-_.][a-z0-9]+)*))?
+    \s*$""",
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _pep440_key(version: str) -> tuple | None:
+    """A PEP 440 ordering key for *version* (equal for equal versions), or None.
+
+    The same order ``packaging.version.Version`` gives, for the forms cvcpkg
+    uses -- ``packaging`` is not a cvcpkg dependency.
+    """
+    m = _PEP440_RE.match(version or "")
+    if not m:
+        return None
+    release = [int(x) for x in m.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    # Slots are (rank, value): rank 0 sorts below any value, 2 above.
+    has_pre, has_post, has_dev = m.group("pre"), m.group("post"), m.group("dev")
+    if has_pre:
+        letter = m.group("pre_l").lower()
+        letter = {"alpha": "a", "beta": "b", "c": "rc", "pre": "rc", "preview": "rc"}.get(
+            letter, letter
+        )
+        pre: tuple = (1, letter, int(m.group("pre_n") or 0))
+    elif has_dev and not has_post:
+        pre = (0, "", 0)  # 1.0.dev1 < 1.0a1
+    else:
+        pre = (2, "", 0)
+    post = (1, int(m.group("post_n1") or m.group("post_n2") or 0)) if has_post else (0, 0)
+    dev = (1, int(m.group("dev_n") or 0)) if has_dev else (2, 0)
+    local: tuple = ()
+    if m.group("local"):
+        local = tuple(
+            (1, int(p), "") if p.isdigit() else (0, 0, p.lower())
+            for p in re.split(r"[-_.]", m.group("local"))
+        )
+    return (int(m.group("epoch") or 0), tuple(release), pre, post, dev, local)
+
+
 def _is_newer_version(candidate: str, current: str) -> bool:
     """True when cvcpkg version *candidate* is newer than *current*.
 
     ``builder.update`` carries the server's own version.  A builder that is
     already at it, or ahead of it, has nothing to update to: acting on it
     would only drain the builder and restart it on the code it already runs.
-    A version that does not parse falls back to plain inequality.
+    Compared as PEP 440 versions, so the two spellings of one version (see
+    _PEP440_RE) are equal; failing that as SemVer, and failing both by plain
+    inequality.
     """
+    a, b = _pep440_key(candidate), _pep440_key(current)
+    if a is not None and b is not None:
+        return a > b
     from cvcpkg.semver import Version
 
     try:
         return Version.parse(candidate) > Version.parse(current)
     except ValueError:
-        return candidate != current
+        return candidate.strip() != current.strip()
+
+
+def _same_version(a: str, b: str) -> bool:
+    """True when *a* and *b* name the same cvcpkg version (see _is_newer_version)."""
+    ka, kb = _pep440_key(a), _pep440_key(b)
+    if ka is not None and kb is not None:
+        return ka == kb
+    from cvcpkg.semver import Version
+
+    try:
+        return Version.parse(a) == Version.parse(b)
+    except ValueError:
+        return a.strip() == b.strip()
+
+
+def _pyproject_field(text: str, key: str) -> str | None:
+    """The first top-level ``key = "value"`` in pyproject.toml *text*."""
+    m = re.search(rf'^{key}\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    return m.group(1) if m else None
 
 
 def _checkout_version(checkout: Path) -> str | None:
     """The ``version`` a cvcpkg source checkout's pyproject.toml declares."""
-    import re
-
     try:
         text = (checkout / "pyproject.toml").read_text(encoding="utf-8")
     except OSError:
         return None
-    m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    return m.group(1) if m else None
+    return _pyproject_field(text, "version")
 
+
+# -- Self-update (server-pushed ``builder.update``) ----------------------------
+#
+# A pip-installed builder updates itself from a cvcpkg source checkout: it
+# resolves the checkout and the version it would install *before* it stops
+# taking work (an update with nothing newer to install must not drain a busy
+# builder for hours), then, once idle, fetches and fast-forwards, pip-installs,
+# checks that the install took, and re-execs.  Any failure leaves it running
+# the code it runs.
+
+# Explicit checkout to update from; when set, nothing else is searched.
+_SELF_UPDATE_DIR_ENV = "CVCPKG_SELF_UPDATE_DIR"
+# pip learned --break-system-packages (PEP 668) in 23.0.1.  Older pips -- 22.0.2
+# is Ubuntu 22.04's -- reject it with "no such option", which used to fail
+# every self-update on those hosts.
+_PIP_BREAK_SYSTEM_PACKAGES_MIN = (23, 0, 1)
+# Per-step timeouts.  Each step heartbeats every _UPDATE_BEAT_SECS while it runs
+# (see _run_update_step): the server marks a builder silent for 180 s offline
+# and fails the jobs dispatched to it.
+_UPDATE_GIT_TIMEOUT = 60.0
+_UPDATE_PIP_TIMEOUT = 300.0
+_UPDATE_VERIFY_TIMEOUT = 60.0
+_UPDATE_BEAT_SECS = 20.0
+# After a timed-out step's process tree is killed: how long to wait for its
+# output pipes to close.  A process that escaped the kill (it started its own
+# session) can hold them open for as long as it lives; past this the step gives
+# up on its output instead of blocking the builder with it.
+_UPDATE_KILL_GRACE_SECS = 5.0
+# A step that has to end early (timed out, or the builder is stopping) first
+# gets a Ctrl-C (SIGINT to its process group, POSIX) and this long to exit on
+# it -- git removes its lock files on SIGINT, and a SIGKILLed git leaves
+# .git/index.lock behind to fail every later merge in that checkout; pip
+# removes its temporary build directories -- before its tree is SIGKILLed.
+# Only a timeout ends the two steps that rewrite files (the merge, pip): a
+# stop lets them finish (see _run_update_step's *finish_on_stop*).
+_UPDATE_STOP_GRACE_SECS = 3.0
+# How often a running step checks whether the builder was asked to stop (its
+# `stop` callable).  The steps run in their own session, so the stop signal
+# itself never reaches them: builder_run's handler only sets a flag.
+_UPDATE_STOP_POLL_SECS = 1.0
+_UPDATE_STOPPED_MSG = "stopped: the builder is shutting down"
+# Two `git fetch`es in one checkout at once -- builders sharing it, all told to
+# update by one push -- collide on the remote-tracking ref ("cannot lock ref
+# ... is at <new> but expected <old>"), and the loser fails.  It waits this
+# long (the winner is done by then) and fetches once more; see _git_fetch.
+_UPDATE_FETCH_RETRY_SECS = 2.0
+# Builders that share a checkout -- a pip fleet's workers, or a dev and a prod
+# unit on one host -- each get builder.update from their own server.  This
+# lock (in the checkout's git dir) runs their updates one at a time: two
+# concurrent merges collide on index.lock, and two concurrent pip installs
+# into one site-packages can leave it broken.  The one that waits finds the
+# version installed already and only restarts.  Waiting is bounded by the
+# longest an update holding it can take: the steps it runs under the lock --
+# a fetch (twice, on a collision), the merge, the tree check, two version
+# probes and pip (twice, when the --break-system-packages guess was wrong) --
+# each up to its timeout, plus, for each, the grace an ended step gets, plus
+# slack for heartbeats (each can block for its HTTP timeout).
+_UPDATE_LOCK_NAME = "cvcpkg-self-update.lock"
+_UPDATE_LOCKED_STEPS = 8
+_UPDATE_LOCK_TIMEOUT = (
+    4 * _UPDATE_GIT_TIMEOUT
+    + _UPDATE_FETCH_RETRY_SECS
+    + 2 * _UPDATE_VERIFY_TIMEOUT
+    + 2 * _UPDATE_PIP_TIMEOUT
+    + _UPDATE_LOCKED_STEPS * (_UPDATE_STOP_GRACE_SECS + 2 * _UPDATE_KILL_GRACE_SECS)
+    + 120.0
+)
+
+# git's network transports otherwise wait on a dead connection for as long as
+# the kernel lets them.  Applied only where the user has not set their own
+# (see _git_update_env).
+_GIT_SSH_COMMAND = (
+    "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=2"
+)
+_GIT_LOW_SPEED = {
+    # env var -> the git config key it overrides
+    "GIT_HTTP_LOW_SPEED_LIMIT": ("http.lowspeedlimit", "1000"),  # bytes/s ...
+    "GIT_HTTP_LOW_SPEED_TIME": ("http.lowspeedtime", "30"),  # ... for this many s
+}
+
+
+def _git_configured_keys(cwd: Path | str | None) -> set[str]:
+    """Which transport settings git's own config sets for *cwd* (lowercase).
+
+    One local ``git config`` read; any failure counts as "none set".
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(  # noqa: S603 - fixed command
+            [
+                "git",
+                "config",
+                "--get-regexp",
+                r"^(core\.sshcommand|http\.lowspeedlimit|http\.lowspeedtime)$",
+            ],
+            cwd=str(cwd) if cwd is not None else None,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            # A value in some other encoding (Latin-1, say) must not raise.
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {line.split(None, 1)[0].lower() for line in r.stdout.splitlines() if line.strip()}
+
+
+def _git_update_env(cwd: Path | str | None) -> dict[str, str]:
+    """The environment a self-update's git commands run with.
+
+    Unattended, and bounded: a remote that wants credentials fails the step
+    instead of waiting on a prompt nobody will answer (terminal, or the
+    Windows Git Credential Manager's dialog), and a stalled ssh or http
+    transport gives up instead of holding the step open.  Each bound applies
+    only when neither the environment nor git's config already sets it, so a
+    builder's own ssh command or http limits win.
+    """
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env.setdefault("GCM_INTERACTIVE", "never")
+    configured = _git_configured_keys(cwd)
+    if not (env.get("GIT_SSH_COMMAND") or env.get("GIT_SSH") or "core.sshcommand" in configured):
+        env["GIT_SSH_COMMAND"] = _GIT_SSH_COMMAND
+    for var, (key, value) in _GIT_LOW_SPEED.items():
+        if not env.get(var) and key not in configured:
+            env[var] = value
+    return env
+
+
+def _update_step_popen_kwargs() -> dict:
+    """Start each step as the leader of its own process group / session.
+
+    So a timed-out step can be killed as a whole tree -- git's ssh and
+    git-remote-https helpers, pip's build backends.  It also means a signal
+    meant for the builder (a Ctrl-C at its terminal, ``kill <pid>``) never
+    reaches the step: a stopping builder ends the step itself, through
+    _run_update_step's *stop*.
+    """
+    import subprocess
+
+    if sys.platform == "win32":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)}
+    return {"start_new_session": True}
+
+
+def _kill_update_step(proc) -> None:
+    """Kill *proc* and every process it started (best effort)."""
+    import subprocess
+
+    if sys.platform == "win32":
+        try:
+            subprocess.run(  # noqa: S603, S607 - fixed command
+                ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        import signal
+
+        try:
+            # The step leads its own session (start_new_session), so its pid
+            # is its process group id -- never ours.
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:  # ESRCH: the whole group is gone already
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _collect_killed_step(proc) -> tuple[str, str]:
+    """Output of a step whose tree was just killed, without waiting on stragglers.
+
+    ``communicate()`` with no timeout waits for EOF on stdout/stderr, and any
+    descendant that survived the kill and inherited them keeps them open --
+    for a git transport stuck on a dead connection, indefinitely.  So wait a
+    bounded time, then drop the pipes and settle for no output.
+    """
+    import subprocess
+
+    try:
+        out, err = proc.communicate(timeout=_UPDATE_KILL_GRACE_SECS)
+        return out or "", err or ""
+    except subprocess.TimeoutExpired:
+        pass
+    if sys.platform != "win32":
+        # POSIX communicate() read on this thread, so nothing else holds these.
+        # (On Windows its reader threads still do, and closing would block on
+        # them; they are daemon threads and end when the straggler does.)
+        for pipe in (proc.stdout, proc.stderr):
+            try:
+                if pipe is not None:
+                    pipe.close()
+            except OSError:
+                pass
+    try:
+        proc.wait(timeout=_UPDATE_KILL_GRACE_SECS)
+    except subprocess.TimeoutExpired:
+        pass
+    return "", "(output lost: a process the step started outlived the kill)"
+
+
+def _end_update_step(proc) -> tuple[str, str]:
+    """End a running step and everything it started; return its output.
+
+    First as a Ctrl-C would (POSIX: SIGINT to the step's process group), so
+    git can remove its lock files and pip its temporary directories; whatever
+    still runs _UPDATE_STOP_GRACE_SECS later is killed with its tree.
+    (Windows has no group-wide Ctrl-C for a process without a console of its
+    own, so there it is the tree kill straight away.)
+    """
+    import subprocess
+
+    if sys.platform != "win32":
+        import signal
+
+        try:
+            # The step leads its own session, so this is its group, never ours.
+            os.killpg(proc.pid, signal.SIGINT)
+        except OSError:  # ESRCH: nothing left in the group
+            pass
+        try:
+            out, err = proc.communicate(timeout=_UPDATE_STOP_GRACE_SECS)
+        except subprocess.TimeoutExpired:
+            pass
+        else:
+            _kill_update_step(proc)  # anything it left behind
+            return out or "", err or ""
+    _kill_update_step(proc)
+    return _collect_killed_step(proc)
+
+
+def _run_update_step(
+    cmd: list[str],
+    *,
+    timeout: float,
+    cwd: Path | str | None = None,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+    finish_on_stop: str = "",
+):
+    """Run one self-update command, heartbeating while it runs.
+
+    Returns a ``subprocess.CompletedProcess`` with text stdout/stderr (bytes
+    that are not valid in the locale's encoding are replaced, never raised
+    on).  A command that cannot be started (no git on PATH) comes back as exit
+    127, and one that overruns *timeout* is ended -- with everything it
+    started -- and comes back as exit 124 within a few seconds of the
+    deadline; the caller treats both as a failed step, never as an exception.
+
+    *stop* is polled about once a second: once it returns True the step is
+    ended the same way and comes back as exit 130 (and is not started at all
+    if it already does).  The step runs in its own session, so this is the
+    only way a builder's stop request reaches it -- builder_run's signal
+    handler only sets a flag.  *beat* is still called only every
+    _UPDATE_BEAT_SECS.
+
+    *finish_on_stop* is for a step that rewrites files: the merge (the
+    checkout) and pip (site-packages).  A stop never ends one of those --
+    ended part-way, the merge leaves HEAD on the old commit under a tree half
+    from the new one, and pip a half-installed cvcpkg (it rolls its uninstall
+    back only on an Exception, never on Ctrl-C), so the builder cannot even
+    start again.  The step is let finish, still bounded by *timeout*, and
+    *finish_on_stop* (what happens now) is logged once, when the stop is
+    seen.  It is not started once stopping, all the same; and should the
+    builder itself be interrupted (KeyboardInterrupt) while it runs, it is
+    left running, in its own session, to finish there.
+    """
+    import subprocess
+
+    if stop is not None and stop():
+        return subprocess.CompletedProcess(cmd, 130, "", _UPDATE_STOPPED_MSG)
+    env = _git_update_env(cwd) if cmd and cmd[0] == "git" else None
+    try:
+        proc = subprocess.Popen(  # noqa: S603 - fixed commands
+            cmd,
+            cwd=str(cwd) if cwd is not None else None,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            errors="replace",
+            **_update_step_popen_kwargs(),
+        )
+    except OSError as exc:
+        return subprocess.CompletedProcess(cmd, 127, "", str(exc))
+    started = time.monotonic()
+    deadline = started + timeout
+    # Nothing to wake up for but the deadline when there is neither a beat to
+    # send nor a stop to poll for (math.inf: never due).
+    next_beat = started + _UPDATE_BEAT_SECS if beat is not None else math.inf
+    poll = _UPDATE_STOP_POLL_SECS if stop is not None else math.inf
+    try:
+        while True:
+            now = time.monotonic()
+            wait = max(0.1, min(poll, deadline - now, next_beat - now))
+            try:
+                out, err = proc.communicate(timeout=wait)
+                return subprocess.CompletedProcess(cmd, proc.returncode, out or "", err or "")
+            except subprocess.TimeoutExpired:
+                pass
+            if poll != math.inf and stop is not None and stop():
+                if not finish_on_stop:
+                    out, err = _end_update_step(proc)
+                    return subprocess.CompletedProcess(
+                        cmd, 130, out, f"{err}\n{_UPDATE_STOPPED_MSG}".lstrip("\n")
+                    )
+                click.echo(f"  self-update: shutdown requested; {finish_on_stop}")
+                poll = math.inf  # seen; from here on only the deadline counts
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            if beat is not None and now >= next_beat:
+                beat()
+                next_beat = now + _UPDATE_BEAT_SECS
+        if beat is not None:
+            beat()  # ending the step can take a few seconds more
+        out, err = _end_update_step(proc)
+        return subprocess.CompletedProcess(cmd, 124, out, err + f"\ntimed out after {timeout:.0f}s")
+    except BaseException:
+        if finish_on_stop:
+            # A step that rewrites files is never ended part-way (see
+            # *finish_on_stop*): it runs on in its own session and finishes.
+            raise
+        # KeyboardInterrupt (or a failing beat) while the step runs: it is in
+        # its own session, so nothing else will stop it.  Unconditionally --
+        # the step's own process may be gone while what it started is not, and
+        # its group id stays reserved (no pid reuse) while any member lives.
+        try:
+            _end_update_step(proc)
+        except BaseException:  # interrupted again: no more grace
+            _kill_update_step(proc)
+        raise
+
+
+def _installed_source_dir() -> Path | None:
+    """The local directory pip installed this cvcpkg from, if any.
+
+    pip records it in the distribution's ``direct_url.json`` (PEP 610) for
+    both ``pip install <dir>`` and ``pip install -e <dir>`` -- which is how a
+    non-editable builder install still finds the checkout it came from.
+    """
+    try:
+        from importlib.metadata import distribution
+
+        raw = distribution("cvcpkg").read_text("direct_url.json")
+    except Exception:  # noqa: BLE001 - not installed as a distribution, etc.
+        return None
+    if not raw:
+        return None
+    try:
+        url = str(json.loads(raw).get("url") or "")
+    except (ValueError, AttributeError):
+        return None
+    if not url.startswith("file:"):
+        return None
+    from urllib.parse import unquote, urlparse
+    from urllib.request import url2pathname
+
+    return Path(url2pathname(unquote(urlparse(url).path)))
+
+
+def _self_update_candidates() -> list[Path]:
+    """Where to look for the cvcpkg checkout to update from, in order.
+
+    Only checkouts this install is tied to: ``CVCPKG_SELF_UPDATE_DIR`` (and
+    nothing else when it is set), the directory pip installed from, and the
+    checkout this code runs out of.  Never a guessed path such as
+    ``~/src/cvc/cvcpkg``: on a builder host that is as likely a developer's
+    clone on a feature branch, and ``git pull`` + pip install there would put
+    unreviewed code on the builder.  A PyPI install has none of these, so it
+    updates only once ``CVCPKG_SELF_UPDATE_DIR`` names a checkout.
+    """
+    explicit = os.environ.get(_SELF_UPDATE_DIR_ENV, "").strip()
+    if explicit:
+        return [Path(explicit).expanduser()]
+    out: list[Path] = []
+    src = _installed_source_dir()
+    if src is not None:
+        out.append(src)
+    # A source/editable checkout: <repo>/src/cvcpkg/cli/_builder.py.
+    parents = Path(__file__).resolve().parents
+    if len(parents) > 3:
+        out.append(parents[3])
+    seen: set[Path] = set()
+    return [c for c in out if not (c in seen or seen.add(c))]
+
+
+def _find_update_checkout() -> Path | None:
+    """The first candidate that is a git checkout of cvcpkg itself."""
+    for c in _self_update_candidates():
+        try:
+            text = (c / "pyproject.toml").read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _pyproject_field(text, "name") == "cvcpkg" and (c / ".git").exists():
+            return c
+    return None
+
+
+def _git_error(stderr: str) -> str:
+    """A git step's stderr, short enough for one log line.
+
+    Its first line says what went wrong ("Your local changes to the
+    following files would be overwritten by merge:"); a list of every file
+    involved, and git's "Aborting", follow.  Keep the first and the last.
+    """
+    lines = [line.strip() for line in stderr.strip().splitlines() if line.strip()]
+    if len(lines) > 2:
+        lines = [lines[0], f"... ({len(lines) - 2} more lines) ...", lines[-1]]
+    text = " ".join(lines)
+    return text if len(text) <= 300 else text[:297] + "..."
+
+
+def _git_fetch(
+    checkout: Path,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+):
+    """``git fetch --prune --quiet`` in *checkout*, as an update step.
+
+    ``--prune``: an upstream branch deleted on the remote must not live on as
+    a stale remote-tracking ref to merge from.  A fetch that lost a race for a
+    ref to another fetch in the same checkout ("cannot lock ref ... is at
+    <new> but expected <old>": builders sharing it, all told to update by one
+    push) is retried once, _UPDATE_FETCH_RETRY_SECS later -- the other fetch
+    has finished by then, so the retry finds everything up to date.  Without
+    it the loser goes by a stale ref and drops the update until the next push.
+    """
+
+    def fetch():
+        return _run_update_step(
+            ["git", "fetch", "--prune", "--quiet"],
+            cwd=checkout,
+            timeout=_UPDATE_GIT_TIMEOUT,
+            beat=beat,
+            stop=stop,
+        )
+
+    fetched = fetch()
+    if fetched.returncode == 0 or "cannot lock ref" not in fetched.stderr:
+        return fetched
+    click.echo(
+        f"  self-update: git fetch in {checkout} collided with another fetch there; "
+        f"retrying in {_UPDATE_FETCH_RETRY_SECS:.0f}s"
+    )
+    until = time.monotonic() + _UPDATE_FETCH_RETRY_SECS
+    while not (stop is not None and stop()):
+        left = until - time.monotonic()
+        if left <= 0:
+            break
+        time.sleep(min(left, _UPDATE_STOP_POLL_SECS))
+    return fetch()  # not started (exit 130) once stopping
+
+
+def _tree_differs_from_head(
+    checkout: Path,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> str:
+    """Why *checkout*'s tracked files are not exactly HEAD's, or "" when they are.
+
+    A self-update installs the working tree, so it has to be a commit.  Local
+    edits are not one; nor is a merge ended part-way through rewriting the
+    tree -- by its timeout, by systemd stopping the unit (SIGTERM to its whole
+    cgroup, the merge included), by the OOM killer.  That leaves HEAD on the
+    old commit under a tree partly from the new one, and pyproject.toml,
+    which sorts before src/, may already say the new version: installing it
+    would put code that matches no commit on the builder, and every later
+    fast-forward refuses ("would be overwritten") until someone cleans up.
+    """
+    diff = _run_update_step(
+        ["git", "diff", "--quiet", "HEAD"],
+        cwd=checkout,
+        timeout=_UPDATE_GIT_TIMEOUT,
+        beat=beat,
+        stop=stop,
+    )
+    if diff.returncode == 0:
+        return ""
+    if diff.returncode == 1:
+        return f"tracked files in {checkout} differ from HEAD (local edits or an interrupted pull)"
+    return (
+        f"cannot tell whether tracked files in {checkout} match HEAD (git diff exit "
+        f"{diff.returncode}: {diff.stderr.strip()[-200:]})"
+    )
+
+
+def _resolve_update_source(
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> tuple[Path, str] | None:
+    """``(checkout, version)`` a self-update would install, or None.
+
+    Must predict what _self_update() -- fetch, ``git merge --ff-only`` of the
+    upstream, then pip install of whatever the working tree holds -- will
+    actually install, since the builder drains (stops taking work, possibly
+    for hours) on the strength of it.
+
+    None when tracked files differ from HEAD (local edits, or a pull ended
+    part-way): _self_update() refuses to install from such a tree, so the
+    builder must not drain for it.  Otherwise it fetches (_git_fetch) and
+    counts on the upstream's version only when the merge can deliver it: the
+    fetch succeeded (a failed one leaves a stale remote-tracking ref, and
+    _self_update() does not merge then) and HEAD is an ancestor of the
+    upstream (a diverged branch cannot fast-forward).  Otherwise the merge
+    would fail or change nothing, and the working tree's version is what gets
+    installed; it logs which case it was.
+
+    Not detected: an untracked file the merge would have to overwrite, which
+    also makes it refuse.  That costs one drain for nothing -- the update
+    then installs the working tree's version only if that is newer.
+
+    It reads the upstream with ``git show`` and never touches the working
+    tree: an editable install runs straight out of the checkout, and jobs are
+    still building.  None, too, once *stop* returns True.
+    """
+    checkout = _find_update_checkout()
+    if checkout is None:
+        return None
+    local = _checkout_version(checkout)
+
+    def git(*args: str):
+        return _run_update_step(
+            ["git", *args], cwd=checkout, timeout=_UPDATE_GIT_TIMEOUT, beat=beat, stop=stop
+        )
+
+    def stopping() -> bool:
+        return stop is not None and stop()
+
+    def working_tree(why: str) -> tuple[Path, str] | None:
+        click.echo(
+            f"  self-update: {checkout}: {why}; going by its working tree "
+            f"({local or 'no version'}), not its upstream",
+            err=True,
+        )
+        return (checkout, local) if local else None
+
+    dirty = _tree_differs_from_head(checkout, beat=beat, stop=stop)
+    if stopping():
+        return None
+    if dirty:
+        click.echo(
+            f"  self-update: {dirty}; a self-update will not install from it - see "
+            + _shell_join(["git", "-C", str(checkout), "status"]),
+            err=True,
+        )
+        return None
+    fetched = _git_fetch(checkout, beat=beat, stop=stop)
+    if stopping():
+        return None
+    if fetched.returncode != 0:
+        return working_tree(
+            f"git fetch failed (exit {fetched.returncode}): {_git_error(fetched.stderr)}"
+        )
+    ancestor = git("merge-base", "--is-ancestor", "HEAD", "@{upstream}")
+    if stopping():
+        return None
+    if ancestor.returncode == 1:
+        return working_tree(
+            "HEAD has commits its upstream does not (diverged), so a fast-forward "
+            "cannot update it"
+        )
+    if ancestor.returncode != 0:
+        return working_tree(
+            "nothing to merge: a detached HEAD, no upstream branch, or an upstream "
+            f"deleted on the remote ({ancestor.stderr.strip()[-200:]})"
+        )
+    shown = git("show", "@{upstream}:pyproject.toml")
+    if stopping():
+        return None
+    upstream = _pyproject_field(shown.stdout, "version") if shown.returncode == 0 else None
+    if upstream is None:
+        return working_tree("cannot read a version from the upstream's pyproject.toml")
+    return (checkout, upstream)
+
+
+def _parse_version_tuple(text: str) -> tuple[int, ...] | None:
+    m = re.match(r"\s*(\d+(?:\.\d+)*)", text or "")
+    return tuple(int(x) for x in m.group(1).split(".")) if m else None
+
+
+def _pip_supports_break_system_packages() -> bool:
+    """True when this interpreter's pip accepts ``--break-system-packages``."""
+    try:
+        from importlib.metadata import version
+
+        found = _parse_version_tuple(version("pip"))
+    except Exception:  # noqa: BLE001 - no pip metadata: assume an old pip
+        return False
+    return found is not None and found >= _PIP_BREAK_SYSTEM_PACKAGES_MIN
+
+
+def _installed_in_user_site() -> bool:
+    """True when this cvcpkg runs from the user site (a ``pip install --user``)."""
+    import site
+
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return False  # a venv: --user is an error there
+    if not getattr(site, "ENABLE_USER_SITE", False):
+        return False
+    try:
+        user_site = Path(site.getusersitepackages()).resolve()
+        Path(__file__).resolve().relative_to(user_site)
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _pip_install_cmd(checkout: Path, *, break_system_packages: bool) -> list[str]:
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet", "--disable-pip-version-check"]
+    if break_system_packages:
+        cmd.append("--break-system-packages")
+    if _installed_in_user_site():
+        # Install where the running copy lives, or the re-exec finds it again.
+        cmd.append("--user")
+    # [builder] keeps the agent's own optional deps (websockets) installed.
+    cmd.append(f"{checkout}[builder]")
+    return cmd
+
+
+def _reexec_args(args: list[str]) -> list[str]:
+    """*args* (``sys.argv[1:]``) for the re-exec'd builder.
+
+    Drops ``--token`` (the successor gets it through ``CVCPKG_TOKEN``, so a
+    self-update never re-publishes it on the command line) and ``--daemon``
+    (the process is already detached; forking again would change its PID out
+    from under the pidfile and the service manager).
+    """
+    out: list[str] = []
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a == "--token":
+            skip = True
+            continue
+        if a.startswith("--token=") or a == "--daemon":
+            continue
+        out.append(a)
+    return out
+
+
+def _reexec_argv(args: list[str]) -> list[str]:
+    """The argv that restarts this builder on the freshly installed cvcpkg.
+
+    ``[python, -m, cvcpkg, ...]`` for a pip install and ``[binary, ...]`` for
+    the single-file binary -- never ``[python] + sys.argv``: under
+    ``python -m cvcpkg`` (every fleet worker) ``sys.argv[0]`` is
+    ``.../cvcpkg/__main__.py``, and running that as a script puts the package
+    directory first on ``sys.path``, where cvcpkg/platform.py shadows the
+    stdlib ``platform`` and the successor dies at startup.
+    """
+    from cvcpkg.selfexec import cvcpkg_argv
+
+    return cvcpkg_argv(*_reexec_args(args))
+
+
+def _reexec_builder(token: str, extra_env: dict[str, str] | None = None) -> None:
+    """Replace this process with a fresh builder (POSIX; same PID)."""
+    argv = _reexec_argv(sys.argv[1:])
+    env = dict(os.environ)
+    env.update(extra_env or {})
+    if token:
+        env["CVCPKG_TOKEN"] = token
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(argv[0], argv, env)
+
+
+def _fresh_cvcpkg_version(
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> tuple[str | None, str]:
+    """``(version, error)``: what a freshly started interpreter imports.
+
+    *version* is None when the import failed, and *error* then says why.
+    ``cvcpkg.__version__`` is the installed distribution's metadata, which
+    only a pip install changes -- for an editable install too, whose code the
+    merge alone already changes.
+    """
+    probe = _run_update_step(
+        [sys.executable, "-c", "import cvcpkg; print(cvcpkg.__version__)"],
+        # Not the checkout: its directory must not shadow the installed copy.
+        cwd=os.path.abspath(os.sep),
+        timeout=_UPDATE_VERIFY_TIMEOUT,
+        beat=beat,
+        stop=stop,
+    )
+    if probe.returncode != 0:
+        return None, probe.stderr.strip()[-300:] or f"exit {probe.returncode}"
+    lines = probe.stdout.strip().splitlines()
+    if not lines:
+        return None, "it printed no version"
+    return lines[-1].strip(), ""
+
+
+def _git_dir(checkout: Path) -> Path:
+    """*checkout*'s git directory: ``.git``, or where a ``.git`` file points
+    (a linked worktree or a submodule)."""
+    dot = checkout / ".git"
+    try:
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if text.startswith("gitdir:"):
+                target = Path(text[len("gitdir:") :].strip())
+                return target if target.is_absolute() else checkout / target
+    except OSError:
+        pass
+    return dot
+
+
+def _try_lock(fd: int) -> bool:
+    """Take an exclusive lock on *fd* without waiting: False if another holds it.
+
+    Other failures (a filesystem without locks) raise OSError.  Released when
+    the fd is closed -- by the kernel too, if the holder dies, and across an
+    exec, since Python opens it non-inheritable -- so it never goes stale.
+    flock() where there is one, else (Windows) msvcrt.locking() on byte 0.
+    """
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except PermissionError:  # EACCES: locked by another process
+            return False
+        return True
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:  # EWOULDBLOCK / EAGAIN: locked elsewhere
+        return False
+    return True
+
+
+def _unlock(fd: int) -> None:
+    try:
+        import fcntl
+    except ImportError:
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _self_update_lock(
+    checkout: Path,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> Iterator[bool]:
+    """Hold *checkout*'s self-update lock (see _UPDATE_LOCK_NAME) for the block.
+
+    Yields True once held -- or when the lock cannot be used at all (the git
+    dir is not writable, the filesystem has no locks), in which case the
+    update goes ahead unlocked, as it always used to, and says so.  Yields
+    False, after logging why, when *stop* turned True or _UPDATE_LOCK_TIMEOUT
+    passed while another builder held it.  Heartbeats while it waits.
+    """
+    path = _git_dir(checkout) / _UPDATE_LOCK_NAME
+    try:
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+        except PermissionError:
+            # Created by another user's builder: a read-only fd locks too.
+            fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        click.echo(f"  self-update: cannot open {path} ({exc}); updating unlocked", err=True)
+        yield True
+        return
+    locked = False
+    try:
+        acquired = False
+        started = time.monotonic()
+        next_beat = started + _UPDATE_BEAT_SECS
+        waiting = False
+        while True:
+            try:
+                locked = _try_lock(fd)
+            except OSError as exc:
+                click.echo(
+                    f"  self-update: cannot lock {path} ({exc}); updating unlocked", err=True
+                )
+                acquired = True
+                break
+            if locked:
+                acquired = True
+                break
+            if not waiting:
+                click.echo(
+                    f"  self-update: another builder sharing {checkout} is updating; "
+                    "waiting for it to finish"
+                )
+                waiting = True
+            now = time.monotonic()
+            if stop is not None and stop():
+                click.echo("  self-update: shutdown requested while waiting for the lock")
+                break
+            if now - started >= _UPDATE_LOCK_TIMEOUT:
+                click.echo(
+                    f"  self-update: another builder has held {path} for "
+                    f"{now - started:.0f}s; giving up on this update",
+                    err=True,
+                )
+                break
+            if beat is not None and now >= next_beat:
+                beat()
+                next_beat = now + _UPDATE_BEAT_SECS
+            time.sleep(min(_UPDATE_STOP_POLL_SECS, _UPDATE_BEAT_SECS))
+        yield acquired
+    finally:
+        if locked:
+            try:
+                _unlock(fd)
+            except OSError:
+                pass
+        os.close(fd)
+
+
+# _ws_catch_up stops behind a job whose claim has not landed yet (see there).
+# The socket loop then re-runs it on its next turns, waiting at most this long
+# for a message in between -- so pushes are still handled between attempts --
+# for up to _CATCH_UP_RERUN_SECS without progress before leaving the rest to
+# the periodic sweep.  A claim normally lands within a second.
+_CATCH_UP_RERUN_RECV_TIMEOUT = 0.5
+_CATCH_UP_RERUN_SECS = 30.0
 
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
@@ -373,24 +1292,63 @@ def builder_gc(
     click.echo(f"total: {verb} {total_mib:.0f} MiB")
 
 
+# Fleet worker restarts (see _supervise_fleet).  A worker that keeps dying
+# soon after it starts -- a revoked token, a pidfile held by a stray builder, a
+# bad config -- is restarted on a doubling delay up to this cap, instead of every
+# few seconds forever: each start of the single-file binary unpacks a fresh copy
+# of itself (~85 MB) into TMPDIR, so a flat 5 s loop churns ~17 MB/s of disk.
+_FLEET_RESPAWN_MAX_DELAY = 300.0
+# A worker that ran at least this long before exiting was healthy; its next
+# restart starts over at the configured --restart-delay.
+_FLEET_WORKER_STABLE_SECS = 60.0
+# How long the fleet waits for its workers to drain their in-flight jobs on
+# shutdown before killing them.
+_FLEET_DRAIN_SECS = 120.0
+# How often the supervisor checks on its workers.
+_FLEET_POLL_SECS = 1.0
+
+
+def _next_respawn_delay(previous: float, base: float, lived: float) -> float:
+    """Delay before restarting a worker that exited after *lived* seconds.
+
+    *previous* is the delay used for its last restart (0 before the first).
+    A worker that lived at least ``_FLEET_WORKER_STABLE_SECS`` restarts after
+    *base*; one that died sooner waits twice as long as last time, capped at
+    ``_FLEET_RESPAWN_MAX_DELAY`` (never below *base*).
+    """
+    if base <= 0:
+        return 0.0
+    if previous <= 0 or lived >= _FLEET_WORKER_STABLE_SECS:
+        return base
+    return min(max(previous * 2, base), max(base, _FLEET_RESPAWN_MAX_DELAY))
+
+
 def _supervise_fleet(fleet, restart_delay: float) -> None:
     """Run one `cvcpkg builder run` worker per configured server.
 
-    Each worker is a separate process holding only its own server's token, so
-    one server/org's credentials and build outputs never reach another
-    (isolation by construction). Crashed workers are restarted; SIGINT/SIGTERM
-    is forwarded so the whole fleet drains gracefully together.
+    Each worker is a separate process whose environment holds only its own
+    server's token (as ``CVCPKG_TOKEN``; never on its argv) -- see
+    ``builder_fleet.worker_env``.  Workers that exit are restarted, on a
+    capped exponential backoff while they keep dying young; SIGINT/SIGTERM
+    (and Ctrl+Break on Windows) is forwarded so the whole fleet drains
+    gracefully together.
     """
     import signal
     import subprocess
     import threading
     import time
 
-    from cvcpkg.builder_fleet import worker_argv
+    from cvcpkg.builder_fleet import worker_argv, worker_env
     from cvcpkg.selfexec import cvcpkg_argv, cvcpkg_env
 
+    windows = sys.platform == "win32"
+    # POSIX: each worker leads its own process group (see _spawn).
+    own_group = hasattr(os, "killpg") and not windows
     stopping = threading.Event()
     procs: dict[str, subprocess.Popen] = {}
+    started: dict[str, float] = {}
+    delays: dict[str, float] = {}
+    respawn_at: dict[str, float] = {}
 
     def _spawn(fs):
         # `python -m cvcpkg builder run ...` from a pip install, but
@@ -400,64 +1358,113 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
         # disk was replaced, so a frozen worker unpacks its own copy rather
         # than borrowing this process's.
         argv = cvcpkg_argv(*worker_argv(fs))
+        kw: dict = {}
+        if own_group:
+            # The frozen binary runs as a launcher + interpreter pair and only
+            # the launcher is ours to wait on; if it dies alone, the
+            # interpreter (the PID in the worker's pidfile) keeps building and
+            # holds the single-instance guard, so every respawn would exit at
+            # once.  Its own group lets _reap stop all of it.
+            kw["start_new_session"] = True
+        elif windows:
+            # Its own console process group: the only way to deliver a
+            # graceful stop (CTRL_BREAK_EVENT) to one worker -- SIGINT cannot
+            # be sent to a process on Windows at all.
+            kw["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200)
+        started[fs.name] = time.time()
         return subprocess.Popen(  # noqa: S603 - argv built from config
             argv,
-            env=cvcpkg_env(),
-            # POSIX: each worker leads its own process group.  The frozen
-            # binary runs as a launcher + interpreter pair and only the
-            # launcher is ours to wait on; if it dies alone, the interpreter
-            # (the PID in the worker's pidfile) keeps building and holds the
-            # single-instance guard, so every respawn would exit at once.
-            start_new_session=hasattr(os, "killpg"),
+            env=worker_env(fs, fleet.servers, cvcpkg_env()),
+            **kw,
         )
 
+    def _kill_tree(p) -> None:
+        """Windows: kill worker *p* and every process it started."""
+        try:
+            subprocess.run(  # noqa: S603, S607 - fixed command, our own child's pid
+                ["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001 - best effort
+            pass
+
     def _reap(p) -> None:
-        """Stop whatever outlived worker *p*'s launcher in its process group."""
-        if hasattr(os, "killpg"):
+        """Stop whatever outlived worker *p*'s launcher."""
+        if own_group:
             try:
                 os.killpg(p.pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 pass
+        elif windows:
+            _kill_tree(p)
+
+    def _ask_to_stop(p) -> None:
+        """Ask worker *p* to finish its in-flight jobs and exit."""
+        if p.poll() is not None:
+            return
+        sig = getattr(signal, "CTRL_BREAK_EVENT", 1) if windows else signal.SIGINT
+        try:
+            p.send_signal(sig)
+        except Exception:  # noqa: BLE001 - best effort (e.g. no console on Windows)
+            pass
 
     def _handle_signal(signum, _frame):
         stopping.set()
         for p in procs.values():
-            if p.poll() is None:
-                try:
-                    p.send_signal(signal.SIGINT)
-                except Exception:  # noqa: BLE001 - best effort
-                    pass
+            _ask_to_stop(p)
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+    if hasattr(signal, "SIGBREAK"):  # Windows: Ctrl+Break / CTRL_BREAK_EVENT
+        signal.signal(signal.SIGBREAK, _handle_signal)
 
     for fs in fleet.servers:
         procs[fs.name] = _spawn(fs)
         click.echo(f"started worker {fs.name} (pid {procs[fs.name].pid}) -> {fs.server}")
 
     while not stopping.is_set():
-        if stopping.wait(1.0):
+        if stopping.wait(_FLEET_POLL_SECS):
             break
+        now = time.time()
         for fs in fleet.servers:
+            if stopping.is_set():
+                break
             p = procs[fs.name]
-            if p.poll() is not None and not stopping.is_set():
+            if fs.name in respawn_at:
+                # Exited earlier; restart once its delay is up.  Scheduled
+                # rather than slept, so one worker in a long backoff does not
+                # hold up noticing (and restarting) the others.
+                if now >= respawn_at[fs.name]:
+                    del respawn_at[fs.name]
+                    procs[fs.name] = _spawn(fs)
+                    click.echo(f"restarted worker {fs.name} (pid {procs[fs.name].pid})")
+                continue
+            if p.poll() is not None:
                 _reap(p)
+                lived = now - started.get(fs.name, now)
+                delay = _next_respawn_delay(delays.get(fs.name, 0.0), restart_delay, lived)
+                delays[fs.name] = delay
+                respawn_at[fs.name] = now + delay
                 click.echo(
-                    f"worker {fs.name} exited (code {p.returncode}); "
-                    f"restarting in {restart_delay:g}s"
+                    f"worker {fs.name} exited (code {p.returncode}) after {lived:.0f}s; "
+                    f"restarting in {delay:g}s"
                 )
-                if stopping.wait(restart_delay):
-                    break
-                procs[fs.name] = _spawn(fs)
 
-    # Graceful drain: workers finish in-flight jobs on SIGINT.
-    deadline = time.time() + 120
+    # Graceful drain: workers finish in-flight jobs on SIGINT / Ctrl+Break.
+    deadline = time.time() + _FLEET_DRAIN_SECS
     for name, p in procs.items():
         try:
             p.wait(timeout=max(1.0, deadline - time.time()))
         except subprocess.TimeoutExpired:
             click.echo(f"worker {name} did not exit in time; terminating")
-            p.terminate()
+            if windows:
+                # TerminateProcess on the launcher alone would orphan the
+                # single-file binary's interpreter and its build children.
+                _kill_tree(p)
+            else:
+                p.terminate()
 
 
 @builder_group.command("fleet")
@@ -486,8 +1493,12 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
     Runs one ``cvcpkg builder run`` worker per server in the config file, so a
     single machine (and a single service unit) serves multiple registries at
     once — e.g. the public ``cvcpkg.org`` and an org's edge server — instead of
-    running a separate builder deployment per server. Each worker holds only
-    its own server's token, giving per-server secret isolation by construction.
+    running a separate builder deployment per server. Each worker is given only
+    its own server's token, in its environment rather than on its command
+    line, and keeps it out of the environment of the builds it runs.  All
+    workers share this process's uid, so servers that must not be able to read
+    each other's tokens need separate ``builder run`` services under separate
+    users instead.
     """
     from cvcpkg.builder_fleet import FleetConfigError, load_fleet_config, worker_argv
 
@@ -498,31 +1509,59 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
 
     click.echo(f"fleet '{fleet.name}': {len(fleet.servers)} server(s)")
     if dry_run:
+        tokens = {s.token for s in fleet.servers if s.token}
         for fs in fleet.servers:
-            masked = ["***" if a == fs.token else a for a in worker_argv(fs)]
+            # worker_argv carries no token; mask defensively all the same.
+            masked = ["***" if a in tokens else a for a in worker_argv(fs)]
+            source = f"${fs.token_env}" if fs.token_env else "the literal 'token'"
             click.echo(f"  {fs.name} [{fs.server}] serves {list(fs.serve)}")
-            click.echo("    cvcpkg " + " ".join(masked))
+            click.echo(f"    CVCPKG_TOKEN=*** (from {source}) cvcpkg " + " ".join(masked))
         return
     _supervise_fleet(fleet, restart_delay)
 
 
-def _self_update() -> None:
-    """Pip-install the latest cvcpkg from the local git repo and re-exec.
+def _self_update(
+    token: str = "",
+    beat: Callable[[], None] | None = None,
+    extra_env: dict[str, str] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> None:
+    """Pip-install a newer cvcpkg from its source checkout and re-exec.
 
-    Looks for a libcvc-deps checkout by walking up from the
-    installed package location.  Falls back to a ``git pull``
-    in known paths.
+    Returns -- leaving the builder on the code it runs -- when there is
+    nothing newer to install, or when any step fails.  *beat* is called while
+    the slow steps run, to keep the builder's heartbeat going.  *extra_env* is
+    added to the successor's environment, along with ``CVCPKG_TOKEN``.
+
+    *stop* says the builder was asked to stop.  Once it returns True the
+    update goes no further and never re-execs: a re-exec would start a fresh
+    builder that takes work again, the stop request lost with the old process
+    image.  A read-only step that is running then (the fetch, the tree check,
+    a version probe, the wait for the lock) is ended (see _run_update_step);
+    the two that rewrite files -- the merge and pip -- are let finish
+    (bounded by their timeouts), since either one ended part-way can leave
+    the builder unable to start.  It is checked on entry, after every step,
+    and right before the re-exec.
+
+    The update is ``git fetch`` then ``git merge --ff-only @{upstream}`` (a
+    ``git pull``, split so that only its network half can be ended), and it
+    installs only a working tree that matches HEAD exactly
+    (_tree_differs_from_head).
+
+    Builders sharing the checkout update one at a time (_self_update_lock),
+    and one that finds the version installed already only restarts.
     """
-    import subprocess
+    # Stopping: nothing to update, and certainly no re-exec (see *stop*).
+    if stop is not None and stop():
+        click.echo("  self-update: shutdown requested; not updating")
+        return
 
     # The single-file binary cannot update itself this way: `sys.executable`
-    # is cvcpkg, not Python, so `-m pip` is rejected as a cvcpkg option, and
-    # `sys.argv[0]` is the binary itself, so the re-exec below would hand the
-    # binary its own path as a subcommand and exit.  Keep running on the
-    # current version; replacing the binary and restarting is the update.
-    # Checked before the Windows supervisor hand-off too: that wrapper
-    # updates with pip, so a frozen builder would only be relaunched on the
-    # same version, be asked to update again, and exit again.
+    # is cvcpkg, not Python, so `-m pip` is rejected as a cvcpkg option.  Keep
+    # running on the current version; replacing the binary and restarting is
+    # the update.  Checked before the Windows supervisor hand-off too: that
+    # wrapper updates with pip, so a frozen builder would only be relaunched on
+    # the same version, be asked to update again, and exit again.
     from cvcpkg.selfexec import is_frozen
 
     if is_frozen():
@@ -549,85 +1588,232 @@ def _self_update() -> None:
         )
         raise SystemExit(_SUPERVISOR_RESTART_CODE)
 
-    # Find the cvcpkg project root (where pyproject.toml lives)
-    pkg_dir = Path(__file__).resolve().parent.parent  # cvcpkg package
-    setup_dir = pkg_dir.parent  # src/
-    # Walk up to find pyproject.toml
-    candidates = [
-        setup_dir.parent,  # repo root
-        Path.home() / "libcvc-deps",
-        Path("/root/libcvc-deps"),
-    ]
-    cvcpkg_dir: Path | None = None
-    for c in candidates:
-        if (c / "pyproject.toml").is_file():
-            cvcpkg_dir = c
-            break
+    from cvcpkg import __version__ as running
 
-    if cvcpkg_dir is None:
-        click.echo("  self-update: cannot find cvcpkg source dir", err=True)
+    checkout = _find_update_checkout()
+    if checkout is None:
+        click.echo(
+            "  self-update: cannot find a cvcpkg source checkout to update from "
+            f"(set {_SELF_UPDATE_DIR_ENV}); staying on {running}",
+            err=True,
+        )
         return
 
-    click.echo(f"  self-update: updating from {cvcpkg_dir}")
+    click.echo(f"  self-update: updating from {checkout}")
     try:
-        # Pull latest code
-        repo_root = cvcpkg_dir
-        subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=repo_root,
-            check=False,
-            capture_output=True,
-            timeout=60,
-        )
-        # Never install an OLDER cvcpkg than the one running: a stale
-        # fallback checkout (an old clone whose upstream no longer moves)
-        # would otherwise downgrade the builder on every update request.
-        from cvcpkg import __version__ as _running
+        with _self_update_lock(checkout, beat=beat, stop=stop) as locked:
+            if not locked:
+                return
+            staying = f"not updating, staying on {running}"
+            fetched = _git_fetch(checkout, beat=beat, stop=stop)
+            if _stop_requested(stop, staying):
+                return
+            if fetched.returncode != 0:
+                # As `git pull` would: no merge, the working tree as it is.
+                click.echo(
+                    f"  self-update: git fetch failed (exit {fetched.returncode}): "
+                    f"{_git_error(fetched.stderr)}",
+                    err=True,
+                )
+            else:
+                # Local, and it rewrites the working tree: a stop lets it
+                # finish (see _run_update_step's finish_on_stop).
+                merged = _run_update_step(
+                    ["git", "merge", "--ff-only", "--quiet", "@{upstream}"],
+                    cwd=checkout,
+                    timeout=_UPDATE_GIT_TIMEOUT,
+                    beat=beat,
+                    stop=stop,
+                    finish_on_stop=(
+                        f"letting git merge finish (at most {_UPDATE_GIT_TIMEOUT:.0f} s), "
+                        "no restart"
+                    ),
+                )
+                if _stop_requested(stop, staying):
+                    return
+                if merged.returncode != 0:
+                    click.echo(
+                        f"  self-update: git merge --ff-only failed (exit {merged.returncode}): "
+                        f"{_git_error(merged.stderr)}",
+                        err=True,
+                    )
+            # Whatever the merge did -- or a merge or pull before this one,
+            # killed part-way -- install only a tree that is exactly a commit.
+            dirty = _tree_differs_from_head(checkout, beat=beat, stop=stop)
+            if _stop_requested(stop, staying):
+                return
+            if dirty:
+                click.echo(
+                    f"  self-update: {dirty}; not installing - see "
+                    + _shell_join(["git", "-C", str(checkout), "status"]),
+                    err=True,
+                )
+                return
+            # Only ever a NEWER cvcpkg.  An older one -- a stale clone whose
+            # upstream no longer moves -- would downgrade the builder on every
+            # update request, and the same version would restart it on the code
+            # it already runs.
+            found = _checkout_version(checkout)
+            if not found or not _is_newer_version(found, running):
+                click.echo(
+                    f"  self-update: {checkout} is at {found or 'an unknown version'}, "
+                    f"not newer than the running {running}; not installing it",
+                    err=True,
+                )
+                return
 
-        _found = _checkout_version(cvcpkg_dir)
-        if _found and _is_newer_version(_running, _found):
-            click.echo(
-                f"  self-update: {cvcpkg_dir} is at {_found}, older than the "
-                f"running {_running}; not installing it",
-                err=True,
-            )
-            return
-        # Pip install
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--quiet",
-                "--break-system-packages",
-                str(cvcpkg_dir),
-            ],
-            check=False,
-            capture_output=True,
-            timeout=120,
-        )
-        if sys.platform == "win32":
-            # Windows has no in-place exec.  os.execv() here would spawn a
-            # *new* process (CRT _P_OVERLAY semantics) and - because the
-            # builder is launched via the ``cvcpkg.exe`` console-script -
-            # re-exec ``python.exe cvcpkg.exe builder run ...``, which is
-            # wrong and a source of stray/duplicate cvcpkg processes.  The
-            # freshly pip-installed code is already on disk; it takes
-            # effect the next time the scheduled task starts the builder.
-            # Keep this single instance running on the current code rather
-            # than spawning a broken successor.
-            click.echo(
-                "  self-update: installed; new code applies on the next "
-                "builder restart (Windows).",
-            )
-            return
-        click.echo("  self-update: installed, restarting...")
-        # POSIX: replace the process image in place - same PID, no new
-        # process, so the single-instance pidfile stays valid.
-        os.execv(sys.executable, [sys.executable] + sys.argv)
+            # A builder sharing this checkout and interpreter (a fleet's
+            # workers; a dev and a prod unit) may have installed it already --
+            # while this one waited for the lock, or earlier.  Installing it
+            # again would rewrite the files under that builder's feet for
+            # nothing.  Not older, either: never downgrade what it installed.
+            before, _ = _fresh_cvcpkg_version(beat, stop)
+            if _stop_requested(stop, staying):
+                return
+            if before is not None and not _is_newer_version(found, before):
+                click.echo(
+                    f"  self-update: a fresh {sys.executable} imports cvcpkg {before} "
+                    "already (installed by another builder sharing it?); not reinstalling"
+                )
+                found = before
+            elif not _pip_install(checkout, found, running, beat=beat, stop=stop):
+                return
+
+            if sys.platform == "win32":
+                # Windows has no in-place exec.  os.execv() here would spawn a
+                # *new* process (CRT _P_OVERLAY semantics), which is wrong and a
+                # source of stray/duplicate cvcpkg processes.  The freshly
+                # pip-installed code is already on disk; it takes effect the next
+                # time the scheduled task starts the builder.  Keep this single
+                # instance running on the current code rather than spawning a
+                # broken successor.
+                click.echo(
+                    f"  self-update: installed {found}; it applies on the next "
+                    "builder restart (Windows).",
+                )
+                return
+            if _stop_requested(
+                stop, f"{found} is installed; not restarting into it (the next start runs it)"
+            ):
+                return
+            click.echo(f"  self-update: installed {found}, restarting...")
+            # POSIX: replace the process image in place - same PID, no new
+            # process, so the single-instance pidfile stays valid.  The exec
+            # also drops the lock (its fd is not inherited).
+            _reexec_builder(token, extra_env)
     except Exception as exc:
         click.echo(f"  self-update failed: {exc}", err=True)
+
+
+def _shell_join(cmd: list[str]) -> str:
+    """*cmd* as a command line to paste into this platform's shell."""
+    if sys.platform == "win32":
+        import subprocess
+
+        return subprocess.list2cmdline(cmd)
+    import shlex
+
+    return shlex.join(cmd)
+
+
+def _stop_requested(stop: Callable[[], bool] | None, what: str) -> bool:
+    """True, after logging *what* happens instead, once *stop* returns True."""
+    if stop is not None and stop():
+        click.echo(f"  self-update: shutdown requested; {what}")
+        return True
+    return False
+
+
+def _pip_install(
+    checkout: Path,
+    found: str,
+    running: str,
+    *,
+    beat: Callable[[], None] | None = None,
+    stop: Callable[[], bool] | None = None,
+) -> bool:
+    """_self_update's install: pip-install *checkout* (at *found*), check it took.
+
+    True when a fresh interpreter now imports *found*; otherwise it logs why
+    and returns False -- also once *stop* returns True (see _self_update).
+    """
+    flag = _pip_supports_break_system_packages()
+
+    def pip(break_system_packages: bool):
+        # A stop lets pip finish: ended part-way it leaves cvcpkg
+        # half-installed (see _run_update_step's finish_on_stop); the check
+        # right after it then keeps the builder from restarting.  A builder
+        # killed meanwhile (`builder fleet` gives up on a worker after 120 s)
+        # leaves pip running in its own session, where it completes.
+        return _run_update_step(
+            _pip_install_cmd(checkout, break_system_packages=break_system_packages),
+            timeout=_UPDATE_PIP_TIMEOUT,
+            beat=beat,
+            stop=stop,
+            finish_on_stop=(
+                f"letting pip finish (at most {_UPDATE_PIP_TIMEOUT:.0f} s), no restart"
+            ),
+        )
+
+    installed = pip(flag)
+    err_text = installed.stderr.lower()
+    if installed.returncode != 0 and (
+        (flag and "no such option" in err_text)
+        or (not flag and "externally-managed-environment" in err_text)
+    ):
+        # The version probe guessed wrong (a pip without metadata, a
+        # distro-patched pip): try once more the other way.
+        flag = not flag
+        installed = pip(flag)
+    if installed.returncode == 130 and _stop_requested(
+        stop, f"not installing, staying on {running}"
+    ):
+        # Only a pip that was not started comes back as 130 (a stop lets a
+        # running one finish), so nothing was changed.
+        return False
+    if installed.returncode != 0:
+        click.echo(
+            f"  self-update: pip install failed (exit {installed.returncode}); "
+            f"staying on {running}: {installed.stderr.strip()[-500:]}",
+            err=True,
+        )
+        if installed.returncode == 124:
+            # Timed out: pip was Ctrl-C'd and then killed, possibly in the
+            # middle of replacing cvcpkg -- and it rolls its uninstall back
+            # only on an Exception, never on Ctrl-C.
+            click.echo(
+                "  self-update: pip was ended part-way and may have left cvcpkg "
+                "half-installed; should the builder then fail to start, reinstall with: "
+                + _shell_join(_pip_install_cmd(checkout, break_system_packages=flag)),
+                err=True,
+            )
+        return False
+    on_disk = f"{found} is installed; not restarting into it (the next start runs it)"
+    if _stop_requested(stop, on_disk):
+        return False
+
+    # pip can succeed and still leave the old copy first on sys.path (it
+    # installed somewhere else).  Restarting then only comes back on the
+    # same code, so check what a fresh interpreter actually imports.
+    # Compared as versions, not strings: `found` is pyproject.toml's
+    # spelling and `fresh` the installed metadata's (2.5.0-rc1 vs 2.5.0rc1).
+    fresh, why = _fresh_cvcpkg_version(beat, stop)
+    if _stop_requested(stop, on_disk):
+        return False
+    if fresh is None or not _same_version(fresh, found):
+        # pip succeeded, so the new copy is on disk regardless: say so --
+        # whatever restarts this builder next (a reboot, the service
+        # manager) loads whichever copy the interpreter finds.
+        seen = f"imports cvcpkg {fresh}" if fresh else f"cannot import cvcpkg ({why})"
+        click.echo(
+            f"  self-update: pip installed {found} from {checkout}, so it is on "
+            f"disk now, but a fresh {sys.executable} {seen}; not restarting, "
+            f"still running {running}.  The builder's next start runs whatever "
+            "that interpreter imports -- check which copy of cvcpkg it finds.",
+            err=True,
+        )
+        return False
+    return True
 
 
 @builder_group.command("run")
@@ -810,6 +1996,29 @@ def builder_run(
 
     from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
     from cvcpkg.platform import detect_arch, detect_platform
+    from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env, split_names
+
+    # -- Keep credentials out of the builds' environment -------
+    # Every recipe build/test script, git, ssh and compiler this builder runs
+    # inherits os.environ -- and the token is in it whenever it came from
+    # CVCPKG_TOKEN or an env file (the root group loads /etc/cvcpkg/env & co.
+    # into os.environ before this runs), as is every other server's token on a
+    # fleet host.  The builder itself only ever uses the `token` parameter, so
+    # drop them all here, before anything is spawned.  A fleet worker is also
+    # told the names of the fleet's token variables (builder_fleet.worker_env).
+    _scrub_hint = os.environ.get(SCRUB_NAMES_ENV)
+    _scrubbed_env = scrub_token_env(os.environ, names=split_names(_scrub_hint), secrets=[token])
+    os.environ.pop(SCRUB_NAMES_ENV, None)
+    # What a self-update re-exec hands its successor besides CVCPKG_TOKEN.
+    _reexec_env = {SCRUB_NAMES_ENV: _scrub_hint} if _scrub_hint else {}
+    # Put them back when this command ends, for whatever embeds the CLI (tests,
+    # a parent process): os.environ outlives one invocation.
+    _restore_env = dict(_scrubbed_env, **_reexec_env)
+    _cli_ctx = click.get_current_context(silent=True)
+    if _cli_ctx is not None and _restore_env:
+        _cli_ctx.call_on_close(
+            lambda: [os.environ.setdefault(k, v) for k, v in _restore_env.items()]
+        )
 
     if platform is None:
         platform = detect_platform()
@@ -1170,8 +2379,20 @@ def builder_run(
         shutdown = True
         click.echo("\nShutdown requested - finishing in-flight jobs...")
 
+    def _stopping() -> bool:
+        """The self-update's *stop*: its git and pip steps run in their own
+        session, so the signal that set ``shutdown`` never reaches them, and a
+        re-exec would replace this process -- ``shutdown`` with it -- by a
+        fresh builder that takes work again."""
+        return shutdown
+
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+    if hasattr(signal, "SIGBREAK"):
+        # Windows: `builder fleet` starts each worker in its own console
+        # process group and stops it with CTRL_BREAK_EVENT (a process cannot
+        # be sent SIGINT there), so Ctrl+Break must drain like Ctrl+C.
+        signal.signal(signal.SIGBREAK, _handle_signal)
 
     # -- Helpers ---------------------------------------------
 
@@ -1800,6 +3021,99 @@ def builder_run(
             finally:
                 tmp_archive.unlink(missing_ok=True)
 
+    def _claim_landed(job_id: int, why: str) -> bool:
+        """After every claim attempt was lost: did one of them land anyway?
+
+        A claim whose answer never arrives (a timeout, a dropped connection, a
+        proxy 502/503/504) may still have committed, and then the job sits
+        "running" under this builder with nothing building it until the build
+        timeout reaps it -- next-job never hands a running job back.  So ask
+        the server whose job it is now, and build it if it is ours.
+        """
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.get(f"{base}/v1/builds/{job_id}", headers=headers)
+            info = resp.json() if resp.status_code == 200 else None
+        except Exception:  # noqa: BLE001 - same outcome as no answer
+            info = None
+        if isinstance(info, dict) and info.get("status") == "running":
+            ours = (
+                info.get("builder_id") == builder_id
+                if builder_id is not None
+                else info.get("claimed_by") == name
+            )
+            if ours:
+                click.echo(
+                    f"  [{job_id}] claim answer lost ({why}), but the job is "
+                    "running under this builder; building it"
+                )
+                return True
+        click.echo(f"  [{job_id}] claim failed ({why}), skipping", err=True)
+        return False
+
+    def _claim_job(job_id: int) -> bool:
+        """Claim *job_id* for this builder; True when it is ours to build.
+
+        A claim whose answer is lost is asked again: re-claiming a job this
+        builder holds is idempotent on the server for exactly this reason.
+        When every attempt is lost, _claim_landed checks whether one landed.
+        """
+        claim_body: dict = (
+            {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
+        )
+        try:
+            resp = None
+            why = ""
+            for _attempt in range(3):
+                if _attempt:
+                    time.sleep(2.0 * _attempt)
+                try:
+                    with httpx.Client(timeout=30) as client:
+                        resp = client.post(
+                            f"{base}/v1/builds/{job_id}/claim",
+                            headers=headers,
+                            json=claim_body,
+                        )
+                except httpx.TransportError as exc:
+                    resp, why = None, str(exc) or type(exc).__name__
+                    click.echo(f"  [{job_id}] claim error: {why}", err=True)
+                    continue
+                if resp.status_code in (502, 503, 504):
+                    why = f"answered {resp.status_code}"
+                    click.echo(f"  [{job_id}] claim {why}", err=True)
+                    continue
+                break
+            if resp is None or resp.status_code in (502, 503, 504):
+                return _claim_landed(job_id, why)
+            if resp.status_code == 409:
+                # Someone else got there first (unregistered workers select by
+                # platform, so two can see the same job).  Not an error.
+                click.echo(f"  [{job_id}] already claimed elsewhere, skipping")
+                return False
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  [{job_id}] claim failed ({resp.status_code}), skipping",
+                    err=True,
+                )
+                return False
+            # A 200 is not by itself a go-ahead.  For a job that is no longer
+            # claimable (cancelled or paused while it was being handed out,
+            # or already finished) the server answers 200 and hands the row
+            # back so the caller can see why.  Building it would publish a
+            # cancelled job and then /complete would flip it to succeeded.
+            # A body without a status (an older or fake server) proceeds.
+            try:
+                claimed_status = str(resp.json().get("status") or "")
+            except Exception:
+                claimed_status = ""
+            if claimed_status and claimed_status != "running":
+                click.echo(f"  [{job_id}] claim returned status '{claimed_status}', skipping")
+                return False
+            return True
+        except Exception as exc:
+            click.echo(f"  [{job_id}] claim error: {exc}", err=True)
+            return False
+
     def _execute_job(job: dict) -> None:
         """Execute a single build job.  The slot is released by the calling
         _run_job_guarded wrapper, not here."""
@@ -1828,30 +3142,8 @@ def builder_run(
             f"({job_platform}/{job_arch}/{job_config}/{job_link})"
         )
 
-        # 1. Claim the job
-        try:
-            claim_body: dict = (
-                {"builder_id": builder_id} if builder_id is not None else {"claimant": name}
-            )
-            with httpx.Client(timeout=30) as client:
-                resp = client.post(
-                    f"{base}/v1/builds/{job_id}/claim",
-                    headers=headers,
-                    json=claim_body,
-                )
-            if resp.status_code == 409:
-                # Someone else got there first (unregistered workers select by
-                # platform, so two can see the same job).  Not an error.
-                click.echo(f"  [{job_id}] already claimed elsewhere, skipping")
-                return
-            if resp.status_code >= 400:
-                click.echo(
-                    f"  [{job_id}] claim failed ({resp.status_code}), skipping",
-                    err=True,
-                )
-                return
-        except Exception as exc:
-            click.echo(f"  [{job_id}] claim error: {exc}", err=True)
+        # 1. Claim the job.
+        if not _claim_job(job_id):
             return
 
         error_message = ""
@@ -2037,6 +3329,33 @@ def builder_run(
         finally:
             _release_slot(slot_id, job.get("id"))
 
+    def _start_job(job: dict, slot_id: int) -> bool:
+        """Start *job*'s thread; False (admission undone) if it can't start.
+
+        _admit_job marks the job id in flight and only the thread's own
+        finally clears it.  A thread that never starts (``RuntimeError: can't
+        start new thread`` under a thread/process limit) would leave the mark
+        set for the life of the process, and since ``next-job`` keeps handing
+        that still-dispatched job back first, the poll loop would refuse it
+        forever and take no other work while heartbeating "online".
+
+        The failure is reported, not raised: every caller is a loop that must
+        keep running -- the HTTP poll loop is the whole builder, and a BSD
+        builder started from ``@reboot`` has no supervisor to restart it.  The
+        job stays dispatched to us, so a later poll or sweep retries it.
+        """
+        t = threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True)
+        try:
+            t.start()
+        except RuntimeError as exc:
+            _release_slot(slot_id, job.get("id"))
+            click.echo(f"  [{job.get('id')}] could not start a job thread: {exc}", err=True)
+            return False
+        except BaseException:
+            _release_slot(slot_id, job.get("id"))
+            raise
+        return True
+
     def _apply_pending_update() -> None:
         """Run a deferred ``builder.update`` once no job is in flight.
 
@@ -2047,12 +3366,24 @@ def builder_run(
         nonlocal pending_update
         if not pending_update:
             return
+        if shutdown:
+            # Stopping: an update would re-exec into a builder that is not.
+            click.echo(
+                f"  self-update: the builder is stopping; dropping the update to {pending_update}"
+            )
+            pending_update = None
+            return
         with jobs_lock:
             if current_jobs:
                 return
         target, pending_update = pending_update, None
         click.echo(f"  self-update: no job in flight, updating to {target}")
-        _self_update()
+        # Beat first -- the last one may be most of a minute old -- and keep
+        # beating while git and pip run (_self_update's beat): the server marks
+        # a builder silent for 180 s offline and fails the jobs it dispatched
+        # to it meanwhile.
+        _heartbeat()
+        _self_update(token=token, beat=_heartbeat, extra_env=_reexec_env, stop=_stopping)
 
     # -- WebSocket helpers -----------------------------------
 
@@ -2080,7 +3411,7 @@ def builder_run(
         text = str(exc) or type(exc).__name__
         return text.replace(token, "***") if token else text
 
-    def _ws_catch_up() -> None:
+    def _ws_catch_up() -> bool:
         """Start jobs dispatched to us that the socket will never push.
 
         ``job.dispatch`` is pushed exactly once, at dispatch time, and only if
@@ -2092,11 +3423,17 @@ def builder_run(
         ask it -- on every (re)connect and then periodically.  A job already
         running here (its claim not landed yet) comes back too; _admit_job
         refuses that one, so a job seen on both paths still runs once.
+
+        Starts every such job there is room for.  ``next-job`` hands back the
+        lowest-id dispatched job, so a job just started here hides the rest
+        until its claim lands.  Returns True when it stopped there, and the
+        socket loop runs it again on its next turns (handling pushes in
+        between) rather than leaving the rest to the next sweep, a minute away.
         """
         while not shutdown and not pending_update:
             with jobs_lock:
                 if current_jobs >= max_jobs:
-                    return
+                    return False
             try:
                 with httpx.Client(timeout=15) as client:
                     resp = client.get(
@@ -2106,25 +3443,26 @@ def builder_run(
                     )
             except Exception as exc:
                 click.echo(f"  catch-up poll error: {exc}", err=True)
-                return
+                return False
             if resp.status_code != 200:
-                return  # 204: nothing waiting.  Errors: the next sweep retries.
+                return False  # 204: nothing waiting.  Errors: the next sweep retries.
             try:
                 job = resp.json()
             except ValueError:
                 # A 200 that is not JSON (a proxy error page): runs on the
                 # socket's thread, so raising here would tear the session down.
-                return
-            if not isinstance(job, dict) or "id" not in job:
-                return
+                return False
+            if not isinstance(job, dict) or job.get("id") is None:
+                return False
             with jobs_lock:
                 slot_id = _admit_job(job)
             if slot_id is None:
-                # Already running it; anything queued behind it is picked up
-                # by the next sweep, once our claim has moved it on.
-                return
+                # Already running it: our claim has not landed yet.
+                return True
             click.echo(f"  [{job.get('id')}] picked up a dispatch the socket did not deliver")
-            threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True).start()
+            if not _start_job(job, slot_id):
+                return False
+        return False
 
     def _run_ws_loop() -> tuple[str, float]:
         """Run one WebSocket session: connect, then serve until it ends.
@@ -2175,6 +3513,10 @@ def builder_run(
                 # in that window.  Catch up as soon as a slot frees instead of
                 # leaving it for the periodic sweep (up to ws_sweep_interval).
                 missed_push = False
+                # _ws_catch_up stopped behind a job whose claim had not landed;
+                # run it again on the next turns (see catch_up_deadline).
+                catch_up_again = False
+                catch_up_deadline = 0.0
                 while not shutdown:
                     # Wall-clock budget: stop claiming, drain in-flight, exit.
                     if _past_deadline():
@@ -2218,14 +3560,22 @@ def builder_run(
                         # leave the dropped push to the periodic sweep once
                         # the update returns without a restart.
                         slot_free = current_jobs < max_jobs and not pending_update
-                    if now - last_sweep >= ws_sweep_interval or (missed_push and slot_free):
+                    rerun = catch_up_again and slot_free
+                    sweep_due = now - last_sweep >= ws_sweep_interval
+                    if sweep_due or (missed_push and slot_free) or rerun:
                         missed_push = False
-                        _ws_catch_up()
+                        started_before = _job_seq
+                        blocked = _ws_catch_up()
                         last_sweep = time.time()
+                        # Re-run while blocked, for a while past the last time
+                        # a run made progress (started a job).
+                        if blocked and (not rerun or _job_seq != started_before):
+                            catch_up_deadline = last_sweep + _CATCH_UP_RERUN_SECS
+                        catch_up_again = blocked and last_sweep < catch_up_deadline
 
                     # Try to receive a message
                     try:
-                        raw = ws.recv(timeout=2)
+                        raw = ws.recv(timeout=_CATCH_UP_RERUN_RECV_TIMEOUT if catch_up_again else 2)
                     except TimeoutError:
                         continue
                     except Exception as exc:
@@ -2240,7 +3590,7 @@ def builder_run(
 
                     if msg_type == "job.dispatch":
                         job = msg.get("job")
-                        if job is None:
+                        if not isinstance(job, dict) or job.get("id") is None:
                             continue
                         with jobs_lock:
                             if current_jobs >= max_jobs or pending_update:
@@ -2257,10 +3607,9 @@ def builder_run(
                                 "ignoring the repeated dispatch"
                             )
                             continue
-                        t = threading.Thread(
-                            target=_run_job_guarded, args=(job, slot_id), daemon=True
-                        )
-                        t.start()
+                        if not _start_job(job, slot_id):
+                            # Still dispatched to us: the catch-up retries it.
+                            missed_push = True
 
                     elif msg_type == "recipe.push":
                         recipe = msg.get("recipe", {})
@@ -2285,7 +3634,12 @@ def builder_run(
                         from cvcpkg import __version__
                         from cvcpkg.selfexec import is_frozen
 
-                        if server_ver and server_ver != __version__:
+                        if shutdown:
+                            click.echo(
+                                f"  Server requests update to {server_ver}; ignored: "
+                                "shutting down"
+                            )
+                        elif server_ver and server_ver != __version__:
                             if not _is_newer_version(server_ver, __version__):
                                 click.echo(
                                     f"  Server is at {server_ver}, not newer than "
@@ -2301,7 +3655,12 @@ def builder_run(
                                     f"{server_ver}; ignored (single-file binary)",
                                     err=True,
                                 )
-                            else:
+                            elif sys.platform == "win32" and os.environ.get(
+                                "CVCPKG_BUILDER_SUPERVISED"
+                            ):
+                                # The Windows supervisor wrapper owns the
+                                # update: it pulls and installs before it
+                                # relaunches us (see _self_update).
                                 click.echo(
                                     f"  Server requests update: {__version__} -> "
                                     f"{server_ver} (once in-flight jobs finish; "
@@ -2309,6 +3668,58 @@ def builder_run(
                                 )
                                 pending_update = server_ver
                                 _apply_pending_update()
+                            else:
+                                # Decide now whether there is anything to
+                                # install, before the builder stops taking
+                                # work: draining a busy builder (hours, behind
+                                # an llvm build) only to find no newer source
+                                # is pure loss.
+                                try:
+                                    src = _resolve_update_source(beat=_heartbeat, stop=_stopping)
+                                    failed = ""
+                                except Exception as exc:
+                                    # Never at the socket's expense: an
+                                    # exception here would end this session.
+                                    src, failed = (
+                                        None,
+                                        f"{type(exc).__name__}: {_ws_error_text(exc)}",
+                                    )
+                                if shutdown:
+                                    click.echo(
+                                        f"  Server requests update to {server_ver}; "
+                                        "ignored: shutting down"
+                                    )
+                                elif failed:
+                                    click.echo(
+                                        f"  Server requests update to {server_ver}; "
+                                        f"ignored: the update check failed ({failed})",
+                                        err=True,
+                                    )
+                                elif src is None:
+                                    # No checkout, or one it will not install
+                                    # from (the check logged why).
+                                    click.echo(
+                                        f"  Server requests update: {__version__} -> "
+                                        f"{server_ver}; ignored: no usable cvcpkg "
+                                        "source checkout to update from (set "
+                                        f"{_SELF_UPDATE_DIR_ENV} to name one)",
+                                        err=True,
+                                    )
+                                elif not _is_newer_version(src[1], __version__):
+                                    click.echo(
+                                        f"  Server requests update: {__version__} -> "
+                                        f"{server_ver}; ignored: {src[0]} has "
+                                        f"{src[1]}, not newer than {__version__}"
+                                    )
+                                else:
+                                    click.echo(
+                                        f"  Server requests update: {__version__} -> "
+                                        f"{server_ver}; installing {src[1]} from "
+                                        f"{src[0]} once in-flight jobs finish "
+                                        "(taking no new jobs meanwhile)"
+                                    )
+                                    pending_update = server_ver
+                                    _apply_pending_update()
 
                     elif msg_type == "job.timeout":
                         job_id = msg.get("job_id")
@@ -2531,7 +3942,17 @@ def builder_run(
                 time.sleep(poll_interval)
                 continue
 
-            job = resp.json()
+            try:
+                job = resp.json()
+            except ValueError:
+                job = None
+            if not isinstance(job, dict) or job.get("id") is None:
+                # A 200 that is not a job (a proxy page, a truncated body).
+                # _admit_job runs in this loop, so letting it through would
+                # raise here and stop the whole builder.
+                click.echo("  poll returned a 200 that is not a job; ignoring", err=True)
+                time.sleep(poll_interval)
+                continue
             drain_empty_since = None  # got work; restart the settle window
             with jobs_lock:
                 # NOT `token`: this runs in builder_run's own scope, so binding
@@ -2546,11 +3967,19 @@ def builder_run(
                 continue
 
             # Run in a thread so we can keep heartbeating & polling.  The
-            # guarded wrapper releases the slot on any exit path.
-            t = threading.Thread(target=_run_job_guarded, args=(job, slot_id), daemon=True)
-            t.start()
+            # guarded wrapper releases the slot on any exit path.  A thread
+            # that cannot start leaves the job dispatched; poll again later
+            # rather than spin on it.
+            if not _start_job(job, slot_id):
+                time.sleep(poll_interval)
 
     finally:
+        if pending_update:
+            # Deferred behind a job, and the builder stopped first: no update.
+            click.echo(
+                f"  self-update: the builder is stopping; dropping the update to {pending_update}"
+            )
+            pending_update = None
         # Wait for in-flight jobs
         deadline = time.time() + 300  # 5 min grace period
         while current_jobs > 0 and time.time() < deadline:
