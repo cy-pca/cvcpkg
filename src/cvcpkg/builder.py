@@ -1169,9 +1169,26 @@ def _install_ldconfig_shim(ctx: BuildContext) -> Path | None:
     return shim_dir
 
 
+def _script_base_env() -> dict[str, str]:
+    """``os.environ`` minus cvcpkg's credentials: the base of a build or test
+    script's environment.
+
+    Recipe scripts are third-party code, and their environment ends up in
+    build logs.  ``cvcpkg builder run`` already drops its tokens from its own
+    environment at startup; this covers every other way into a build (a local
+    ``cvcpkg build`` with ``CVCPKG_TOKEN`` exported, an embedding caller).  See
+    cvcpkg.tokenenv.
+    """
+    from cvcpkg.tokenenv import scrub_token_env
+
+    env = os.environ.copy()
+    scrub_token_env(env)
+    return env
+
+
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     """Construct the environment for the build script."""
-    env = os.environ.copy()
+    env = _script_base_env()
     # Standard CVC env vars (§7.3 of the roadmap)
     # Resolve symlinks so build systems that reject symlinked paths
     # (e.g. Qt6) work on macOS where /var -> /private/var.
@@ -1728,7 +1745,7 @@ def run_test(
         _haikuhost.run_haiku_test(ctx, test_path, log_callback=log_callback)
         return
 
-    env = os.environ.copy()
+    env = _script_base_env()
     test_build_prefix = ctx.build_prefix or ctx.prefix
     env["CVC_PREFIX"] = ctx.install_dir.as_posix()
     env["CVC_INSTALL_DIR"] = ctx.install_dir.as_posix()

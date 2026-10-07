@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -226,14 +227,18 @@ def _full_fleet_server():
     )
 
 
-def test_worker_argv_is_accepted_by_builder_run():
+def test_worker_argv_is_accepted_by_builder_run(monkeypatch):
     """Every flag the fleet passes must be one `builder run` accepts, under the
-    name it accepts it, or each worker dies on argument parsing."""
+    name it accepts it, or each worker dies on argument parsing.  The token is
+    not one of them: it arrives as CVCPKG_TOKEN (see worker_env)."""
+    from cvcpkg.builder_fleet import worker_env
     from cvcpkg.cli._builder import builder_run
 
     fs = _full_fleet_server()
     argv = worker_argv(fs)
     assert argv[:2] == ["builder", "run"]
+    assert "--token" not in argv and "secret" not in argv
+    monkeypatch.setenv("CVCPKG_TOKEN", worker_env(fs, [fs], {})["CVCPKG_TOKEN"])
     ctx = builder_run.make_context("run", argv[2:])
     p = ctx.params
     assert p["server"] == "https://cvcpkg.org"
@@ -347,6 +352,7 @@ def test_supervisor_reaps_the_process_group_of_an_exited_worker(monkeypatch):
     from cvcpkg.cli import _builder
 
     killed: list = []
+    monkeypatch.setattr(sys, "platform", "linux")  # the POSIX path, on every CI OS
     monkeypatch.setattr(os, "killpg", lambda pgid, sig: killed.append((pgid, sig)), raising=False)
     handlers: dict = {}
     monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
@@ -382,3 +388,287 @@ def test_supervisor_reaps_the_process_group_of_an_exited_worker(monkeypatch):
     assert killed == [(5001, signal.SIGTERM)]
     assert len(spawns) == 2
     assert all(kw.get("start_new_session") for kw in spawns)
+
+
+# ── tokens: env, not argv; each worker only its own ─────────────
+
+
+def test_parse_records_which_variable_each_token_came_from(monkeypatch):
+    monkeypatch.setenv("TP", "p")
+    cfg = parse_fleet_config(
+        {
+            "servers": [
+                {"server": "https://a", "token_env": "TP"},
+                {"server": "https://b", "token": "literal"},
+            ]
+        }
+    )
+    assert [s.token_env for s in cfg.servers] == ["TP", ""]
+    # Never in a repr (a log line, a traceback).
+    assert "'p'" not in repr(cfg.servers[0]) and "literal" not in repr(cfg.servers[1])
+
+
+def test_worker_env_holds_only_the_workers_own_token():
+    from cvcpkg.builder_fleet import FleetServer, worker_env
+    from cvcpkg.tokenenv import SCRUB_NAMES_ENV
+
+    a = FleetServer(server="https://a", token="tok-a", serve=("",), name="a", token_env="TA")
+    b = FleetServer(server="https://b", token="tok-b", serve=("",), name="b", token_env="TB")
+    base = {
+        "TA": "tok-a",
+        "TB": "tok-b",
+        "COPY": "tok-b",  # another server's token under an unrelated name
+        "CVCPKG_TOKEN": "stray",
+        "CVCPKG_ADMIN_TOKEN": "admin",
+        "PATH": "/usr/bin",
+        "GITHUB_TOKEN": "gh",
+    }
+    env = worker_env(a, [a, b], base)
+    assert env == {
+        "PATH": "/usr/bin",
+        "GITHUB_TOKEN": "gh",
+        "CVCPKG_TOKEN": "tok-a",
+        SCRUB_NAMES_ENV: "TA,TB",
+    }
+    assert base["TB"] == "tok-b"  # the supervisor's own environment is untouched
+
+
+def test_supervisor_puts_no_token_on_argv_and_one_in_each_env(monkeypatch):
+    """The whole fleet's secrets, as the supervisor's environment holds them:
+    no worker sees one on its command line, and each sees exactly its own."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    monkeypatch.setenv("CVCPKG_TOKEN_PROD", "prod-secret-1")
+    monkeypatch.setenv("DEV_TOK", "dev-secret-2")
+    monkeypatch.setenv("CVCPKG_TOKEN", "stray-secret-3")
+    monkeypatch.setenv("COPY_OF_PROD", "prod-secret-1")
+    monkeypatch.setenv("UNRELATED_SETTING", "keep-me")
+    cfg = parse_fleet_config(
+        {
+            "name": "two-servers",
+            "servers": [
+                {"server": "https://cvcpkg.org", "token_env": "CVCPKG_TOKEN_PROD"},
+                {"server": "http://10.0.0.1:8420", "token_env": "DEV_TOK"},
+            ],
+        }
+    )
+    spawned = _run_supervisor(monkeypatch, cfg)
+
+    secrets = {"prod-secret-1", "dev-secret-2", "stray-secret-3"}
+    assert len(spawned) == 2
+    for (argv, env), own in zip(spawned, ["prod-secret-1", "dev-secret-2"], strict=True):
+        assert not [a for a in argv if any(sec in a for sec in secrets)], argv
+        assert env["CVCPKG_TOKEN"] == own
+        rest = json.dumps({k: v for k, v in env.items() if k != "CVCPKG_TOKEN"})
+        assert not [sec for sec in secrets if sec in rest]
+        assert env["UNRELATED_SETTING"] == "keep-me"
+        assert env["CVCPKG_BUILDER_SCRUB_ENV"] == "CVCPKG_TOKEN_PROD,DEV_TOK"
+
+
+def test_fleet_dry_run_shows_no_token_anywhere(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+
+    from cvcpkg.cli._builder import builder_fleet
+
+    monkeypatch.setenv("TOK", "supersecret")
+    p = tmp_path / "fleet.yaml"
+    p.write_text("servers:\n  - server: https://a.example\n    token_env: TOK\n")
+    res = CliRunner().invoke(builder_fleet, ["--config", str(p), "--dry-run"])
+    assert res.exit_code == 0, res.output
+    assert "supersecret" not in res.output
+    assert "--token" not in res.output
+    assert "CVCPKG_TOKEN=*** (from $TOK)" in res.output
+
+
+# ── restarts: capped exponential backoff ────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("previous", "base", "lived", "expected"),
+    [
+        (0.0, 5.0, 0.0, 5.0),  # first restart
+        (5.0, 5.0, 3.0, 10.0),  # died young again: double
+        (160.0, 5.0, 3.0, 300.0),  # capped
+        (300.0, 5.0, 3.0, 300.0),
+        (300.0, 5.0, 61.0, 5.0),  # ran a minute: healthy, start over
+        (0.0, 0.0, 0.0, 0.0),  # --restart-delay 0 means no delay at all
+        (0.0, 600.0, 0.0, 600.0),  # a base above the cap is honoured
+        (600.0, 600.0, 1.0, 600.0),
+    ],
+)
+def test_next_respawn_delay(previous, base, lived, expected):
+    from cvcpkg.cli._builder import _next_respawn_delay
+
+    assert _next_respawn_delay(previous, base, lived) == expected
+
+
+def test_frozen_worker_crash_loop_backs_off(monkeypatch, capsys):
+    """Frozen simulation: a single-file worker that dies at once (revoked token,
+    stuck pidfile) is restarted on a doubling delay, not every 5 s -- each
+    start unpacks a fresh ~85 MB copy of the binary."""
+    import os
+    import signal
+    import subprocess
+
+    from cvcpkg.builder_fleet import FleetConfig, FleetServer
+    from cvcpkg.cli import _builder
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/cvcpkg/cvcpkg")
+    monkeypatch.setattr(_builder, "_FLEET_POLL_SECS", 0.005)
+    monkeypatch.setattr(_builder, "_FLEET_RESPAWN_MAX_DELAY", 0.08)
+    monkeypatch.setattr(sys, "platform", "linux")  # the POSIX path, on every CI OS
+    monkeypatch.setattr(os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)  # never a real taskkill
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
+    spawns: list = []
+
+    class _Dead:
+        def __init__(self, pid):
+            self.pid, self.returncode = pid, 1
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _sig):
+            pass
+
+        def wait(self, timeout=None):
+            return 1
+
+        def terminate(self):
+            pass
+
+    def _popen(argv, env=None, **kw):
+        spawns.append((list(argv), dict(env or {})))
+        if len(spawns) == 7:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return _Dead(6000 + len(spawns))
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    fs = FleetServer(server="https://a.example", token="t", serve=("",), name="a")
+    _builder._supervise_fleet(FleetConfig(name="f", servers=[fs]), restart_delay=0.01)
+
+    out = capsys.readouterr().out
+    delays = [
+        line.rsplit("restarting in ", 1)[1] for line in out.splitlines() if "restarting in" in line
+    ]
+    assert delays[:6] == ["0.01s", "0.02s", "0.04s", "0.08s", "0.08s", "0.08s"], out
+    argv, env = spawns[0]
+    assert argv[:3] == ["/opt/cvcpkg/cvcpkg", "builder", "run"] and "-m" not in argv
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+    assert env["CVCPKG_TOKEN"] == "t" and "t" not in argv
+
+
+# ── Windows: own process group, Ctrl+Break drain, tree kill ─────
+
+
+def _windows(monkeypatch):
+    import os
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delattr(os, "killpg", raising=False)
+
+
+def test_windows_worker_is_drained_with_ctrl_break_then_tree_killed(monkeypatch):
+    """SIGINT cannot be sent to a process on Windows (send_signal raises
+    ValueError, which was swallowed: workers never drained).  Each worker gets
+    its own console process group and CTRL_BREAK_EVENT; one that outlives the
+    drain is killed with its whole tree, not just the launcher."""
+    import signal
+    import subprocess
+
+    from cvcpkg.builder_fleet import FleetConfig, FleetServer
+    from cvcpkg.cli import _builder
+
+    _windows(monkeypatch)
+    monkeypatch.setattr(_builder, "_FLEET_POLL_SECS", 0.005)
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
+    popen_kw: list = []
+    sent: list = []
+    ran: list = []
+    terminated: list = []
+
+    class _Busy:
+        pid = 777
+        returncode = None
+        polls = 0
+
+        def poll(self):
+            _Busy.polls += 1
+            if _Busy.polls == 1:  # the supervisor's first look: stop the fleet
+                handlers[signal.SIGTERM](signal.SIGTERM, None)
+            return None
+
+        def send_signal(self, sig):
+            sent.append(sig)
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("cvcpkg", timeout)
+
+        def terminate(self):
+            terminated.append(self.pid)
+
+    def _popen(argv, env=None, **kw):
+        popen_kw.append(kw)
+        return _Busy()
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: ran.append(list(cmd)))
+    fs = FleetServer(server="https://a.example", token="t", serve=("",), name="a")
+    _builder._supervise_fleet(FleetConfig(name="f", servers=[fs]), restart_delay=0.0)
+
+    assert popen_kw[0].get("creationflags") == getattr(
+        subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200
+    )
+    assert "start_new_session" not in popen_kw[0]
+    assert sent == [getattr(signal, "CTRL_BREAK_EVENT", 1)]
+    assert ran == [["taskkill", "/T", "/F", "/PID", "777"]]
+    assert terminated == []
+
+
+def test_windows_exited_worker_is_reaped_as_a_tree(monkeypatch):
+    import signal
+    import subprocess
+
+    from cvcpkg.builder_fleet import FleetConfig, FleetServer
+    from cvcpkg.cli import _builder
+
+    _windows(monkeypatch)
+    monkeypatch.setattr(_builder, "_FLEET_POLL_SECS", 0.005)
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
+    ran: list = []
+    spawns: list = []
+
+    class _Proc:
+        def __init__(self, pid, rc):
+            self.pid, self.returncode = pid, rc
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _sig):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            pass
+
+    def _popen(argv, env=None, **kw):
+        spawns.append(kw)
+        if len(spawns) == 1:
+            return _Proc(5001, 3)  # exited
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return _Proc(5002, None)
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: ran.append(list(cmd)))
+    fs = FleetServer(server="https://a.example", token="t", serve=("",), name="a")
+    _builder._supervise_fleet(FleetConfig(name="f", servers=[fs]), restart_delay=0.0)
+
+    assert ran == [["taskkill", "/T", "/F", "/PID", "5001"]]
+    assert len(spawns) == 2

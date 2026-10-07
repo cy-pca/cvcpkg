@@ -41,21 +41,31 @@ periodic heartbeats. If a builder misses heartbeats, it transitions to
 "offline" status and won't receive new jobs.
 
 ```bash
-cvcpkg builder run \
+# The token comes from CVCPKG_TOKEN -- here an env file (see "Keeping the token
+# out of ps" below), so it is never on the command line.
+cvcpkg --env-file /etc/cvcpkg/builder.env builder run \
   --server https://cvcpkg.org \
-  --token $BUILDER_TOKEN \
   --name $(hostname) \
   --max-jobs 4 \
   --work-dir /tmp/cvcpkg-builder \
   --daemon
 ```
 
+The builder removes its token -- and every other `CVCPKG_...TOKEN...`
+variable -- from the environment its build scripts inherit, so recipes never
+see a builder credential in their environment. This is hygiene, not a sandbox:
+a build script runs as the builder's user, and a builder started with
+`CVCPKG_TOKEN` still has it in its own initial environment
+(`/proc/<pid>/environ`), which that user can read. See
+[Keeping the token out of `ps`](#keeping-the-token-out-of-ps----env-file), and
+run builders that must not reach each other's credentials as separate users.
+
 ### Key Options
 
 | Option | Description |
 |--------|-------------|
 | `--server URL` | Server to connect to (env: `CVCPKG_SERVER_URL`) |
-| `--token TOKEN` | Publisher-role auth token (env: `CVCPKG_TOKEN`) |
+| `--token TOKEN` | Publisher-role auth token (env: `CVCPKG_TOKEN`; prefer the env var or an env file — a command line is visible in `ps`) |
 | `--name NAME` | Unique builder name |
 | `--org SLUG` | Home namespace / identity (empty = public) |
 | `--serve NS` | Additional namespace to accept jobs for (repeatable; `''` = public) |
@@ -98,8 +108,71 @@ new jobs, lets the in-flight ones finish, and only then updates and restarts
 jobs `running` until the build timeout). Jobs dispatched to it meanwhile stay
 dispatched and are picked up by the restarted builder. The single-file binary
 ignores `builder.update`; replace the binary instead. A builder already at the
-server's version, or ahead of it, ignores it too, and the update never installs
-a source checkout older than the running cvcpkg.
+server's version, or ahead of it, ignores it too.
+
+A pip-installed builder updates from a cvcpkg **source checkout**, and only
+from one of these: `CVCPKG_SELF_UPDATE_DIR` if set (then nothing else), the
+directory it was installed from (pip records it), or the checkout it runs from
+(editable install). It never guesses a path, so a builder installed from PyPI
+ignores `builder.update` until `CVCPKG_SELF_UPDATE_DIR` names a checkout -- a
+clean clone of cy-pca/cvcpkg tracking `master`, since the update fast-forwards
+whatever branch it has checked out to its upstream (`git fetch`, then
+`git merge --ff-only @{upstream}`: a `git pull`, split in two).
+
+It decides whether there is anything to install *before* it stops taking work.
+A checkout whose tracked files differ from HEAD -- local edits, or a pull or
+merge that was killed part-way through rewriting the tree -- is never installed
+from, so the update is ignored (the log names the checkout; see
+`git -C <checkout> status`). Otherwise it fetches (with `--prune`, so an
+upstream branch deleted on the remote does not linger as a stale ref; a fetch
+that collides with another builder's fetch in the same checkout is retried
+once, 2 s later), and counts on the upstream's version only when the
+fast-forward can deliver it (the fetch succeeded and the branch fast-forwards);
+otherwise it goes by the working tree's version and logs which of these was the
+reason. It ignores the update unless that version is newer than the running one
+-- so a builder with no checkout, or a stale or diverged one, is never drained
+for nothing. (An untracked file the merge would have to overwrite is not
+detected; that costs one drain, after which the builder installs the working
+tree's version only if it is newer.) Once idle it fetches and fast-forwards,
+checks again that the tree is exactly HEAD, pip-installs `<checkout>[builder]`
+(passing `--break-system-packages` only to a pip that knows it, 23.0.1+),
+checks that a fresh interpreter imports the new version, and re-execs as
+`python -m cvcpkg builder run ...` with the token in `CVCPKG_TOKEN`. If any
+step fails it logs why and keeps running the version it has. It heartbeats throughout, so the server does not mark it
+offline mid-update, and every step has a timeout; a step that overruns gets a
+Ctrl-C (SIGINT to its process group, so git can remove its lock files and pip
+its temporary directories) and, 3 s later, its whole process tree is killed.
+git runs non-interactively, with ssh and http stall limits unless the
+builder's environment or git config sets its own
+(`GIT_SSH_COMMAND`/`core.sshCommand`, `http.lowSpeedLimit`/`http.lowSpeedTime`).
+
+A stop request wins over an update: once it arrives the update goes no further
+and the builder never re-execs (which would start a fresh builder that takes
+work again). An update still waiting for jobs to finish is dropped. The
+update's git and pip steps run in a session of their own, so a signal sent to
+the builder -- Ctrl-C, `kill <pid>`, `builder fleet` draining a worker -- does
+not reach them; the builder sees the stop within about a second. A read-only
+step running then (the fetch, the tree check, a version probe, the wait for the
+lock) is ended, the same way as a timed-out one. The two steps that rewrite
+files are let finish, within their timeouts (60 s and 300 s), and the builder
+logs that it is waiting for them: the fast-forward merge, which ended part-way
+leaves HEAD on the old commit under a tree half from the new one, and pip,
+which ended part-way can leave no cvcpkg installed at all (it rolls back its
+uninstall only on an error, not on Ctrl-C) -- the builder could not start
+again. A `builder fleet` worker still updating after the supervisor's 120 s
+drain is killed, but pip, in its own session, runs on and completes. A pip that
+times out is ended like any other step; the builder then logs the
+`pip install` command to run should it fail to start. A merge killed anyway --
+systemd stopping the unit signals its whole cgroup; the OOM killer -- leaves a
+tree that differs from HEAD, which no later update installs from.
+
+Builders that share a checkout -- a fleet's workers, or a dev and a prod unit
+on one host -- update one at a time: each holds an exclusive lock
+(`.git/cvcpkg-self-update.lock` in the checkout, released when the process
+exits or re-execs) for its fetch, merge, install and check, and heartbeats
+while it waits for it (at most about 20 minutes, the longest an update holding
+it can take). One that finds the version already installed by another only
+restarts, without running pip again.
 
 | Environment variable | Default | Meaning |
 |----------------------|---------|---------|
@@ -107,6 +180,7 @@ a source checkout older than the running cvcpkg.
 | `CVCPKG_BUILDER_WS_RETRY_MAX` | `300` | Backoff cap: the longest a builder stays on long-poll once the server accepts sockets again |
 | `CVCPKG_BUILDER_WS_STABLE_SECS` | `60` | A socket that stayed up this long resets the backoff |
 | `CVCPKG_BUILDER_WS_SWEEP_INTERVAL` | `60` | How often a connected builder asks `next-job` for undelivered dispatches |
+| `CVCPKG_SELF_UPDATE_DIR` | (install source) | The cvcpkg git checkout a pip-installed builder updates itself from; needed for a PyPI install |
 
 `--no-websocket` disables the socket entirely; drain mode
 (`--exit-when-empty`, `--no-register`) never uses it.
@@ -183,9 +257,12 @@ the full guide.
 
 - **Serve several servers (fleet supervisor)** — `cvcpkg builder fleet --config
   fleet.yaml` runs one worker per server listed in the config, under one
-  process. Each worker holds only its own server's token, so credentials and
-  build outputs stay isolated per server. This is how the previously separate
-  dev and prod fleets consolidate into one.
+  process. Each worker is given only its own server's token, in its
+  environment (never on its command line), and its builds see none. All
+  workers run as one user, though, so this is not a boundary between servers
+  that must not be able to read each other's tokens -- run those as separate
+  `builder run` services under separate users. This is how the previously
+  separate dev and prod fleets consolidate into one.
 
   ```bash
   cvcpkg builder fleet --config /etc/cvcpkg/fleet.yaml --dry-run   # inspect
@@ -199,7 +276,15 @@ shadow the public catalogue) — only *build execution* is pooled.
 
 Run the builder under whatever service manager the platform provides so it
 survives reboots. The templates below use placeholders — substitute your own
-token and paths.
+paths. None of them puts the token on the command line, where `ps` shows it
+to every local user: it lives in a root-owned, mode-`0600` env file that the
+builder reads as `CVCPKG_TOKEN`.
+
+```bash
+install -d -m 755 /etc/cvcpkg
+install -m 600 /dev/null /etc/cvcpkg/builder.env
+printf 'CVCPKG_TOKEN=%s\n' '<TOKEN>' >> /etc/cvcpkg/builder.env
+```
 
 ### Linux (systemd)
 
@@ -213,9 +298,10 @@ Wants=network-online.target
 [Service]
 Type=forking
 User=<user>
+# Read by systemd as root, so the file can stay 0600 root:root.
+EnvironmentFile=/etc/cvcpkg/builder.env
 ExecStart=/usr/local/bin/cvcpkg builder run \
   --server https://cvcpkg.org \
-  --token <TOKEN> \
   --name %H \
   --max-jobs 4 \
   --work-dir /tmp/cvcpkg-builder \
@@ -236,14 +322,18 @@ systemctl enable --now cvcpkg-builder
 ### BSD (cron @reboot)
 
 ```bash
-@reboot /usr/local/bin/cvcpkg builder run \
+# root's crontab: the env file supplies CVCPKG_TOKEN
+@reboot /usr/local/bin/cvcpkg --env-file /etc/cvcpkg/builder.env builder run \
   --server https://cvcpkg.org \
-  --token <TOKEN> \
   --name $(hostname) \
   --max-jobs 2 \
   --work-dir /tmp/cvcpkg-builder \
   --daemon
 ```
+
+A builder started from `@reboot` has no supervisor: if it exits, it stays down
+until the next reboot. It does not exit on a job it cannot start (a thread or
+process limit) -- it logs it and polls again.
 
 ### Windows (scheduled task + supervisor)
 
@@ -418,7 +508,9 @@ The loaded variables are **scoped to the invocation**: cvcpkg removes the ones
 it added when the command finishes, so an embedding process (the server, a test
 session, an IDE plugin) does not inherit one command's env file as standing
 configuration. Anything already in the environment is never touched, and
-subprocesses started during the command still see the settings.
+subprocesses started during the command still see the settings -- except
+cvcpkg's own credentials: build and test scripts never see a `CVCPKG_...TOKEN...`
+variable, and `builder run` drops them from its environment altogether.
 
 > Fleet configs have their own indirection for the same reason: prefer
 > `token_env:` over a literal `token:` in `fleet.yaml`, and supply the named
