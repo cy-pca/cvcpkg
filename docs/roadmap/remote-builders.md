@@ -478,27 +478,40 @@ archive URL — no builder is needed.
 
 ### 8.1 WebSocket Protocol (Preferred)
 
-Connection: `wss://server/v1/builders/{id}/ws?token=<bearer>`
+Connection: `wss://server/v1/builders/{id}/ws` with
+`Authorization: Bearer <token>` (older builders pass `?token=<bearer>`,
+which every proxy on the way logs).
 
 **Server → Builder messages:**
 
 ```json
 {"type": "job.dispatch", "job": { "id": "...", "recipe_name": "zlib", ... }}
+{"type": "job.cancel", "job_id": "...", "message": "force-cancelled by ..."}
 {"type": "job.timeout", "job_id": "...", "message": "exceeded 86400s limit"}
 {"type": "recipe.push",  "recipe": { "name": "zlib", "version": "1.3.1", "bundle_url": "..." }}
+{"type": "builder.update", "version": "..."}
 {"type": "ping"}
 ```
 
 **Builder → Server messages:**
 
 ```json
-{"type": "job.claim",    "job_id": "..."}
-{"type": "job.log",      "job_id": "...", "data": "base64-encoded-chunk"}
-{"type": "job.complete",  "job_id": "...", "archive_url": "..."}
-{"type": "job.fail",      "job_id": "...", "error": "..."}
 {"type": "heartbeat",    "status": "online", "current_jobs": 3}
 {"type": "pong"}
 ```
+
+Job-state changes go over HTTP only: `POST /v1/builds/{id}/claim`,
+`PATCH /v1/builds/{id}/log`, `POST /v1/builds/{id}/complete` and
+`POST /v1/builds/{id}/fail`.  That is where org visibility, the holder
+check, the status guard, auditing and webhooks are enforced, and it is what
+every builder release has always used.  The `job.claim`, `job.log`,
+`job.complete` and `job.fail` frames this protocol once described are
+answered with
+`{"type": "error", "code": "http_only", "rejected": "<type>", "job_id": ..., "message": ...}`
+and change nothing: their handlers were an unused second copy of the job
+plane that checked builder ownership but not job visibility, so any
+publisher could claim, log to or fail another org's private job through its
+own builder's socket.
 
 Reconnection: exponential backoff starting at 1s, max 60s.
 If WebSocket is unavailable, builder falls back to REST long-poll.
@@ -533,8 +546,9 @@ git access.
   archives — S3, GCS, Azure, local, etc.).
 - Path convention: `logs/{dag_id}/{job_id}.log` (or
   `logs/standalone/{job_id}.log` for single jobs).
-- During the build, log chunks are appended via the WebSocket `job.log`
-  message or `PATCH /v1/builds/{id}/log`.  The server buffers and
+- During the build, log chunks are appended via
+  `PATCH /v1/builds/{id}/log` (the WebSocket `job.log` frame is refused;
+  see §8.1).  The server buffers and
   flushes to storage periodically (every 10s or 64 KB).
 
 ### 9.2 Access
@@ -618,8 +632,8 @@ cvcpkg-server config set log-retention-days 90
 
 - [x] Builder job execution loop: fetch recipe, run build, stream
   log, upload archive, report completion/failure
-- [x] WebSocket protocol: `job.dispatch`, `job.claim`, `job.log`,
-  `job.complete`, `job.fail`, heartbeat
+- [x] WebSocket protocol: `job.dispatch`, `job.cancel`, heartbeat
+  (job claim/log/complete/fail are HTTP-only; see §8.1)
 - [x] Long-poll fallback: `next-job` endpoint
 - [x] Log streaming: server buffers + flushes to object storage
 - [x] `GET /v1/builds/{id}/log` (download) and

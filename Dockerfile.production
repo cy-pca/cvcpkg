@@ -59,6 +59,14 @@ RUN if [ "$PYTHON_DEPS" = "poetry" ]; then \
 # so the `cvcpkg-server` entrypoint exists there.  cvcpkg install resolves the
 # full transitive closure, so only the direct roots (main + `production` extra +
 # the interpreter) are listed.
+#
+# KNOWN GAP: the `production` extra's `websockets` is not in this list because
+# cvcpkg publishes no websockets-cp312 recipe yet.  uvicorn has no WebSocket
+# protocol of its own, so an image built this way answers 404 on the builder
+# WebSocket (/v1/builders/{id}/ws): builders fall back to HTTP long-poll and
+# `update-builders` reaches none of them.  The default poetry path is not
+# affected.  Once websockets-cp312 is published, add it to the roots below;
+# until then the build says so loudly instead of shipping the gap silently.
 RUN mkdir -p /opt/pydeps && \
     if [ "$PYTHON_DEPS" = "cvcpkg" ]; then \
       pip install --no-cache-dir . && \
@@ -68,7 +76,10 @@ RUN mkdir -p /opt/pydeps && \
         httpx-cp312 sqlalchemy-cp312 fastapi-cp312 uvicorn-cp312 \
         pydantic-cp312 python-multipart-cp312 asyncpg-cp312 alembic-cp312 \
         --prefix /opt/pydeps --platform linux --arch x86_64 && \
-      /opt/pydeps/bin/python3.12 -m pip install --no-deps --no-cache-dir . ; \
+      /opt/pydeps/bin/python3.12 -m pip install --no-deps --no-cache-dir . && \
+      { /opt/pydeps/bin/python3.12 -c "import websockets" 2>/dev/null \
+        || echo "WARNING: no websockets in /opt/pydeps (no websockets-cp312 recipe yet):" \
+                "this image 404s the builder WebSocket; builders will long-poll." ; } ; \
     fi
 
 # ── Final stage: poetry variant ─────────────────────────────────

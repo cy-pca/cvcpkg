@@ -11,7 +11,7 @@ This document describes the automated deployment pipelines for cvcpkg.
 
 ## Production Deployment (`deploy-prod.yml`)
 
-**Trigger:** Push to `prod` branch or manual `workflow_dispatch` (optional `sha` input, defaults to `prod` HEAD).
+**Trigger:** Push to `prod` branch or manual `workflow_dispatch` (optional `sha` input, defaults to the dispatched ref's HEAD). The workflow checks out and deploys exactly that commit; it must be on `prod` or `master`.
 
 **Runner:** `[self-hosted, Linux, cvcpkg-prod]` (catx-03)
 
@@ -19,9 +19,11 @@ This document describes the automated deployment pipelines for cvcpkg.
 
 The `deploy` job:
 
+0. **Resolve and check out the target SHA** — a short SHA is resolved to the full commit, a commit on neither `prod` nor `master` is refused, and the workspace is moved to it before anything is synced (the `sha` input used to be only the image label while the dispatched ref's HEAD was deployed)
 1. **Deploy to cvcpkg.org** — SSH to the primary host (`vars.PROD_SERVER_SSH`): reap stale build dirs and prune Docker, rsync the checkout, back up the database, rebuild the backend container, run migrations (`cvcpkg-server migrate upgrade head`), health-check `/healthz`
 2. **Deploy to pkg.tx.wtf** — same flow, executed locally on the runner host
 3. **Push recipes to cvcpkg.org** — refresh the DB-backed `/v1/recipes/*` store so builders fetch the deployed recipe revision (needs `CVCPKG_PUBLISHER_TOKEN`)
+4. **Check the builder WebSocket route** — an unauthenticated RFC 6455 handshake to `/v1/builders/0/ws` through the public URL must be refused by the route (`403`/`401`). A `404` means the reverse proxy is not forwarding WebSocket upgrades (or the image lacks `websockets`): builders cannot connect and `notify-builders` would reach none of them, so the job fails. See [deployment-guide.md](deployment-guide.md#checking-the-websocket-route).
 
 > **Extras matter on every host these pipelines touch.** A bare
 > `pip install .` now gets the core client only (`click` + `PyYAML`). Each
@@ -37,7 +39,7 @@ The `deploy` job:
 # From master, push to prod:
 git push origin master:prod
 
-# Or deploy a specific SHA:
+# Or deploy (or roll back to) a specific commit on prod or master:
 gh workflow run deploy-prod -f sha=abc1234
 ```
 

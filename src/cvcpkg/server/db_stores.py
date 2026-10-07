@@ -21,7 +21,7 @@ from cvcpkg.optional import require_sqlalchemy
 # See cvcpkg.server.db: this module is also reachable before db.py is imported.
 require_sqlalchemy()
 
-from sqlalchemy import distinct, or_, select, update
+from sqlalchemy import and_, distinct, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
@@ -59,6 +59,7 @@ from cvcpkg.server.models import (
     BuildJobAlreadyClaimedError,
     BuildJobInfo,
     BuildJobNotActiveError,
+    BuildJobNotHeldError,
     BuildJobStatus,
     MirrorInfo,
     OrgInfo,
@@ -3806,6 +3807,24 @@ class DbBuildJobStore:
         builder has died or is stuck and no completion is coming.
         Callers using force=True should typically also invoke
         :meth:`cancel_downstream` to propagate the cancellation.
+
+        The row comes back whether or not this call changed it; use
+        :meth:`cancel_and_report` to tell a fresh cancel from a no-op.
+        """
+        info, _changed = await self.cancel_and_report(job_id, force=force)
+        return info
+
+    async def cancel_and_report(
+        self, job_id: int, *, force: bool = False
+    ) -> tuple[BuildJobInfo | None, bool]:
+        """Cancel a job and say whether *this* call cancelled it.
+
+        Returns ``(info, changed)``: *info* is the job as it stands (None if
+        it does not exist) and *changed* is True only when this call moved it
+        to cancelled.  A job that was already cancelled comes back with
+        ``status == "cancelled"`` and ``changed == False`` -- the case the
+        cancel endpoint must not answer with a second audit entry, webhook
+        and ``job.cancel`` push.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         allowed = [BuildJobStatus.pending, BuildJobStatus.dispatched]
@@ -3830,9 +3849,9 @@ class DbBuildJobStore:
                 )
             ).scalar()
             if row is None:
-                return None
+                return None, False
             if result.rowcount == 0:
-                return self._row_to_info(row)
+                return self._row_to_info(row), False
             builder_id = row.builder_id
             if force and builder_id is not None:
                 # Reconcile builder's current_jobs from actual DB state
@@ -3855,7 +3874,7 @@ class DbBuildJobStore:
                 if builder_row is not None:
                     builder_row.current_jobs = active
             dep_ids = await self._load_dep_ids(session, job_id)
-            return self._row_to_info(row, dep_ids)
+            return self._row_to_info(row, dep_ids), True
 
     async def list_active_by_builder(self, builder_id: int) -> list[BuildJobInfo]:
         """Return jobs currently assigned to a builder in dispatched or running state."""
@@ -3872,6 +3891,78 @@ class DbBuildJobStore:
                 results.append(self._row_to_info(row, dep_ids))
             return results
 
+    # ── Conditional state transitions ──────────────────────────────
+    #
+    # Every status change below is ONE conditional UPDATE whose WHERE clause
+    # carries the state the change is allowed from -- the shape claim(),
+    # _finish(), cancel() and reap_timed_out() already use.  Reading the row
+    # and then writing it let a concurrent writer that committed in between
+    # be silently overwritten: a cancel landing inside dispatch() came back
+    # as "dispatched" (and was then claimed and built), and a claim landing
+    # inside pause() came back as "paused" while the builder was building it
+    # (resume then dispatched a second copy).  With the predicate in the
+    # UPDATE the database decides: on Postgres (READ COMMITTED) the UPDATE
+    # waits on the competing writer's row lock and re-checks the predicate
+    # against the committed row; on SQLite the write lock serializes the two.
+
+    async def _transition(
+        self,
+        job_id: int,
+        from_statuses: tuple[BuildJobStatus, ...],
+        values: dict,
+    ) -> tuple[BuildJobInfo | None, bool]:
+        """Apply *values* to one job only while its status is in *from_statuses*.
+
+        Returns ``(info, changed)``: the job as it stands after the attempt
+        (None when it does not exist) and whether this call changed it.
+        """
+        async with get_session() as session:
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(BuildJobRow.id == job_id, BuildJobRow.status.in_(from_statuses))
+                .values(**values)
+                .execution_options(synchronize_session=False)
+            )
+            # populate_existing: the UPDATE bypassed the ORM, so refresh the
+            # identity-mapped instance rather than reading back stale values.
+            row = (
+                await session.execute(
+                    select(BuildJobRow)
+                    .where(BuildJobRow.id == job_id)
+                    .execution_options(populate_existing=True)
+                )
+            ).scalar()
+            if row is None:
+                return None, False
+            dep_ids = await self._load_dep_ids(session, job_id)
+            return self._row_to_info(row, dep_ids), result.rowcount == 1
+
+    @staticmethod
+    def _dag_predicate(dag_id: str, *, allow_prefix: bool = False):
+        """WHERE clause selecting a DAG's jobs (``prefix*`` when *allow_prefix*)."""
+        if allow_prefix and dag_id.endswith("*"):
+            # escape LIKE metacharacters in the fixed prefix, then match.
+            prefix = dag_id[:-1].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            return BuildJobRow.dag_id.like(prefix + "%", escape="\\")
+        return BuildJobRow.dag_id == dag_id
+
+    async def _transition_dag(
+        self,
+        dag_pred,
+        from_statuses: tuple[BuildJobStatus, ...],
+        values: dict,
+    ) -> int:
+        """Apply *values* to every job matching *dag_pred* whose status is in
+        *from_statuses*, in one UPDATE.  Returns how many jobs changed."""
+        async with get_session() as session:
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(dag_pred, BuildJobRow.status.in_(from_statuses))
+                .values(**values)
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount or 0
+
     async def cancel_dag(self, dag_id: str) -> int:
         """Cancel all pending/dispatched jobs in a DAG. Returns count cancelled.
 
@@ -3879,96 +3970,64 @@ class DbBuildJobStore:
         cancels every sub-DAG of a PR run -- submit-dag splits one logical DAG
         into ``<base>-<platform>-<arch>-<config>-<link>`` sub-DAGs, and a
         superseded CI run leaves several such orphans behind.
+
+        A job a builder claims while this runs stays running: the status
+        predicate is part of the UPDATE, not a separate read.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
-        async with get_session() as session:
-            if dag_id.endswith("*"):
-                # escape LIKE metacharacters in the fixed prefix, then match.
-                prefix = dag_id[:-1].replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-                dag_pred = BuildJobRow.dag_id.like(prefix + "%", escape="\\")
-            else:
-                dag_pred = BuildJobRow.dag_id == dag_id
-            q = (
-                select(BuildJobRow)
-                .where(dag_pred)
-                .where(
-                    BuildJobRow.status.in_(
-                        [
-                            BuildJobStatus.pending,
-                            BuildJobStatus.dispatched,
-                        ]
-                    )
-                )
-            )
-            rows = (await session.execute(q)).scalars().all()
-            for row in rows:
-                row.status = BuildJobStatus.cancelled
-                row.finished_at = now
-            return len(rows)
+        return await self._transition_dag(
+            self._dag_predicate(dag_id, allow_prefix=True),
+            (BuildJobStatus.pending, BuildJobStatus.dispatched),
+            {"status": BuildJobStatus.cancelled, "finished_at": now},
+        )
 
     async def pause(self, job_id: int) -> BuildJobInfo | None:
-        """Pause a pending or dispatched job. Returns updated info or None."""
-        async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            if row.status not in (
-                BuildJobStatus.pending,
-                BuildJobStatus.dispatched,
-            ):
-                return self._row_to_info(row)
-            row.status = BuildJobStatus.paused
-            dep_ids = await self._load_dep_ids(session, job_id)
-            return self._row_to_info(row, dep_ids)
+        """Pause a pending or dispatched job. Returns the job as it stands, or None.
+
+        A job claimed (now running) or finished while this runs is left
+        alone and comes back with that status.
+        """
+        info, _changed = await self.pause_and_report(job_id)
+        return info
+
+    async def pause_and_report(self, job_id: int) -> tuple[BuildJobInfo | None, bool]:
+        """:meth:`pause`, also saying whether this call paused the job."""
+        return await self._transition(
+            job_id,
+            (BuildJobStatus.pending, BuildJobStatus.dispatched),
+            {"status": BuildJobStatus.paused},
+        )
 
     async def resume(self, job_id: int) -> BuildJobInfo | None:
-        """Resume a paused job back to pending. Returns updated info or None."""
-        async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            if row.status != BuildJobStatus.paused:
-                return self._row_to_info(row)
-            row.status = BuildJobStatus.pending
-            dep_ids = await self._load_dep_ids(session, job_id)
-            return self._row_to_info(row, dep_ids)
+        """Resume a paused job back to pending. Returns the job as it stands, or None.
+
+        Only a job that is still paused moves: one cancelled while this runs
+        stays cancelled.
+        """
+        info, _changed = await self.resume_and_report(job_id)
+        return info
+
+    async def resume_and_report(self, job_id: int) -> tuple[BuildJobInfo | None, bool]:
+        """:meth:`resume`, also saying whether this call resumed the job."""
+        return await self._transition(
+            job_id, (BuildJobStatus.paused,), {"status": BuildJobStatus.pending}
+        )
 
     async def pause_dag(self, dag_id: str) -> int:
         """Pause all pending/dispatched jobs in a DAG. Returns count paused."""
-        async with get_session() as session:
-            q = (
-                select(BuildJobRow)
-                .where(BuildJobRow.dag_id == dag_id)
-                .where(
-                    BuildJobRow.status.in_(
-                        [
-                            BuildJobStatus.pending,
-                            BuildJobStatus.dispatched,
-                        ]
-                    )
-                )
-            )
-            rows = (await session.execute(q)).scalars().all()
-            for row in rows:
-                row.status = BuildJobStatus.paused
-            return len(rows)
+        return await self._transition_dag(
+            self._dag_predicate(dag_id),
+            (BuildJobStatus.pending, BuildJobStatus.dispatched),
+            {"status": BuildJobStatus.paused},
+        )
 
     async def resume_dag(self, dag_id: str) -> int:
         """Resume all paused jobs in a DAG back to pending. Returns count resumed."""
-        async with get_session() as session:
-            q = (
-                select(BuildJobRow)
-                .where(BuildJobRow.dag_id == dag_id)
-                .where(BuildJobRow.status == BuildJobStatus.paused)
-            )
-            rows = (await session.execute(q)).scalars().all()
-            for row in rows:
-                row.status = BuildJobStatus.pending
-            return len(rows)
+        return await self._transition_dag(
+            self._dag_predicate(dag_id),
+            (BuildJobStatus.paused,),
+            {"status": BuildJobStatus.pending},
+        )
 
     _TERMINAL_STATUSES = frozenset(
         {
@@ -4102,34 +4161,60 @@ class DbBuildJobStore:
     # dispatched-but-unclaimed jobs of a builder that went offline.
     _FINISHABLE_STATUSES = (BuildJobStatus.dispatched, BuildJobStatus.running)
 
-    async def complete(self, job_id: int, *, result_archive_url: str = "") -> BuildJobInfo | None:
+    async def complete(
+        self,
+        job_id: int,
+        *,
+        result_archive_url: str = "",
+        builder_id: int | None = None,
+        claimant: str = "",
+    ) -> BuildJobInfo | None:
         """Mark an active job as succeeded and reconcile builder job count.
 
         Returns None if the job does not exist.  Raises
         BuildJobNotActiveError -- leaving the row untouched -- if the job is
-        not dispatched or running; see :meth:`_finish`.
+        not dispatched or running; see :meth:`_finish`.  *builder_id* /
+        *claimant* name the reporter; when given, the report only lands while
+        that worker still holds the job (BuildJobNotHeldError otherwise).
         """
         values: dict = {"error_message": ""}
         if result_archive_url:
             values["result_archive_url"] = result_archive_url
-        return await self._finish(job_id, BuildJobStatus.succeeded, values)
+        return await self._finish(
+            job_id, BuildJobStatus.succeeded, values, builder_id=builder_id, claimant=claimant
+        )
 
-    async def fail(self, job_id: int, *, error_message: str = "") -> BuildJobInfo | None:
+    async def fail(
+        self,
+        job_id: int,
+        *,
+        error_message: str = "",
+        builder_id: int | None = None,
+        claimant: str = "",
+    ) -> BuildJobInfo | None:
         """Mark an active job as failed and reconcile builder job count.
 
         Returns None if the job does not exist.  Raises
         BuildJobNotActiveError -- leaving the row untouched -- if the job is
         not dispatched or running; see :meth:`_finish`.  The caller cascades
         to dependents (:meth:`cancel_downstream`) only after a fail that
-        actually landed.
+        actually landed.  *builder_id* / *claimant* as for :meth:`complete`.
         """
         values: dict = {}
         if error_message:
             values["error_message"] = error_message
-        return await self._finish(job_id, BuildJobStatus.failed, values)
+        return await self._finish(
+            job_id, BuildJobStatus.failed, values, builder_id=builder_id, claimant=claimant
+        )
 
     async def _finish(
-        self, job_id: int, status: BuildJobStatus, values: dict
+        self,
+        job_id: int,
+        status: BuildJobStatus,
+        values: dict,
+        *,
+        builder_id: int | None = None,
+        claimant: str = "",
     ) -> BuildJobInfo | None:
         """Move an active job to the terminal *status*, once.
 
@@ -4150,15 +4235,41 @@ class DbBuildJobStore:
         A refused report raises BuildJobNotActiveError carrying the job as it
         stands; ``is_repeat`` on it tells a harmless repeat of the same
         outcome from a conflicting one.
+
+        *builder_id* (or, failing that, *claimant*) names the reporter.  When
+        given, the holder is part of the same WHERE clause, so a report from a
+        worker that no longer holds the job -- one whose attempt was paused,
+        resumed and re-dispatched elsewhere -- cannot finish the next
+        attempt; it raises BuildJobNotHeldError.  Callers that name no
+        reporter (older builders, the scheduler's offline reaper) are checked
+        on status alone, as before.
+
+        A job whose holder no longer exists has no holder to compare with:
+        deleting a builder (``DELETE /v1/builders/{id}``) while it is building
+        sets the job's builder_id to NULL (the foreign key is ON DELETE SET
+        NULL).  That builder's report still names its old id, and refusing it
+        would leave the job running until the build timeout reaps it -- so a
+        report naming a builder lands on such an orphan, as it did before the
+        holder check existed.  If that claim also recorded a claimant, the
+        report has to name the same one.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
+        claimant = (claimant or "").strip()
+        where = [BuildJobRow.id == job_id, BuildJobRow.status.in_(self._FINISHABLE_STATUSES)]
+        if builder_id is not None:
+            where.append(
+                or_(
+                    BuildJobRow.builder_id == builder_id,
+                    # Orphaned by an admin deleting the holder mid-job.
+                    and_(BuildJobRow.builder_id.is_(None), BuildJobRow.claimed_by == claimant),
+                )
+            )
+        elif claimant:
+            where.append(BuildJobRow.claimed_by == claimant)
         async with get_session() as session:
             result = await session.execute(
                 update(BuildJobRow)
-                .where(
-                    BuildJobRow.id == job_id,
-                    BuildJobRow.status.in_(self._FINISHABLE_STATUSES),
-                )
+                .where(*where)
                 .values(status=status, finished_at=now, **values)
                 .execution_options(synchronize_session=False)
             )
@@ -4175,25 +4286,39 @@ class DbBuildJobStore:
                 return None
             dep_ids = await self._load_dep_ids(session, job_id)
             if result.rowcount == 0:
-                raise BuildJobNotActiveError(
-                    job_id,
-                    status=row.status,
-                    attempted=status,
-                    info=self._row_to_info(row, dep_ids),
-                )
+                info = self._row_to_info(row, dep_ids)
+                named_reporter = builder_id is not None or bool(claimant)
+                if named_reporter and row.status in self._FINISHABLE_STATUSES:
+                    # Still active, so the status was not what stopped it:
+                    # the job is held by someone other than the reporter.
+                    holder = (
+                        f"builder #{row.builder_id}"
+                        if row.builder_id is not None
+                        else (row.claimed_by or "")
+                    )
+                    reporter = f"builder #{builder_id}" if builder_id is not None else claimant
+                    raise BuildJobNotHeldError(
+                        job_id,
+                        status=row.status,
+                        attempted=status,
+                        holder=holder,
+                        reporter=reporter,
+                        info=info,
+                    )
+                raise BuildJobNotActiveError(job_id, status=row.status, attempted=status, info=info)
             # Reconcile builder's current_jobs from actual DB state
-            builder_id = row.builder_id
-            if builder_id is not None:
+            holder_id = row.builder_id
+            if holder_id is not None:
                 active = (
                     await session.execute(
                         select(sa_func.count())
                         .select_from(BuildJobRow)
-                        .where(BuildJobRow.builder_id == builder_id)
+                        .where(BuildJobRow.builder_id == holder_id)
                         .where(BuildJobRow.status.in_(self._FINISHABLE_STATUSES))
                     )
                 ).scalar() or 0
                 builder_row = (
-                    await session.execute(select(BuilderRow).where(BuilderRow.id == builder_id))
+                    await session.execute(select(BuilderRow).where(BuilderRow.id == holder_id))
                 ).scalar()
                 if builder_row is not None:
                     builder_row.current_jobs = active
@@ -4231,20 +4356,23 @@ class DbBuildJobStore:
             return results
 
     async def dispatch(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
-        """Mark a pending job as dispatched to a specific builder."""
-        async with get_session() as session:
-            row = (
-                await session.execute(select(BuildJobRow).where(BuildJobRow.id == job_id))
-            ).scalar()
-            if row is None:
-                return None
-            if row.status != BuildJobStatus.pending:
-                dep_ids = await self._load_dep_ids(session, job_id)
-                return self._row_to_info(row, dep_ids)
-            row.status = BuildJobStatus.dispatched
-            row.builder_id = builder_id
-            dep_ids = await self._load_dep_ids(session, job_id)
-            return self._row_to_info(row, dep_ids)
+        """Mark a pending job as dispatched to *builder_id*.
+
+        Returns the dispatched job, or None when nothing was dispatched: the
+        job does not exist, or it is no longer pending (cancelled, paused or
+        claimed since the scheduler listed it).  The caller must then neither
+        push ``job.dispatch`` to the builder nor count the job against it.
+
+        One conditional UPDATE (see :meth:`_transition`): reading the row and
+        then writing it brought a job cancelled in between back to life as
+        "dispatched", and the builder then claimed and built it.
+        """
+        info, changed = await self._transition(
+            job_id,
+            (BuildJobStatus.pending,),
+            {"status": BuildJobStatus.dispatched, "builder_id": builder_id},
+        )
+        return info if changed else None
 
     async def reap_timed_out(self, default_timeout: int = 86400) -> list[BuildJobInfo]:
         """Mark running jobs that exceed their timeout as timed_out.
@@ -4380,14 +4508,15 @@ class DbBuildJobStore:
                         for targets, platforms, caps in builder_offers
                     ):
                         continue
-                    row.status = BuildJobStatus.unschedulable
-                    row.finished_at = now
-                    row.error_message = (
+                    fresh = await self._reap_pending_as_unschedulable(
+                        session,
+                        row.id,
+                        now,
                         f"no registered builder for {row.platform}/{row.arch} "
-                        f"with capability {', '.join(sorted(required_caps))}"
+                        f"with capability {', '.join(sorted(required_caps))}",
                     )
-                    dep_ids = await self._load_dep_ids(session, row.id)
-                    reaped.append(self._row_to_info(row, dep_ids))
+                    if fresh is not None:
+                        reaped.append(fresh)
                     continue
                 if row.platform == "any":
                     # A platform-independent (noarch) job is built on the
@@ -4404,12 +4533,49 @@ class DbBuildJobStore:
                     continue
                 if row.platform in schedulable_platforms:
                     continue
-                row.status = BuildJobStatus.unschedulable
-                row.finished_at = now
-                row.error_message = f"no registered builder for {row.platform}/{row.arch}"
-                dep_ids = await self._load_dep_ids(session, row.id)
-                reaped.append(self._row_to_info(row, dep_ids))
+                fresh = await self._reap_pending_as_unschedulable(
+                    session,
+                    row.id,
+                    now,
+                    f"no registered builder for {row.platform}/{row.arch}",
+                )
+                if fresh is not None:
+                    reaped.append(fresh)
             return reaped
+
+    async def _reap_pending_as_unschedulable(
+        self, session, job_id: int, now: datetime.datetime, reason: str
+    ) -> BuildJobInfo | None:
+        """Mark one job unschedulable only if it is STILL pending.
+
+        Conditional, like reap_timed_out(): a job that was dispatched,
+        claimed, paused or cancelled after the reaper's listing keeps that
+        state and is not reported, so the caller cascades nothing for it.
+        Writing the listed row unconditionally turned a job a just-registered
+        builder had claimed into "unschedulable" and cancelled everything
+        downstream of it.
+        """
+        result = await session.execute(
+            update(BuildJobRow)
+            .where(BuildJobRow.id == job_id, BuildJobRow.status == BuildJobStatus.pending)
+            .values(
+                status=BuildJobStatus.unschedulable,
+                finished_at=now,
+                error_message=reason,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount == 0:
+            return None
+        fresh = (
+            await session.execute(
+                select(BuildJobRow)
+                .where(BuildJobRow.id == job_id)
+                .execution_options(populate_existing=True)
+            )
+        ).scalar()
+        dep_ids = await self._load_dep_ids(session, job_id)
+        return self._row_to_info(fresh, dep_ids)
 
     @staticmethod
     def _offer_covers_target(
@@ -4436,43 +4602,53 @@ class DbBuildJobStore:
         """Cancel all pending/dispatched jobs that depend (transitively) on a failed job.
 
         Returns count of cancelled jobs.
+
+        The dependency graph is walked first (reads only) and the dependents
+        are then cancelled in ONE conditional UPDATE: a dependent that a
+        worker claimed (or that finished) after the walk started keeps its
+        state.  Reading each row and then writing it let a concurrent claim be
+        overwritten to "cancelled" while the worker was building it; one
+        statement also takes the row locks in a single pass rather than one
+        per dependent, so two cascades over shared dependents cannot lock
+        them in opposite orders.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
-            # BFS to find all downstream jobs
+            # BFS over the dependency edges.  Every dependent is visited
+            # whatever its status: a job that already left "pending" still has
+            # dependents of its own that can no longer run.
             to_visit = [failed_job_id]
             visited: set[int] = set()
-            cancelled = 0
-
+            downstream: set[int] = set()
             while to_visit:
                 current_id = to_visit.pop(0)
                 if current_id in visited:
                     continue
                 visited.add(current_id)
-
-                # Find jobs that depend on current_id
                 q = select(BuildJobDepRow.job_id).where(
                     BuildJobDepRow.depends_on_job_id == current_id
                 )
-                downstream_ids = (await session.execute(q)).scalars().all()
-
-                for ds_id in downstream_ids:
-                    if ds_id in visited:
-                        continue
-                    row = (
-                        await session.execute(select(BuildJobRow).where(BuildJobRow.id == ds_id))
-                    ).scalar()
-                    if row and row.status in (
-                        BuildJobStatus.pending,
-                        BuildJobStatus.dispatched,
-                    ):
-                        row.status = BuildJobStatus.cancelled
-                        row.finished_at = now
-                        row.error_message = f"cancelled: dependency {failed_job_id} failed"
-                        cancelled += 1
-                    to_visit.append(ds_id)
-
-            return cancelled
+                for ds_id in (await session.execute(q)).scalars().all():
+                    if ds_id not in visited:
+                        downstream.add(ds_id)
+                        to_visit.append(ds_id)
+            downstream.discard(failed_job_id)
+            if not downstream:
+                return 0
+            result = await session.execute(
+                update(BuildJobRow)
+                .where(
+                    BuildJobRow.id.in_(sorted(downstream)),
+                    BuildJobRow.status.in_((BuildJobStatus.pending, BuildJobStatus.dispatched)),
+                )
+                .values(
+                    status=BuildJobStatus.cancelled,
+                    finished_at=now,
+                    error_message=f"cancelled: dependency {failed_job_id} failed",
+                )
+                .execution_options(synchronize_session=False)
+            )
+            return result.rowcount or 0
 
     # ── Log management ──────────────────────────────────────────
 

@@ -929,6 +929,46 @@ class BuildJobNotActiveError(Exception):
         return self.status == self.attempted
 
 
+class BuildJobNotHeldError(BuildJobNotActiveError):
+    """A complete/fail report named a worker that does not hold the job.
+
+    The job is still active, but it is dispatched to or claimed by someone
+    else -- typically because it was paused and resumed, or force-cancelled
+    and resubmitted, and a later attempt now owns it.  The stale report from
+    the earlier holder must not decide the new attempt's outcome, so it is
+    refused and the row is left as it was.
+
+    The reporter identity is self-asserted (a builder id or claimant name in
+    the request), so this is a guard against *stale* reports, not an
+    authorization check; visibility is still enforced by the endpoint.
+    Subclasses BuildJobNotActiveError so every existing refusal path (HTTP
+    409, the scheduler's reaper) handles it unchanged.
+    """
+
+    def __init__(
+        self,
+        job_id: int,
+        *,
+        status: str,
+        attempted: str,
+        holder: str,
+        reporter: str,
+        info: BuildJobInfo | None = None,
+    ):
+        super().__init__(job_id, status=status, attempted=attempted, info=info)
+        self.holder = holder
+        self.reporter = reporter
+        self.args = (
+            f"build job {job_id} is {self.status} on {holder or 'another worker'}, "
+            f"not on {reporter}; a stale report from a previous holder changes nothing",
+        )
+
+    @property
+    def is_repeat(self) -> bool:
+        """Never a harmless repeat: the job is active under someone else."""
+        return False
+
+
 class BuildJobInfo(BaseModel):
     """Public representation of a build job."""
 
@@ -1105,6 +1145,20 @@ class BuildJobClaimRequest(BaseModel):
     )
 
 
+_REPORTER_BUILDER_ID_DOC = (
+    "The registered builder reporting, as it claimed the job.  When set, the "
+    "report only lands while the job is still held by this builder: a stale "
+    "report from a previous holder (after a pause/resume re-dispatched the "
+    "job elsewhere) is refused with 409.  A job left with no holder because "
+    "its builder was deleted mid-build still accepts the report.  Omitted by "
+    "older builders, which keeps their behaviour unchanged."
+)
+_REPORTER_CLAIMANT_DOC = (
+    "The unregistered worker reporting, as named in its claim.  Checked like "
+    "builder_id (which takes precedence when both are given)."
+)
+
+
 class BuildJobCompleteRequest(BaseModel):
     """Builder reports job completion."""
 
@@ -1112,6 +1166,8 @@ class BuildJobCompleteRequest(BaseModel):
         default="",
         description="URL of the published archive.",
     )
+    builder_id: int | None = Field(None, description=_REPORTER_BUILDER_ID_DOC)
+    claimant: str = Field("", max_length=255, description=_REPORTER_CLAIMANT_DOC)
 
 
 class BuildJobFailRequest(BaseModel):
@@ -1122,6 +1178,8 @@ class BuildJobFailRequest(BaseModel):
         max_length=4096,
         description="Failure reason.",
     )
+    builder_id: int | None = Field(None, description=_REPORTER_BUILDER_ID_DOC)
+    claimant: str = Field("", max_length=255, description=_REPORTER_CLAIMANT_DOC)
 
 
 class BuildLogAppendRequest(BaseModel):

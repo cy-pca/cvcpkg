@@ -1069,23 +1069,45 @@ def _log_refused_job_report(exc: BuildJobNotActiveError, via: str) -> None:
         )
 
 
-def _ws_refused_ack(ack_type: str, exc: BuildJobNotActiveError) -> dict:
-    """The ack for a ``job.complete``/``job.fail`` frame the store refused.
+# Builder -> server frames that change a job, and the HTTP endpoint that does
+# the same thing.  They are refused over the WebSocket.
+#
+# Every builder release (2.2.x, 2.3.x) and the current agent claim, log,
+# complete and fail over HTTP; none sends these frames.  Their WebSocket
+# handlers were a second, unused copy of the job plane that had drifted from
+# the first: they checked only that the token owned the *builder*, never that
+# it could see the *job*, wrote no audit entry, and so let any publisher with a
+# builder claim, write the log of, and fail a private org's job
+# (cascade-cancelling its dependents).  Keeping one path for job-state changes
+# keeps one place for org visibility, holder checks, the status guard, auditing
+# and webhooks, so a future rule cannot be added to one path and missed on the
+# other.  The socket stays what the builders use it for: dispatch/cancel/update
+# pushes in, heartbeats out.
+_WS_HTTP_ONLY_JOB_FRAMES: dict[str, str] = {
+    "job.claim": "POST /v1/builds/{job_id}/claim",
+    "job.log": "PATCH /v1/builds/{job_id}/log",
+    "job.complete": "POST /v1/builds/{job_id}/complete",
+    "job.fail": "POST /v1/builds/{job_id}/fail",
+}
 
-    ``status`` is the job's status as it stands (unchanged by the frame) and
-    ``noop`` says nothing happened.  ``conflict`` is False for a harmless
-    repeat of the outcome the job already has, and True when the frame
-    contradicts it (a fail after success, a complete after a fail/cancel/
-    timeout) or the job was never handed out -- the WebSocket mirror of the
-    HTTP endpoints' 200-vs-409.
+
+def _ws_job_frame_refusal(msg_type: str, job_id) -> dict:
+    """The answer to a job-state frame sent over the builder WebSocket.
+
+    An ``error`` frame, never a ``*_ack``: a client that does not check an
+    ack's status could read any ack as success and build the job.  Carries
+    the refused type and job id so a client can correlate it, and names the
+    HTTP endpoint to use instead.
     """
     return {
-        "type": ack_type,
-        "job_id": exc.job_id,
-        "status": exc.status,
-        "noop": True,
-        "conflict": not exc.is_repeat,
-        "detail": str(exc),
+        "type": "error",
+        "code": "http_only",
+        "rejected": msg_type,
+        "job_id": job_id,
+        "message": (
+            f"{msg_type} over WebSocket is not supported; use "
+            f"{_WS_HTTP_ONLY_JOB_FRAMES[msg_type]}"
+        ),
     }
 
 
@@ -1507,17 +1529,22 @@ async def _build_scheduler_loop() -> None:
                 if chosen is None:
                     continue
 
-                await _db_build_jobs.dispatch(job.id, chosen.id)
+                dispatched = await _db_build_jobs.dispatch(job.id, chosen.id)
+                if dispatched is None:
+                    # The job left "pending" after find_ready_jobs listed it
+                    # (cancelled, paused, claimed by an anonymous drainer).
+                    # Nothing was dispatched: do not push job.dispatch -- the
+                    # builder would build a job nobody wants -- and do not
+                    # count it against the builder's slots.
+                    continue
                 # Notify builder via WebSocket if connected
-                dispatched = await _db_build_jobs.get(job.id)
-                if dispatched is not None:
-                    await _ws_send(
-                        chosen.id,
-                        {
-                            "type": "job.dispatch",
-                            "job": json.loads(dispatched.model_dump_json()),
-                        },
-                    )
+                await _ws_send(
+                    chosen.id,
+                    {
+                        "type": "job.dispatch",
+                        "job": json.loads(dispatched.model_dump_json()),
+                    },
+                )
                 # Update builder's current_jobs count
                 await _db_builders.heartbeat(
                     chosen.id,
@@ -9132,23 +9159,60 @@ def create_app(
         await _assert_build_visible(actor, _existing)
         cascaded = 0
         # Cancel + the force-cascade + audit commit as one unit; the no-op
-        # path (running-without-force / already-terminal) records nothing.
+        # path (running-without-force / already-terminal / already
+        # cancelled) records nothing.
         async with _audit_txn(
             AuditAction.build_cancel,
             actor.name,
             str(job_id),
             "force" if force else "",
         ) as ac:
-            info = await _db_build_jobs.cancel(job_id, force=force)
+            info, changed = await _db_build_jobs.cancel_and_report(job_id, force=force)
             if info is None:
                 raise HTTPException(404, f"build job {job_id} not found")
-            if info.status != BuildJobStatus.cancelled:
-                ac.skip = True
-            elif force:
+            if changed:
+                if force:
+                    cascaded = await _db_build_jobs.cancel_downstream(job_id)
+            elif force and info.status == BuildJobStatus.cancelled:
+                # Repeating a forced cancel on an already-cancelled job: the
+                # job itself does not change again (no second audit entry,
+                # webhook or job.cancel push).  Its dependents can never run,
+                # though, and a first cancel WITHOUT force left them pending,
+                # so the cascade still applies -- and only counts as a change
+                # when it actually cancelled something.
                 cascaded = await _db_build_jobs.cancel_downstream(job_id)
-        if info.status != BuildJobStatus.cancelled:
-            # The store no-op'd (e.g. running without force, or already terminal)
+                if cascaded:
+                    ac.detail = f"force; cascade only ({cascaded} dependents)"
+                else:
+                    ac.skip = True
+            else:
+                ac.skip = True
+        if not changed and not cascaded:
+            # The store no-op'd: running without force, already terminal, or
+            # already cancelled by an earlier call.
             return {"message": "no-op", "id": job_id, "status": info.status}
+        if not changed:
+            # Cascade-only repeat: the job was already cancelled (and its
+            # builder, if any, already told); report the dependents only.
+            await emit_webhook_event(
+                "build.cancelled",
+                {
+                    "job_id": job_id,
+                    "recipe_name": info.recipe_name,
+                    "platform": info.platform,
+                    "cancelled_by": actor.name,
+                    "forced": force,
+                    "cascaded": cascaded,
+                    "cascade_only": True,
+                },
+                org_slug=info.org_slug,
+            )
+            return {
+                "message": "dependents cancelled",
+                "id": job_id,
+                "status": info.status,
+                "cascaded": cascaded,
+            }
         # Notify the builder + webhook subscribers after the commit.
         if force and info.builder_id is not None:
             await _ws_send(
@@ -9214,9 +9278,13 @@ def create_app(
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.pause(job_id)
+        info, changed = await _db_build_jobs.pause_and_report(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        if not changed:
+            # Not pending/dispatched (any more): a job claimed while this ran
+            # keeps running, and says so rather than claiming to be paused.
+            return {"message": "no-op", "id": job_id, "status": info.status}
         return {"message": "job paused", "id": job_id, "status": info.status}
 
     @app.post("/v1/builds/{job_id}/resume", tags=["builds"])
@@ -9230,9 +9298,11 @@ def create_app(
         if _existing is None:
             raise HTTPException(404, f"build job {job_id} not found")
         await _assert_build_visible(actor, _existing)
-        info = await _db_build_jobs.resume(job_id)
+        info, changed = await _db_build_jobs.resume_and_report(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
+        if not changed:
+            return {"message": "no-op", "id": job_id, "status": info.status}
         return {"message": "job resumed", "id": job_id, "status": info.status}
 
     @app.post("/v1/builds/dag/{dag_id}/pause", tags=["builds"])
@@ -9301,12 +9371,13 @@ def create_app(
             if not mine:
                 raise HTTPException(409, f"build job {job_id} is already running")
         _who = f"builder #{body.builder_id}" if body.builder_id is not None else body.claimant
+        reclaimed = False
         async with _audit_txn(
             AuditAction.build_claim,
             actor.name,
             str(job_id),
             _who,
-        ):
+        ) as ac:
             try:
                 info = await _db_build_jobs.claim(
                     job_id, body.builder_id, claimant=body.claimant.strip()
@@ -9327,8 +9398,26 @@ def create_app(
                 if not _mine:
                     raise HTTPException(409, f"build job {job_id} is already running") from None
                 info = _held
+                # Idempotent re-claim by the holder: nothing changed, so no
+                # second audit entry and no second build.started.
+                reclaimed = True
+                ac.skip = True
             if info is None:
                 raise HTTPException(404, f"build job {job_id} not found")
+            if info.status != BuildJobStatus.running:
+                # claim() hands back a job it could not claim -- cancelled,
+                # paused, already finished -- unchanged.  Answering that with
+                # 200 made every builder build (and publish) a dead job: they
+                # skip on 409 only.  Raising inside the block rolls the audit
+                # row back, and returning before the webhook sends no
+                # build.started for a job that never started.
+                raise HTTPException(
+                    409,
+                    f"build job {job_id} is {info.status}; only a pending or "
+                    "dispatched job can be claimed",
+                )
+        if reclaimed:
+            return info
         await emit_webhook_event(
             "build.started",
             {
@@ -9375,6 +9464,8 @@ def create_app(
         report for a job that already succeeded answers 200 and changes
         nothing; a report for any other job (failed, cancelled, timed out,
         unschedulable, or never handed out) is a 409 and changes nothing.
+        A report that names its reporter (``builder_id`` / ``claimant``) is
+        also a 409 when the job is now held by someone else.
         """
         _require_db_build_jobs()
         _existing = await _db_build_jobs.get(job_id)
@@ -9384,7 +9475,10 @@ def create_app(
         try:
             async with _audit_txn(AuditAction.build_complete, actor.name, str(job_id)):
                 info = await _db_build_jobs.complete(
-                    job_id, result_archive_url=body.result_archive_url
+                    job_id,
+                    result_archive_url=body.result_archive_url,
+                    builder_id=body.builder_id,
+                    claimant=body.claimant,
                 )
                 if info is None:
                     raise HTTPException(404, f"build job {job_id} not found")
@@ -9429,6 +9523,8 @@ def create_app(
         for a job that already failed answers 200 and changes nothing; a
         report for any other job is a 409, changes nothing and cancels no
         dependents -- above all a late fail for a job that already succeeded.
+        A report that names its reporter (``builder_id`` / ``claimant``) is
+        also a 409 when the job is now held by someone else.
         """
         _require_db_build_jobs()
         _existing = await _db_build_jobs.get(job_id)
@@ -9442,12 +9538,17 @@ def create_app(
                 str(job_id),
                 body.error_message[:200] if body.error_message else "",
             ):
-                info = await _db_build_jobs.fail(job_id, error_message=body.error_message)
+                info = await _db_build_jobs.fail(
+                    job_id,
+                    error_message=body.error_message,
+                    builder_id=body.builder_id,
+                    claimant=body.claimant,
+                )
                 if info is None:
                     raise HTTPException(404, f"build job {job_id} not found")
-                # Cascade-cancel downstream dependents in the same transaction
-                # (parity with the WS job.fail path).  Only a fail that landed
-                # gets here: a refused one raised above and cascades nothing.
+                # Cascade-cancel downstream dependents in the same transaction.
+                # Only a fail that landed gets here: a refused one raised
+                # above and cascades nothing.
                 cascaded = await _db_build_jobs.cancel_downstream(job_id)
         except BuildJobNotActiveError as exc:
             return _refused_job_report(exc)
@@ -9615,12 +9716,17 @@ def create_app(
     async def builder_ws(websocket: WebSocket, builder_id: int):
         """Persistent WebSocket for a builder.
 
-        The builder authenticates by passing ``token`` as a query
-        parameter.  Once connected the builder receives
-        ``job.dispatch``, ``job.timeout``, ``recipe.push``, and
-        ``ping`` messages from the server.  The builder sends
-        ``job.claim``, ``job.log``, ``job.complete``, ``job.fail``,
-        ``heartbeat``, and ``pong`` messages.
+        The builder authenticates with ``Authorization: Bearer <token>``
+        (older builders pass ``token`` as a query parameter).  Once
+        connected the builder receives ``job.dispatch``, ``job.cancel``,
+        ``job.timeout``, ``recipe.push``, ``builder.update`` and ``ping``
+        messages from the server, and sends ``heartbeat`` and ``pong``.
+
+        Job-state changes -- claim, log, complete, fail -- go over HTTP
+        only, where org visibility, the holder check, auditing and webhooks
+        are enforced; the ``job.claim``/``job.log``/``job.complete``/
+        ``job.fail`` frames are answered with an ``error`` frame and change
+        nothing (see ``_WS_HTTP_ONLY_JOB_FRAMES``).
         """
         # Authenticate: the Authorization header, as on every HTTP endpoint;
         # the ``token`` query parameter is the fallback for older builders.  A
@@ -9670,6 +9776,7 @@ def create_app(
         logger.info("builder %d connected via WebSocket", builder_id)
 
         last_reauth = time.monotonic()
+        refused_frame_types: set[str] = set()  # log each refused type once
         try:
             while True:
                 # Block for a frame, but wake at least once per re-auth interval
@@ -9718,132 +9825,18 @@ def create_app(
                     )
                     await websocket.send_json({"type": "heartbeat_ack"})
 
-                elif msg_type == "job.claim":
-                    job_id = data.get("job_id")
-                    if job_id is not None:
-                        try:
-                            result = await _db_build_jobs.claim(job_id, builder_id)
-                        except BuildJobAlreadyClaimedError:
-                            # Losing a claim race is routine, not a protocol
-                            # error.  Letting this escape would reach the outer
-                            # ``except Exception`` and close the socket, taking
-                            # heartbeat and log/complete delivery down with it.
-                            # Re-claiming a job we already hold stays idempotent,
-                            # matching the HTTP claim endpoint.
-                            _held = await _db_build_jobs.get(job_id)
-                            result = (
-                                _held
-                                if _held is not None and _held.builder_id == builder_id
-                                else None
-                            )
-                            if result is None:
-                                await websocket.send_json(
-                                    {
-                                        "type": "job.claim_ack",
-                                        "job_id": job_id,
-                                        "status": "already_claimed",
-                                    }
-                                )
-                                continue
-                        await websocket.send_json(
-                            {
-                                "type": "job.claim_ack",
-                                "job_id": job_id,
-                                "status": result.status if result else "not_found",
-                            }
+                elif msg_type in _WS_HTTP_ONLY_JOB_FRAMES:
+                    # Job-state frames are HTTP-only; see
+                    # _WS_HTTP_ONLY_JOB_FRAMES.  Refused without touching the
+                    # job, and the socket stays up for heartbeats/dispatch.
+                    if msg_type not in refused_frame_types:
+                        refused_frame_types.add(msg_type)
+                        logger.warning(
+                            "builder %d sent %s over WebSocket; refused (HTTP only)",
+                            builder_id,
+                            msg_type,
                         )
-
-                elif msg_type == "job.log":
-                    job_id = data.get("job_id")
-                    log_data = data.get("data", "")
-                    if job_id is not None and log_data:
-                        state = _get_state()
-                        await _db_build_jobs.append_log(job_id, log_data, logs_dir=state.logs_dir())
-
-                elif msg_type == "job.complete":
-                    job_id = data.get("job_id")
-                    archive_url = data.get("archive_url", "")
-                    if job_id is not None:
-                        try:
-                            result = await _db_build_jobs.complete(
-                                job_id, result_archive_url=archive_url
-                            )
-                        except BuildJobNotActiveError as exc:
-                            # Refused: the job is not active (already
-                            # finished, cancelled, or never handed out).
-                            # Nothing changed, so no webhook either.
-                            _log_refused_job_report(exc, f"ws builder {builder_id}")
-                            await websocket.send_json(_ws_refused_ack("job.complete_ack", exc))
-                            continue
-                        await websocket.send_json(
-                            {
-                                "type": "job.complete_ack",
-                                "job_id": job_id,
-                                "status": result.status if result else "not_found",
-                            }
-                        )
-                        if result:
-                            await emit_webhook_event(
-                                "build.succeeded",
-                                {
-                                    "job_id": job_id,
-                                    "recipe_name": result.recipe_name,
-                                    "platform": result.platform,
-                                    "arch": result.arch,
-                                    "archive_url": archive_url,
-                                },
-                                org_slug=result.org_slug,
-                            )
-                            if result.dag_id:
-                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
-                                if done:
-                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
-                                    await emit_webhook_event(
-                                        "build.dag_completed",
-                                        summary,
-                                        org_slug=result.org_slug,
-                                    )
-
-                elif msg_type == "job.fail":
-                    job_id = data.get("job_id")
-                    error = data.get("error", "")
-                    if job_id is not None:
-                        try:
-                            result = await _db_build_jobs.fail(job_id, error_message=error[:4096])
-                        except BuildJobNotActiveError as exc:
-                            # Refused: above all, a late fail on a job that
-                            # already succeeded must not cascade-cancel its
-                            # dependents.
-                            _log_refused_job_report(exc, f"ws builder {builder_id}")
-                            await websocket.send_json(_ws_refused_ack("job.fail_ack", exc))
-                            continue
-                        await websocket.send_json(
-                            {
-                                "type": "job.fail_ack",
-                                "job_id": job_id,
-                                "status": result.status if result else "not_found",
-                            }
-                        )
-                        if result:
-                            await _db_build_jobs.cancel_downstream(job_id)
-                            await emit_webhook_event(
-                                "build.failed",
-                                {
-                                    "job_id": job_id,
-                                    "recipe_name": result.recipe_name,
-                                    "error": error[:256],
-                                },
-                                org_slug=result.org_slug,
-                            )
-                            if result.dag_id:
-                                done = await _db_build_jobs.is_dag_complete(result.dag_id)
-                                if done:
-                                    summary = await _db_build_jobs.dag_summary(result.dag_id)
-                                    await emit_webhook_event(
-                                        "build.dag_completed",
-                                        summary,
-                                        org_slug=result.org_slug,
-                                    )
+                    await websocket.send_json(_ws_job_frame_refusal(msg_type, data.get("job_id")))
 
                 elif msg_type == "pong":
                     pass  # response to server ping
