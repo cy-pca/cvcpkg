@@ -1,0 +1,106 @@
+schema_version: 1
+recipe:
+  name: lxml-cp311
+  upstream_version: "6.1.3"
+  # New recipe.  lxml (import `lxml.etree`) is the libxml2/libxslt-backed XML
+  # toolkit; it is the native dependency of python-pptx (pptx.oxml is lxml),
+  # which was being pip-installed off-catalog.  HAND-WRITTEN, not generated:
+  # lxml links native cvcpkg libraries (libxml2, libxslt, libexslt), and the
+  # native-library edges, the hermetic pkg-config discovery and the $ORIGIN
+  # RUNPATH pass are things the generator cannot infer from [build-system]
+  # requires — the same reason pillow-cp31X / numpy-cp31X are hand-written.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/lxml/
+  license: "BSD-3-Clause"
+  tags: [python, source, xml]
+  description: >-
+    lxml 6.1.3 for CPython 3.11 (cp311), BUILT FROM SOURCE against cvcpkg's own
+    libxml2 and libxslt (libxslt + libexslt) — the native XML/XSLT stack
+    python-pptx needs.  lxml finds those libraries through pkg-config pinned to
+    the prefix (PKG_CONFIG_LIBDIR replaces the system .pc path), so a missing
+    libxslt.pc FAILS the build loudly instead of lxml resolving a system libxslt
+    or statically downloading its own (STATIC_DEPS=false).  The compiled
+    extensions link the prefix libraries by soname and resolve them at runtime
+    out of the SAME activated prefix via an $ORIGIN-relative RUNPATH — no
+    statically-vendored copy.  build.sh verifies a real etree.XSLT transform,
+    the code path that does not even link without libxslt/libexslt.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches + sha256-
+# verifies this tarball and extracts it (strip_components) to CVC_SOURCE_DIR;
+# build.sh compiles the wheel with the prefix's own interpreter.  The sdist
+# ships pre-generated C, so no Cython is needed.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/23/ad/28ecd7cb894d172f3c9c80a075eeeb2017ac62e3632cee05a5f9493547eb/lxml-6.1.3.tar.gz
+  sha256: "45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21"
+  strip_components: 1
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+    # PEP-517 backend (setuptools.build_meta); --no-build-isolation means pip
+    # will NOT fetch it, so it must be in the build prefix (build.sh bridges it
+    # onto sys.path).  wheel supplies bdist_wheel for the offline build.
+    - name: setuptools-cp311
+    - name: wheel-cp311
+    # Native libraries, discovered hermetically via pkg-config pinned to the
+    # prefix.  A missing .pc then FAILS the build (build.sh pre-checks).
+    - name: libxml2
+      version: "^2.12"
+    - name: libxslt
+      version: "^1.1"
+    # Flat closure of libxml2 (libxml2 -> zlib): cvcpkg staging is flat, so the
+    # recipe declares what the libraries' NEEDED entries resolve against.
+    - name: zlib
+      version: "^1.3"
+  runtime:
+    - name: python311
+    # The compiled extensions link these by soname and resolve them from the
+    # merged prefix at import (see the $ORIGIN RUNPATH pass in build.sh).
+    - name: libxml2
+      version: "^2.12"
+    - name: libxslt
+      version: "^1.1"
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - python311
+    # lxml's setup queries libxml-2.0 / libxslt through pkg-config.
+    - pkg-config
+    # Stamps the relocatable $ORIGIN RUNPATH into the extension .so on ELF
+    # platforms (Linux); macOS relocation is cvc_rewrite_install_paths'.
+    - patchelf
+
+build:
+  # The Python ABI is stable across cvcpkg build types; build once, optimized.
+  build_type_independent: true
+  # linux is verified end-to-end here (build + an etree.XSLT transform on the
+  # cvcpkg Linux toolchain).  macos/windows are claimed for the fleet's builders
+  # and share the same pkg-config-against-the-prefix discovery (build.sh /
+  # build.ps1).  The BSDs are NOT claimed — nothing has built lxml there yet,
+  # and an unverified column is a phantom claim (see pillow-cp311).
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  # From-source build linking prefix libraries: the payload is lxml/ + its
+  # dist-info only (build.sh asserts no statically-vendored *.libs/ exists).
+  files:
+    - lib/python3.11/site-packages/lxml/
+    - lib/python3.11/site-packages/lxml-*.dist-info/
+    - Lib/site-packages/lxml/
+    - Lib/site-packages/lxml-*.dist-info/

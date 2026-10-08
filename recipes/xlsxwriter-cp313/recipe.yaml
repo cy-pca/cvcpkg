@@ -1,0 +1,63 @@
+schema_version: 1
+recipe:
+  name: xlsxwriter-cp313
+  upstream_version: "3.2.9"
+  # New recipe.  XlsxWriter (import `xlsxwriter`) is a pure-Python .xlsx writer,
+  # pulled in as a runtime dependency of python-pptx (embedded chart data).  It
+  # has NO native dependencies (standard library only), so this is a plain
+  # from-source setuptools sdist build in the generated shape.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/XlsxWriter/
+  license: "BSD-2-Clause"
+  tags: [python, source]
+  description: >-
+    XlsxWriter 3.2.9 for CPython 3.13 (cp313) — the cp313 column of cvcpkg's
+    per-interpreter matrix, BUILT FROM SOURCE from the PyPI sdist.  Pure Python
+    (no native deps); added as a runtime dependency of python-pptx.  cvcpkg
+    fetches and sha256-verifies the sdist and build.sh compiles the wheel with
+    the prefix's own CPython 3.13 — no third-party prebuilt binary enters the
+    bundle.
+
+# From-source sdist, sha256 as published by PyPI for this exact version.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/46/2c/c06ef49dc36e7954e55b802a8b231770d286a9758b3d936bd1e04ce5ba88/xlsxwriter-3.2.9.tar.gz
+  sha256: "254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c"
+  strip_components: 1
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: python313
+    # PEP-517 backend (setuptools.build_meta); --no-build-isolation means pip
+    # will NOT fetch it, so it must be in the build prefix (build.sh bridges it
+    # onto sys.path).  wheel supplies bdist_wheel for the offline build.
+    - name: setuptools-cp313
+    - name: wheel-cp313
+  runtime:
+    - name: python313
+  host_tools:
+    - python313
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/python3.13/site-packages/xlsxwriter/
+    - lib/python3.13/site-packages/*.dist-info/
+    - Lib/site-packages/xlsxwriter/
+    - Lib/site-packages/*.dist-info/
