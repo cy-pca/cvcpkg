@@ -6,7 +6,12 @@ recipe:
   # platform: wasi on both hosts and runtime-depends on boost, so the wasi
   # half of cgal's matrix was unbuildable.  See the wasi note below for the
   # libraries the single-threaded wasip1 target forces us to exclude.
-  cvc_revision: 4
+  #
+  # Bumped 4 -> 5: build.sh pins Boost's optional backends (ICU off; iostreams
+  # zlib only). +cvc.4 linked whatever the build host had: the linux
+  # libboost_locale needs the builder's ICU 70, the macOS libboost_iostreams
+  # loads Homebrew's zstd from /opt/homebrew. Neither exists on a clean host.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

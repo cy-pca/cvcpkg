@@ -1314,6 +1314,7 @@ def pack_all_cmd(
             staging,
             recipe_dir=ctx.recipe.recipe_dir,
             temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+            linkage_allow=ctx.recipe.linkage_allow,
         )
         archive_path, sha256, size = create_archive(
             staging,

@@ -495,6 +495,15 @@ $defs:
         type: array
         items: { type: string }
         description: "pkg-config module names shipped by this component"
+      linkage_allow:
+        type: array
+        items: { type: string, pattern: "^/" }
+        description: >
+          Absolute path prefixes this bundle's binaries may load from although
+          the pack-time relocatability gate would reject them -- on macOS, a
+          library outside /usr/lib and /System that the bundle cannot carry
+          (e.g. a vendor framework installed at a fixed location). It never
+          excuses a builder path (a job's scratch prefix, /tmp, a CI workspace).
       archive_format:
         type: string
         enum: [tar.gz, tar.xz, tar.bz2, zip]

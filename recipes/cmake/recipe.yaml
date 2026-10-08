@@ -56,7 +56,21 @@ recipe:
   # not patchelf (NetBSD). build.sh fails the build if the installed
   # programs carry any other RPATH. openbsd (no RPATH; the installer bakes
   # one), macos, windows and haiku are unchanged.
-  cvc_revision: 7
+  #
+  # Bumped 7 -> 8: relocatable on macos too, and openssl declared. +cvc.7 was
+  # never published for linux, so linux still served +cvc.6 (job-prefix
+  # RUNPATH: "error while loading shared libraries: libcurl.so.4.8.0" outside
+  # the builder). macos +cvc.5 loaded @rpath/libcurl.4.dylib through its only
+  # LC_RPATH, the build runner's deps prefix, and was published without its
+  # curl dependency; +cvc.1 loaded libcurl from curl's own build-temp dir.
+  # macos now links with LC_RPATH @executable_path/../lib (build.sh checks it).
+  # openssl is a direct runtime dependency: bin/cmake NEEDs libcrypto.so.3 on
+  # linux and libssl.so.3 on the BSDs, and on macos curl's own published bundles
+  # do not carry their openssl dependency, so a clean Mac got libcurl without
+  # the libssl it loads. Packaging also gained a relocatability gate and an
+  # executable-aware relocation pass (src/cvcpkg/linkage.py, builder.py) that
+  # would have refused every one of these bundles.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -83,6 +97,11 @@ depends:
       # haiku bootstraps with cmake's BUNDLED curl (no cvcpkg haiku curl yet),
       # so it has no external libcurl runtime dependency.
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: openssl
+      version: "^3.0"
+      # Linked directly (libcrypto/libssl via cmlibarchive and curl). Windows
+      # repackages Kitware's cmake.exe, which imports only system DLLs.
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:

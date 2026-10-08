@@ -49,7 +49,15 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     #   openbsd: its ld.so does not expand $ORIGIN, so no RPATH at all
     #     (CMAKE_SKIP_INSTALL_RPATH also drops the link-path entries); the
     #     cvcpkg installer bakes the absolute <prefix>/lib into it at install.
-    #   macos: unchanged (absolute deps-prefix LC_RPATH).
+    #   macos: LC_RPATH @executable_path/../lib, the same layout. +cvc.5 shipped
+    #     the deps prefix as its only LC_RPATH ("/Users/runner/work/.../prefix/
+    #     lib"), so bin/cmake's @rpath/libcurl.4.dylib resolved on the build
+    #     runner and nowhere else. Unlike linux, the BUILD tree keeps that
+    #     absolute dir (CMAKE_BUILD_WITH_INSTALL_RPATH=OFF + CMAKE_BUILD_RPATH):
+    #     `make install` runs the freshly built bin/cmake, and DYLD_LIBRARY_PATH
+    #     does not survive the SIP-protected /bin/sh and make in between. CMake's
+    #     install step then swaps it for the install RPATH (install_name_tool),
+    #     and the check after `make install` fails the build if it did not.
     case "${CVC_PLATFORM:-}" in
         linux|freebsd|netbsd)
             CMAKE_FLAGS+=(
@@ -59,6 +67,14 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
             ;;
         openbsd)
             CMAKE_FLAGS+=(-DCMAKE_SKIP_INSTALL_RPATH=ON)
+            ;;
+        macos)
+            CMAKE_FLAGS+=(
+                "-DCMAKE_INSTALL_RPATH=@executable_path/../lib"
+                -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
+                -DCMAKE_BUILD_WITH_INSTALL_RPATH=OFF
+                "-DCMAKE_BUILD_RPATH=${CVC_DEPS_PREFIX}/lib"
+            )
             ;;
         *)
             CMAKE_FLAGS+=(-DCMAKE_BUILD_RPATH="${CVC_DEPS_PREFIX}/lib")
@@ -115,7 +131,8 @@ fi
 make install
 
 # The installed programs must carry exactly the relocatable RPATH set above. A
-# build-prefix path here is the +cvc.6 defect; fail instead of packaging it.
+# build-prefix path here is the +cvc.6 (linux) / +cvc.5 (macos) defect; fail
+# instead of packaging it.
 case "${CVC_PLATFORM:-}" in
     linux|freebsd|netbsd)
         if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
@@ -135,6 +152,31 @@ case "${CVC_PLATFORM:-}" in
                 if [[ "${_rpath}" != '$ORIGIN/../lib' ]]; then
                     echo "cmake build.sh: ${_exe##*/} RPATH is '${_rpath}', expected '\$ORIGIN/../lib'" >&2
                     _rpath_bad=1
+                fi
+            done
+            [[ "${_rpath_bad}" == 0 ]] || exit 1
+        fi
+        ;;
+    macos)
+        if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
+            if [[ ! -f "${CVC_INSTALL_DIR}/bin/cmake" ]]; then
+                echo "cmake build.sh: ${CVC_INSTALL_DIR}/bin/cmake was not installed" >&2
+                exit 1
+            fi
+            _rpath_bad=0
+            for _exe in "${CVC_INSTALL_DIR}"/bin/*; do
+                [[ -f "${_exe}" && ! -L "${_exe}" ]] || continue
+                # otool -l prints each LC_RPATH as: cmd / cmdsize / "path <p> (offset 12)".
+                _rpath=$(otool -l "${_exe}" | awk '$2 == "LC_RPATH" { getline; getline; print $2 }' | paste -sd: -)
+                echo "=== cmake build.sh: ${_exe##*/} LC_RPATH: ${_rpath:-<none>}"
+                if [[ "${_rpath}" != '@executable_path/../lib' ]]; then
+                    echo "cmake build.sh: ${_exe##*/} LC_RPATH is '${_rpath}', expected '@executable_path/../lib'" >&2
+                    _rpath_bad=1
+                fi
+                # arm64 will not exec a binary whose signature install_name_tool
+                # invalidated; re-sign ad hoc if CMake's rewrite left it broken.
+                if ! codesign --verify "${_exe}" >/dev/null 2>&1; then
+                    codesign --force --sign - "${_exe}"
                 fi
             done
             [[ "${_rpath_bad}" == 0 ]] || exit 1

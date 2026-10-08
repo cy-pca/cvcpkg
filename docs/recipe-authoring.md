@@ -192,6 +192,21 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   `CVCPKG_STRICT_GLOBS=0` downgrades the failure to a warning.
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
+- **Relocatability** — a bundle is unpacked into an arbitrary prefix, so every
+  path the dynamic loader follows must be loader-relative or belong to the OS.
+  After the build, cvcpkg rewrites what it can: RPATHs into this build's own
+  deps/install prefixes become `$ORIGIN/…` (ELF) or `@loader_path/…` (macOS),
+  in `bin/` as well as `lib/`; absolute macOS references to a dylib the bundle
+  or a dependency ships become `@rpath/<leaf>`. `cvcpkg pack` then reads every
+  ELF/Mach-O object it is about to archive and FAILS if any RUNPATH/RPATH,
+  NEEDED, LC_RPATH or LC_*_DYLIB still points into a build machine (a job's
+  scratch prefix, `/tmp`, a CI workspace) or — on macOS — anywhere outside
+  `/usr/lib` and `/System` (Homebrew, MacPorts). The fix is almost always in
+  the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
+  `depends.runtime`, and do not let an optional feature pick up whatever the
+  build host has installed (see `recipes/boost/build.sh`). For a library at a
+  fixed system location the bundle cannot carry, list its prefix under
+  **`package.linkage_allow`**; that never excuses a build-machine path.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of
