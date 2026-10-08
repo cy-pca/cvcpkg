@@ -54,6 +54,8 @@ def fake_recipe(
     # package.files declarations verified along the pack path (builder reads
     # ctx.recipe.package_files); default to none declared.
     r.package_files = list(package_files)
+    # package.linkage_allow, passed to the pack-time relocatability gate.
+    r.linkage_allow = []
     return r
 
 
