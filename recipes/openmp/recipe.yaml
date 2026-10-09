@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: openmp
   upstream_version: "21.1.8"
-  cvc_revision: 1
+  # Bumped 1 -> 2: added the windows (MSVC) build -- build.ps1, a python311
+  # build edge scoped to windows, and the Windows package.files entries. The
+  # linux/macos build is unchanged; their bundles embed this recipe.yaml, so the
+  # revision moves with it.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -10,7 +14,9 @@ recipe:
     LLVM's OpenMP runtime library (libomp), built standalone. AppleClang ships
     no OpenMP runtime of its own, so find_package(OpenMP) fails on macOS unless
     a libomp is on the prefix -- and consumers that gate on OpenMP_CXX_FOUND
-    then silently build serial code.
+    then silently build serial code. On Windows it is the redistributable
+    alternative to MSVC's libomp140.x86_64.dll, which Microsoft does not allow
+    shipping (see notes).
   homepage: https://openmp.llvm.org/
   license: Apache-2.0 WITH LLVM-exception
   tags: [runtime, parallel, compiler]
@@ -30,6 +36,14 @@ depends:
   build:
     - cmake
     - ninja
+    # Upstream's generators (message-converter.py, generate-def.py) are Python,
+    # and runtime/cmake/config-ix.cmake has find_package(Python3 REQUIRED), so
+    # there is no build without an interpreter. Declared for windows only:
+    # python311 is the CPython cvcpkg publishes for windows (python312 has no
+    # windows bundle). The linux/macos builds still take the build host's
+    # python3, as they did at cvc.1 -- unchanged here.
+    - name: python311
+      platforms: [windows]
   runtime: []
   host_tools: []
 
@@ -51,13 +65,30 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
         CXXFLAGS: "-O2 -fPIC"
+    # Windows (MSVC) exists so a consumer can ship an OpenMP 3.0+ runtime:
+    # MSVC's /openmp runtime (vcomp) is OpenMP 2.0 only, and the -openmp:llvm
+    # one (libomp140.x86_64.dll) is not redistributable. libcvc's Windows SDK is
+    # the first consumer (transfix/libcvc#587).
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
-    # libomp.dylib on macOS, libomp.so on Linux, libomp.a for a static build.
+    # libomp.dylib on macOS, libomp.so on Linux, libomp.a for a static build;
+    # on Windows the import library lib/libomp.lib.
     - lib/libomp.*
+    # Windows: the runtime itself, and the collision-free copy of the import
+    # library that consumers should link (see the "Import library" note).
+    - { glob: "bin/libomp.dll", platforms: [windows] }
+    - { glob: "lib/libomp-llvm.lib", platforms: [windows] }
+    # Upstream's Windows install always adds a libiomp5md compatibility copy of
+    # the DLL and the import library (LIBOMP_INSTALL_ALIASES only governs the
+    # unix aliases). See the "libiomp5md" note.
+    - { glob: "bin/libiomp5md.dll", platforms: [windows] }
+    - { glob: "lib/libiomp5md.lib", platforms: [windows] }
     # omp.h is the one consumers include; ompt.h / omp-tools.h / ompx.h come
-    # along with it. One pattern rather than four names, so a header upstream
+    # along with it (Windows: omp.h + ompx.h only -- OMPT is off there
+    # upstream). One pattern rather than four names, so a header upstream
     # renames does not turn into a packaging failure.
     - include/omp*.h
   cmake_packages: []
@@ -89,3 +120,49 @@ notes:
       consumers also search, and binding two OpenMP runtimes into one process
       aborts with "OMP: Error #15: Initializing libomp, but found libgomp
       already initialized". build.sh asserts the aliases are absent.
+  - title: "Windows: why this runtime and not MSVC's"
+    platforms: [windows]
+    description: >-
+      MSVC's /openmp runtime (vcomp140.dll) implements OpenMP 2.0 only, so code
+      needing OpenMP 3.0+ (unsigned loop indices, min/max reductions, tasks) is
+      compiled with -openmp:llvm, which links libomp140.x86_64.dll. Microsoft
+      documents that DLL as not redistributable and does not put it in
+      VC\Redist, so a binary importing it loads only where Visual Studio is
+      installed. This bundle is LLVM's own libomp (Apache-2.0 WITH
+      LLVM-exception, freely redistributable) built with cl: a consumer links
+      it instead and ships bin/libomp.dll beside its binaries.
+  - title: "Windows import library: link lib/libomp-llvm.lib"
+    platforms: [windows]
+    description: >-
+      Upstream installs the import library as lib/libomp.lib, which is also the
+      file name of MSVC's own import library for libomp140.x86_64.dll -- the
+      one cl -openmp:llvm requests through /DEFAULTLIB:libomp.lib. That name is
+      on every MSVC toolchain's LIB path, so any lookup by bare name
+      (find_library(NAMES libomp), a #pragma comment(lib), a link line without
+      a directory) can silently resolve to Microsoft's file and bring
+      libomp140 back. The bundle therefore also ships lib/libomp-llvm.lib, the
+      same bytes under a name nothing in MSVC uses. Consumers link that by
+      full path and cancel MSVC's default library:
+        <prefix>/lib/libomp-llvm.lib  /NODEFAULTLIB:libomp.lib
+      and the result imports libomp.dll (build.ps1 links and runs exactly that
+      as a smoke test, and checks that every import library in lib/ imports
+      from libomp.dll only). Ship bin/libomp.dll beside the consumer's
+      binaries. lib/libomp.lib stays, for clang-cl and upstream-convention
+      consumers that search for "libomp".
+  - title: "Windows: the DLL ships in the static variant too"
+    platforms: [windows]
+    description: >-
+      Upstream cannot build a static libomp on Windows ("Static libraries
+      requested but not available on Windows"), so build.ps1 always builds
+      the DLL. A --link static bundle carries bin/libomp.dll compiled against
+      the static CRT (/MT, no VCRUNTIME140.dll dependency); the shared bundle
+      uses /MD.
+  - title: "Windows: libiomp5md copies"
+    platforms: [windows]
+    description: >-
+      Upstream's Windows install always adds bin/libiomp5md.dll and
+      lib/libiomp5md.lib, copies kept for code built against Intel's runtime
+      name (LIBOMP_INSTALL_ALIASES only governs the unix libgomp/libiomp5
+      aliases, which this recipe turns off). They are harmless here -- the
+      import library still names libomp.dll -- and a consumer bundling the
+      runtime needs only bin/libomp.dll.
