@@ -78,7 +78,7 @@ package:
     # on Windows the import library lib/libomp.lib.
     - lib/libomp.*
     # Windows: the runtime itself, and the collision-free copy of the import
-    # library that consumers should link (see the "Import library" note).
+    # library that consumers should link (see the "Windows import library" note).
     - { glob: "bin/libomp.dll", platforms: [windows] }
     - { glob: "lib/libomp-llvm.lib", platforms: [windows] }
     # Upstream's Windows install always adds a libiomp5md compatibility copy of
@@ -135,28 +135,46 @@ notes:
     platforms: [windows]
     description: >-
       Upstream installs the import library as lib/libomp.lib, which is also the
-      file name of MSVC's own import library for libomp140.x86_64.dll -- the
-      one cl -openmp:llvm requests through /DEFAULTLIB:libomp.lib. That name is
-      on every MSVC toolchain's LIB path, so any lookup by bare name
-      (find_library(NAMES libomp), a #pragma comment(lib), a link line without
-      a directory) can silently resolve to Microsoft's file and bring
-      libomp140 back. The bundle therefore also ships lib/libomp-llvm.lib, the
-      same bytes under a name nothing in MSVC uses. Consumers link that by
-      full path and cancel MSVC's default library:
+      file name of MSVC's own import library for libomp140.x86_64.dll. Every
+      object cl -openmp:llvm compiles asks for it: /DEFAULTLIB:libomp.lib under
+      /MD, /DEFAULTLIB:libompd.lib under /MDd (read off the objects with
+      dumpbin /directives, MSVC 14.44 and 14.51). That name is on every MSVC
+      toolchain's LIB path, so any lookup by bare name (find_library(NAMES
+      libomp), a #pragma comment(lib), a link line without a directory) can
+      silently resolve to Microsoft's file and bring libomp140 back. The bundle
+      therefore also ships lib/libomp-llvm.lib, the same bytes under a name
+      nothing in MSVC uses. Consumers link that by full path and cancel MSVC's
+      default library:
         <prefix>/lib/libomp-llvm.lib  /NODEFAULTLIB:libomp.lib
-      and the result imports libomp.dll (build.ps1 links and runs exactly that
-      as a smoke test, and checks that every import library in lib/ imports
-      from libomp.dll only). Ship bin/libomp.dll beside the consumer's
-      binaries. lib/libomp.lib stays, for clang-cl and upstream-convention
-      consumers that search for "libomp".
+      (add /NODEFAULTLIB:libompd.lib for a /MDd build). The result imports
+      libomp.dll: build.ps1 compiles, links and runs exactly that as a smoke
+      test, and checks that every import library in lib/ imports from
+      libomp.dll only, by name. Linking lib/libomp.lib by full path with the
+      same /NODEFAULTLIB works too with today's link.exe (it applies
+      /NODEFAULTLIB to default libraries only; the smoke test tries it and
+      reports), but that rests on undocumented name matching, and the distinct
+      name removes the question. lib/libomp.lib stays, for clang-cl and
+      upstream-convention consumers that search for "libomp".
+  - title: "Windows: what to ship with it"
+    platforms: [windows]
+    description: >-
+      Ship bin/libomp.dll beside the consumer's binaries; nothing else from
+      this bundle is needed at run time. The shared build's libomp.dll imports
+      only KERNEL32, PSAPI, the UCRT (api-ms-win-crt-*) and the VC++ runtime
+      (VCRUNTIME140.dll and VCRUNTIME140_1.dll), all redistributable or part of
+      Windows. This bundle's include/omp.h compiles under cl -openmp:llvm
+      (which reports _OPENMP as 200203 although it accepts OpenMP 3.x
+      constructs), so a consumer with the prefix's include/ on its include path
+      gets the LLVM runtime's full API rather than MSVC's OpenMP 2.0 omp.h.
   - title: "Windows: the DLL ships in the static variant too"
     platforms: [windows]
     description: >-
       Upstream cannot build a static libomp on Windows ("Static libraries
       requested but not available on Windows"), so build.ps1 always builds
       the DLL. A --link static bundle carries bin/libomp.dll compiled against
-      the static CRT (/MT, no VCRUNTIME140.dll dependency); the shared bundle
-      uses /MD.
+      the static CRT (/MT); the shared bundle uses /MD. Either works under a
+      consumer of either CRT: the OpenMP API passes no CRT objects across the
+      DLL boundary.
   - title: "Windows: libiomp5md copies"
     platforms: [windows]
     description: >-

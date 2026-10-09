@@ -37,7 +37,7 @@ $cmakeTarballUrl = "https://github.com/llvm/llvm-project/releases/download/llvmo
 # Name of the second, collision-free copy of the import library. Upstream's
 # lib\libomp.lib has the same file name as MSVC's own libomp.lib (the import
 # library for libomp140.x86_64.dll that -openmp:llvm requests through
-# /DEFAULTLIB:libomp.lib). See recipe.yaml, "Import library".
+# /DEFAULTLIB:libomp.lib). See the "Windows import library" note in recipe.yaml.
 $distinctImplib = 'libomp-llvm.lib'
 
 # -- Python ---------------------------------------------------------------------
