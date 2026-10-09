@@ -17,7 +17,15 @@ recipe:
   # $ORIGIN/../lib and the plugins $ORIGIN/.. (patchelf, a linux build dep) and
   # fails the build unless the installed openssl resolves both libraries from
   # the install tree.
-  cvc_revision: 7
+  #
+  # Bumped 7 -> 8: the same for FreeBSD and NetBSD (linux output is unchanged
+  # from +cvc.7). FreeBSD's +cvc.6 had no run path on any object, NetBSD's had
+  # only /usr/pkg/lib (from env-netbsd.sh), so both loaded a host or pkgsrc
+  # libssl.so.3 if there was one. FreeBSD takes the linux patchelf route;
+  # NetBSD, whose loader rejects objects patchelf has grown, gets
+  # $ORIGIN:$ORIGIN/../lib:$ORIGIN/.. at link time through LD_RUN_PATH. The
+  # ldd check in build.sh runs on all three.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,8 +51,9 @@ depends:
     - name: perl
       platforms: [linux, macos, freebsd, netbsd, windows]
     # Post-install run paths for bin/openssl and the plugin modules (build.sh).
+    # Not netbsd: there the run path is set at link time.
     - name: patchelf
-      platforms: [linux]
+      platforms: [linux, freebsd]
   runtime: []
   host_tools: []
 
