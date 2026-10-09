@@ -33,10 +33,11 @@ source:
 patches:
   - netbsd-dirfd-macro.patch
   - netbsd-exit-code-constexpr.patch
-  # Boost.Process cmd()/exe() on NetBSD and OpenBSD, backported from 1.87. Only
-  # those platforms' code changes, and boost was never published for either
-  # (OpenBSD failed on exactly this), so no revision bump.
-  - bsd-process-cmd-exe.patch
+  # Boost.Process on NetBSD and OpenBSD (cmd/exe/close_handles/environ),
+  # backported from upstream. Only those platforms' code changes, and boost was
+  # never published for either (OpenBSD failed on exactly these), so no
+  # revision bump.
+  - bsd-process-backports.patch
 
 depends:
   build:
