@@ -211,15 +211,34 @@ The static-embed happy path, independent of platform **[R1]**:
 
 ---
 
-## 8. Case B — execution plan (2026-09-20)
+## 8. Case B — execution plan (2026-09-20; status refreshed 2026-10-09)
 
 This section turns Case B into a sequenced plan. Two decisions since the doc above was written
 resolve §7 Q8 (the VolRover UI question) and reorder the risk.
 
-**Decision 1 — the browser UI is Dear ImGui on a GL context, not Qt-for-WebAssembly.** Rationale:
-one UI codebase native + wasm; and **Qt-for-WebAssembly is GPLv3-or-commercial only (no LGPL)**, which
-would force open-sourcing or a commercial license for a proprietary build. Decisive enabler: the
-ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
+> **Status (2026-10-09).** Most of what this plan gated on has landed — checked against libcvc,
+> cvcpkg, and cvc-engagement-docs master and the cvcpkg.org catalog:
+> - **UI:** Qt is retired for VolRover (and TexMol) as of 2026-09-28 in favour of **`cvc::ariadne`**,
+>   libcvc/cvcGL's backend-agnostic UI DSL (libcvc #419 and follow-ons), whose ImGui backend
+>   (`cvc::gl::ImGuiBackend`) renders over cvcGL's VTK canvas — see cvc-engagement-docs
+>   `modernization/CVC-Modernization-Plan-2.0.md` (update of 2026-09-28, §1). Decision 1 below stands
+>   as the *why-not-Qt* argument; the UI layer is Ariadne, with ImGui as its rendering backend.
+> - **Keyboard seam:** landed — libcvc #383 feeds wasm key/char events into `ImGuiIO`.
+> - **Python on wasm:** `python312`, `numpy-cp312`, and `vtk-python-cp312` are published for both
+>   `wasm` and `wasm-mt` (static). `pycvc` + `pycvc_gl` with numpy link into a single-`.wasm` CPython
+>   host and run headless under node (libcvc #414/#415, `PYCVC_WASM_OK`); with the VTK-Python bridge
+>   on, `import pycvc_gl` and live `vtkmodules` objects (a `vtkSphereSource` pipeline,
+>   `vtkNetCDFReader`) coexist in one interpreter (libcvc #418, `PYCVC_VTK_BRIDGE_OK`, against
+>   vtk-python `cvc.6` — published for `wasm`; `wasm-mt` is still at `cvc.2`). So the §4 step-1
+>   wall — VTK Python wrapping on wasm — is crossed headless; in-browser rendering + REPL is next.
+> - **Execution host:** Windows-host wasm VTK builds now render too (cvcpkg #48, parity with
+>   `build-wasm.sh`); the Linux-only constraint below is historical.
+
+**Decision 1 — the browser UI is Dear ImGui on a GL context, not Qt-for-WebAssembly.** *(Superseded
+2026-09-28 by `cvc::ariadne` with an ImGui backend — see the status note; the Qt rationale holds.)*
+Rationale: one UI codebase native + wasm; and **Qt-for-WebAssembly is GPLv3-or-commercial only (no
+LGPL)**, which would force open-sourcing or a commercial license for a proprietary build. Decisive
+enabler: the ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
 
 - VTK owns the GL context on every platform via its object factory (`vtkRenderWindow::New()` →
   `vtkWebAssemblyOpenGLRenderWindow` under Emscripten); ImGui uses **`imgui_impl_opengl3` only, fed
@@ -227,14 +246,16 @@ ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
 - `src/cvcGL/examples/volren_bunny.cpp` **already renders + scripts a GPU volume through this in the
   browser**; `inc/cvc/gl/ImGuiBinding.h` (`cvc::gl::ui`) provides `cvc::state`-bound widgets, and
   `bindings/pycvc/pycvc_imgui.i` already wraps them for Python.
-- **Prerequisite:** wasm ImGui has **no keyboard input today** (mouse/touch only). Routing
-  `vtkWebAssemblyRenderWindowInteractor` key/char events into `ImGuiIO` in `ImGuiOverlay` is the
-  linchpin for an in-browser REPL/editor and is the main net-new UI-side engineering.
+- **Prerequisite (done, libcvc #383):** wasm ImGui had **no keyboard input** (mouse/touch only).
+  Routing `vtkWebAssemblyRenderWindowInteractor` key/char events into `ImGuiIO` in `ImGuiOverlay` was
+  the linchpin for an in-browser REPL/editor.
 
 **Decision 2 — sequence the cheap, decisive spike first.** The only thing forcing the hard
 VTK-wrap-Python-on-wasm problem (§4 step 1) is `pycvc_gl` linking `vtkWrappingPythonCore`. The
 user-facing goal — script the scene — needs only the **cvc/cvcGL** surface, which can be bound
-*without* VTK's Python wrappers.
+*without* VTK's Python wrappers. *(The headless premise of both spikes is now proven by the full
+`pycvc_gl` BRIDGE=ON build — libcvc #414/#415/#418 — so the slim module is a size/flavor option,
+not a prerequisite.)*
 
 - **Spike A (recommended first, ~1 wk):** a slim pybind11/SWIG module exposing only cvc types
   (`cvc::gl::SceneGraph`, camera, volume, transfer function, `cvc::state`) with **no `vtkObject` in the
@@ -244,19 +265,24 @@ user-facing goal — script the scene — needs only the **cvc/cvcGL** surface, 
 - **Spike B (optional, ~1–2 wk):** the §4 step-1 go/no-go — wasm VTK rebuilt `VTK_WRAP_PYTHON=ON` +
   `BUILD_STATIC` + `BUILD_SHARED_LIBS=OFF`, wrappers registered via the generated `<TARGET>_load()`
   (§2.3), gated on `import vtkmodules.vtkRenderingVolumeOpenGL2` succeeding headless. Only needed if
-  the full VTK/numpy Python API in-browser is required beyond Spike A. numpy-on-wasm (against emsdk
-  5.0.7) is a separable follow-on, not part of the gate.
+  the full VTK/numpy Python API in-browser is required beyond Spike A. *(Wrapping proven headless in
+  libcvc #418: VTK's static build exports a single `PyInit__vtkmodules_static` builtin rather than
+  per-module `_load()` functions, and numpy-cp312 for wasm shipped alongside. The bridge smoke
+  exercises a filter pipeline and IO, not the `vtkRenderingVolumeOpenGL2` import named here.)*
 
-**Execution host:** rendering-capable wasm VTK builds only from a **Linux host** (the Windows
-`build-wasm.ps1` is compute-only), so both spikes run on catx-03 as `github-runner`.
+**Execution host:** at plan time, rendering-capable wasm VTK built only from a **Linux host** (the
+Windows `build-wasm.ps1` was compute-only), so both spikes were slated for catx-03 as `github-runner`.
+cvcpkg #48 gave the Windows host rendering parity, so either host works now.
 
 **In-app IDE (native + browser identical):** vendor MIT-licensed components — **ImGuiColorTextEdit**
 (maintained fork) for the source editor, the **Dear ImGui console** scaffold for the REPL, and
 **jedi** run in-process by the embedded interpreter for completion/hover (identical on both targets);
 optionally **tree-sitter** for highlighting and **Zep** if modal editing is wanted. We roll only the
 integration (keyboard seam, console↔interpreter glue, editor↔MEMFS/zipos, traceback→diagnostics). Full
-rationale, license table, and build-vs-borrow analysis:
-[`../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md`](../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md).
+rationale, license table, and build-vs-borrow analysis — reconciled 2026-10-08 with the Ariadne
+decision — live in cvc-engagement-docs as
+[`modernization/volrover3-wasm-embedded-python-and-ide.md`](https://github.com/cy-pca/cvc-engagement-docs/blob/main/modernization/volrover3-wasm-embedded-python-and-ide.md)
+(cy-pca/cvc-engagement-docs #171).
 
 ---
 
