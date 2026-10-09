@@ -11,7 +11,11 @@ recipe:
   # zlib only). +cvc.4 linked whatever the build host had: the linux
   # libboost_locale needs the builder's ICU 70, the macOS libboost_iostreams
   # loads Homebrew's zstd from /opt/homebrew. Neither exists on a clean host.
-  cvc_revision: 5
+  #
+  # Bumped 5 -> 6: Boost.Charconv without quadmath (build.sh). +cvc.5's linux
+  # libboost_charconv still NEEDed GCC's libquadmath.so.0, which minimal hosts
+  # lack, and exported -lquadmath to consumers.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
