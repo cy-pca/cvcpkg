@@ -98,6 +98,15 @@ if [[ "${CVC_PLATFORM}" == "macos" && "${CVC_LINK}" == "shared" ]]; then
     _extra_cmake_flags+=("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-undefined,dynamic_lookup")
 fi
 
+# OpenBSD's <arpa/nameser.h> predates the BIND 8 enums (ns_c_in, ns_t_srv,
+# ...), and c-ares only defines them itself when the system has no nameser.h at
+# all, so grpc's c-ares resolvers (ares_resolver.cc, grpc_ares_wrapper.cc) find
+# neither:  error: use of undeclared identifier 'ns_c_in'. Supply the three
+# they use, with their RFC 1035 / RFC 2782 values.
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    export CXXFLAGS="${CXXFLAGS:-} -Dns_c_in=1 -Dns_t_srv=33 -Dns_t_txt=16"
+fi
+
 cvc_cmake_build \
     ${_extra_cmake_flags[@]+"${_extra_cmake_flags[@]}"} \
     -DgRPC_BUILD_TESTS=OFF \
