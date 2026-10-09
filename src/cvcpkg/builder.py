@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform as _platform_module
+import posixpath
 import re
 import shutil
 import stat
@@ -1583,6 +1584,58 @@ def _scrub_elf_rpaths(
             print(f"cvcpkg: WARNING: could not rewrite {rel} RPATH {old_s} -> {new_s}")
 
 
+def _complete_elf_rpaths(
+    install_dir: Path,
+    dep_prefixes: Sequence[Path | None],
+    patchelf: str | None,
+) -> None:
+    """Give every ELF object the ``$ORIGIN`` entries its shipped libraries need.
+
+    A NEEDED library that this bundle, or a runtime dependency in
+    *dep_prefixes*, ships is only loaded from the installed prefix if the
+    object's RUNPATH reaches the directory it lands in; otherwise the loader
+    takes whatever copy the host has (openssl +cvc.6's bin/openssl, built with
+    no RPATH, loaded the distro's libssl.so.3) or fails.  For each such library
+    this appends ``$ORIGIN/<path from the object to it>`` -- ``$ORIGIN/../lib``
+    from bin/, ``$ORIGIN/..`` from lib/engines-3/.
+
+    Appending grows the RPATH string, so this needs *patchelf* and runs only
+    where ``cvcpkg.linkage.REACH_PLATFORMS`` says growing is safe (linux).  The
+    pack-time gate reports whatever is still unreachable.
+    """
+    index = _linkage.library_index([install_dir, *(p for p in dep_prefixes if p)])
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf":
+            continue
+        rel_dir = obj.parent.relative_to(install_dir).as_posix()
+        added: list[str] = []
+        for _name, homes in _linkage.unreachable_libs(rel_dir, link, index):
+            r = posixpath.relpath(homes[0], rel_dir)
+            entry = "$ORIGIN" if r == "." else f"$ORIGIN/{r}"
+            if entry not in added:
+                added.append(entry)
+        if not added:
+            continue
+        old_s = ":".join(link.rpaths)
+        new_s = ":".join([*link.rpaths, *added])
+        rel = obj.relative_to(install_dir).as_posix()
+        done = False
+        if patchelf:
+            cmd = [patchelf, "--set-rpath", new_s]
+            if link.dt_rpath:
+                cmd.append("--force-rpath")  # keep DT_RPATH semantics
+            restore = _writable(obj)
+            try:
+                done = subprocess.run([*cmd, str(obj)], capture_output=True).returncode == 0
+            finally:
+                if restore is not None:
+                    obj.chmod(restore)
+        if done:
+            print(f"cvcpkg: relocated {rel}: RPATH {old_s or '<none>'} -> {new_s}")
+        else:
+            print(f"cvcpkg: WARNING: could not add {':'.join(added)} to {rel}'s RPATH")
+
+
 def _patch_macos_install_names(
     install_dir: Path,
     dep_prefixes: Sequence[Path | None] = (),
@@ -1744,6 +1797,8 @@ def _make_relocatable(ctx: BuildContext) -> None:
             # _patch_elf_rpath already owns lib/**/*.so* (its own $ORIGIN rule).
             skip=lambda p: lib_pass and ".so" in p.name and lib_dir in p.parents,
         )
+        if ctx.platform in _linkage.REACH_PLATFORMS:
+            _complete_elf_rpaths(ctx.install_dir, (ctx.prefix,), patchelf)
 
 
 def run_build(
@@ -2445,6 +2500,7 @@ def stage_bundle(
     recipe_dir: Path | None = None,
     temp_prefixes: Sequence[Path | str] = (),
     linkage_allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
 ) -> None:
     """Copy the installed tree, manifest, and recipe into a staging directory.
 
@@ -2460,7 +2516,8 @@ def stage_bundle(
     Raises :class:`PackError` when a staged ELF/Mach-O object still loads
     from, or searches, a path into the build machine — see
     :func:`check_relocatable`.  *linkage_allow* is the recipe's
-    ``package.linkage_allow``.
+    ``package.linkage_allow``; *dep_prefixes* hold the runtime dependencies the
+    bundle is installed next to (their libraries must be reachable too).
     """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
@@ -2473,6 +2530,7 @@ def stage_bundle(
         manifest["bundle"],
         temp_prefixes=(*temp_prefixes, install_dir),
         allow=linkage_allow,
+        dep_prefixes=dep_prefixes,
     )
 
     # Write the manifest under a subdirectory named for the bundle itself.
@@ -2501,6 +2559,7 @@ def check_relocatable(
     *,
     temp_prefixes: Sequence[Path | str] = (),
     allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
 ) -> None:
     """Fail packing when a binary in *root* points into the build machine.
 
@@ -2512,11 +2571,16 @@ def check_relocatable(
     LC_ID_DYLIB is read (:func:`cvcpkg.linkage.audit_tree`); a path into
     *temp_prefixes*, a cvcpkg build directory, /tmp or a CI workspace fails
     the pack, as does — on macOS — any absolute path outside the OS
-    (Homebrew, MacPorts).  Runs on the staged tree, after the relocation pass
+    (Homebrew, MacPorts).  On linux, a NEEDED library the bundle or a runtime
+    dependency in *dep_prefixes* ships must also be reachable through the
+    object's own ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.
+    Runs on the staged tree, after the relocation pass
     (:func:`_make_relocatable`) has rewritten everything it can.
     """
     platform = str(bundle.get("platform", ""))
-    result = _linkage.audit_tree(root, platform, temp_prefixes, allow)
+    result = _linkage.audit_tree(
+        root, platform, temp_prefixes, allow, lib_roots=[p for p in dep_prefixes if p]
+    )
     if result.ok:
         if result.objects:
             print(f"cvcpkg: relocatable OK — {result.objects} binary object(s) checked")
@@ -2529,9 +2593,10 @@ def check_relocatable(
         + "\nLink against the dependency through its installed prefix with a "
         "loader-relative RPATH ($ORIGIN/../lib, @loader_path/../lib) and declare it in "
         "depends.runtime; the relocation pass rewrites paths into this build's own "
-        "prefixes, so anything left is either another build's directory or a library "
-        "the build host provides (patchelf / install_name_tool missing also leaves "
-        "them). See src/cvcpkg/linkage.py."
+        "prefixes and adds the $ORIGIN entries shipped libraries need, so anything "
+        "left is either another build's directory or a library the build host "
+        "provides (patchelf / install_name_tool missing also leaves them). See "
+        "src/cvcpkg/linkage.py."
     )
 
 
@@ -3501,6 +3566,7 @@ def pack_recipe(
         recipe_dir=ctx.recipe.recipe_dir,
         temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
         linkage_allow=ctx.recipe.linkage_allow,
+        dep_prefixes=(ctx.prefix,),
     )
 
     archive_path, sha256, size = create_archive(

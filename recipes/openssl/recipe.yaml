@@ -7,7 +7,17 @@ recipe:
   # neither no-sock nor -DNO_FORK; only the APE-inherent limits (static single
   # file, so no shared/dso/engine) are compiled out. python31x already declared
   # cosmo and runtime-depends on openssl, so this was also an unresolvable claim.
-  cvc_revision: 6
+  #
+  # Bumped 6 -> 7: linux run paths. OpenSSL's Configure links nothing with an
+  # RPATH, so +cvc.6's bin/openssl (NEEDED libssl.so.3, libcrypto.so.3) had
+  # none and loaded whatever libssl the host's loader found first -- the
+  # distro's, on any machine that has one -- instead of the bundle's. Its
+  # engines-3/ and ossl-modules/ plugins (NEEDED libcrypto.so.3) only got the
+  # packager's bare $ORIGIN, their own directory. build.sh now gives bin/openssl
+  # $ORIGIN/../lib and the plugins $ORIGIN/.. (patchelf, a linux build dep) and
+  # fails the build unless the installed openssl resolves both libraries from
+  # the install tree.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -32,6 +42,9 @@ depends:
     # everything openssl's Configure + build scripts need.
     - name: perl
       platforms: [linux, macos, freebsd, netbsd, windows]
+    # Post-install run paths for bin/openssl and the plugin modules (build.sh).
+    - name: patchelf
+      platforms: [linux]
   runtime: []
   host_tools: []
 

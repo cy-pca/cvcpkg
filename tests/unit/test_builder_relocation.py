@@ -17,7 +17,13 @@ from unittest import mock
 import pytest
 
 from cvcpkg import builder
-from cvcpkg.builder import PackError, _scrub_elf_rpaths, check_relocatable, stage_bundle
+from cvcpkg.builder import (
+    PackError,
+    _complete_elf_rpaths,
+    _scrub_elf_rpaths,
+    check_relocatable,
+    stage_bundle,
+)
 from cvcpkg.linkage import read_linkage
 from tests.unit._binfixtures import elf, macho
 
@@ -122,6 +128,56 @@ def test_read_only_binary_is_rewritten_and_mode_restored(tmp_path):
     assert stat.S_IMODE(os.stat(exe).st_mode) == 0o555
 
 
+def _complete(root, deps=()):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with mock.patch("cvcpkg.builder.subprocess.run", side_effect=fake_run):
+        _complete_elf_rpaths(root, deps, "/x/patchelf")
+    return {c[-1].replace("\\", "/").split("/install/", 1)[-1]: c[1:-1] for c in calls}
+
+
+def test_complete_adds_the_entries_shipped_libraries_need(tmp_path):
+    # openssl +cvc.6: bin/openssl with no RPATH loaded the host's libssl.so.3.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    elf(inst / "bin" / "openssl", needed=["libssl.so.3", "libcrypto.so.3", "libc.so.6"])
+    elf(inst / "lib" / "libssl.so.3", kind="dyn", needed=["libcrypto.so.3"], runpath="$ORIGIN")
+    elf(inst / "lib" / "libcrypto.so.3", kind="dyn", runpath="$ORIGIN")
+    elf(
+        inst / "lib" / "engines-3" / "padlock.so",
+        kind="dyn",
+        needed=["libcrypto.so.3"],
+        runpath="$ORIGIN",
+    )
+    elf(
+        inst / "lib" / "ossl-modules" / "legacy.so",
+        kind="dyn",
+        needed=["libcrypto.so.3"],
+        rpath="$ORIGIN",
+    )
+    elf(deps / "lib" / "libz.so.1", kind="dyn")
+    elf(inst / "bin" / "sqlite3", needed=["libz.so.1"], runpath="/usr/local/lib")
+    calls = _complete(inst, (deps,))
+    assert calls == {
+        "bin/openssl": ["--set-rpath", "$ORIGIN/../lib"],
+        "lib/engines-3/padlock.so": ["--set-rpath", "$ORIGIN:$ORIGIN/.."],
+        "lib/ossl-modules/legacy.so": ["--set-rpath", "$ORIGIN:$ORIGIN/..", "--force-rpath"],
+        "bin/sqlite3": ["--set-rpath", "/usr/local/lib:$ORIGIN/../lib"],
+    }  # libssl/libcrypto already reach each other; libc is the host's
+
+
+def test_complete_needs_patchelf(tmp_path, capsys):
+    elf(tmp_path / "install" / "bin" / "openssl", needed=["libssl.so.3"])
+    elf(tmp_path / "install" / "lib" / "libssl.so.3", kind="dyn")
+    with mock.patch("cvcpkg.builder.subprocess.run") as run:
+        _complete_elf_rpaths(tmp_path / "install", (), None)
+    run.assert_not_called()
+    assert "could not add $ORIGIN/../lib to bin/openssl" in capsys.readouterr().out
+
+
 def _ctx(tmp_path, platform, link):
     inst = tmp_path / "install"
     return SimpleNamespace(
@@ -150,6 +206,21 @@ def test_make_relocatable_scrubs_executables_for_every_link(tmp_path, link):
     so = ctx.install_dir / "lib" / "libfoo.so.1"
     assert kwargs["skip"](so) == (link == "shared")
     assert kwargs["skip"](ctx.install_dir / "bin" / "foo") is False
+
+
+@pytest.mark.parametrize("platform,runs", [("linux", True), ("freebsd", False), ("netbsd", False)])
+def test_make_relocatable_completes_rpaths_on_linux_only(tmp_path, platform, runs):
+    ctx = _ctx(tmp_path, platform, "shared")
+    with (
+        mock.patch.object(builder, "_find_patchelf", return_value="/x/patchelf"),
+        mock.patch.object(builder, "_patch_elf_rpath"),
+        mock.patch.object(builder, "_scrub_elf_rpaths"),
+        mock.patch.object(builder, "_complete_elf_rpaths") as complete,
+    ):
+        builder._make_relocatable(ctx)
+    assert complete.called == runs
+    if runs:
+        complete.assert_called_once_with(ctx.install_dir, (ctx.prefix,), "/x/patchelf")
 
 
 def test_make_relocatable_macos_passes_deps_prefix(tmp_path):
@@ -195,6 +266,15 @@ def test_stage_bundle_treats_install_dir_as_a_build_path(tmp_path):
     check_relocatable(root, _bundle("linux"))  # unknown dir: not flagged
     with pytest.raises(PackError):
         check_relocatable(root, _bundle("linux"), temp_prefixes=[inst])
+
+
+def test_stage_bundle_refuses_unreachable_shipped_library(tmp_path):
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    elf(inst / "bin" / "cmake", needed=["libcurl.so.4.8.0"])  # no RUNPATH
+    elf(deps / "lib" / "libcurl.so.4.8.0", kind="dyn")
+    with pytest.raises(PackError, match="bin/cmake: NEEDED libcurl.so.4.8.0"):
+        stage_bundle(inst, {"bundle": _bundle("linux")}, tmp_path / "s1", dep_prefixes=(deps,))
+    stage_bundle(inst, {"bundle": _bundle("linux")}, tmp_path / "s2")  # deps unknown: host's
 
 
 def test_stage_bundle_linkage_allow(tmp_path):

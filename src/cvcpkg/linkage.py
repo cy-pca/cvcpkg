@@ -32,6 +32,7 @@ itself where its tool is missing is worse than none.
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 import struct
 import tempfile
@@ -451,6 +452,75 @@ def builder_path_reason(
     return None
 
 
+# ── Which shipped libraries an object can reach ─────────────────
+
+# Platforms whose shipped libraries must be reachable through each object's own
+# RUNPATH.  Linux only for now: its builders have patchelf, which the relocation
+# pass needs to ADD a missing entry.  NetBSD refuses objects patchelf has grown
+# (see recipes/curl), the FreeBSD builders lack patchelf, OpenBSD bakes absolute
+# run paths at install time, so on those a missing entry cannot be fixed at pack
+# time yet and checking for it would only fail the pack.
+REACH_PLATFORMS = frozenset({"linux"})
+
+
+def library_index(roots: Sequence[Path | str]) -> dict[str, set[str]]:
+    """Directory of every shared-library file under *roots*, by file name.
+
+    Directories are relative to the root they were found in, POSIX-style
+    (``lib``, ``lib/engines-3``).  A bundle and its runtime dependencies are
+    unpacked into one prefix, so the same relative directory names the same
+    place once installed -- which is what lets the bundle and its deps prefix
+    be indexed together.  Symlinks count: a NEEDED name is usually one.
+    """
+    index: dict[str, set[str]] = {}
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for dirpath, _dirs, names in os.walk(root):
+            rel: str | None = None
+            for name in names:
+                if ".so" not in name:
+                    continue
+                if rel is None:
+                    rel = Path(os.path.relpath(dirpath, root)).as_posix()
+                index.setdefault(name, set()).add(rel)
+    return index
+
+
+def origin_dirs(rel_dir: str, rpaths: Iterable[str]) -> set[str]:
+    """The directories (relative to the prefix) that *rpaths*' ``$ORIGIN``
+    entries name for an object in *rel_dir*.  Entries escaping the prefix and
+    absolute ones are left out: neither reaches a shipped library."""
+    out: set[str] = set()
+    for e in rpaths:
+        for tok in ("$ORIGIN", "${ORIGIN}"):
+            if e == tok or e.startswith(tok + "/"):
+                d = posixpath.normpath(posixpath.join(rel_dir, e[len(tok) :].lstrip("/") or "."))
+                if d != ".." and not d.startswith("../"):
+                    out.add(d)
+    return out
+
+
+def unreachable_libs(
+    rel_dir: str, link: Linkage, index: dict[str, set[str]]
+) -> list[tuple[str, list[str]]]:
+    """``(name, homes)`` for each NEEDED library *index* says the prefix ships
+    that no RUNPATH entry of *link* (an object in *rel_dir*) reaches.
+
+    The loader then finds it only through ``LD_LIBRARY_PATH`` -- or takes a
+    different copy from the host's own directories: +cvc.6 openssl's
+    bin/openssl had no RUNPATH, NEEDED libssl.so.3, and loaded the distro's.
+    """
+    reached = origin_dirs(rel_dir, link.rpaths)
+    out: list[tuple[str, list[str]]] = []
+    for name in link.needed:
+        homes = index.get(name) if "/" not in name else None
+        if homes and not homes & reached:
+            out.append((name, sorted(homes, key=lambda h: (h != "lib", len(h), h))))
+    return out
+
+
 # ── The gate ────────────────────────────────────────────────────
 
 
@@ -492,6 +562,7 @@ def audit_tree(
     platform: str,
     temp_prefixes: Sequence[Path | str] = (),
     allow: Sequence[str] = (),
+    lib_roots: Sequence[Path | str] = (),
 ) -> AuditResult:
     """Every loader path under *root* that will not exist once it is installed.
 
@@ -504,6 +575,11 @@ def audit_tree(
     or inside the OS (``/usr/lib``, ``/System``) — a builder path, Homebrew or
     MacPorts is reported.
 
+    Linux (``REACH_PLATFORMS``): every NEEDED library that the bundle, or a
+    runtime dependency installed under *lib_roots*, ships must be reachable
+    through the object's own ``$ORIGIN`` RUNPATH -- otherwise the loader takes
+    the host's copy (see :func:`unreachable_libs`).
+
     *allow* lists path prefixes a recipe vouches for (``package.linkage_allow``)
     — e.g. a vendor framework installed at a fixed location.  It never excuses a
     builder path.  Windows and wasm bundles have nothing to check and return an
@@ -514,6 +590,7 @@ def audit_tree(
         return result
     roots = _ephemeral_roots()
     allowed = tuple(a for a in allow if a)
+    index = library_index([root, *lib_roots]) if platform in REACH_PLATFORMS else None
 
     def check(rel: str, fld: str, value: str, macho: bool) -> None:
         if not value or is_relative_entry(value):
@@ -537,6 +614,18 @@ def audit_tree(
                 check(rel, "LC_LOAD_DYLIB" if macho else "NEEDED", n, macho)
         if link.soname and (macho or "/" in link.soname):
             check(rel, "LC_ID_DYLIB" if macho else "SONAME", link.soname, macho)
+        if index is not None and not macho:
+            rel_dir = posixpath.dirname(rel) or "."
+            for name, homes in unreachable_libs(rel_dir, link, index):
+                result.findings.append(
+                    Finding(
+                        rel,
+                        "NEEDED",
+                        name,
+                        f"shipped in {homes[0]}/ but no RUNPATH entry reaches it, so the "
+                        "loader would take the host's copy",
+                    )
+                )
     return result
 
 

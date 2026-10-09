@@ -10,6 +10,8 @@ import pytest
 from cvcpkg.linkage import (
     audit_tree,
     builder_path_reason,
+    library_index,
+    origin_dirs,
     read_linkage,
     relative_to_prefixes,
     rewrite_elf_rpath,
@@ -238,3 +240,72 @@ def test_audit_skips_platforms_without_loader_paths(tmp_path):
     elf(tmp_path / "bin" / "x", runpath=f"{JOB}/lib")
     for plat in ("windows", "wasm", "wasi", "cosmo", "any"):
         assert audit_tree(tmp_path, plat).ok
+
+
+# ── shipped libraries must be reachable (linux) ─────────────────
+
+
+def _openssl_cvc6(root):
+    """The shape of openssl 3.4.1+cvc.6's linux bundle."""
+    elf(root / "bin" / "openssl", needed=["libssl.so.3", "libcrypto.so.3", "libc.so.6"])
+    elf(root / "lib" / "libcrypto.so.3", kind="dyn", runpath="$ORIGIN", soname="libcrypto.so.3")
+    elf(
+        root / "lib" / "libssl.so.3",
+        kind="dyn",
+        needed=["libcrypto.so.3"],
+        runpath="$ORIGIN",
+        soname="libssl.so.3",
+    )
+    elf(
+        root / "lib" / "engines-3" / "padlock.so",
+        kind="dyn",
+        needed=["libcrypto.so.3"],
+        runpath="$ORIGIN",
+    )
+
+
+def test_library_index_and_origin_dirs(tmp_path):
+    _openssl_cvc6(tmp_path)
+    (tmp_path / "lib" / "libssl.so").symlink_to("libssl.so.3")
+    index = library_index([tmp_path])
+    assert index["libssl.so.3"] == {"lib"} and index["libssl.so"] == {"lib"}
+    assert index["padlock.so"] == {"lib/engines-3"}
+    assert origin_dirs("bin", ["$ORIGIN/../lib", "/usr/lib", "${ORIGIN}"]) == {"lib", "bin"}
+    assert origin_dirs("lib/engines-3", ["$ORIGIN/.."]) == {"lib"}
+    assert origin_dirs("bin", ["$ORIGIN/../../outside"]) == set()
+
+
+def test_audit_linux_openssl_cvc6_reaches_the_hosts_libssl(tmp_path):
+    _openssl_cvc6(tmp_path)
+    found = {(f.path, f.value) for f in audit_tree(tmp_path, "linux").findings}
+    assert found == {
+        ("bin/openssl", "libssl.so.3"),
+        ("bin/openssl", "libcrypto.so.3"),
+        ("lib/engines-3/padlock.so", "libcrypto.so.3"),
+    }
+    # libc.so.6 is not shipped, so it is the host's to provide: never reported.
+
+
+def test_audit_linux_reachable_and_dependency_libraries(tmp_path):
+    root, deps = tmp_path / "bundle", tmp_path / "deps"
+    elf(root / "bin" / "openssl", needed=["libssl.so.3"], runpath="$ORIGIN/../lib")
+    elf(root / "lib" / "libssl.so.3", kind="dyn", runpath="$ORIGIN")
+    elf(
+        root / "lib" / "engines-3" / "padlock.so",
+        kind="dyn",
+        needed=["libssl.so.3"],
+        runpath="$ORIGIN:$ORIGIN/..",
+    )
+    assert audit_tree(root, "linux").ok
+    # A library from a runtime dependency counts as shipped too.
+    elf(deps / "lib" / "libcurl.so.4.8.0", kind="dyn")
+    elf(root / "bin" / "cmake", needed=["libcurl.so.4.8.0"])
+    assert audit_tree(root, "linux").ok  # without the deps prefix: the host's problem
+    (f,) = audit_tree(root, "linux", lib_roots=[deps]).findings
+    assert (f.path, f.field, f.value) == ("bin/cmake", "NEEDED", "libcurl.so.4.8.0")
+
+
+def test_audit_reachability_is_linux_only(tmp_path):
+    _openssl_cvc6(tmp_path)
+    for plat in ("freebsd", "netbsd", "openbsd", "haiku"):
+        assert audit_tree(tmp_path, plat).ok, plat

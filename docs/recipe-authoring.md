@@ -201,7 +201,10 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   ELF/Mach-O object it is about to archive and FAILS if any RUNPATH/RPATH,
   NEEDED, LC_RPATH or LC_*_DYLIB still points into a build machine (a job's
   scratch prefix, `/tmp`, a CI workspace) or — on macOS — anywhere outside
-  `/usr/lib` and `/System` (Homebrew, MacPorts). The fix is almost always in
+  `/usr/lib` and `/System` (Homebrew, MacPorts). On linux, a library the
+  bundle or one of its runtime deps ships must also be reachable through the
+  object's own `$ORIGIN` RUNPATH (the pass adds missing entries with patchelf);
+  otherwise the loader quietly takes the host's copy. The fix is almost always in
   the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
   `depends.runtime`, and do not let an optional feature pick up whatever the
   build host has installed (see `recipes/boost/build.sh`). For a library at a

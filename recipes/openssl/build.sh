@@ -78,5 +78,39 @@ make -j "${CVC_JOBS}"
 # and do not want to create or own /etc/ssl entries.
 make install_sw
 
+# Linux run paths. Configure links nothing with an RPATH: bin/openssl would
+# load the HOST's libssl.so.3/libcrypto.so.3 (any distro with OpenSSL 3 has
+# them) instead of the ones beside it, and the engines-3/ and ossl-modules/
+# plugins would only search their own directory for libcrypto. Set them with
+# patchelf after the fact rather than through Configure's LDFLAGS, which every
+# object shares: the executable needs $ORIGIN/../lib, the plugins $ORIGIN/..,
+# the libraries $ORIGIN. (cvcpkg's packager prepends $ORIGIN to lib/**/*.so*
+# and keeps $ORIGIN-relative entries, so the plugins end up $ORIGIN:$ORIGIN/..)
+if [[ "${CVC_PLATFORM}" == "linux" && "${CVC_LINK}" != "static" ]]; then
+    patchelf --set-rpath '$ORIGIN/../lib' "${CVC_INSTALL_DIR}/bin/openssl"
+    for _lib in "${CVC_INSTALL_DIR}"/lib/libssl.so.* "${CVC_INSTALL_DIR}"/lib/libcrypto.so.*; do
+        if [[ -f "${_lib}" && ! -L "${_lib}" ]]; then
+            patchelf --set-rpath '$ORIGIN' "${_lib}"
+        fi
+    done
+    for _mod in "${CVC_INSTALL_DIR}"/lib/engines-3/*.so "${CVC_INSTALL_DIR}"/lib/ossl-modules/*.so; do
+        if [[ -f "${_mod}" ]]; then
+            patchelf --set-rpath '$ORIGIN/..' "${_mod}"
+        fi
+    done
+    # The installed openssl must resolve both libraries from this tree, not
+    # from the host, with no LD_LIBRARY_PATH to help it.
+    _ldd=$(env -u LD_LIBRARY_PATH ldd "${CVC_INSTALL_DIR}/bin/openssl")
+    echo "${_ldd}"
+    _inst=$(realpath "${CVC_INSTALL_DIR}")
+    for _so in libssl.so.3 libcrypto.so.3; do
+        _at=$(awk -v n="${_so}" '$1 == n { print $3 }' <<<"${_ldd}")
+        if [[ -z "${_at}" || "$(realpath "${_at}" 2>/dev/null)" != "${_inst}"/* ]]; then
+            echo "openssl build.sh: bin/openssl loads ${_so} from '${_at:-nowhere}', not ${CVC_INSTALL_DIR}" >&2
+            exit 1
+        fi
+    done
+fi
+
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths
