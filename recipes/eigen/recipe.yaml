@@ -1,0 +1,125 @@
+schema_version: 1
+recipe:
+  name: eigen
+  # 5.0.1 is the Eigen libigl v2.6.4 itself pins (cmake/recipes/external/eigen.cmake,
+  # libigl PR #2538 "Port to Eigen 5.0.1").  NOTE Eigen 5's Eigen3ConfigVersion.cmake
+  # is strict per requested component: find_package(Eigen3 3.3|3.4|3.1.0) does NOT
+  # accept 5.0.1 -- consumers must ask with no version, `5.0`, or a range such as
+  # `3.4...<6`.  Its config also no longer sets the legacy EIGEN3_* variables.
+  upstream_version: "5.0.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Eigen: header-only C++ template library for linear algebra (dense and
+    sparse matrices, decompositions, solvers). Installed through Eigen's own
+    CMake install, so the bundle ships the upstream Eigen3Config.cmake exporting
+    the Eigen3::Eigen INTERFACE target (and eigen3.pc off native Windows).
+    Base of libigl.
+  homepage: https://eigen.tuxfamily.org/
+  # The expression covers everything the bundle ships, i.e. all of
+  # include/eigen3/{Eigen,unsupported}, not just what a given consumer includes.
+  # Eigen itself is MPL-2.0 (COPYING.README); the other terms are third-party
+  # code inside it:
+  #  - Apache-2.0: src/Core/arch/Default/BFloat16.h (TensorFlow).  Eigen/Core
+  #    always includes it, so every consumer compiles Apache-2.0 code.
+  #  - BSD-3-Clause: the *_BLAS.h / *_LAPACKE.h / Assign_MKL.h / MKL_support.h /
+  #    misc/lapacke.h backends and PardisoSupport.h (Intel), and
+  #    Geometry/AlignedBox.h (Open Source Robotics Foundation).
+  #  - Minpack: unsupported/Eigen/NonLinearOptimization and
+  #    unsupported/Eigen/src/LevenbergMarquardt (CopyrightMINPACK.txt).  The
+  #    bundle cannot drop unsupported/: libigl's core includes
+  #    <unsupported/Eigen/SparseExtra>.
+  #  - LicenseRef-COLAMD: OrderingMethods/Eigen_Colamd.h (Univ. of Florida:
+  #    the copyright, the licence and where to get the original must stay with
+  #    every copy and reach the end user).
+  #  - LicenseRef-SuperLU: SparseLU/SparseLU_*.h and SparseCore/SparseColEtree.h
+  #    (Xerox / SuperLU: keep the notices, and say that the code was modified).
+  # No term for Half.h's float-conversion routines: Fabian Giesen's notice there
+  # permits redistribution and use without conditions (it is not BSD-3-Clause).
+  # Likewise for the public-domain JAMA code behind EigenSolver.h / RealSchur.h.
+  # EIGEN_MPL2_ONLY is a no-op in 5.x.  The COPYING.* texts (MPL2, APACHE, BSD,
+  # MINPACK) ship in share/licenses/eigen/; the COLAMD and SuperLU notices exist
+  # only in their own headers, which ship too.
+  license: MPL-2.0 AND Apache-2.0 AND BSD-3-Clause AND Minpack AND LicenseRef-COLAMD AND LicenseRef-SuperLU
+  tags: [math, linear-algebra, header-only, wasm, wasi]
+
+source:
+  type: tarball
+  url: https://gitlab.com/libeigen/eigen/-/archive/5.0.1/eigen-5.0.1.tar.gz
+  # The GitLab release asset (immutable upload) with the identical digest -- used by
+  # the Bazel Central Registry (modules/eigen/5.0.1/source.json).
+  mirror: https://gitlab.com/libeigen/eigen/-/package_files/246179253/download
+  sha256: "e9c326dc8c05cd1e044c71f30f1b2e34a6161a3b6ecf445d56b53ff1669e3dec"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  # Explicit and empty: without a runtime key the manifest falls back to
+  # depends.build and cmake/ninja leak into required_deps
+  # (tests/unit/test_required_deps_no_host_tools.py).
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+    # Cross targets reuse build.sh: it sources env-${CVC_PLATFORM}.sh, i.e.
+    # env-wasm.sh / env-wasm-mt.sh / env-wasi.sh / env-cosmo.sh, each of which
+    # loads env-${CVC_HOST_PLATFORM}.sh and redefines cvc_cmake_build around its
+    # toolchain.  The toolchain only has to pass Eigen's compiler checks; nothing
+    # is compiled, so the bundle is the same headers on every target.
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
+    - platform: cosmo
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    - include/eigen3/Eigen/
+    - include/eigen3/unsupported/
+    - include/eigen3/signature_of_eigen3_matrix_library
+    - share/eigen3/cmake/
+    - share/licenses/eigen/
+    # Eigen only defines EIGEN_BUILD_PKGCONFIG off native Windows hosts.
+    - glob: share/pkgconfig/eigen3.pc
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi, cosmo]
+  cmake_packages:
+    - { name: Eigen3, targets: ["Eigen3::Eigen"] }
+  # No pkg_config: list.  It is copied as-is into every bundle's manifest
+  # (contents.pkg_config) and cannot be scoped per platform, and a native
+  # Windows bundle has no eigen3.pc.  Where the .pc ships (the glob above), it
+  # is found through PKG_CONFIG_PATH like any other shipped .pc file.
+
+abi:
+  # Eigen 5 requires C++14 (target_compile_features(eigen INTERFACE cxx_std_14)).
+  cxx_std: 14
