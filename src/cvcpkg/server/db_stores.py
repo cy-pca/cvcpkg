@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from collections.abc import Collection
 from pathlib import Path
 
 from cvcpkg.optional import require_sqlalchemy
@@ -2359,6 +2360,12 @@ class DbOrgStore:
             )
             return set((await session.execute(q)).scalars().all())
 
+    async def private_slugs(self) -> set[str]:
+        """Return the slugs of every private org."""
+        async with get_session() as session:
+            q = select(OrganizationRow.slug).where(OrganizationRow.is_private == True)  # noqa: E712
+            return set((await session.execute(q)).scalars().all())
+
     async def update(
         self,
         slug: str,
@@ -3127,8 +3134,8 @@ class DbTagStore:
             ).scalar()
             if row is None:
                 return None
-            count = await self._count_packages(session, name, org_slug)
-            return self._row_to_info(row, package_count=count)
+            index = await self._tag_index(session, like=name)
+            return self._row_to_info(row, package_count=self._count(index, row.name, row.org_slug))
 
     async def list_tags(
         self,
@@ -3153,83 +3160,112 @@ class DbTagStore:
                 .scalars()
                 .all()
             )
-            result: list[TagInfo] = []
-            for row in rows:
-                count = await self._count_packages(session, row.name, row.org_slug)
-                result.append(self._row_to_info(row, package_count=count))
+            if not rows:
+                return [], total
+            index = await self._tag_index(session)
+            result = [
+                self._row_to_info(row, package_count=self._count(index, row.name, row.org_slug))
+                for row in rows
+            ]
             return result, total
 
-    async def list_all_tag_names(self) -> list[dict]:
-        """Return lightweight tag summaries including package counts.
+    async def list_all_tag_names(self, *, exclude_orgs: Collection[str] = ()) -> list[dict]:
+        """Return one summary per tag name, with package counts.
 
         This collects both curated tags from the ``tags`` table *and*
         ad-hoc tags found in published packages that have no curated
-        row yet, so the front page shows all tags in use.
+        row yet, so the tag browser shows all tags in use.
+
+        A tag used or curated in several orgs is still a single entry:
+        ``package_count`` counts distinct package names carrying it in
+        any org, ``orgs`` lists the orgs it appears in, and curated
+        metadata comes from the global row first, then the first org
+        row that sets it.  Tags and packages in *exclude_orgs* (private
+        orgs the caller cannot see) are left out entirely.
         """
+        hidden = set(exclude_orgs)
         async with get_session() as session:
-            # 1. Curated tags
             curated = (
                 (await session.execute(select(TagRow).order_by(TagRow.org_slug, TagRow.name)))
                 .scalars()
                 .all()
             )
-            result: dict[str, dict] = {}
-            for row in curated:
-                count = await self._count_packages(session, row.name, row.org_slug)
-                key = f"{row.org_slug}/{row.name}" if row.org_slug else row.name
-                result[key] = {
-                    "name": row.name,
-                    "org_slug": row.org_slug,
-                    "display_name": row.display_name,
-                    "description": row.description,
-                    "logo_url": row.logo_url,
-                    "package_count": count,
-                }
+            index = await self._tag_index(session, exclude_orgs=hidden)
 
-            # 2. Ad-hoc tags from packages not yet curated
-            curated_keys = {f"{r.org_slug}/{r.name}" if r.org_slug else r.name for r in curated}
-            all_tags_rows = (
-                await session.execute(
-                    select(PackageRow.name, PackageRow.tags, PackageRow.org_slug)
-                    .where(PackageRow.tags != "")
-                    .where(PackageRow.yanked == False)  # noqa: E712
-                )
-            ).all()
-            # Track distinct package names per ad-hoc tag
-            adhoc_names: dict[str, set[str]] = {}
-            for pkg_name, tags_str, org in all_tags_rows:
-                for raw_tag in tags_str.split(","):
-                    tag = raw_tag.strip().lower()
-                    if not tag:
-                        continue
-                    key = f"{org}/{tag}" if org else tag
-                    if key not in result:
-                        result[key] = {
-                            "name": tag,
-                            "org_slug": org,
-                            "display_name": tag,
-                            "description": "",
-                            "logo_url": "",
-                            "package_count": 0,
-                        }
-                    if key not in curated_keys:
-                        adhoc_names.setdefault(key, set()).add(pkg_name)
-            for key, names in adhoc_names.items():
-                result[key]["package_count"] = len(names)
+        merged: dict[str, dict] = {}
 
-            return sorted(result.values(), key=lambda t: t["name"])
+        def _entry(tag: str) -> dict:
+            return merged.setdefault(
+                tag,
+                {
+                    "name": tag,
+                    "display_name": "",
+                    "description": "",
+                    "logo_url": "",
+                    "package_count": 0,
+                    "orgs": set(),
+                },
+            )
+
+        # Ordered by org_slug, so the global ("") row is seen first and wins.
+        for row in curated:
+            if row.org_slug in hidden:
+                continue
+            e = _entry(row.name.strip().lower())
+            if row.org_slug:
+                e["orgs"].add(row.org_slug)
+            # ensure_tags stubs set display_name = name; that is not curation.
+            if not e["display_name"] and row.display_name and row.display_name != row.name:
+                e["display_name"] = row.display_name
+            e["description"] = e["description"] or row.description
+            e["logo_url"] = e["logo_url"] or row.logo_url
+
+        for tag, by_org in index.items():
+            e = _entry(tag)
+            e["orgs"].update(org for org in by_org if org)
+            e["package_count"] = self._count(index, tag, "")
+
+        return [
+            {**e, "display_name": e["display_name"] or e["name"], "orgs": sorted(e["orgs"])}
+            for e in sorted(merged.values(), key=lambda t: t["name"])
+        ]
 
     @staticmethod
-    async def _count_packages(session, tag_name: str, org_slug: str) -> int:
-        """Count distinct non-yanked package *names* whose tags contain *tag_name*."""
-        like_pat = f"%{tag_name}%"
-        q = select(sa_func.count(distinct(PackageRow.name))).where(
-            PackageRow.tags.ilike(like_pat),
+    async def _tag_index(
+        session, *, like: str = "", exclude_orgs: Collection[str] = ()
+    ) -> dict[str, dict[str, set[str]]]:
+        """Map tag -> org slug -> names of non-yanked packages carrying it.
+
+        One scan, matched in Python the way the search tag filter and the
+        facets do it: whole comma-separated tokens, case-insensitively.  A
+        per-tag ``ILIKE '%tag%'`` count was one query per tag (the tag page
+        took a minute) and a substring match (``asset`` counted ``dataset``).
+        *like* only narrows the scan for a single-tag lookup.
+        """
+        q = select(PackageRow.name, PackageRow.tags, PackageRow.org_slug).where(
+            PackageRow.tags != "",
             PackageRow.yanked == False,  # noqa: E712
         )
+        if like:
+            q = q.where(PackageRow.tags.ilike(f"%{like}%"))
+        if exclude_orgs:
+            q = q.where(PackageRow.org_slug.notin_(list(exclude_orgs)))
+        index: dict[str, dict[str, set[str]]] = {}
+        for pkg_name, tags_str, org in (await session.execute(q)).all():
+            for raw_tag in tags_str.split(","):
+                tag = raw_tag.strip().lower()
+                if tag:
+                    index.setdefault(tag, {}).setdefault(org or "", set()).add(pkg_name)
+        return index
+
+    @staticmethod
+    def _count(index: dict[str, dict[str, set[str]]], tag_name: str, org_slug: str) -> int:
+        """Count distinct package *names* carrying *tag_name* in *org_slug*, or
+        in any org when *org_slug* is empty (a global tag)."""
+        by_org = index.get(tag_name.strip().lower(), {})
         if org_slug:
-            q = q.where(PackageRow.org_slug == org_slug)
-        return (await session.execute(q)).scalar() or 0
+            return len(by_org.get(org_slug, ()))
+        return len(set().union(*by_org.values()))
 
 
 # ── DB Builder Store ────────────────────────────────────────────

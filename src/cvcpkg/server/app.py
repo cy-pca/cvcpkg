@@ -8397,27 +8397,18 @@ def create_app(
     ):
         """Return all tag names (curated + ad-hoc) with package counts.
 
-        Used by the front-page tag browser.
+        One entry per tag name, merged across the orgs the caller can see.
+        Used by the tag browser.
         """
         if not _use_db or _db_tags is None:
             return {"tags": []}
-        all_tags = await _db_tags.list_all_tag_names()
-        # Filter out tags belonging to private orgs for unauthenticated users
-        if _db_orgs is not None:
-            visible: list[dict] = []
-            for t in all_tags:
-                org_slug = t.get("org_slug", "")
-                if org_slug:
-                    org_info = await _db_orgs.get(org_slug)
-                    if org_info and org_info.is_private:
-                        if _auth is None or (
-                            _auth.role != TokenRole.admin
-                            and not await _db_orgs.is_member(org_slug, _auth.name)
-                        ):
-                            continue
-                visible.append(t)
-            return {"tags": visible}
-        return {"tags": all_tags}
+        # Private orgs the caller is not in contribute neither tags nor counts.
+        hidden: set[str] = set()
+        if _db_orgs is not None and (_auth is None or _auth.role != TokenRole.admin):
+            hidden = await _db_orgs.private_slugs()
+            if hidden and _auth is not None:
+                hidden -= await _db_orgs.member_org_slugs(_auth.name)
+        return {"tags": await _db_tags.list_all_tag_names(exclude_orgs=hidden)}
 
     @app.post("/v1/tags", response_model=TagInfo, tags=["tags"])
     async def create_tag(

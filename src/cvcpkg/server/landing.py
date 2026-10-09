@@ -2838,7 +2838,7 @@ function render(tags) {{
   }}
 
   grid.innerHTML = tags.map(t => {{
-    const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
+    const href = '/tag/' + encodeURIComponent(t.name);
     return `
       <div class="column is-3">
         <a href="${{href}}" class="box has-background-black-ter has-text-centered" style="display:block; border:1px solid #363636;">
@@ -2858,7 +2858,7 @@ document.addEventListener('DOMContentLoaded', () => {{
       t.name.toLowerCase().includes(q) ||
       (t.display_name || '').toLowerCase().includes(q) ||
       (t.description || '').toLowerCase().includes(q) ||
-      (t.org_slug || '').toLowerCase().includes(q)
+      (t.orgs || []).some(o => o.toLowerCase().includes(q))
     ));
   }});
   init();
@@ -2958,14 +2958,12 @@ def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
 const TAG_NAME = {_js_string_literal(tag_name)};
 const TAG_ORG = {_js_string_literal(org_slug)};
 
-async function init() {{
-  // Load tag metadata (if curated)
+async function loadTagMeta() {{
+  // Curated display name / description / logo, if any.
   try {{
-    const qs = TAG_ORG ? '?org=' + encodeURIComponent(TAG_ORG) : '';
     const resp = await fetch('/v1/tags/all');
     const data = await resp.json();
-    const tags = data.tags || [];
-    const match = tags.find(t => t.name === TAG_NAME && (t.org_slug || '') === TAG_ORG);
+    const match = (data.tags || []).find(t => t.name === TAG_NAME.toLowerCase());
     if (match) {{
       if (match.display_name) {{
         document.getElementById('tag-title').textContent =
@@ -2980,12 +2978,30 @@ async function init() {{
       }}
     }}
   }} catch (_) {{}}
+}}
+
+async function fetchCandidates() {{
+  // /v1/packages caps a page at 1000 bundles; a popular tag spans several.
+  const base = '/v1/packages?limit=1000&search=' + encodeURIComponent(TAG_NAME) +
+    (TAG_ORG ? '&org=' + encodeURIComponent(TAG_ORG) : '');
+  const out = [];
+  for (let offset = 0; ; ) {{
+    const resp = await fetch(base + '&offset=' + offset);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const page = data.packages || [];
+    out.push(...page);
+    offset += page.length;
+    if (page.length === 0 || offset >= (data.total || 0)) return out;
+  }}
+}}
+
+async function init() {{
+  loadTagMeta();
 
   // Load packages with this tag
   try {{
-    const resp = await fetch('/v1/packages?limit=1000&search=' + encodeURIComponent(TAG_NAME));
-    const data = await resp.json();
-    const pkgs = (data.packages || []).filter(p => {{
+    const pkgs = (await fetchCandidates()).filter(p => {{
       const tags = (p.tags || '').split(',').map(t => t.trim().toLowerCase());
       return tags.includes(TAG_NAME.toLowerCase());
     }});
