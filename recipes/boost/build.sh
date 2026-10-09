@@ -22,7 +22,18 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # added a PUBLIC -lquadmath to every consumer of Boost::charconv. Presetting the
 # probe's result skips it; clang (macOS, the BSDs) never had quadmath, so every
 # platform now builds charconv the same way.
+# OpenBSD: no Boost.Process. Its v2 library needs <wordexp.h> (shell.cpp), which
+# OpenBSD does not have, and reads kinfo_proc fields under FreeBSD's names
+# (pid.cpp: kp_pid); upstream has never built it there. Every other library
+# builds. (bsd-process-backports.patch still carries the cmd/exe/close_handles/
+# environ fixes NetBSD needs.)
+_boost_extra=()
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=process)
+fi
+
 cvc_cmake_build \
+    ${_boost_extra[@]+"${_boost_extra[@]}"} \
     -DBOOST_ENABLE_CMAKE=ON \
     -DBUILD_TESTING=OFF \
     -DBOOST_INSTALL_LAYOUT=system \
