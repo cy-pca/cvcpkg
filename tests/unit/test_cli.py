@@ -4952,6 +4952,76 @@ class TestBuildsSubmitDagCLI:
         # No builder can serve any combo → nothing is submitted.
         assert posted == []
 
+    def _registry_client(self, posted, builders):
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builders" in url:
+                    return FakeResp({"builders": builders})
+                return FakeResp({"packages": [], "total": 0})
+
+            def post(self, url, **kw):
+                posted.append(kw.get("json") or {})
+                return FakeResp({"dag_id": "dag-o", "total": 1, "jobs": []})
+
+        return FakeClient
+
+    _REGISTRY = [
+        {"name": "lin", "platform": "linux", "arch": "x86_64", "status": "online"},
+        {"name": "sandipaws-dev", "platform": "windows", "arch": "x86_64", "status": "offline"},
+    ]
+
+    def _submit(self, monkeypatch, *extra):
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._registry_client(posted, self._REGISTRY))
+        argv = ["builds", "submit-dag", "--platform", "linux,windows", "--arch", "x86_64"]
+        argv += ["--server", "https://s.example.com", "--token", "tok", "--no-deps", *extra]
+        return main([*argv, "nasm"]), posted
+
+    def test_submit_dag_online_only_skips_offline_builders(self, capsys, monkeypatch):
+        """--online-only skips a combo whose only builder is offline, and names it."""
+        ret, posted = self._submit(monkeypatch, "--online-only")
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Skipping windows/x86_64: its builder(s) are offline (sandipaws-dev)" in out
+        assert "Skipping linux/x86_64" not in out
+        platforms = {j.get("platform") for body in posted for j in body.get("jobs", [])}
+        assert platforms == {"linux"}
+
+    def test_submit_dag_counts_offline_builders_by_default(self, capsys, monkeypatch):
+        """Without --online-only a registered-but-offline builder still counts
+        (populate runs queue jobs until it returns)."""
+        ret, posted = self._submit(monkeypatch)
+        assert ret == 0
+        assert "Skipping windows" not in capsys.readouterr().out
+        platforms = {j.get("platform") for body in posted for j in body.get("jobs", [])}
+        assert platforms == {"linux", "windows"}
+
+    def test_submit_dag_online_only_excludes_allow_unschedulable(self, monkeypatch):
+        ret, posted = self._submit(monkeypatch, "--online-only", "--allow-unschedulable")
+        assert ret != 0 and posted == []
+
     def test_submit_dag_allow_unschedulable_skips_builder_check(self, capsys, monkeypatch):
         """--allow-unschedulable bypasses the builder registry lookup."""
         calls = {"get": 0}
