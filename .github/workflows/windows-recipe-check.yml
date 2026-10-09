@@ -17,6 +17,12 @@
 #   gh workflow run windows-recipe-check -f recipe=vtk -f platform=wasm
 # (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
 #  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
+#   gh workflow run windows-recipe-check -f recipe=openmp -f runner=windows-2022 -f deps=catalog
+# (runner=windows-2022 + deps=catalog mirrors windows-build.yml, the job that
+#  publishes Windows bundles: VS 2022, and the dependency closure installed from
+#  the catalog. The default builds the closure from source, which cannot work
+#  on windows-latest for a recipe whose closure holds python311: CPython 3.11's
+#  PCbuild does not know VS 2026's toolset -- see windows-build.yml.)
 #
 # The pull_request trigger is deliberately narrow: it fires only when this
 # workflow file itself changes, so the PR that edits it proves it still works
@@ -57,6 +63,22 @@ on:
         options:
           - shared
           - static
+      runner:
+        description: "Runner image (windows-2022 = VS 2022, what windows-build.yml publishes from)"
+        required: true
+        default: "windows-latest"
+        type: choice
+        options:
+          - windows-latest
+          - windows-2022
+      deps:
+        description: "Dependency closure (windows only): build it from source, or install the published bundles"
+        required: true
+        default: "source"
+        type: choice
+        options:
+          - source
+          - catalog
   pull_request:
     paths:
       - ".github/workflows/windows-recipe-check.yml"
@@ -77,7 +99,9 @@ on:
       - "recipes/libtool/**"
 
 concurrency:
-  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}
+  # Every input is in the key, so variants of one recipe (runner, deps, link,
+  # config) can run side by side instead of cancelling each other.
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}-${{ inputs.runner || 'windows-latest' }}-${{ inputs.deps || 'source' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}
   cancel-in-progress: true
 
 permissions:
@@ -86,7 +110,7 @@ permissions:
 jobs:
   build:
     name: Build ${{ inputs.recipe || 'gsl' }} on Windows
-    runs-on: windows-latest
+    runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 150
 
     steps:
@@ -178,6 +202,18 @@ jobs:
             cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
               --prefix "$prefix" --platform "$platform" --link static \
               --no-deps --host-platform windows
+          elif [[ "${{ inputs.deps || 'source' }}" == catalog ]]; then
+            # The windows-build.yml path, minus the publish: install the recipe's
+            # PUBLISHED build + runtime closure into the prefix (cmake/ninja and
+            # any interpreter included -- install-deps keeps depends.build
+            # entries on a native build), then build only the recipe against it.
+            link="${{ inputs.link || 'shared' }}"
+            echo "cvcpkg install-deps recipes/$recipe --platform windows --link $link"
+            cvcpkg install-deps "recipes/$recipe" --platform windows --config "$config" \
+              --link "$link" --prefix "$prefix" --recipes-dir recipes
+            echo "cvcpkg build $recipe --no-deps --platform windows --link $link"
+            cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
+              --prefix "$prefix" --platform windows --link "$link" --no-deps
           else
             # --with-deps: build the recipe's whole closure from source first, in
             # topological order. The default gsl (and the other MSYS autotools
