@@ -103,6 +103,14 @@ the import path via `PYTHONPATH`. The result is still a real wheel installed by
 pip (proper `dist-info`/`RECORD`/`METADATA`), so a consumer's later
 `pip install <other>` coexists and pip's resolver sees the package as satisfied.
 
+The declared closure is the *only* thing importable: `python-wheel.sh` and
+`python-wheel.ps1` export `PYTHONNOUSERSITE=1`, because the prefix interpreter
+would otherwise search the builder account's user site (`~/.local/lib/pythonX.Y/
+site-packages`) ahead of its own. A backend or dependency missing from
+`depends` then fails the build with `No module named …` on every builder,
+instead of passing on whichever builder happens to have a `pip install --user`
+copy.
+
 Two kinds of from-source column exist:
 
 - **Generated** (the bulk): emitted by `tools/gen_python_recipes.py`, which
