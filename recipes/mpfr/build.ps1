@@ -40,7 +40,14 @@ $linkMode = if ($env:CVC_LINK -eq 'static') {
     @('--enable-shared', '--disable-static')
 }
 
-Invoke-CvcMsysAutotoolsBuild -ConfigureArgs (@("--with-gmp='$gmpRoot'") + $linkMode)
+# -static-libgcc: unlike gmp, MPFR calls into libgcc -- emutls for its C11
+# thread-local state (MPFR_USE_C11_THREAD_SAFE), and the soft-float routines
+# behind its _Float128 and decimal-float conversions.  With a plain -shared
+# link gcc resolves those against libgcc_s, so libmpfr-6.dll imported
+# libgcc_s_seh-1.dll, which nothing ships beside it.  Linked statically, the
+# DLL carries its own copy (GCC runtime library exception; no MinGW runtime
+# DLL for consumers to ship).  libtool passes -static-* through to gcc.
+Invoke-CvcMsysAutotoolsBuild -ConfigureArgs (@("--with-gmp='$gmpRoot'") + $linkMode + @("LDFLAGS='-static-libgcc'"))
 
 # -- What did the build install? ---------------------------------------------
 $bin = Join-Path $env:CVC_INSTALL_DIR 'bin'
@@ -86,6 +93,18 @@ if ($env:CVC_LINK -ne 'static') {
     Write-Host "mpfr: bin\libmpfr-6.dll imports: $($deps -join ', ')"
     $foreign = @($deps | Where-Object { $_ -notmatch '(?i)^(kernel32\.dll|api-ms-win-crt-[a-z0-9-]+\.dll|ucrtbase\.dll|libgmp-10\.dll)$' })
     if ($foreign.Count -gt 0) {
+        # Say which symbols each disallowed DLL supplies: that names the cause.
+        $imports = & dumpbin /nologo /imports $dll
+        foreach ($f in $foreign) {
+            $in = $false
+            $syms = foreach ($line in $imports) {
+                $t = $line.Trim()
+                if ($t -ieq $f) { $in = $true; continue }
+                if ($in -and $t -match '(?i)^[^\s]+\.dll$') { $in = $false }
+                if ($in -and $t -match '^[0-9A-Fa-f]+\s+(\S+)$') { $Matches[1] }
+            }
+            Write-Host "mpfr: symbols imported from ${f}: $($syms -join ', ')"
+        }
         throw "mpfr: libmpfr-6.dll imports [$($foreign -join ', ')]; only KERNEL32, the UCRT and libgmp-10.dll are allowed"
     }
     if (@($deps | Where-Object { $_ -ieq 'libgmp-10.dll' }).Count -ne 1) {
