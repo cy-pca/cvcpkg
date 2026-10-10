@@ -80,7 +80,8 @@ from cvcpkg.optional import require_httpx
     "publish_all",
     is_flag=True,
     default=False,
-    help="Publish all archives in --output-dir matching the platform tuple.",
+    help="Publish all archives in --output-dir matching the platform tuple, "
+    "plus the any-noarch bundles beside them.",
 )
 def publish(
     packages: tuple[str, ...],
@@ -376,12 +377,20 @@ def _resolve_all_archives(
     config: str,
     link: str,
 ) -> list[Path]:
-    """Find all archives in *output_dir* matching the platform tuple."""
+    """Find all archives in *output_dir* matching the platform tuple.
+
+    Includes the ``any-noarch`` bundles built alongside them: ``cvcpkg pack``
+    and ``pack-all`` give a recipe served by its ``any`` matrix entry that
+    identity whatever the host, so a ``--platform macos`` glob alone left
+    them unpublished.
+    """
     dist = Path(output_dir).resolve()
     if not dist.is_dir():
         return []
-    pattern = f"*-{platform}-{arch}-{config}-{link}.*"
-    matches = sorted(dist.glob(pattern))
+    patterns = [f"*-{platform}-{arch}-{config}-{link}.*"]
+    if (platform, arch) != ("any", "noarch"):
+        patterns.append(f"*-any-noarch-{config}-{link}.*")
+    matches = sorted({m for pattern in patterns for m in dist.glob(pattern)})
     return [m for m in matches if m.is_file() and not m.name.endswith(".sig")]
 
 

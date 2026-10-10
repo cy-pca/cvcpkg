@@ -1097,7 +1097,8 @@ def build_all_cmd(
     is_flag=True,
     default=False,
     envvar="CVCPKG_SERVER_CACHE_PUSH",
-    help="Push successful builds to the server cache.",
+    help="Publish each packed bundle to the server cache as soon as it is "
+    "archived (the same bundle 'cvcpkg publish' would upload).",
 )
 @click.option(
     "--no-server-cache",
@@ -1171,6 +1172,7 @@ def pack_all_cmd(
     import shutil
 
     from cvcpkg.builder import (
+        _serves_target_via_any,
         build_all,
         create_archive,
         enforce_declared_files,
@@ -1250,19 +1252,54 @@ def pack_all_cmd(
         force_clean=force_clean,
         server_cache_url=server_cache,
         server_cache_token=server_cache_token,
-        server_cache_push=server_cache_push,
+        # Not build_all's push: that uploads the build cache's raw install
+        # tree -- no manifest, build-prefix shebangs -- and the catalog row it
+        # creates makes the later publish of the real bundle a no-op.  pack-all
+        # publishes the bundle it packs instead (_push_packed below).
+        server_cache_push=False,
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
         work_dir_root=work_dir_root,
         cleanup_work_dirs=False,
     )
 
+    push = server_cache_push and bool(server_cache) and not no_server_cache
+
+    def _push_packed(archive_path: Path) -> None:
+        """Publish one packed bundle; a failure warns, ``cvcpkg publish`` can retry."""
+        from cvcpkg.cli._publish import _publish_to_server
+
+        try:
+            _publish_to_server(
+                server_cache,
+                server_cache_token,
+                [archive_path],
+                release_tag="",
+                chunked_threshold=10 * 1024 * 1024,  # cvcpkg publish's default
+                org=server_cache_org,
+            )
+        # Anything -- a ClickException, an httpx transport error -- must not
+        # throw away the builds still to be packed.
+        except Exception as exc:  # noqa: BLE001
+            msg = exc.format_message() if isinstance(exc, click.ClickException) else str(exc)
+            click.echo(
+                f"cvcpkg: WARNING: server-cache push of {archive_path.name} failed: {msg}",
+                err=True,
+            )
+
     output.mkdir(parents=True, exist_ok=True)
     for ctx in contexts:
-        # Cross-compiled recipes (e.g. wasm built on linux) use their
-        # actual target platform and arch, not the host's.
-        ctx_plat = ctx.platform
-        ctx_arch = "wasm32" if ctx_plat in ("wasm", "wasm-mt") else arch
+        # The package identity follows the matrix entry that drives this
+        # build, exactly as in pack_recipe: a target served by the recipe's
+        # `any` entry packs one any/noarch bundle (the identity -- and chain
+        # hash -- build_all caches it under).  Cross-compiled recipes (e.g.
+        # wasm built on linux) use their actual target platform and arch,
+        # not the host's.
+        if _serves_target_via_any(ctx.recipe, ctx.platform):
+            ctx_plat, ctx_arch = "any", "noarch"
+        else:
+            ctx_plat = ctx.platform
+            ctx_arch = "wasm32" if ctx_plat in ("wasm", "wasm-mt") else arch
         # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
         # mutable and full_version derives from it, so this flows into both the
         # manifest and the archive name below.
@@ -1335,6 +1372,8 @@ def pack_all_cmd(
             sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
             write_signature(sig, sig_path)
             click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
+        if push:
+            _push_packed(archive_path)
 
         # Clean up per-component work directory now that the archive
         # has been created (build_all was called with
