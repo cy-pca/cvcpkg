@@ -20,6 +20,7 @@ import sys
 import tarfile
 import threading
 import time
+import zipfile
 
 import pytest
 
@@ -45,6 +46,22 @@ def _bundle(message: str) -> bytes:
         info.size = len(script)
         info.mode = 0o755
         tar.addfile(info, io.BytesIO(script))
+    return buf.getvalue()
+
+
+def _windows_bundle(message: str) -> bytes:
+    """A Windows cvcpkg bundle as the fleet publishes one: a zip holding bin/cvcpkg.exe.
+
+    The "exe" is a shell script with the Unix exec bit recorded in the zip, so
+    the closing `& $DestPath --version` of install.ps1 can run it on the
+    non-Windows host these tests run on.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        info = zipfile.ZipInfo("bin/cvcpkg.exe")
+        info.create_system = 3  # Unix, so external_attr carries a mode
+        info.external_attr = 0o100755 << 16
+        z.writestr(info, f'#!/bin/sh\necho "{message}"\n')
     return buf.getvalue()
 
 
@@ -266,6 +283,10 @@ def _seed_and_serve(tmp_path, monkeypatch, **app_kwargs):
         _publish(
             client, publisher, "2.1.0+cvc.1", content=_bundle("cvcpkg 2.1.0 (registry)"), **host
         )
+        win = {"platform": "windows", "arch": "x86_64"}
+        for v, msg in (("2.0.0+cvc.1", "old"), ("2.1.0+cvc.1", "registry")):
+            body = _windows_bundle(f"cvcpkg {v.split('+')[0]} ({msg}, windows)")
+            _publish(client, publisher, v, content=body, **win)
     return app, reader
 
 
@@ -322,3 +343,108 @@ class TestInstallShAgainstRegistry:
         assert "could not reach http://127.0.0.1:9" in r.stderr
         assert "GitHub" not in r.stderr
         assert not (tmp_path / "cvcpkg").exists()
+
+
+# ── install.ps1, end to end (under PowerShell 7 on a non-Windows host) ─────
+
+PWSH = os.environ.get("CVCPKG_TEST_PWSH") or shutil.which("pwsh")
+
+needs_pwsh = pytest.mark.skipif(
+    not PWSH or sys.platform == "win32",
+    reason="needs pwsh (set CVCPKG_TEST_PWSH or put it on PATH); on Windows the stand-in "
+    "cvcpkg.exe shell script cannot run",
+)
+
+
+def _install_ps1(tmp_path, *args, arch="AMD64", **env):
+    """Run install.ps1 with the Windows environment it reads simulated."""
+    from importlib.resources import files
+
+    script = files("cvcpkg.server").joinpath("assets", "install.ps1")
+    home = tmp_path / "pshome"
+    (home / "AppData" / "Local").mkdir(parents=True, exist_ok=True)
+    (home / "Temp").mkdir(exist_ok=True)
+    run_env = {
+        "PATH": os.environ["PATH"],
+        "HOME": str(home),
+        "LOCALAPPDATA": str(home / "AppData" / "Local"),
+        "TEMP": str(home / "Temp"),
+        "PROCESSOR_ARCHITECTURE": arch,
+        "NO_COLOR": "1",
+        **env,
+    }
+    r = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-File", str(script), *args],
+        env=run_env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    return r.returncode, r.stdout + r.stderr
+
+
+@needs_pwsh
+class TestInstallPs1AgainstRegistry:
+    def test_installs_the_registrys_newest_build(self, tmp_path, monkeypatch):
+        app, _reader = _seed_and_serve(tmp_path, monkeypatch)
+        dest = tmp_path / "bin"
+        with _serve(app) as url:
+            rc, out = _install_ps1(tmp_path, "-Server", url, "-InstallDir", str(dest))
+        assert rc == 0, out
+        assert f"Installing cvcpkg 2.1.0+cvc.1 for windows/x86_64 from {url}" in out
+        assert "GitHub" not in out
+        assert "cvcpkg 2.1.0 (registry, windows)" in (dest / "cvcpkg.exe").read_text()
+
+    def test_version_pin_and_server_from_env(self, tmp_path, monkeypatch):
+        app, _reader = _seed_and_serve(tmp_path, monkeypatch)
+        dest = tmp_path / "bin"
+        with _serve(app) as url:
+            rc, out = _install_ps1(
+                tmp_path,
+                CVCPKG_SERVER_URL=url + "/",
+                CVCPKG_VERSION="cvcpkg-v2.0.0",
+                CVCPKG_INSTALL_DIR=str(dest),
+            )
+        assert rc == 0, out
+        assert "cvcpkg 2.0.0 (old, windows)" in (dest / "cvcpkg.exe").read_text()
+
+    def test_32bit_powershell_on_64bit_windows(self, tmp_path, monkeypatch):
+        # WOW64 reports x86 in PROCESSOR_ARCHITECTURE; the machine is in ...W6432.
+        app, _reader = _seed_and_serve(tmp_path, monkeypatch)
+        with _serve(app) as url:
+            rc, out = _install_ps1(
+                tmp_path,
+                "-Server",
+                url,
+                "-InstallDir",
+                str(tmp_path / "bin"),
+                arch="x86",
+                PROCESSOR_ARCHITEW6432="AMD64",
+            )
+        assert rc == 0, out
+        assert "for windows/x86_64" in out
+
+    def test_token_for_a_read_gated_registry(self, tmp_path, monkeypatch):
+        app, reader = _seed_and_serve(tmp_path, monkeypatch, require_auth_for_reads=True)
+        dest = tmp_path / "bin"
+        with _serve(app) as url:
+            denied = _install_ps1(tmp_path, "-Server", url, "-InstallDir", str(dest))
+            allowed = _install_ps1(
+                tmp_path, "-Server", url, "-InstallDir", str(dest), CVCPKG_TOKEN=reader
+            )
+        rc, out = denied
+        assert rc != 0
+        assert "CVCPKG_TOKEN" in out
+        assert "GitHub" not in out
+        rc, out = allowed
+        assert rc == 0, out
+        assert "cvcpkg 2.1.0 (registry, windows)" in (dest / "cvcpkg.exe").read_text()
+
+    def test_unreachable_registry_does_not_fall_back(self, tmp_path):
+        rc, out = _install_ps1(
+            tmp_path, "-Server", "http://127.0.0.1:9", "-InstallDir", str(tmp_path / "bin")
+        )
+        assert rc != 0
+        assert "could not look up cvcpkg on http://127.0.0.1:9" in out
+        assert "GitHub" not in out
+        assert not (tmp_path / "bin" / "cvcpkg.exe").exists()
