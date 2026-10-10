@@ -17,8 +17,9 @@ to a cvcpkg server so anyone can install it with `cvcpkg install`.
 
 ## Step 1: install the cvcpkg CLI
 
-The quick installer downloads the latest standalone binary for your
-platform, verifies its SHA-256, and installs it to `~/.local/bin`:
+The quick installer downloads the newest cvcpkg the registry publishes for
+your platform (falling back to the standalone binary on the GitHub release),
+verifies its SHA-256, and installs it to `~/.local/bin`:
 
 ```bash
 curl -fsSL https://cvcpkg.org/install.sh | sh
@@ -31,7 +32,7 @@ irm https://cvcpkg.org/install.ps1 | iex
 ```
 
 Set `CVCPKG_INSTALL_DIR` to change the install location, or `CVCPKG_VERSION`
-to pin a release tag. If there is no prebuilt binary for your platform,
+to pin a version (e.g. `2.4.0`). If there is no prebuilt binary for your platform,
 install from PyPI instead (Python ≥ 3.10 required):
 
 ```bash

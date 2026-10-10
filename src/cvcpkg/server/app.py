@@ -3697,25 +3697,112 @@ def create_app(
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
         if not include_yanked:
             bundles = [b for b in bundles if not b.get("yanked", False)]
-        packages = [
-            PackageInfo(
-                name=b["name"],
-                version=b["version"],
-                platform=b.get("platform", ""),
-                arch=b.get("arch", ""),
-                build_type=b.get("build_type", ""),
-                link=b.get("link", ""),
-                sha256=b.get("sha256", ""),
-                size_bytes=b.get("size_bytes", 0),
-                archive_url=b.get("archive_url", ""),
-                published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
-                yanked=b.get("yanked", False),
-                published_by=b.get("published_by", ""),
-                org=b.get("org", ""),
-            )
-            for b in bundles
-        ]
+        packages = [_index_package_info(b) for b in bundles]
         return PackageListResponse(total=len(packages), packages=packages)
+
+    def _index_package_info(b: dict) -> PackageInfo:
+        """A ``state.index`` bundle dict as a PackageInfo (YAML / mirror backends)."""
+        return PackageInfo(
+            name=b["name"],
+            version=b["version"],
+            platform=b.get("platform", ""),
+            arch=b.get("arch", ""),
+            build_type=b.get("build_type", ""),
+            link=b.get("link", ""),
+            sha256=b.get("sha256", ""),
+            size_bytes=b.get("size_bytes", 0),
+            archive_url=b.get("archive_url", ""),
+            published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+            yanked=b.get("yanked", False),
+            published_by=b.get("published_by", ""),
+            org=b.get("org", ""),
+        )
+
+    @app.get("/v1/packages/{name}/latest", response_model=PackageInfo, tags=["packages"])
+    async def get_latest_package(
+        name: str,
+        platform: str = Query("", description="Target platform, e.g. 'linux'"),
+        arch: str = Query("", description="Target architecture, e.g. 'x86_64'"),
+        build_type: str = Query("release", description="Build type"),
+        link: str = Query("", description="Link mode; empty matches any"),
+        version: str = Query(
+            "",
+            description=(
+                "Version constraint: '2.3.0' (any +cvc.N of it), '2.3.0+cvc.2', "
+                "or a range like '>=2.2,<3'.  Empty means the newest stable "
+                "version (pre-releases such as 2.3.0-rc.1 are skipped)."
+            ),
+        ),
+        org: str = Query(
+            "",
+            description="Organization slug.  Empty means the official (unscoped) package.",
+        ),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """The newest non-yanked bundle of *name* matching the filters; 404 if none.
+
+        This is what ``/install.sh`` and ``/install.ps1`` ask for (name
+        ``cvcpkg``), so they install this deployment's own build.  "Newest" is
+        ``semver.version_sort_key`` -- not publish time, since a rebuild of an
+        older revision lands after the newer one, and not a client-side sort,
+        since the installers have no comparator that agrees with it on every
+        shell they run under.
+
+        Unlike ``/v1/packages/{name}``, an empty ``org`` means the unscoped
+        package, not "any org": choosing ONE winner across orgs would let any
+        org that publishes a same-named package at a higher version take over
+        the answer, and the installers execute what this returns.
+        """
+        from cvcpkg.semver import Version, parse_range, satisfies, version_sort_key
+
+        if version:
+            try:
+                parse_range(version)
+            except ValueError as exc:
+                raise HTTPException(422, f"invalid version constraint {version!r}: {exc}") from exc
+
+        if _use_db and not MIRROR_MODE:
+            candidates, _total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
+            )
+        else:
+            candidates = [
+                _index_package_info(b)
+                for b in _get_state().index.get("bundles", [])
+                if b.get("name") == name
+                and not b.get("yanked", False)
+                and (not platform or b.get("platform", "") == platform)
+                and (not arch or b.get("arch", "") == arch)
+                and (not build_type or b.get("build_type", "") == build_type)
+                and (not link or b.get("link", "") == link)
+            ]
+        # get_bundles treats an empty org_slug as "no filter"; here it is a value.
+        candidates = [p for p in candidates if (p.org or "") == org]
+
+        def _matches(v: str) -> bool:
+            try:
+                if version:
+                    return satisfies(v, version)
+                # Unpinned: stable only, as GitHub's "latest" skips -rc tags.
+                return not Version.parse(v).pre
+            except ValueError:  # unparseable: cannot match a pin; still stable-ish
+                return not version
+
+        candidates = [p for p in candidates if _matches(p.version)]
+        if not candidates:
+            want = " ".join(x for x in (platform, arch, build_type, link) if x)
+            raise HTTPException(
+                404,
+                f"no {name}{' ' + version if version else ''} published"
+                f"{' for ' + want if want else ''}",
+            )
+        return max(candidates, key=lambda p: version_sort_key(p.version))
 
     # ── Cache status probe ──────────────────────────────────
 
