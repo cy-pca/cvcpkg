@@ -247,6 +247,27 @@ class TestBuildCacheStore:
         assert meta is not None
         assert meta.org == "myorg"
 
+    def test_archive_stores_each_path_once(self, tmp_path):
+        """Each file appears once, not once per directory above it.
+
+        The archive is what a server-cache push publishes, so duplicate
+        members bloated every such bundle on the catalog.
+        """
+        import tarfile
+
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        (install / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        (install / "lib" / "python3.12" / "site-packages" / "mod.py").write_text("x = 1")
+        ch = _fake_chain_hash()
+        archive = bc.store(install, "pkg", "1.0", ch, "linux", "x86_64", "release", "shared")
+
+        with tarfile.open(archive, "r:gz") as tar:
+            names = tar.getnames()
+        assert len(names) == len(set(names))
+        assert "lib/python3.12/site-packages/mod.py" in names
+
 
 # ── BuildCache.restore ──────────────────────────────────────────
 

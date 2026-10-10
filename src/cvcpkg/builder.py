@@ -1949,6 +1949,44 @@ def _total_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
+def runtime_dependencies(recipe: Recipe, platform: str) -> list[dict[str, str]]:
+    """The consumer-facing deps a *platform* bundle of *recipe* records.
+
+    This is the bundle's ``dependencies.required`` and its catalog row's
+    ``required_deps`` -- the edges the client resolver walks on install.
+    Every publish path must derive them here, so a bundle cannot reach the
+    catalog with fewer deps than its own manifest declares.
+
+    Uses ``depends.runtime``, falling back to ``depends.build`` for recipes
+    that haven't adopted the runtime/build split yet.  A dep whose
+    ``platforms:`` list excludes *platform* is dropped.
+    """
+    depends_block = recipe.raw.get("depends", {})
+    depends = depends_block.get("runtime", depends_block.get("build", []))
+
+    dep_list = []
+    for d in depends:
+        if isinstance(d, str):
+            # Support "org/name" shorthand in string deps
+            if "/" in d:
+                dep_org, dep_name = d.split("/", 1)
+                dep_list.append({"name": dep_name, "org": dep_org})
+            else:
+                dep_list.append({"name": d})
+        else:
+            plats = d.get("platforms")
+            if plats and platform not in plats:
+                continue
+            # Don't write platforms into the manifest -- it's platform-specific
+            entry: dict[str, str] = {"name": d["name"]}
+            if d.get("org"):
+                entry["org"] = d["org"]
+            if d.get("version"):
+                entry["version"] = d["version"]
+            dep_list.append(entry)
+    return dep_list
+
+
 def generate_manifest(
     recipe: Recipe,
     install_dir: Path,
@@ -1977,34 +2015,7 @@ def generate_manifest(
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
     abi = recipe.raw.get("abi", {})
-
-    # Use ``depends.runtime`` for the manifest (consumer-facing deps).
-    # Falls back to ``depends.build`` for recipes that haven't adopted
-    # the runtime/build split yet.
-    depends_block = recipe.raw.get("depends", {})
-    depends = depends_block.get("runtime", depends_block.get("build", []))
-
-    # Normalize dep entries to dicts, filtering by target platform
-    dep_list = []
-    for d in depends:
-        if isinstance(d, str):
-            # Support "org/name" shorthand in string deps
-            if "/" in d:
-                dep_org, dep_name = d.split("/", 1)
-                dep_list.append({"name": dep_name, "org": dep_org})
-            else:
-                dep_list.append({"name": d})
-        else:
-            plats = d.get("platforms")
-            if plats and platform not in plats:
-                continue
-            # Don't write platforms into the manifest -- it's platform-specific
-            entry: dict[str, str] = {"name": d["name"]}
-            if d.get("org"):
-                entry["org"] = d["org"]
-            if d.get("version"):
-                entry["version"] = d["version"]
-            dep_list.append(entry)
+    dep_list = runtime_dependencies(recipe, platform)
 
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")
@@ -3930,8 +3941,7 @@ def _server_cache_push(
     base_url: str,
     token: str,
     archive_path: Path,
-    name: str,
-    version: str,
+    recipe: Recipe,
     platform: str,
     arch: str,
     build_type: str,
@@ -3941,22 +3951,38 @@ def _server_cache_push(
 ) -> bool:
     """Publish an archive to the server cache via ``POST /v1/publish``.
 
+    The server cache IS the catalog: this creates the same row ``cvcpkg
+    publish`` would, and a later ``cvcpkg publish`` of the packed bundle
+    skips it as already published.  So it must send the same catalog
+    metadata -- above all ``required_deps``, which the resolver walks on
+    install.  The cached archive has no manifest to read them from, so they
+    come from the recipe, via the helper :func:`generate_manifest` uses.
+
     Returns ``True`` on success, ``False`` on failure.
     """
+    import json
     import urllib.error
     import urllib.parse
     import urllib.request
 
+    recipe_block = recipe.raw.get("recipe", {})
     params = urllib.parse.urlencode(
         {
-            "name": name,
-            "version": version,
+            "name": recipe.name,
+            "version": recipe.full_version,
             "platform": platform,
             "arch": arch,
             "build_type": build_type,
             "link": link,
             "recipe_version": recipe_version,
+            "description": recipe_block.get("description", ""),
+            "homepage": recipe_block.get("homepage", ""),
+            "license": recipe_block.get("license", ""),
+            "maintainer": recipe_block.get("maintainer", "Community"),
+            "tags": ",".join(recipe.tags) if recipe.tags else "",
             "org": org,
+            "required_deps": json.dumps(runtime_dependencies(recipe, platform)),
+            "provides": json.dumps(list(recipe.provides)),
         }
     )
     url = f"{base_url.rstrip('/')}/v1/publish?{params}"
@@ -4345,8 +4371,7 @@ def build_all(
                                 server_cache_url,
                                 server_cache_token,
                                 arc,
-                                ht_recipe.name,
-                                ht_recipe.full_version,
+                                ht_recipe,
                                 ht_platform,
                                 ht_arch,
                                 config,
@@ -4600,8 +4625,7 @@ def build_all(
                                 server_cache_url,
                                 server_cache_token,
                                 arc,
-                                recipe.name,
-                                recipe.full_version,
+                                recipe,
                                 eff_platform,
                                 eff_arch,
                                 config,
