@@ -1061,6 +1061,20 @@ def builds_submit(
     ),
 )
 @click.option(
+    "--online-only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Count only ONLINE builders when deciding which platform/arch combos "
+        "can be served: a combo whose capable builders are all offline is "
+        "skipped (and named) instead of submitted.  For CI checks that wait "
+        "on the result, where a best-effort builder being off (the dev "
+        "cluster's Windows laptop) would otherwise fail every run with jobs "
+        "nothing can claim.  Not for populate runs, whose jobs should queue "
+        "until the builder returns."
+    ),
+)
+@click.option(
     "--skip-existing/--no-skip-existing",
     default=True,
     help=(
@@ -1103,6 +1117,7 @@ def builds_submit_dag(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     allow_unschedulable: bool,
+    online_only: bool,
     skip_existing: bool,
     auto_deps: bool,
     recipe_names: tuple[str, ...],
@@ -1290,6 +1305,11 @@ def builds_submit_dag(
     # capability AND has the space — never pieced together from three hosts.
     # The free-disk element is None for a builder that advertises nothing.
     _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str], int | None]] = []
+    # --online-only: builders left out because they are offline, with what
+    # they would have served, so a skip can name them.
+    _offline_offers: list[tuple[str, set[tuple[str, str]], set[str]]] = []
+    if online_only and allow_unschedulable:
+        raise click.UsageError("--online-only and --allow-unschedulable are mutually exclusive.")
     _builder_check = not allow_unschedulable
     if _builder_check:
         _httpx = require_httpx("publish")
@@ -1318,6 +1338,9 @@ def builds_submit_dag(
                     if _k != "cross_platforms" and _v
                 }
                 _b_disk = _b.get("free_disk_gb")
+                if online_only and _b.get("status") != "online":
+                    _offline_offers.append((str(_b.get("name", "?")), _b_targets, _b_platforms))
+                    continue
                 _supported_targets |= _b_targets
                 _supported_platforms |= _b_platforms
                 _builder_offers.append((_b_targets, _b_platforms, _b_caps, _b_disk))
@@ -1510,9 +1533,17 @@ def builds_submit_dag(
                 continue
             if plat in _wasm_platforms and ar not in _wasm_arches:
                 continue
-            # Skip combos no registered builder can serve.
+            # Skip combos no registered (--online-only: online) builder can serve.
             if _builder_check and not _has_builder(plat, ar):
-                click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
+                _off = sorted(
+                    _n for _n, _t, _p in _offline_offers if (plat, ar) in _t or plat in _p
+                )
+                if _off:
+                    click.echo(
+                        f"  Skipping {plat}/{ar}: its builder(s) are offline ({', '.join(_off)})"
+                    )
+                else:
+                    click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
                 continue
             for cfg in configs:
                 for lnk in links:

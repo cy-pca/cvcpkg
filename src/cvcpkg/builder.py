@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform as _platform_module
+import posixpath
 import re
 import shutil
 import stat
@@ -28,6 +29,7 @@ from typing import Any
 
 import yaml
 
+from cvcpkg import linkage as _linkage
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
 from cvcpkg.platform import (
@@ -248,6 +250,9 @@ class Recipe:
     # NOTE: "image" is not just a hint -- pack_recipe enforces the
     # share/<name>/ layout and a schema-valid image.yaml for it.
     archive_format: str | None = None  # tar.gz|tar.xz|tar.bz2|zip; None = per-platform default
+    # package.linkage_allow: absolute path prefixes the relocatability gate
+    # accepts in this bundle's binaries (see check_relocatable).
+    linkage_allow: list[str] = field(default_factory=list)
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
@@ -307,6 +312,7 @@ class Recipe:
             tags=recipe_block.get("tags", []) or [],
             kind=recipe_block.get("kind", ""),
             archive_format=package_block.get("archive_format") or None,
+            linkage_allow=package_block.get("linkage_allow", []) or [],
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
@@ -1470,66 +1476,291 @@ def _patch_elf_rpath_absolute(
     return patched
 
 
-def _patch_macos_install_names(install_dir: Path) -> None:
-    """Rewrite absolute build-tree install names to ``@rpath`` on macOS dylibs.
+def _relocated_entries(
+    obj: Path,
+    root: Path,
+    entries: Sequence[str],
+    temp_prefixes: Sequence[Path | str | None],
+    origin: str | None,
+) -> list[str]:
+    """*entries* (RPATH / LC_RPATH) with every path into the build machine fixed.
 
-    The macOS analog of :func:`_patch_elf_rpath`.  autotools/libtool builds
-    (e.g. ImageMagick) bake the absolute build-temp install prefix into a
-    dylib's own install name (``LC_ID_DYLIB``) and into its references to
-    sibling dylibs (``LC_LOAD_DYLIB``).  Once the bundle is unpacked elsewhere
-    that path no longer exists, so anything linking the dylib records the dead
-    path and fails under dyld ("Library not loaded:
-    .../cvcpkg-<recipe>-XXXX/install/lib/...").  CMake builds already default to
-    ``@rpath`` install names (``MACOSX_RPATH``), so this only rescues the
-    autotools/hand-rolled ones.
+    An entry inside one of *temp_prefixes* (the deps / build-tool / install
+    prefixes of this build) names a directory the installed prefix also has --
+    a bundle and its dependencies are merged flat into one prefix -- so it
+    becomes *origin* plus the path from *obj*'s directory to that directory
+    under *root*: ``<deps-prefix>/lib`` seen from ``bin/cmake`` is
+    ``$ORIGIN/../lib``.  With *origin* None (OpenBSD: no ``$ORIGIN``; the
+    installer bakes an absolute RPATH) such an entry is dropped instead.  Any
+    other builder path (another job's scratch dir, a CI workspace, /tmp) exists
+    on no machine the bundle is installed on and is dropped too.  Loader-
+    relative entries and system directories are kept, in their original order.
+    """
+    prefixes = [p for p in temp_prefixes if p]
+    out: list[str] = []
+    for e in entries:
+        if not e:
+            continue
+        if _linkage.is_relative_entry(e) or not e.startswith("/"):
+            out.append(e)
+            continue
+        rel = _linkage.relative_to_prefixes(e, prefixes)
+        if rel is not None:
+            if origin is not None:
+                r = os.path.relpath(root / rel, obj.parent).replace(os.sep, "/")
+                out.append(origin if r == "." else f"{origin}/{r}")
+            continue
+        if _linkage.builder_path_reason(e) is None:
+            out.append(e)
+    return list(dict.fromkeys(out))
 
-    For every dylib in *install_dir*/lib it: sets the id to ``@rpath/<leaf>``;
-    adds a ``@loader_path`` RPATH so the dylib finds its siblings next to itself
-    (the ``$ORIGIN`` analog); and rewrites any absolute reference that points at
-    another dylib IN THIS BUNDLE to ``@rpath/<leaf>``.  System references
-    (/usr/lib, /System/...) are left untouched.  Only runs when
-    ``install_name_tool``/``otool`` are available (any macOS host); silently
-    skips otherwise.
+
+def _writable(path: Path) -> int | None:
+    """Make *path* user-writable for an in-place edit; return the mode to restore.
+
+    Installed binaries and libraries are often 0555/0444 (openssl, perl), and
+    both patchelf and install_name_tool rewrite the file in place.
+    """
+    mode = path.stat().st_mode
+    if mode & stat.S_IWUSR:
+        return None
+    path.chmod(mode | stat.S_IWUSR)
+    return mode
+
+
+def _scrub_elf_rpaths(
+    install_dir: Path,
+    temp_prefixes: Sequence[Path | str | None],
+    patchelf: str | None,
+    *,
+    platform: str,
+    skip: Callable[[Path], bool] = lambda _p: False,
+) -> None:
+    """Rewrite builder paths out of the RPATH of every ELF object in *install_dir*.
+
+    :func:`_patch_elf_rpath` only ever covered ``lib/**/*.so*`` of shared
+    builds, so executables kept whatever their link line baked in: cmake's
+    bin/{cmake,ctest,cpack} shipped RUNPATH
+    ``/tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib`` for six revisions, and
+    bin/curl its job's ``install/lib``.  Those programs then only started where
+    ``LD_LIBRARY_PATH`` happened to name the prefix.  This covers every other
+    ELF object (*skip* names the ones :func:`_patch_elf_rpath` already owns),
+    for static builds as well: see :func:`_relocated_entries` for the mapping.
+
+    Objects are only touched when their RPATH actually changes.  The new value
+    is written over the old string in place (:func:`cvcpkg.linkage.
+    rewrite_elf_rpath`) -- it is nearly always shorter, a long scratch path
+    becoming ``$ORIGIN/../lib`` -- so no tool is needed and no segment is
+    added; an emptied RPATH stays as an empty search path.  Only a value that
+    would GROW falls back to *patchelf*, and never on NetBSD, whose ld.elf_so
+    refuses the third PT_LOAD that growing ``.dynstr`` produces (see
+    recipes/curl).  Whatever is left is reported by the pack-time gate
+    (:func:`check_relocatable`), so a refused edit fails the pack instead of
+    shipping.
+    """
+    origin = None if platform == "openbsd" else "$ORIGIN"
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf" or not link.rpaths or skip(obj):
+            continue
+        new = _relocated_entries(obj, install_dir, link.rpaths, temp_prefixes, origin)
+        if new == list(link.rpaths):
+            continue
+        old_s, new_s = ":".join(link.rpaths), ":".join(new)
+        rel = obj.relative_to(install_dir).as_posix()
+        restore = _writable(obj)
+        try:
+            done = _linkage.rewrite_elf_rpath(obj, new_s)
+            if not done and patchelf and platform != "netbsd":
+                cmd = [patchelf, "--set-rpath", new_s]
+                if link.dt_rpath:
+                    cmd.append("--force-rpath")  # keep DT_RPATH semantics
+                done = subprocess.run([*cmd, str(obj)], capture_output=True).returncode == 0
+        finally:
+            if restore is not None:
+                obj.chmod(restore)
+        if done:
+            print(f"cvcpkg: relocated {rel}: RPATH {old_s} -> {new_s or '<none>'}")
+        else:
+            print(f"cvcpkg: WARNING: could not rewrite {rel} RPATH {old_s} -> {new_s}")
+
+
+def _complete_elf_rpaths(
+    install_dir: Path,
+    dep_prefixes: Sequence[Path | None],
+    patchelf: str | None,
+) -> None:
+    """Give every ELF object the ``$ORIGIN`` entries its shipped libraries need.
+
+    A NEEDED library that this bundle, or a runtime dependency in
+    *dep_prefixes*, ships is only loaded from the installed prefix if the
+    object's RUNPATH reaches the directory it lands in; otherwise the loader
+    takes whatever copy the host has (openssl +cvc.6's bin/openssl, built with
+    no RPATH, loaded the distro's libssl.so.3) or fails.  For each such library
+    this appends ``$ORIGIN/<path from the object to it>`` -- ``$ORIGIN/../lib``
+    from bin/, ``$ORIGIN/..`` from lib/engines-3/.
+
+    Appending grows the RPATH string, so this needs *patchelf* and runs only
+    where ``cvcpkg.linkage.REACH_PLATFORMS`` says growing is safe (linux).  The
+    pack-time gate reports whatever is still unreachable.
+    """
+    index = _linkage.library_index([install_dir, *(p for p in dep_prefixes if p)])
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf":
+            continue
+        rel_dir = obj.parent.relative_to(install_dir).as_posix()
+        added: list[str] = []
+        for _name, homes in _linkage.unreachable_libs(rel_dir, link, index):
+            r = posixpath.relpath(homes[0], rel_dir)
+            entry = "$ORIGIN" if r == "." else f"$ORIGIN/{r}"
+            if entry not in added:
+                added.append(entry)
+        if not added:
+            continue
+        old_s = ":".join(link.rpaths)
+        new_s = ":".join([*link.rpaths, *added])
+        rel = obj.relative_to(install_dir).as_posix()
+        done = False
+        if patchelf:
+            cmd = [patchelf, "--set-rpath", new_s]
+            if link.dt_rpath:
+                cmd.append("--force-rpath")  # keep DT_RPATH semantics
+            restore = _writable(obj)
+            try:
+                done = subprocess.run([*cmd, str(obj)], capture_output=True).returncode == 0
+            finally:
+                if restore is not None:
+                    obj.chmod(restore)
+        if done:
+            print(f"cvcpkg: relocated {rel}: RPATH {old_s or '<none>'} -> {new_s}")
+        else:
+            print(f"cvcpkg: WARNING: could not add {':'.join(added)} to {rel}'s RPATH")
+
+
+def _patch_macos_install_names(
+    install_dir: Path,
+    dep_prefixes: Sequence[Path | None] = (),
+    temp_prefixes: Sequence[Path | str | None] = (),
+) -> None:
+    """Make every Mach-O object in *install_dir* load its libraries via ``@rpath``.
+
+    The macOS analog of :func:`_patch_elf_rpath` + :func:`_scrub_elf_rpaths`.
+    autotools/libtool builds (e.g. ImageMagick) bake the absolute build-temp
+    install prefix into a dylib's own install name (``LC_ID_DYLIB``) and into
+    its references to sibling dylibs (``LC_LOAD_DYLIB``); a program linked
+    against a DEPENDENCY whose id was such a path records it too (cmake +cvc.1
+    loaded ``/private/var/folders/.../cvcpkg-curl-.../install/lib/libcurl.4.dylib``,
+    grpc its libssl/libcrypto); and CMake's link-path RPATH adds the job's deps
+    prefix as an absolute ``LC_RPATH`` (cmake +cvc.5:
+    ``/Users/runner/work/.../prefix/lib``).  Once the bundle is unpacked
+    elsewhere none of those paths exist and dyld aborts ("Library not loaded").
+
+    For every executable, dylib and bundle under *install_dir* (not just lib/ --
+    bin/ is where cmake, curl and openssl were left broken) it:
+
+    * sets each ``lib/**/*.dylib``'s id to ``@rpath/<leaf>`` and gives it a
+      ``@loader_path`` RPATH so it finds its siblings (the ``$ORIGIN`` analog);
+    * rewrites an absolute reference to a dylib that this bundle ships, or that
+      a dependency installed in *dep_prefixes* ships, to ``@rpath/<leaf>`` --
+      both end up in the same flat prefix;
+    * maps an ``LC_RPATH`` inside *temp_prefixes* to the ``@loader_path``-
+      relative equivalent and deletes any other builder-path ``LC_RPATH``
+      (see :func:`_relocated_entries`);
+    * adds the ``@loader_path``-relative RPATH each ``@rpath`` reference needs
+      to resolve in the installed prefix (``@loader_path/../lib`` from bin/).
+
+    System references (/usr/lib, /System) are left alone.  A modified file is
+    re-signed ad hoc: arm64 refuses to run a binary whose signature the edit
+    invalidated.  Only runs where ``install_name_tool`` exists (any macOS host).
     """
     install_name_tool = shutil.which("install_name_tool")
-    otool = shutil.which("otool")
-    if not install_name_tool or not otool:
+    if not install_name_tool:
         return
+    codesign = shutil.which("codesign")
     lib_dir = install_dir / "lib"
-    if not lib_dir.is_dir():
-        return
-    # Leaf names of every dylib the bundle ships (incl. version symlinks), so we
-    # only rewrite references that resolve to one of OUR libraries.
-    bundle_leaves = {p.name for p in lib_dir.rglob("*.dylib")}
-    for dylib in lib_dir.rglob("*.dylib"):
-        if not dylib.is_file() or dylib.is_symlink():
+
+    # Where each dylib leaf lives, relative to the prefix root: in a dependency
+    # first, then this bundle, so the bundle's own copy wins.
+    homes: dict[str, str] = {}
+    for root in [*(p for p in dep_prefixes if p), install_dir]:
+        root_lib = Path(root) / "lib"
+        if root_lib.is_dir():
+            for d in root_lib.rglob("*.dylib"):
+                homes[d.name] = d.parent.relative_to(root).as_posix()
+
+    def resolves_to(entry: str, obj: Path, executable: bool) -> Path | None:
+        for token in ("@loader_path", "@executable_path" if executable else None):
+            if token and (entry == token or entry.startswith(token + "/")):
+                return Path(os.path.normpath(obj.parent / entry[len(token) :].lstrip("/")))
+        return None
+
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "macho":
             continue
-        subprocess.run(
-            [install_name_tool, "-id", f"@rpath/{dylib.name}", str(dylib)],
-            capture_output=True,
+        args: list[str] = []
+        in_lib = obj.suffix == ".dylib" and lib_dir in obj.parents
+        if in_lib and link.kind == "shared" and link.soname != f"@rpath/{obj.name}":
+            args += ["-id", f"@rpath/{obj.name}"]
+
+        need_dirs: list[str] = []
+        for ref in link.needed:
+            leaf = ref.rsplit("/", 1)[-1]
+            if leaf not in homes:
+                continue
+            if ref.startswith("/") and not ref.startswith(_linkage.MACOS_SYSTEM_ROOTS):
+                args += ["-change", ref, f"@rpath/{leaf}"]
+            elif not ref.startswith("@rpath/"):
+                continue
+            need_dirs.append(homes[leaf])
+
+        final = _relocated_entries(obj, install_dir, link.rpaths, temp_prefixes, "@loader_path")
+        executable = link.kind == "executable"
+        reached = {resolves_to(e, obj, executable) for e in final}
+        wanted = ["."] if in_lib else []
+        for d in [*wanted, *dict.fromkeys(need_dirs)]:
+            target = obj.parent if d == "." else Path(os.path.normpath(install_dir / d))
+            if target in reached:
+                continue
+            r = os.path.relpath(target, obj.parent).replace(os.sep, "/")
+            final.append("@loader_path" if r == "." else f"@loader_path/{r}")
+            reached.add(target)
+        for e in link.rpaths:
+            if e not in final:
+                args += ["-delete_rpath", e]
+        for e in final:
+            if e not in link.rpaths:
+                args += ["-add_rpath", e]
+        if not args:
+            continue
+
+        rel = obj.relative_to(install_dir).as_posix()
+        restore = _writable(obj)
+        result = subprocess.run(
+            [install_name_tool, *args, str(obj)], capture_output=True, text=True
         )
-        # Idempotent: -add_rpath errors (harmlessly) if @loader_path is present.
-        subprocess.run(
-            [install_name_tool, "-add_rpath", "@loader_path", str(dylib)],
-            capture_output=True,
-        )
-        listing = subprocess.run(
-            [otool, "-L", str(dylib)],
-            capture_output=True,
-            text=True,
-        ).stdout
-        # First line is the file path itself; the rest are dependent libraries.
-        for line in listing.splitlines()[1:]:
-            ref = line.strip().split(" ", 1)[0]
-            if ref.startswith("/") and Path(ref).name in bundle_leaves:
-                subprocess.run(
-                    [install_name_tool, "-change", ref, f"@rpath/{Path(ref).name}", str(dylib)],
-                    capture_output=True,
-                )
+        if result.returncode != 0:
+            print(
+                f"cvcpkg: WARNING: install_name_tool could not rewrite {rel}: {result.stderr.strip()}"
+            )
+        elif codesign:
+            subprocess.run(
+                [
+                    codesign,
+                    "--force",
+                    "--sign",
+                    "-",
+                    "--preserve-metadata=entitlements,requirements,flags,runtime",
+                    str(obj),
+                ],
+                capture_output=True,
+            )
+        if restore is not None:
+            obj.chmod(restore)
+        if result.returncode == 0:
+            print(f"cvcpkg: relocated {rel}: {' '.join(args)}")
 
 
 def _make_relocatable(ctx: BuildContext) -> None:
-    """Rewrite the installed tree so the shared bundle is relocatable.
+    """Rewrite the installed tree so the bundle runs from any install prefix.
 
     Consumers must load the libraries without LD_LIBRARY_PATH/DYLD_* —
     ``$ORIGIN`` RPATH on ELF (Linux + the ``$ORIGIN``-honouring BSDs + Haiku),
@@ -1539,16 +1770,35 @@ def _make_relocatable(ctx: BuildContext) -> None:
     install, so packaging is self-hosting — see _find_patchelf and
     _bootstrap_host_tools.
 
+    The shared-library rewrites (``lib/`` ids and ``$ORIGIN``) are for shared
+    builds; removing builder paths from executables applies to static builds
+    too — cmake's static +cvc.1 shipped the same job-prefix RUNPATH as its
+    shared one.  Whatever this pass cannot fix fails the pack-time gate in
+    :func:`stage_bundle`.
+
     Split out of :func:`run_build` because it has to run for DELEGATED builds
     too, and those return early.
     """
-    if ctx.link != "shared":
-        return
+    temp_prefixes = (ctx.prefix, ctx.build_prefix, ctx.install_dir)
+    shared = ctx.link == "shared"
     if ctx.platform == "macos":
-        _patch_macos_install_names(ctx.install_dir)
-    elif ctx.platform in _ELF_RPATH_PLATFORMS:
+        _patch_macos_install_names(ctx.install_dir, (ctx.prefix,), temp_prefixes)
+    elif ctx.platform in _ELF_RPATH_PLATFORMS or ctx.platform == "openbsd":
         patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-        _patch_elf_rpath(ctx.install_dir, patchelf)
+        lib_pass = shared and ctx.platform in _ELF_RPATH_PLATFORMS
+        if lib_pass:
+            _patch_elf_rpath(ctx.install_dir, patchelf)
+        lib_dir = ctx.install_dir / "lib"
+        _scrub_elf_rpaths(
+            ctx.install_dir,
+            temp_prefixes,
+            patchelf,
+            platform=ctx.platform,
+            # _patch_elf_rpath already owns lib/**/*.so* (its own $ORIGIN rule).
+            skip=lambda p: lib_pass and ".so" in p.name and lib_dir in p.parents,
+        )
+        if ctx.platform in _linkage.REACH_PLATFORMS:
+            _complete_elf_rpaths(ctx.install_dir, (ctx.prefix,), patchelf)
 
 
 def run_build(
@@ -2249,6 +2499,8 @@ def stage_bundle(
     staging_dir: Path,
     recipe_dir: Path | None = None,
     temp_prefixes: Sequence[Path | str] = (),
+    linkage_allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
 ) -> None:
     """Copy the installed tree, manifest, and recipe into a staging directory.
 
@@ -2260,6 +2512,12 @@ def stage_bundle(
     launchers (:func:`_rewrite_exe_launchers`).  The rewrites run on the
     STAGED copy only: ``pack --from-prefix`` packages a tree the caller
     owns, which must come out of packing byte-identical.
+
+    Raises :class:`PackError` when a staged ELF/Mach-O object still loads
+    from, or searches, a path into the build machine — see
+    :func:`check_relocatable`.  *linkage_allow* is the recipe's
+    ``package.linkage_allow``; *dep_prefixes* hold the runtime dependencies the
+    bundle is installed next to (their libraries must be reachable too).
     """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
@@ -2267,6 +2525,13 @@ def stage_bundle(
 
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
+    check_relocatable(
+        staging_dir,
+        manifest["bundle"],
+        temp_prefixes=(*temp_prefixes, install_dir),
+        allow=linkage_allow,
+        dep_prefixes=dep_prefixes,
+    )
 
     # Write the manifest under a subdirectory named for the bundle itself.
     # Every bundle installs into the same shared prefix, and extraction is a
@@ -2286,6 +2551,53 @@ def stage_bundle(
         for f in sorted(recipe_dir.iterdir()):
             if f.is_file() and f.suffix in exts:
                 shutil.copy2(f, dest_recipe / f.name)
+
+
+def check_relocatable(
+    root: Path,
+    bundle: Mapping[str, Any],
+    *,
+    temp_prefixes: Sequence[Path | str] = (),
+    allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
+) -> None:
+    """Fail packing when a binary in *root* points into the build machine.
+
+    The pack-time gate for relocatability, the check that was missing while
+    cmake shipped ``RUNPATH /tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib``
+    (linux, +cvc.1 to +cvc.6) and ``LC_RPATH /Users/runner/work/.../prefix/lib``
+    (macos +cvc.5): those programs start on the builder and nowhere else.
+    Every ELF/Mach-O object's RUNPATH/RPATH, NEEDED, LC_RPATH, LC_*_DYLIB and
+    LC_ID_DYLIB is read (:func:`cvcpkg.linkage.audit_tree`); a path into
+    *temp_prefixes*, a cvcpkg build directory, /tmp or a CI workspace fails
+    the pack, as does — on macOS — any absolute path outside the OS
+    (Homebrew, MacPorts).  On linux, a NEEDED library the bundle or a runtime
+    dependency in *dep_prefixes* ships must also be reachable through the
+    object's own ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.
+    Runs on the staged tree, after the relocation pass
+    (:func:`_make_relocatable`) has rewritten everything it can.
+    """
+    platform = str(bundle.get("platform", ""))
+    result = _linkage.audit_tree(
+        root, platform, temp_prefixes, allow, lib_roots=[p for p in dep_prefixes if p]
+    )
+    if result.ok:
+        if result.objects:
+            print(f"cvcpkg: relocatable OK — {result.objects} binary object(s) checked")
+        return
+    raise PackError(
+        f"{bundle.get('name', '?')} ({platform}/{bundle.get('arch', '?')}): "
+        f"{len(result.findings)} loader path(s) will not exist where the bundle is "
+        "installed:\n"
+        + _linkage.format_findings(result.findings)
+        + "\nLink against the dependency through its installed prefix with a "
+        "loader-relative RPATH ($ORIGIN/../lib, @loader_path/../lib) and declare it in "
+        "depends.runtime; the relocation pass rewrites paths into this build's own "
+        "prefixes and adds the $ORIGIN entries shipped libraries need, so anything "
+        "left is either another build's directory or a library the build host "
+        "provides (patchelf / install_name_tool missing also leaves them). See "
+        "src/cvcpkg/linkage.py."
+    )
 
 
 def _build_deterministic_tar(staging_dir: Path) -> bytes:
@@ -3253,6 +3565,8 @@ def pack_recipe(
         staging,
         recipe_dir=ctx.recipe.recipe_dir,
         temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+        linkage_allow=ctx.recipe.linkage_allow,
+        dep_prefixes=(ctx.prefix,),
     )
 
     archive_path, sha256, size = create_archive(
@@ -3391,6 +3705,7 @@ def pack_from_prefix(
             staging,
             recipe_dir=recipe.recipe_dir,
             temp_prefixes=(prefix,),
+            linkage_allow=recipe.linkage_allow,
         )
         archive_path, sha256, size = create_archive(
             staging,

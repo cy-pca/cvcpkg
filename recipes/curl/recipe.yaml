@@ -151,7 +151,10 @@ package:
     - lib/libcurl*
     - lib/curl*.lib
     - lib/pkgconfig/libcurl*
-    - lib/cmake/CURL/
+    # Only the CMake build (build.ps1, windows) installs a CURL config package;
+    # the autotools build used everywhere else does not, so declaring it for
+    # every platform failed every unix pack under strict globs.
+    - { glob: "lib/cmake/CURL/", platforms: [windows] }
     - include/curl/
     - bin/curl*
     - bin/libcurl*.dll

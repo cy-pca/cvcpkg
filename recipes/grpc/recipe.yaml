@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: grpc
   upstream_version: "1.68.2"
-  cvc_revision: 4
+  # Bumped 4 -> 5: no recipe change; rebuild under the executable- and
+  # dependency-aware relocation pass. The macOS +cvc.4 dylibs load libssl and
+  # libcrypto from openssl's own build-temp dir
+  # (/private/var/folders/.../cvcpkg-openssl-.../install/lib), recorded from an
+  # openssl bundle whose install names were still absolute; packaging now
+  # rewrites such references to @rpath and refuses to pack any that remain.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
