@@ -1628,6 +1628,28 @@ class TestPublishRecipeName:
         assert len(result) == 1
         assert "zlib-" in result[0].name
 
+    def test_resolve_all_includes_noarch(self, tmp_path):
+        """pack/pack-all name a noarch recipe any-noarch on every host, so
+        ``publish --all --platform macos`` must pick those archives up too."""
+        from cvcpkg.cli import _resolve_all_archives
+
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "macos", "arm64", "release", "shared")
+        self._make_archive(
+            tmp_path, "attrs-cp312", "26.1.0+cvc.3", "any", "noarch", "release", "shared"
+        )
+        self._make_archive(
+            tmp_path, "six-cp312", "1.17.0+cvc.1", "any", "noarch", "debug", "shared"
+        )
+        result = _resolve_all_archives(str(tmp_path), "macos", "arm64", "release", "shared")
+        assert [r.name for r in result] == [
+            "attrs-cp312-26.1.0+cvc.3-any-noarch-release-shared.tar.gz",
+            "zlib-1.3.1+cvc.1-macos-arm64-release-shared.tar.gz",
+        ]
+        result = _resolve_all_archives(str(tmp_path), "any", "noarch", "release", "shared")
+        assert [r.name for r in result] == [
+            "attrs-cp312-26.1.0+cvc.3-any-noarch-release-shared.tar.gz",
+        ]
+
     def test_resolve_all_nonexistent_dir(self, tmp_path):
         """_resolve_all_archives returns [] for a missing directory."""
         from cvcpkg.cli import _resolve_all_archives
