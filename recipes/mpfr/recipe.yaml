@@ -57,6 +57,11 @@ depends:
     # Publish gmp's windows bundle first so this one builds against it.
     - name: gmp
       version: ">=6.1.0"
+    # libmpfr-6.dll imports libmcfgthread-2.dll: MPFR's thread-local state uses
+    # GCC's emulated TLS, which with the MCF thread model of cvcpkg's MinGW-w64
+    # gcc lives in mcfgthread (see build.ps1). That DLL ships here.
+    - name: mingw-w64-runtime
+      platforms: [windows]
   host_tools: []
 
 build:
