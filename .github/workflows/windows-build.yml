@@ -112,6 +112,12 @@ jobs:
     # with MSB8020. v143 is the newest toolset CPython 3.11 builds against cleanly.
     runs-on: windows-2022
     timeout-minutes: 350
+    # The runner image ships vcpkg at C:\vcpkg and exports its location.
+    # Clear it so no recipe's build system (CMake, a configure script, ...)
+    # discovers and uses it. Everything comes from cvcpkg.
+    env:
+      VCPKG_INSTALLATION_ROOT: ""
+      VCPKG_ROOT: ""
     strategy:
       fail-fast: false
       matrix:
@@ -137,21 +143,22 @@ jobs:
         shell: powershell
         run: |
           # windows-latest pre-installs chocolatey, cmake, ninja, python3,
-          # nasm, vcpkg, git bash and pwsh.  Pin cmake to 3.x to match
+          # nasm, git bash and pwsh.  Pin cmake to 3.x to match
           # Boost 1.86 expectations.
           choco install ninja --no-progress -y 2>&1 | Out-Null
           choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y 2>&1 | Out-Null
           choco install nasm --no-progress -y 2>&1 | Out-Null
-          # vcpkg pre-installed at C:\vcpkg on windows-latest; bootstrap
-          # only if missing.
-          if (-not (Test-Path 'C:\vcpkg\vcpkg.exe')) {
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          }
-          echo 'C:\vcpkg' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-          # Refresh PATH so downstream bash steps see choco-installed tools.
+          # No vcpkg. cvcpkg builds every recipe from source with its own
+          # scripts and deps, and no recipe uses vcpkg any more; this step used
+          # to bootstrap it and put C:\vcpkg on PATH anyway. The image ships
+          # vcpkg at C:\vcpkg and points VCPKG_INSTALLATION_ROOT at it. The job
+          # clears that variable (see env: above), so nothing finds it by
+          # accident. windows-recipe-check.yml, the PR check for Windows
+          # recipes, has never installed vcpkg.
+          # Refresh PATH so downstream bash steps see choco-installed tools,
+          # minus any vcpkg directory the image may list there.
           foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
-            if ($dir) { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
+            if ($dir -and $dir -notmatch '\\vcpkg(\\|$)') { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
           }
 
       - name: Ensure pwsh is on PATH
