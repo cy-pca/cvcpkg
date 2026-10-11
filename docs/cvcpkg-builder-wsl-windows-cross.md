@@ -96,7 +96,7 @@ Strawberry Perl, …) **plus PowerShell 7**:
 - **PowerShell 7 is required.** Windows PowerShell 5.1 reads BOM-less
   UTF-8 scripts as ANSI; the recipe scripts contain UTF-8 punctuation,
   which 5.1 turns into parse errors (smart-quote mojibake terminates
-  string literals).  Install with `choco install powershell-core`.  The
+  string literals).  Install with `cvcpkg install powershell`.  The
   Microsoft Store `pwsh` alias does **not** count — it refuses to start
   from non-interactive sessions, so the runner ignores it.
 - Exclude the exchange directory from Windows Defender or long builds

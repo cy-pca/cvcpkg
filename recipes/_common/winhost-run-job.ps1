@@ -44,7 +44,7 @@ function Find-CvcBuildShell {
     if ($cmd) { return $cmd.Source }
     # 4. Fall back to this Windows PowerShell 5.1.
     $fallback = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    Write-Host "winhost-run-job: WARNING - PowerShell 7 (pwsh) not found; running the build script under Windows PowerShell 5.1. Install pwsh 7 on the host (choco install powershell-core) if the build fails on syntax."
+    Write-Host "winhost-run-job: WARNING - PowerShell 7 (pwsh) not found; running the build script under Windows PowerShell 5.1. Install pwsh 7 on the host (cvcpkg install powershell) if the build fails on syntax."
     return $fallback
 }
 
