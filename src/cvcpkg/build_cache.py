@@ -378,7 +378,9 @@ def _create_tarball(source_dir: Path, dest: Path) -> None:
     with tarfile.open(dest, "w:gz") as tar:
         for child in sorted(source_dir.rglob("*")):
             arcname = child.relative_to(source_dir)
-            tar.add(child, arcname=str(arcname))
+            # rglob already yields every descendant; letting tar.add recurse
+            # too stored each file once per directory above it.
+            tar.add(child, arcname=str(arcname), recursive=False)
 
 
 def _now_iso() -> str:

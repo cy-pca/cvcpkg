@@ -4492,6 +4492,7 @@ def create_app(
                 "published_by": actor.name,
                 "org": org,
                 "required_deps": json.loads(required_deps),
+                "provides": json.loads(provides),
             }
             async with _audit_txn(
                 AuditAction.publish,

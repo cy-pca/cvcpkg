@@ -482,6 +482,83 @@ class TestServerCacheIntegration:
 
         client.__exit__(None, None, None)
 
+    def test_push_records_runtime_deps(self, tmp_path, monkeypatch):
+        """A ``build_all`` server-cache push records the recipe's runtime deps.
+
+        Regression: the push sent no ``required_deps`` (nor ``provides``), the
+        server stored ``[]``, and the CI's later ``cvcpkg publish --all`` then
+        skipped the packed bundle as already published.  Over a thousand
+        CI-built catalog rows (jsonschema-cp312, anyio-cp312, httpx-cp312, ...)
+        reached the catalog with no dependency edges, so installing them left
+        their deps out of the prefix.
+        """
+        import io
+        import urllib.error
+        import urllib.parse
+        import urllib.request
+
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(tmp_path / "cache"))
+        # Ensure in-process server uses YAML backend (matching TokenStore)
+        # even when CVCPKG_DATABASE_URL is set by the Docker test env.
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
+
+        srv_dir = tmp_path / "server"
+        srv_dir.mkdir()
+        client, pub_token = self._start_server(srv_dir)
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libfoo")
+        app_dir = _create_vendored_recipe(recipes_dir, "libapp")
+        raw = yaml.safe_load((app_dir / "recipe.yaml").read_text())
+        raw["depends"] = {
+            "build": ["libfoo"],
+            # The windows-only dep must not be recorded on a linux bundle.
+            "runtime": ["libfoo", {"name": "libwin", "platforms": ["windows"]}],
+        }
+        raw["provides"] = ["app-slot"]
+        (app_dir / "recipe.yaml").write_text(yaml.dump(raw))
+
+        # The builder talks to the server with urllib; route those calls
+        # into the in-process TestClient.
+        def fake_urlopen(req, timeout=None):
+            url = urllib.parse.urlsplit(req.full_url)
+            resp = client.request(
+                req.get_method(),
+                f"{url.path}?{url.query}" if url.query else url.path,
+                content=req.data,
+                headers=dict(req.header_items()),
+            )
+            if resp.status_code >= 400:
+                raise urllib.error.HTTPError(req.full_url, resp.status_code, resp.text, None, None)
+            out = io.BytesIO(resp.content)
+            out.status = resp.status_code
+            return out
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        build_all(
+            recipes_dir,
+            platform="linux",
+            config="release",
+            link="shared",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            server_cache_url="http://testserver",
+            server_cache_token=pub_token,
+            server_cache_push=True,
+        )
+
+        resp = client.get("/v1/catalog")
+        assert resp.status_code == 200
+        bundles = {b["name"]: b for b in resp.json()["bundles"]}
+        assert bundles["libapp"]["required_deps"] == [{"name": "libfoo"}]
+        assert bundles["libapp"]["provides"] == ["app-slot"]
+        assert bundles["libfoo"]["required_deps"] == []
+
+        client.__exit__(None, None, None)
+
     def test_server_cache_pull(self, tmp_path, monkeypatch, capsys):
         """Publish manually, then verify cache/status returns a hit."""
         from cvcpkg.builder import chain_hash as compute_chain_hash
