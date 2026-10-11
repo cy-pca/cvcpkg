@@ -155,43 +155,42 @@ All build scripts must run from a **Developer PowerShell** or
 after sourcing `vcvarsall.bat x64` so that the MSVC tools are on
 PATH.
 
-### Build systems
+### Build systems, assembler and Perl (from cvcpkg)
 
-| Tool | Install | Notes |
-|------|---------|-------|
-| CMake | `choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y` | Pinned < 4.x for Boost compat |
-| Ninja | `choco install ninja -y` | CMake generator |
+Everything comes from cvcpkg: no Chocolatey, no vcpkg, no system copies.
+
+| Tool | cvcpkg component | Notes |
+|------|------------------|-------|
+| CMake | `cmake` (3.31.7) | Pinned < 4.x for Boost compat |
+| Ninja | `ninja` | CMake generator |
+| NASM | `nasm` | OpenSSL and libjpeg-turbo use NASM for optimised x86_64 assembly. Without it OpenSSL falls back to unoptimised C (`no-asm`) and libjpeg-turbo disables SIMD. |
+| Perl | `perl` | OpenSSL Configure |
 | nmake | Visual Studio | OpenSSL build |
 
-### Assembler
-
-| Tool | Install | Notes |
-|------|---------|-------|
-| NASM | `choco install nasm -y` | OpenSSL and libjpeg-turbo use NASM for optimised x86_64 assembly. Install dir: `C:\Program Files\NASM` — ensure it is on PATH. |
-
-After installing, add NASM to your PATH:
+Install them into a tools prefix, then put **only the tools** on PATH,
+the way `windows-build.yml` and `windows-recipe-check.yml` do. CMake
+searches its own install prefix for packages, and that prefix also holds
+the curl/openssl headers and libraries cvcpkg installed with cmake, which
+a recipe build would otherwise pick up instead of its declared deps:
 
 ```powershell
-$env:PATH = "C:\Program Files\NASM;$env:PATH"
+cvcpkg install cmake ninja nasm --prefix C:\cvcpkg-tools-prefix --config release --link shared
+New-Item -ItemType Directory -Force C:\cvcpkg-tools\bin, C:\cvcpkg-tools\share | Out-Null
+'cmake','ctest','cpack','cmcldeps','ninja','nasm','ndisasm' | ForEach-Object {
+  Copy-Item "C:\cvcpkg-tools-prefix\bin\$_.exe" C:\cvcpkg-tools\bin\
+}
+Copy-Item -Recurse C:\cvcpkg-tools-prefix\share\cmake-* C:\cvcpkg-tools\share\
+$env:PATH = "C:\cvcpkg-tools\bin;$env:PATH"
 ```
 
-Without NASM, OpenSSL falls back to unoptimised C code (`no-asm`)
-and libjpeg-turbo disables SIMD, resulting in significantly slower
-crypto and JPEG operations.
+`perl` can go into its own prefix the same way, with its `bin` on PATH.
 
 ### Interpreters
 
 | Tool | Install | Notes |
 |------|---------|-------|
-| Python 3 | `choco install python3 -y` | Runs cvcpkg |
-| Perl | Strawberry Perl (pre-installed on GitHub runners, or `choco install strawberryperl -y`) | OpenSSL Configure |
-
-### Package manager
-
-| Tool | Install | Notes |
-|------|---------|-------|
-| vcpkg | Pre-installed at `C:\vcpkg` on GitHub runners. For local builds: `git clone https://github.com/microsoft/vcpkg && .\vcpkg\bootstrap-vcpkg.bat` | Used by `clapack` and `pthreads4w` recipes |
-| Chocolatey | https://chocolatey.org/install | Installs cmake, ninja, nasm |
+| Python 3 | python.org installer | Runs cvcpkg itself (`pip install` of this repo) |
+| PowerShell 7 | `cvcpkg install powershell` | Runs the `.ps1` recipe scripts |
 
 ### Qt6 (pre-built)
 
@@ -205,19 +204,10 @@ installer](https://www.qt.io/download-qt-installer-oss) and set
 $env:Qt6_DIR = "C:\Qt\6.7.3\msvc2019_64\lib\cmake\Qt6"
 ```
 
-### One-liner install (Chocolatey)
+### Getting started
 
-From an **elevated PowerShell** (Administrator):
-
-```powershell
-choco install -y cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System'
-choco install -y ninja nasm strawberryperl python3
-# Add NASM to PATH for the current session
-$env:PATH = "C:\Program Files\NASM;$env:PATH"
-```
-
-Then open a **Developer PowerShell for VS 2022** to get `cl.exe`
-and `nmake` on PATH.
+Open a **Developer PowerShell for VS 2022** to get `cl.exe`
+and `nmake` on PATH, then install the tools from cvcpkg as shown above.
 
 ---
 

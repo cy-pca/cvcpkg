@@ -139,28 +139,6 @@ jobs:
         with:
           arch: x64
 
-      - name: Install system build tools
-        shell: powershell
-        run: |
-          # windows-latest pre-installs chocolatey, cmake, ninja, python3,
-          # nasm, git bash and pwsh.  Pin cmake to 3.x to match
-          # Boost 1.86 expectations.
-          choco install ninja --no-progress -y 2>&1 | Out-Null
-          choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y 2>&1 | Out-Null
-          choco install nasm --no-progress -y 2>&1 | Out-Null
-          # No vcpkg. cvcpkg builds every recipe from source with its own
-          # scripts and deps, and no recipe uses vcpkg any more; this step used
-          # to bootstrap it and put C:\vcpkg on PATH anyway. The image ships
-          # vcpkg at C:\vcpkg and points VCPKG_INSTALLATION_ROOT at it. The job
-          # clears that variable (see env: above), so nothing finds it by
-          # accident. windows-recipe-check.yml, the PR check for Windows
-          # recipes, has never installed vcpkg.
-          # Refresh PATH so downstream bash steps see choco-installed tools,
-          # minus any vcpkg directory the image may list there.
-          foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
-            if ($dir -and $dir -notmatch '\\vcpkg(\\|$)') { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
-          }
-
       - name: Ensure pwsh is on PATH
         shell: bash
         run: |
@@ -187,6 +165,49 @@ jobs:
           # On Windows, pip puts scripts in the Python install Scripts dir.
           PY_SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")
           echo "$PY_SCRIPTS" >> "$GITHUB_PATH"
+
+      # Build tools from cvcpkg: cmake (3.31.7, the version Boost 1.86's
+      # configs expect), ninja and nasm. Nothing comes from Chocolatey, vcpkg or
+      # the runner image's own copies, which these shadow on PATH. cmake is
+      # copied into a tree holding only the tools: CMake searches its own install
+      # prefix (the parent of share/cmake-X.Y) for packages, and the prefix
+      # cvcpkg installs it into also holds curl and openssl headers and libraries
+      # that a recipe build would otherwise find instead of its declared deps.
+      - name: Install build tools (cvcpkg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          prefix="$temp/cvcpkg-tools-prefix"
+          tree="$temp/cvcpkg-tools"
+          cvcpkg install cmake ninja nasm --prefix "$(cygpath -m "$prefix")" --config release --link shared
+          mkdir -p "$tree/bin" "$tree/share"
+          # All of these import only Windows system DLLs, so no DLLs travel with them.
+          for exe in cmake ctest cpack cmcldeps ninja nasm ndisasm; do
+            cp "$prefix/bin/$exe.exe" "$tree/bin/"
+          done
+          cp -R "$prefix"/share/cmake-* "$tree/share/"
+          cygpath -w "$tree/bin" >> "$GITHUB_PATH"
+
+      - name: Check build tools come from cvcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="$(cygpath -u "$RUNNER_TEMP")/cvcpkg-tools/bin"
+          for t in cmake ninja nasm; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$want"/*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($want)"; exit 1 ;;
+            esac
+          done
+          cmake --version | sed -n 1p
+          ninja --version
+          nasm -v
+          if command -v vcpkg >/dev/null 2>&1; then
+            echo "::error::vcpkg is on PATH ($(command -v vcpkg)); nothing may build with it"
+            exit 1
+          fi
 
       - name: Build shard ${{ matrix.shard }} (pack-all)
         shell: bash
