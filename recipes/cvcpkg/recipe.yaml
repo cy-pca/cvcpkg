@@ -62,6 +62,19 @@ depends:
     # frozen `cvcpkg validate` reports jsonschema missing.
     - name: attrs-cp312
     - name: pyrsistent-cp312
+    # python312's own native closure (its recipe's runtime deps), for the
+    # same reason: the published macOS python312 bundles (3.12.10+cvc.3/.8)
+    # record no required_deps, so a catalog-resolved closure installs the
+    # interpreter without them and its first `import zlib` fails with
+    # "Library not loaded: @rpath/libz.1.3.1.dylib".  Linux bundles carry them.
+    - { name: openssl, platforms: [macos] }
+    - { name: zlib, platforms: [macos] }
+    - { name: libffi, platforms: [macos] }
+    - { name: bzip2, platforms: [macos] }
+    - { name: xz, platforms: [macos] }
+    - { name: readline, platforms: [macos] }
+    - { name: sqlite, platforms: [macos] }
+    - { name: ncurses, platforms: [macos] }
   host_tools:
     - python312
 
