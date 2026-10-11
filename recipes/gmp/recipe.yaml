@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: gmp
   upstream_version: "6.3.0"
-  cvc_revision: 9
+  # 10: the first windows bundle built from this recipe (MinGW-w64 gcc + MSYS2
+  # autotools, all from cvcpkg; C library only). It replaces 6.3.0+cvc.1 for
+  # windows, a repackaged vcpkg build. linux/macos/BSD builds are unchanged
+  # from +cvc.9.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -95,11 +99,17 @@ build:
 
 package:
   files:
+    # windows: bin/libgmp-10.dll (shipped, as the whole install tree is),
+    # lib/libgmp.dll.a + lib/gmp.lib (the same import library), gmp.pc, gmp.h.
     - lib/libgmp*
     - lib/gmp*
     - lib/pkgconfig/gmp*
     - include/gmp.h
-    - include/gmpxx.h
+    # gmpxx (C++) everywhere except windows, where build.ps1 builds the C
+    # library only: a MinGW libgmpxx is libstdc++/Itanium-ABI C++ that MSVC
+    # consumers cannot link (see build.ps1).
+    - glob: include/gmpxx.h
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo]
   cmake_packages: []
 
 abi:
