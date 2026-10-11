@@ -16,12 +16,12 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # keeps only zlib, the runtime dependency the recipe declares. That matches what
 # every linux bundle already provided, on every platform.
 #
-# Boost.Charconv's __float128 support is off too: its probe links GCC's
-# libquadmath when it can, which made 1.86.0+cvc.5's linux libboost_charconv
-# NEED libquadmath.so.0 -- a library minimal hosts and containers lack -- and
-# added a PUBLIC -lquadmath to every consumer of Boost::charconv. Presetting the
-# probe's result skips it; clang (macOS, the BSDs) never had quadmath, so every
-# platform now builds charconv the same way.
+# Boost.Charconv's __float128 support is decided here, not by its probe (which
+# turns it on whenever the build host has GCC's libquadmath). On linux it is ON
+# and links the libquadmath of cvcpkg's gcc-runtime, a runtime dependency, so a
+# host without one still loads libboost_charconv (1.86.0+cvc.5 NEEDed the
+# builder's; +cvc.6 went without). Elsewhere OFF: clang (macOS, the BSDs) has no
+# quadmath.
 # OpenBSD: no Boost.Process. Its v2 library needs <wordexp.h> (shell.cpp), which
 # OpenBSD does not have, and reads kinfo_proc fields under FreeBSD's names
 # (pid.cpp: kp_pid); upstream has never built it there. Every other library
@@ -30,6 +30,15 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 _boost_extra=()
 if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=process)
+fi
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    # -L first so -lquadmath binds the deps prefix's copy, not the compiler's.
+    _boost_extra+=(
+        -DBOOST_CHARCONV_QUADMATH_FOUND=ON
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${CVC_DEPS_PREFIX}/lib"
+    )
+else
+    _boost_extra+=(-DBOOST_CHARCONV_QUADMATH_FOUND=OFF)
 fi
 
 cvc_cmake_build \
@@ -41,5 +50,4 @@ cvc_cmake_build \
     -DBOOST_IOSTREAMS_ENABLE_ZLIB=ON \
     -DBOOST_IOSTREAMS_ENABLE_BZIP2=OFF \
     -DBOOST_IOSTREAMS_ENABLE_LZMA=OFF \
-    -DBOOST_IOSTREAMS_ENABLE_ZSTD=OFF \
-    -DBOOST_CHARCONV_QUADMATH_FOUND=OFF
+    -DBOOST_IOSTREAMS_ENABLE_ZSTD=OFF
