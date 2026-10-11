@@ -1054,6 +1054,25 @@ class TestEmitSdistColumn:
         y, _, _ = self._emit(tmp_path)
         assert "tomli-cp311" not in y  # python_version < 3.11
 
+    # A pure package whose sdist compiles an OPTIONAL extension: the switch that
+    # skips it must reach every matrix entry, or the build-once noarch column
+    # ships whichever builder's .so built it (#53).
+    def test_pure_build_env_reaches_every_matrix_entry(self, tmp_path, monkeypatch):
+        import yaml
+
+        monkeypatch.setitem(gen._PURE_BUILD_ENV, "widget", {"WIDGET_NO_EXT": "1"})
+        y, _, _ = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        assert yaml.safe_load(y)["build"]["matrix"] == [
+            {"platform": "any", "script": "build.sh", "env": {"WIDGET_NO_EXT": "1"}},
+            {"platform": "windows", "script": "build.ps1", "env": {"WIDGET_NO_EXT": "1"}},
+        ]
+
+    def test_pure_build_env_leaves_compiled_columns_alone(self, tmp_path, monkeypatch):
+        # A per-platform column is SUPPOSED to compile its extension.
+        monkeypatch.setitem(gen._PURE_BUILD_ENV, "widget", {"WIDGET_NO_EXT": "1"})
+        y, _, _ = self._emit(tmp_path)
+        assert "WIDGET_NO_EXT" not in y
+
     # A build backend must be importable under --no-build-isolation, so its own
     # runtime deps ride along as build-only edges (see _BACKEND_RUNTIME_CLOSURE).
     _CLOSURE_META = {

@@ -1308,6 +1308,19 @@ def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
 # note below describes.
 _PREFER_BINARY = {"cython", "protobuf", "sqlalchemy"}
 
+# The other way out of the same trap, for an extension that is OPTIONAL and
+# that the sdist's own build can be told to skip: keep the build-once noarch
+# column, and export the switch into every matrix entry so the build actually
+# produces the py3-none-any wheel.  Without it the `platform: any` build compiles
+# the extension on whichever builder claims the job and ships that host's `.so`
+# as noarch (#53 again).  Prefer this over _PREFER_BINARY when the extension is
+# only a speedup: a pure column also covers the platforms SDIST_PLATFORMS omits.
+_PURE_BUILD_ENV: dict[str, dict[str, str]] = {
+    # setup.py: BUILD_EXTENSION=no drops websockets.speedups (frame masking in C;
+    # the pure-Python fallback is the same API).
+    "websockets": {"BUILD_EXTENSION": "no"},
+}
+
 
 def classify(wheels: list[dict], interps: list[str], name: str | None = None) -> str:
     """Classify a package by its wheel set:
@@ -2119,7 +2132,12 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             plats.append(("macos", "build.sh"))
         if any(k.startswith("windows") for k in arts):
             plats.append(("windows", "build.ps1"))
-    matrix = "".join(f"    - platform: {p}\n      script: {s}\n" for p, s in plats)
+    env = ""
+    if kind == "pure" and base in _PURE_BUILD_ENV:
+        env = "      env:\n" + "".join(
+            f'        {k}: "{v}"\n' for k, v in sorted(_PURE_BUILD_ENV[base].items())
+        )
+    matrix = "".join(f"    - platform: {p}\n      script: {s}\n{env}" for p, s in plats)
     body += "\nbuild:\n  build_type_independent: true\n  matrix:\n" + matrix
 
     windows = any(p == "windows" for p, _ in plats) or (
