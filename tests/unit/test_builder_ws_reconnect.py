@@ -81,10 +81,10 @@ class _FakeServer:
     The socket: the first ``ws_failures`` handshakes raise (as a proxy that
     strips the upgrade makes them do); later ones connect.  ``on_connect``
     runs for each connection (0-based index) and can push messages or
-    schedule a drop.
+    schedule a drop.  ``on_finish`` runs after a job reports complete/fail.
     """
 
-    def __init__(self, *, ws_failures=0, claim_latency=0.0, on_connect=None):
+    def __init__(self, *, ws_failures=0, claim_latency=0.0, on_connect=None, on_finish=None):
         self.lock = threading.Lock()
         self.jobs: dict[int, str] = {}
         self.claim_latency = claim_latency
@@ -98,6 +98,7 @@ class _FakeServer:
         self.ws_closes: list[float] = []
         self.ws_sent: list[dict] = []
         self.on_connect = on_connect
+        self.on_finish = on_finish
         self.conn = None
         # Ordered log of HTTP heartbeats ("hb") and self-update steps.
         self.events: list[str] = []
@@ -152,7 +153,10 @@ class _FakeServer:
                     job_id = int(url.split("/")[-2])
                     with server.lock:
                         server.jobs[job_id] = "failed" if url.endswith("/fail") else "succeeded"
-                        return _Resp(200, server.job(job_id))
+                        resp = _Resp(200, server.job(job_id))
+                    if server.on_finish is not None:
+                        server.on_finish(server, job_id)
+                    return resp
                 if url.endswith("/heartbeat"):
                     with server.lock:
                         server.events.append("hb")
@@ -656,6 +660,37 @@ def test_builder_update_from_a_server_not_ahead_is_ignored(monkeypatch, tmp_path
     assert not execs, result.output
     assert "update ignored" in result.output
     assert server.claims == {1: 1}, result.output
+
+
+def test_dispatch_read_after_the_job_ran_is_not_claimed_again(monkeypatch, tmp_path):
+    """A ``job.dispatch`` read only after its job already ran here is ignored.
+
+    The frame is queued at dispatch time, but the connect-time catch-up poll
+    can start the job before the socket loop reads it.  A job that fails fast
+    is no longer in flight by then, so the in-flight dedupe let the frame
+    through and the job was claimed a second time (the server answered
+    'failed').  That race made test_builder_update_from_a_server_not_ahead_is_ignored
+    flaky on a slow macOS runner; here the frame is held until the run is over.
+    """
+    frame: dict = {}
+
+    def on_connect(server, conn, index):
+        server.dispatch(1)
+        frame["job"] = server.job(1)  # the frame as pushed at dispatch time
+
+    def on_finish(server, job_id):
+        # Reaches the socket loop after the job thread has released its slot.
+        threading.Timer(
+            0.2, server.conn.push, args=({"type": "job.dispatch", "job": frame["job"]},)
+        ).start()
+
+    server = _FakeServer(on_connect=on_connect, on_finish=on_finish)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert "picked up a dispatch the socket did not deliver" in result.output
+    assert server.claims == {1: 1}, result.output
+    assert "already finished here, ignoring the repeated dispatch" in result.output
 
 
 def test_self_update_never_installs_an_older_checkout(monkeypatch, tmp_path):
