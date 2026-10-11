@@ -1073,6 +1073,66 @@ class TestEmitSdistColumn:
         y, _, _ = self._emit(tmp_path)
         assert "WIDGET_NO_EXT" not in y
 
+    # Each build produces ONE install layout, and packing fails on a declared
+    # entry that matched nothing -- so every from-source pure column failed to
+    # pack on the fleet ("Lib/site-packages/... match nothing").  Each layout is
+    # scoped to the platforms whose build produces it.
+    def test_pure_column_scopes_each_layout(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        assert yaml.safe_load(y)["package"]["files"] == [
+            {"glob": "lib/python3.11/site-packages/widget/", "platforms": ["any"]},
+            {"glob": "lib/python3.11/site-packages/*.dist-info/", "platforms": ["any"]},
+            {"glob": "Lib/site-packages/widget/", "platforms": ["windows"]},
+            {"glob": "Lib/site-packages/*.dist-info/", "platforms": ["windows"]},
+        ]
+
+    def test_compiled_column_scopes_unix_layout_to_its_unix_platforms(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path)  # cext; platforms linux, macos, windows
+        files = yaml.safe_load(y)["package"]["files"]
+        assert {
+            "glob": "lib/python3.11/site-packages/widget/",
+            "platforms": ["linux", "macos"],
+        } in (files)
+        assert {"glob": "Lib/site-packages/widget/", "platforms": ["windows"]} in files
+
+    def test_column_without_a_windows_build_stays_unscoped(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path, platforms=["linux", "macos"])
+        assert yaml.safe_load(y)["package"]["files"] == [
+            "lib/python3.11/site-packages/widget/",
+            "lib/python3.11/site-packages/*.dist-info/",
+        ]
+
+    @pytest.mark.parametrize(
+        ("platform", "layout"),
+        [
+            ("any", "lib/python3.11/site-packages"),
+            ("windows", "Lib/site-packages"),
+        ],
+    )
+    def test_pack_check_passes_on_each_layout(self, tmp_path, platform, layout):
+        # The emitted declaration against the tree that build really stages,
+        # judged by the same function `cvcpkg pack` and the builders use.
+        import yaml
+
+        from cvcpkg.builder import check_declared_files
+
+        y, _, _ = self._emit(
+            tmp_path / "r", kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl")
+        )
+        staged = tmp_path / "install"
+        (staged / layout / "widget").mkdir(parents=True)
+        (staged / layout / "widget" / "__init__.py").write_text("")
+        (staged / layout / "widget-1.2.3.dist-info").mkdir()
+        (staged / layout / "widget-1.2.3.dist-info" / "METADATA").write_text("")
+        files = yaml.safe_load(y)["package"]["files"]
+        assert check_declared_files(staged, files, platform) == []
+
     # A build backend must be importable under --no-build-isolation, so its own
     # runtime deps ride along as build-only edges (see _BACKEND_RUNTIME_CLOSURE).
     _CLOSURE_META = {

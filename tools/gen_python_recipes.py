@@ -2144,8 +2144,24 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
         mode != "sdist" and any(k.startswith("windows") for k in arts)
     )
     body += "\npackage:\n  files:\n"
+    # A column with a Windows build declares BOTH install layouts: CPython's
+    # lib/pythonX.Y/site-packages + bin/ everywhere else, Lib/site-packages +
+    # Scripts/ on Windows.  Any one build produces exactly one of them, and the
+    # pack-time check (builder.check_declared_files) fails on a declared entry
+    # that matched nothing, so each layout is scoped to the matrix platforms
+    # that produce it.  A noarch pack is checked as platform "any", which is
+    # what a pure column's non-Windows entry is.  Unscoped, every from-source
+    # pure column failed to pack on the fleet ("Lib/site-packages/... match
+    # nothing"), and its Windows column the same way in reverse.
+    unix_scope = sorted({p for p, _ in plats if p != "windows"})
     for g in _files_globs(m, base, interp, windows):
-        body += f"    - {g}\n"
+        if not windows:
+            body += f"    - {g}\n"  # one layout: nothing to scope
+        elif g.startswith(("Lib/", "Scripts/")):
+            body += f'    - {{ glob: "{g}", platforms: [windows] }}\n'
+        elif unix_scope:
+            body += f'    - {{ glob: "{g}", platforms: [{", ".join(unix_scope)}] }}\n'
+        # else: a Windows-only column; it never produces the unix layout.
 
     floor = _RESURRECTED_FLOOR.get(base, 1) if not interp.endswith("t") else 1
     _write_recipe(d, body, floor=floor)
