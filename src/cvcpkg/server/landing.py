@@ -13,9 +13,13 @@ from __future__ import annotations
 import functools
 import html as _html
 import json as _json
+import logging
 import os
+import re
 
 from cvcpkg import __version__
+
+_log = logging.getLogger(__name__)
 
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "cy-pca/cvcpkg")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
@@ -124,6 +128,22 @@ def brand_logo_asset() -> tuple[bytes, str]:
         return b"", "image/png"
 
 
+# The default-registry and fallback-repo assignments in each install script,
+# exactly as written there.  The files carry the official deployment's values
+# so they also run as-is from a checkout; install_script_asset swaps in the
+# serving deployment's own.
+_INSTALLER_DEFAULT_LINES = {
+    "install.sh": ('DEFAULT_SERVER_URL="{}"', 'DEFAULT_GITHUB_REPO="{}"'),
+    "install.ps1": ('$DefaultServerUrl = "{}"', '$DefaultGitHubRepo = "{}"'),
+}
+_OFFICIAL_SITE_URL = "https://cvcpkg.org"
+_OFFICIAL_GITHUB_REPO = "cy-pca/cvcpkg"
+# Both values land inside a double-quoted sh / PowerShell string, so nothing
+# that could end or expand it (quotes, $, backtick, backslash) may get through.
+_INSTALLER_URL_RE = re.compile(r"^https?://[A-Za-z0-9.:/_~%\[\]-]+$")
+_INSTALLER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
 @functools.lru_cache(maxsize=2)
 def install_script_asset(name: str) -> str:
     """Return the text of a bundled install script (``install.sh`` / ``install.ps1``).
@@ -131,10 +151,27 @@ def install_script_asset(name: str) -> str:
     Read via ``importlib.resources`` (package data, like ``brand_logo_asset``)
     so it ships in the wheel and is served identically whether cvcpkg-server
     runs from a repo checkout or a ``pip install``.
+
+    The scripts install the ``cvcpkg`` package from a registry, falling back
+    to a GitHub repo's releases.  The copy served here defaults to THIS
+    deployment's ``CVCPKG_SITE_URL`` and ``CVCPKG_GITHUB_REPO``, so a fork's
+    ``/install.sh`` installs the fork's own builds rather than the official
+    ones.  A value that is not safe to paste into the script keeps the
+    official default (and is logged).
     """
     from importlib.resources import files as _res_files
 
-    return _res_files("cvcpkg.server").joinpath("assets", name).read_text(encoding="utf-8")
+    text = _res_files("cvcpkg.server").joinpath("assets", name).read_text(encoding="utf-8")
+    url_line, repo_line = _INSTALLER_DEFAULT_LINES[name]
+    for line, official, value, pattern in (
+        (url_line, _OFFICIAL_SITE_URL, _SITE_URL, _INSTALLER_URL_RE),
+        (repo_line, _OFFICIAL_GITHUB_REPO, _GITHUB_REPO, _INSTALLER_REPO_RE),
+    ):
+        if not pattern.match(value):
+            _log.warning("%s: not baking in unsafe value %r; keeping %r", name, value, official)
+            continue
+        text = text.replace(line.format(official), line.format(value), 1)
+    return text
 
 
 def brand_logo_bytes() -> bytes:
