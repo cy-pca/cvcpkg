@@ -1,0 +1,58 @@
+schema_version: 1
+recipe:
+  name: gcc-runtime
+  upstream_version: "11.4.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gcc.gnu.org/
+  license: "GPL-3.0-or-later WITH GCC-exception-3.1 AND LGPL-2.1-or-later"
+  tags: [runtime, fortran]
+  description: >-
+    GCC 11.4.0's shared runtime libraries for linux: libgfortran.so.5,
+    libquadmath.so.0 and libgomp.so.1.  The fleet compiles with the host's GCC
+    11.4, but a library built that way (openblas's Fortran LAPACK, boost's
+    charconv with __float128, anything with -fopenmp) then NEEDs these, and
+    minimal hosts and containers have none of them -- so cvcpkg used to build
+    without the features instead.  Depend on this at run time; the libraries
+    land in <prefix>/lib, where $ORIGIN-relative run paths find them.
+
+    Copied out of the gfortran package's build (a build dependency), not
+    rebuilt: one GCC build serves both, and the two can never drift apart.
+    libgfortran and libgomp are GPL-3.0+ with the GCC Runtime Library
+    Exception, libquadmath is LGPL-2.1+; the texts are in
+    share/licenses/gcc-runtime/.
+
+# The GCC release itself, for the license texts; the libraries come from the
+# gfortran build dependency (see build.sh).
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/gcc/gcc-11.4.0/gcc-11.4.0.tar.xz
+  sha256: "3f2db222b007e8a4a23cd5ba56726ef08e8b1f1eb2055ee72c1402cea73a8dd9"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: gfortran
+      version: "^11.4"
+      platforms: [linux]
+    - name: patchelf
+      platforms: [linux]
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/libgfortran*
+    - lib/libquadmath*
+    - lib/libgomp*
+    - share/licenses/gcc-runtime/

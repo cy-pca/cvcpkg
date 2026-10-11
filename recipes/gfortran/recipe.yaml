@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: gfortran
+  upstream_version: "11.4.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gcc.gnu.org/fortran/
+  license: "GPL-3.0-or-later WITH GCC-exception-3.1"
+  tags: [tools, toolchain, fortran]
+  description: >-
+    GNU Fortran 11.4.0 for linux, built from the GCC 11.4.0 release.  The
+    linux counterpart of mingw-w64-gcc: packages that compile Fortran (openblas's
+    LAPACK) declare it in depends.build, which puts its bin/ on the build PATH,
+    instead of taking whatever gfortran the builder happens to have.
+
+    Only gfortran is on PATH (bin/gcc, cpp, gcov, ... are removed), so it never
+    replaces the C compiler a build already uses.  11.4.0 is the GCC the linux
+    fleet compiles everything else with, so objects from both mix and the
+    runtime libraries are ABI-identical; consumers get those libraries at run
+    time from the gcc-runtime package, which is copied out of this build.
+    GMP, MPFR and MPC are built in-tree (static), at the versions and sha512s
+    the GCC tarball itself pins, so the compiler needs nothing at run time but
+    glibc and binutils.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/gcc/gcc-11.4.0/gcc-11.4.0.tar.xz
+  sha256: "3f2db222b007e8a4a23cd5ba56726ef08e8b1f1eb2055ee72c1402cea73a8dd9"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # $ORIGIN run paths on the runtime libraries in lib64/ (build.sh).
+  build:
+    - name: patchelf
+      platforms: [linux]
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - bin/gfortran
+    - lib/gcc/
+    - libexec/gcc/
+    - lib64/libgfortran*
+    - lib64/libquadmath*
+    - lib64/libgomp*
+    - share/licenses/gfortran/
