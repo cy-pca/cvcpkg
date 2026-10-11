@@ -1584,26 +1584,119 @@ def _scrub_elf_rpaths(
             print(f"cvcpkg: WARNING: could not rewrite {rel} RPATH {old_s} -> {new_s}")
 
 
+def _dep_manifest(prefixes: Sequence[Path], name: str) -> dict[str, Any] | None:
+    """The manifest dependency *name* installed into one of *prefixes*.
+
+    Looked up at ``share/libcvc-deps/<name>/manifest.yaml``, then among the
+    other installed manifests for one whose bundle provides *name*.  ``None``
+    when there is none -- the flat ``share/libcvc-deps/manifest.yaml`` of
+    older bundles is clobbered by whichever extracted last, so it names
+    nothing reliably.
+    """
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+    def load(path: Path) -> dict[str, Any] | None:
+        try:
+            with open(path) as f:
+                data = yaml.load(f, Loader=loader)
+        except (OSError, yaml.YAMLError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    for prefix in prefixes:
+        data = load(prefix / "share" / "libcvc-deps" / name / "manifest.yaml")
+        if data is not None:
+            return data
+    for prefix in prefixes:
+        for path in sorted((prefix / "share" / "libcvc-deps").glob("*/manifest.yaml")):
+            data = load(path)
+            if data is None:
+                continue
+            provides = data.get("provides") or (data.get("contents") or {}).get("provides") or []
+            if name in provides:
+                return data
+    return None
+
+
+def _required_names(entries: Iterable[Any]) -> list[str]:
+    """Package names in a ``dependencies.required`` list: ``{name: ...}``
+    entries, or the ``[org/]name`` strings of older manifests."""
+    names: list[str] = []
+    for d in entries:
+        name = d.get("name") if isinstance(d, dict) else str(d).rsplit("/", 1)[-1]
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _runtime_dep_libraries(
+    dep_prefixes: Sequence[Path | None], required: Sequence[str] | None
+) -> dict[str, set[str]]:
+    """The shared libraries a bundle's runtime dependencies install, by name.
+
+    What the reach pass (:func:`_complete_elf_rpaths`) and the pack-time gate
+    (:func:`check_relocatable`) count as shipped beside the bundle.  A builder
+    job, like ``pack --prefix``, installs a recipe's build AND runtime
+    dependencies into one deps prefix, but only the runtime closure is
+    installed next to the bundle: indexing the whole prefix gave gcc-runtime's
+    libgfortran a ``$ORIGIN/../lib64`` entry, because its gfortran build
+    dependency keeps libgcc_s.so.1 there -- a directory no consumer has, for a
+    library the host provides.
+
+    The closure starts at *required* (the names in the bundle's
+    ``dependencies.required``) and follows each dependency's installed
+    manifest: its ``dependencies.required``, and its ``contents.files`` for
+    what it installed.  When the closure cannot be told apart -- *required* is
+    ``None``, or a dependency in it has no manifest in *dep_prefixes* (a bundle
+    from before per-bundle manifests, or one ``build-all`` merged in without
+    one) -- every library in *dep_prefixes* counts, as it did before.
+    """
+    prefixes = [Path(p) for p in dep_prefixes if p]
+    if not prefixes:
+        return {}
+    if required is None:
+        return _linkage.library_index(prefixes)
+    files: list[str] = []
+    seen: set[str] = set()
+    queue = list(required)
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        manifest = _dep_manifest(prefixes, name)
+        if manifest is None:
+            print(
+                f"cvcpkg: runtime dependency {name} has no installed manifest; every "
+                "library in the deps prefix counts as shipped"
+            )
+            return _linkage.library_index(prefixes)
+        files.extend(str(f) for f in (manifest.get("contents") or {}).get("files") or [])
+        queue.extend(_required_names((manifest.get("dependencies") or {}).get("required") or []))
+    return _linkage.index_files(files)
+
+
 def _complete_elf_rpaths(
     install_dir: Path,
-    dep_prefixes: Sequence[Path | None],
+    dep_libs: Mapping[str, Iterable[str]],
     patchelf: str | None,
 ) -> None:
     """Give every ELF object the ``$ORIGIN`` entries its shipped libraries need.
 
-    A NEEDED library that this bundle, or a runtime dependency in
-    *dep_prefixes*, ships is only loaded from the installed prefix if the
-    object's RUNPATH reaches the directory it lands in; otherwise the loader
-    takes whatever copy the host has (openssl +cvc.6's bin/openssl, built with
-    no RPATH, loaded the distro's libssl.so.3) or fails.  For each such library
-    this appends ``$ORIGIN/<path from the object to it>`` -- ``$ORIGIN/../lib``
-    from bin/, ``$ORIGIN/..`` from lib/engines-3/.
+    A NEEDED library that this bundle, or one of its runtime dependencies
+    (*dep_libs*, see :func:`_runtime_dep_libraries`), ships is only loaded
+    from the installed prefix if the object's RUNPATH reaches the directory it
+    lands in; otherwise the loader takes whatever copy the host has (openssl
+    +cvc.6's bin/openssl, built with no RPATH, loaded the distro's
+    libssl.so.3) or fails.  For each such library this appends
+    ``$ORIGIN/<path from the object to it>`` -- ``$ORIGIN/../lib`` from bin/,
+    ``$ORIGIN/..`` from lib/engines-3/.
 
     Appending grows the RPATH string, so this needs *patchelf* and runs only
     where ``cvcpkg.linkage.REACH_PLATFORMS`` says growing is safe (linux).  The
     pack-time gate reports whatever is still unreachable.
     """
-    index = _linkage.library_index([install_dir, *(p for p in dep_prefixes if p)])
+    index = _linkage.library_index([install_dir], dep_libs)
     for obj, link in _linkage.iter_objects(install_dir):
         if link.format != "elf":
             continue
@@ -1798,7 +1891,9 @@ def _make_relocatable(ctx: BuildContext) -> None:
             skip=lambda p: lib_pass and ".so" in p.name and lib_dir in p.parents,
         )
         if ctx.platform in _linkage.REACH_PLATFORMS:
-            _complete_elf_rpaths(ctx.install_dir, (ctx.prefix,), patchelf)
+            required = _required_names(runtime_dependencies(ctx.recipe, ctx.platform))
+            dep_libs = _runtime_dep_libraries((ctx.prefix,), required)
+            _complete_elf_rpaths(ctx.install_dir, dep_libs, patchelf)
 
 
 def run_build(
@@ -2527,8 +2622,9 @@ def stage_bundle(
     Raises :class:`PackError` when a staged ELF/Mach-O object still loads
     from, or searches, a path into the build machine — see
     :func:`check_relocatable`.  *linkage_allow* is the recipe's
-    ``package.linkage_allow``; *dep_prefixes* hold the runtime dependencies the
-    bundle is installed next to (their libraries must be reachable too).
+    ``package.linkage_allow``; *dep_prefixes* hold the dependencies the bundle
+    was built against, and the libraries of those the manifest's
+    ``dependencies.required`` installs beside it must be reachable too.
     """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
@@ -2536,12 +2632,16 @@ def stage_bundle(
 
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
+    runtime_deps: list[str] | None = None
+    if "dependencies" in manifest:
+        runtime_deps = _required_names((manifest["dependencies"] or {}).get("required") or [])
     check_relocatable(
         staging_dir,
         manifest["bundle"],
         temp_prefixes=(*temp_prefixes, install_dir),
         allow=linkage_allow,
         dep_prefixes=dep_prefixes,
+        runtime_deps=runtime_deps,
     )
 
     # Write the manifest under a subdirectory named for the bundle itself.
@@ -2571,6 +2671,7 @@ def check_relocatable(
     temp_prefixes: Sequence[Path | str] = (),
     allow: Sequence[str] = (),
     dep_prefixes: Sequence[Path | None] = (),
+    runtime_deps: Sequence[str] | None = None,
 ) -> None:
     """Fail packing when a binary in *root* points into the build machine.
 
@@ -2582,16 +2683,21 @@ def check_relocatable(
     LC_ID_DYLIB is read (:func:`cvcpkg.linkage.audit_tree`); a path into
     *temp_prefixes*, a cvcpkg build directory, /tmp or a CI workspace fails
     the pack, as does — on macOS — any absolute path outside the OS
-    (Homebrew, MacPorts).  On linux, a NEEDED library the bundle or a runtime
-    dependency in *dep_prefixes* ships must also be reachable through the
-    object's own ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.
-    Runs on the staged tree, after the relocation pass
-    (:func:`_make_relocatable`) has rewritten everything it can.
+    (Homebrew, MacPorts).  On linux, a NEEDED library the bundle or one of its
+    runtime dependencies ships must also be reachable through the object's own
+    ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.  Those
+    dependencies are *runtime_deps* and everything they require, as installed
+    in *dep_prefixes* (:func:`_runtime_dep_libraries`); ``None`` counts every
+    library in *dep_prefixes*.  Runs on the staged tree, after the relocation
+    pass (:func:`_make_relocatable`) has rewritten everything it can.
     """
     platform = str(bundle.get("platform", ""))
-    result = _linkage.audit_tree(
-        root, platform, temp_prefixes, allow, lib_roots=[p for p in dep_prefixes if p]
+    dep_libs = (
+        _runtime_dep_libraries(dep_prefixes, runtime_deps)
+        if platform in _linkage.REACH_PLATFORMS
+        else None
     )
+    result = _linkage.audit_tree(root, platform, temp_prefixes, allow, dep_libs=dep_libs)
     if result.ok:
         if result.objects:
             print(f"cvcpkg: relocatable OK — {result.objects} binary object(s) checked")

@@ -36,7 +36,7 @@ import posixpath
 import re
 import struct
 import tempfile
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
@@ -463,7 +463,9 @@ def builder_path_reason(
 REACH_PLATFORMS = frozenset({"linux"})
 
 
-def library_index(roots: Sequence[Path | str]) -> dict[str, set[str]]:
+def library_index(
+    roots: Sequence[Path | str], extra: Mapping[str, Iterable[str]] | None = None
+) -> dict[str, set[str]]:
     """Directory of every shared-library file under *roots*, by file name.
 
     Directories are relative to the root they were found in, POSIX-style
@@ -471,8 +473,9 @@ def library_index(roots: Sequence[Path | str]) -> dict[str, set[str]]:
     unpacked into one prefix, so the same relative directory names the same
     place once installed -- which is what lets the bundle and its deps prefix
     be indexed together.  Symlinks count: a NEEDED name is usually one.
+    *extra* merges in libraries indexed some other way (:func:`index_files`).
     """
-    index: dict[str, set[str]] = {}
+    index: dict[str, set[str]] = {name: set(dirs) for name, dirs in (extra or {}).items()}
     for root in roots:
         root = Path(root)
         if not root.is_dir():
@@ -485,6 +488,17 @@ def library_index(roots: Sequence[Path | str]) -> dict[str, set[str]]:
                 if rel is None:
                     rel = Path(os.path.relpath(dirpath, root)).as_posix()
                 index.setdefault(name, set()).add(rel)
+    return index
+
+
+def index_files(paths: Iterable[str]) -> dict[str, set[str]]:
+    """:func:`library_index` of prefix-relative POSIX file paths -- an installed
+    bundle's ``contents.files`` -- rather than of a directory walk."""
+    index: dict[str, set[str]] = {}
+    for p in paths:
+        rel, _, name = p.rpartition("/")
+        if ".so" in name:
+            index.setdefault(name, set()).add(rel or ".")
     return index
 
 
@@ -562,7 +576,7 @@ def audit_tree(
     platform: str,
     temp_prefixes: Sequence[Path | str] = (),
     allow: Sequence[str] = (),
-    lib_roots: Sequence[Path | str] = (),
+    dep_libs: Mapping[str, Iterable[str]] | None = None,
 ) -> AuditResult:
     """Every loader path under *root* that will not exist once it is installed.
 
@@ -575,10 +589,11 @@ def audit_tree(
     or inside the OS (``/usr/lib``, ``/System``) — a builder path, Homebrew or
     MacPorts is reported.
 
-    Linux (``REACH_PLATFORMS``): every NEEDED library that the bundle, or a
-    runtime dependency installed under *lib_roots*, ships must be reachable
-    through the object's own ``$ORIGIN`` RUNPATH -- otherwise the loader takes
-    the host's copy (see :func:`unreachable_libs`).
+    Linux (``REACH_PLATFORMS``): every NEEDED library that the bundle, or one
+    of its runtime dependencies (*dep_libs*, indexed like
+    :func:`library_index`), ships must be reachable through the object's own
+    ``$ORIGIN`` RUNPATH -- otherwise the loader takes the host's copy (see
+    :func:`unreachable_libs`).
 
     *allow* lists path prefixes a recipe vouches for (``package.linkage_allow``)
     — e.g. a vendor framework installed at a fixed location.  It never excuses a
@@ -590,7 +605,7 @@ def audit_tree(
         return result
     roots = _ephemeral_roots()
     allowed = tuple(a for a in allow if a)
-    index = library_index([root, *lib_roots]) if platform in REACH_PLATFORMS else None
+    index = library_index([root], dep_libs) if platform in REACH_PLATFORMS else None
 
     def check(rel: str, fld: str, value: str, macho: bool) -> None:
         if not value or is_relative_entry(value):

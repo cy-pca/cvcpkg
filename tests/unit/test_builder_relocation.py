@@ -15,16 +15,18 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+import yaml
 
 from cvcpkg import builder
 from cvcpkg.builder import (
     PackError,
     _complete_elf_rpaths,
+    _runtime_dep_libraries,
     _scrub_elf_rpaths,
     check_relocatable,
     stage_bundle,
 )
-from cvcpkg.linkage import read_linkage
+from cvcpkg.linkage import library_index, read_linkage
 from tests.unit._binfixtures import elf, macho
 
 # Loader paths are POSIX strings on every host.
@@ -136,7 +138,7 @@ def _complete(root, deps=()):
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     with mock.patch("cvcpkg.builder.subprocess.run", side_effect=fake_run):
-        _complete_elf_rpaths(root, deps, "/x/patchelf")
+        _complete_elf_rpaths(root, library_index(deps), "/x/patchelf")
     return {c[-1].replace("\\", "/").split("/install/", 1)[-1]: c[1:-1] for c in calls}
 
 
@@ -173,12 +175,115 @@ def test_complete_needs_patchelf(tmp_path, capsys):
     elf(tmp_path / "install" / "bin" / "openssl", needed=["libssl.so.3"])
     elf(tmp_path / "install" / "lib" / "libssl.so.3", kind="dyn")
     with mock.patch("cvcpkg.builder.subprocess.run") as run:
-        _complete_elf_rpaths(tmp_path / "install", (), None)
+        _complete_elf_rpaths(tmp_path / "install", {}, None)
     run.assert_not_called()
     assert "could not add $ORIGIN/../lib to bin/openssl" in capsys.readouterr().out
 
 
-def _ctx(tmp_path, platform, link):
+# ── which dependencies count: the runtime closure ──────────────
+
+
+def _installed(prefix, name, files, required=(), provides=()):
+    """Install dependency *name* into *prefix* as a builder job does: its files,
+    then its manifest at share/libcvc-deps/<name>/manifest.yaml."""
+    for f in files:
+        elf(prefix / f, kind="dyn" if ".so" in f else "exec")
+    manifest = {
+        "schema_version": 3,
+        "bundle": {"name": name},
+        "contents": {"files": list(files)},
+        "dependencies": {"required": [{"name": r, "version": "^1"} for r in required]},
+    }
+    if provides:
+        manifest["provides"] = list(provides)
+    meta = prefix / "share" / "libcvc-deps" / name
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / "manifest.yaml").write_text(yaml.safe_dump(manifest))
+
+
+def _job_prefix(deps):
+    """A job prefix for openblas-on-linux: build deps and the runtime closure, mixed."""
+    # Build-only: the gfortran toolchain keeps its own runtime in lib64/.
+    _installed(deps, "gfortran", ["bin/gfortran", "lib64/libgcc_s.so.1", "lib64/libgfortran.so.5"])
+    _installed(deps, "patchelf", ["bin/patchelf"])
+    # Runtime: gcc-runtime, and curl -> openssl to have a transitive edge.
+    _installed(deps, "gcc-runtime", ["lib/libgfortran.so.5", "lib/libquadmath.so.0"])
+    _installed(deps, "curl", ["lib/libcurl.so.4"], required=["openssl"])
+    _installed(deps, "openssl", ["lib/libssl.so.3", "lib/engines-3/padlock.so"])
+
+
+def test_runtime_dep_libraries_walks_the_runtime_closure(tmp_path):
+    deps = tmp_path / "deps"
+    _job_prefix(deps)
+    assert _runtime_dep_libraries((deps,), ["gcc-runtime", "curl"]) == {
+        "libgfortran.so.5": {"lib"},
+        "libquadmath.so.0": {"lib"},
+        "libcurl.so.4": {"lib"},
+        "libssl.so.3": {"lib"},  # through curl's own manifest
+        "padlock.so": {"lib/engines-3"},
+    }  # never gfortran's lib64/: a build dependency is not installed beside the bundle
+    assert _runtime_dep_libraries((deps,), []) == {}
+    assert _runtime_dep_libraries((None,), ["curl"]) == {}
+    # dependencies.required entries, current and legacy ("[org/]name") shapes.
+    assert builder._required_names([{"name": "zlib"}, "acme/curl", {"version": "^1"}]) == [
+        "zlib",
+        "curl",
+    ]
+
+
+def test_runtime_dep_libraries_falls_back_to_the_whole_prefix(tmp_path, capsys):
+    deps = tmp_path / "deps"
+    _job_prefix(deps)
+    everything = library_index([deps])
+    assert everything["libgcc_s.so.1"] == {"lib64"}
+    # Caller does not know the closure.
+    assert _runtime_dep_libraries((deps,), None) == everything
+    # A dependency with no manifest here (an old flat-manifest bundle): the
+    # closure cannot be told apart, so count everything, as before.
+    elf(deps / "lib" / "libz.so.1", kind="dyn")
+    assert _runtime_dep_libraries((deps,), ["curl", "zlib"]) == library_index([deps])
+    assert "runtime dependency zlib has no installed manifest" in capsys.readouterr().out
+
+
+def test_runtime_dep_libraries_resolves_a_provided_name(tmp_path):
+    deps = tmp_path / "deps"
+    _installed(deps, "openblas", ["lib/libopenblas.so.0"], provides=["blas"])
+    assert _runtime_dep_libraries((deps,), ["blas"]) == {"libopenblas.so.0": {"lib"}}
+
+
+def test_make_relocatable_reaches_runtime_deps_only(tmp_path):
+    # gcc-runtime +cvc.1: libgfortran got $ORIGIN/../lib64 because its gfortran
+    # build dependency, in the same job prefix, keeps libgcc_s.so.1 there.
+    ctx = _ctx(
+        tmp_path,
+        "linux",
+        "shared",
+        {"build": ["gfortran", "patchelf"], "runtime": [{"name": "curl", "version": "^8"}]},
+    )
+    _job_prefix(ctx.prefix)
+    lib = ctx.install_dir / "lib"
+    elf(lib / "libgfortran.so.5.0.0", kind="dyn", needed=["libgcc_s.so.1"], runpath="$ORIGIN")
+    elf(ctx.install_dir / "bin" / "tool", needed=["libcurl.so.4", "libgcc_s.so.1"])
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with (
+        mock.patch.object(builder, "_find_patchelf", return_value="/x/patchelf"),
+        mock.patch.object(builder, "_patch_elf_rpath"),
+        mock.patch.object(builder, "_scrub_elf_rpaths"),
+        mock.patch("cvcpkg.builder.subprocess.run", side_effect=fake_run),
+    ):
+        builder._make_relocatable(ctx)
+    # Only curl's libcurl needs reaching; libgcc_s.so.1 is the host's.
+    assert calls == [
+        ["/x/patchelf", "--set-rpath", "$ORIGIN/../lib", str(ctx.install_dir / "bin" / "tool")]
+    ]
+
+
+def _ctx(tmp_path, platform, link, depends=None):
     inst = tmp_path / "install"
     return SimpleNamespace(
         platform=platform,
@@ -186,6 +291,7 @@ def _ctx(tmp_path, platform, link):
         install_dir=inst,
         prefix=tmp_path / "deps",
         build_prefix=tmp_path / "build-prefix",
+        recipe=SimpleNamespace(raw={"depends": depends or {}}),
     )
 
 
@@ -210,17 +316,20 @@ def test_make_relocatable_scrubs_executables_for_every_link(tmp_path, link):
 
 @pytest.mark.parametrize("platform,runs", [("linux", True), ("freebsd", False), ("netbsd", False)])
 def test_make_relocatable_completes_rpaths_on_linux_only(tmp_path, platform, runs):
-    ctx = _ctx(tmp_path, platform, "shared")
+    ctx = _ctx(tmp_path, platform, "shared", {"build": ["cmake"], "runtime": ["zlib"]})
+    dep_libs = {"libz.so.1": {"lib"}}
     with (
         mock.patch.object(builder, "_find_patchelf", return_value="/x/patchelf"),
         mock.patch.object(builder, "_patch_elf_rpath"),
         mock.patch.object(builder, "_scrub_elf_rpaths"),
+        mock.patch.object(builder, "_runtime_dep_libraries", return_value=dep_libs) as libs,
         mock.patch.object(builder, "_complete_elf_rpaths") as complete,
     ):
         builder._make_relocatable(ctx)
     assert complete.called == runs
     if runs:
-        complete.assert_called_once_with(ctx.install_dir, (ctx.prefix,), "/x/patchelf")
+        libs.assert_called_once_with((ctx.prefix,), ["zlib"])  # runtime deps only
+        complete.assert_called_once_with(ctx.install_dir, dep_libs, "/x/patchelf")
 
 
 def test_make_relocatable_macos_passes_deps_prefix(tmp_path):
@@ -275,6 +384,24 @@ def test_stage_bundle_refuses_unreachable_shipped_library(tmp_path):
     with pytest.raises(PackError, match="bin/cmake: NEEDED libcurl.so.4.8.0"):
         stage_bundle(inst, {"bundle": _bundle("linux")}, tmp_path / "s1", dep_prefixes=(deps,))
     stage_bundle(inst, {"bundle": _bundle("linux")}, tmp_path / "s2")  # deps unknown: host's
+
+
+def test_stage_bundle_demands_only_runtime_closure_libraries(tmp_path):
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    _job_prefix(deps)
+    elf(inst / "bin" / "tool", needed=["libgcc_s.so.1"])  # no RUNPATH
+    bundle = _bundle("linux")
+    # gfortran is only a build dependency: its libgcc_s.so.1 is not installed
+    # beside the bundle, so the host's copy is the right one.
+    manifest = {"bundle": bundle, "dependencies": {"required": [{"name": "gcc-runtime"}]}}
+    stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+    # Without the manifest's dependency list every library in the prefix counts.
+    with pytest.raises(PackError, match="NEEDED libgcc_s.so.1 .shipped in lib64/"):
+        stage_bundle(inst, {"bundle": bundle}, tmp_path / "s2", dep_prefixes=(deps,))
+    # A runtime dependency's library must be reachable.
+    elf(inst / "bin" / "tool", needed=["libquadmath.so.0"])
+    with pytest.raises(PackError, match="bin/tool: NEEDED libquadmath.so.0"):
+        stage_bundle(inst, manifest, tmp_path / "s3", dep_prefixes=(deps,))
 
 
 def test_stage_bundle_linkage_allow(tmp_path):
