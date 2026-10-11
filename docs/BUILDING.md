@@ -223,7 +223,6 @@ Which recipes require which non-standard tools beyond the baseline
 | NASM | `openssl` (Windows), `libjpeg-turbo` (Windows — SIMD) |
 | Autotools | `nfft3` |
 | nmake | `openssl` (Windows) |
-| vcpkg | `clapack` (Windows), `pthreads4w` (Windows) |
 | pkg-config | `nfft3`, various `find_package` module-mode lookups |
 | patchelf | Post-build RPATH fixup (Linux shared only) |
 | libomp | `fftw3` (macOS — OpenMP threading) |
