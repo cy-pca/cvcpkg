@@ -2303,6 +2303,13 @@ def builder_run(
     # _admit_job -- and must never start a second thread.  Guarded by
     # jobs_lock; added by _admit_job, removed in _run_job_guarded's finally.
     inflight_job_ids: set[int] = set()
+    # Server job ids whose claim landed here.  The server moves a running job
+    # only to a terminal state -- pause, resume and re-dispatch apply to jobs
+    # nobody has claimed -- so once our claim lands, any later hand-out of that
+    # id is stale: typically the socket's ``job.dispatch``, read only after
+    # the catch-up poll had already started the job and it had finished.  See
+    # _admit_job.  Guarded by jobs_lock; one int per job run, never pruned.
+    claimed_job_ids: set[int] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -2357,11 +2364,17 @@ def builder_run(
         37099829036, 37106564280).  The job id is what a repeated hand-out has
         in common with the first, so dedupe on it here.
 
+        A hand-out can also outlive the run: a ``job.dispatch`` frame queued on
+        the socket while the catch-up poll started the job is read after a
+        fast job has already finished.  A job whose claim landed here can
+        never be handed out again (see ``claimed_job_ids``), so that is
+        refused too, instead of claiming it a second time.
+
         Call under jobs_lock.
         """
         job_id = job.get("id")
         if job_id is not None:
-            if job_id in inflight_job_ids:
+            if job_id in inflight_job_ids or job_id in claimed_job_ids:
                 return None
             inflight_job_ids.add(job_id)
         return _claim_slot()
@@ -3145,6 +3158,8 @@ def builder_run(
         # 1. Claim the job.
         if not _claim_job(job_id):
             return
+        with jobs_lock:
+            claimed_job_ids.add(job_id)
 
         error_message = ""
         archive_path: Path | None = None
@@ -3601,9 +3616,12 @@ def builder_run(
                                 missed_push = True
                                 continue
                             slot_id = _admit_job(job)
+                            # Refused while not in flight: its claim landed and
+                            # the run is over (see claimed_job_ids).
+                            state = "running" if job.get("id") in inflight_job_ids else "finished"
                         if slot_id is None:
                             click.echo(
-                                f"  [{job.get('id')}] already running here, "
+                                f"  [{job.get('id')}] already {state} here, "
                                 "ignoring the repeated dispatch"
                             )
                             continue
