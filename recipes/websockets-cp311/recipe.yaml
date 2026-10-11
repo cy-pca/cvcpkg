@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: websockets-cp311
   upstream_version: "17.2"
-  cvc_revision: 1
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -57,7 +57,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/websockets/
-    - lib/python3.11/site-packages/*.dist-info/
-    - Lib/site-packages/websockets/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/websockets/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/websockets/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
