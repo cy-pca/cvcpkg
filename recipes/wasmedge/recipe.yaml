@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: wasmedge
   upstream_version: "0.17.0"
-  cvc_revision: 6
+  # Bumped 6 -> 7: Windows builds against the cvcpkg llvm18 (a windows build
+  # dependency) instead of a Chocolatey LLVM, and so get LLVM AOT for the first
+  # time -- the Chocolatey install has no LLVM CMake configs, so build.ps1 had
+  # always fallen back to WASMEDGE_USE_LLVM=OFF.  The shared Windows build now
+  # links one monolithic wasmedge.dll (BUILD_SHARED_LIBS=OFF) instead of the
+  # per-component DLLs that failed with LNK2019.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -23,7 +29,19 @@ depends:
   build:
     - cmake
     - ninja
-  runtime: []
+    # LLVM + LLD for WasmEdge's AOT compiler (-DWASMEDGE_USE_LLVM=ON).  The
+    # llvm18 bundle is LLVM's static .lib component libraries, linked into
+    # wasmedge.dll, so it is not needed at run time.  linux/macos still use a
+    # host LLVM (see toolchain.llvm below).
+    - name: llvm18
+      version: "^18.1"
+      platforms: [windows]
+  runtime:
+    # LLVMSupport links zlib (llvm18 is built with LLVM_ENABLE_ZLIB=FORCE_ON),
+    # so the wasmedge.dll that links LLVM in imports zlib1.dll.
+    - name: zlib
+      version: "^1.3"
+      platforms: [windows]
   host_tools: []
 
 toolchain:
@@ -35,17 +53,20 @@ toolchain:
       LLVM (with LLD) is required for ahead-of-time (AOT) compilation
       support (-DWASMEDGE_USE_LLVM=ON).  Without it WasmEdge still
       builds but can only interpret or JIT-compile Wasm modules.
-      The build scripts auto-detect LLVM on each platform:
+      Where the build scripts find LLVM on each platform:
         Linux  — /usr/lib/llvm-{ver} (apt versioned installs)
         macOS  — $(brew --prefix llvm@{ver}) (Homebrew keg)
-        Windows — C:\Program Files\LLVM (Chocolatey install)
-      Versions 14-21 are scanned in priority order (18 preferred).
-      If no versioned install is found, llvm-config on PATH is used
-      as a final fallback.
+        Windows — the cvcpkg llvm18 recipe, a windows build dependency,
+                  found in the dependency prefix (lib/cmake/llvm and
+                  lib/cmake/lld); nothing on the host is used.  Shared
+                  builds only; static Windows builds are built without
+                  LLVM (see notes).
+      On Linux/macOS versions 14-21 are scanned in priority order (18
+      preferred).  If no versioned install is found, llvm-config on PATH
+      is used as a final fallback.
     install:
       apt: "llvm-18-dev lld-18 liblld-18-dev"
       brew: "llvm@18"
-      choco: "llvm"
   gcc:
     min_version: "11"
   clang:
@@ -68,7 +89,10 @@ package:
   files:
     - lib/libwasmedge*
     - lib/wasmedge*
-    - lib/cmake/wasmedge/
+    # WasmEdge installs no CMake package config (lib/cmake/wasmedge/ was
+    # declared but never produced).  The Windows shared build's bin/wasmedge.dll
+    # is not declared here because a static Windows build has none (package.files
+    # cannot scope by link); build.ps1 asserts it instead.
     - include/wasmedge/
   cmake_packages:
     - { name: wasmedge, targets: ["wasmedge::wasmedge"] }
@@ -104,9 +128,23 @@ notes:
     platforms: [windows]
     description: >
       In 0.17.0 the per-target component DLLs (wasmedgeLoaderFileMgr,
-      etc.) reference internal helpers (WasmEdge::MMap,
-      WasmEdge::Allocator) that are only defined in system-specific
-      translation units and never marked dllexport, producing LNK2019
-      at link time.  The Windows build matrix entry therefore pins
-      `link: static` and ships the static archive only — downstream
-      consumers should use `link: static` for wasmedge on Windows.
+      etc.) that BUILD_SHARED_LIBS=ON produces reference internal helpers
+      (WasmEdge::MMap, WasmEdge::Allocator) that are only defined in
+      system-specific translation units and never marked dllexport,
+      producing LNK2019 at link time.  The shared Windows build therefore
+      passes -DBUILD_SHARED_LIBS=OFF: the components are static
+      libraries, linked into one wasmedge.dll (upstream's own Windows
+      configuration).
+  - title: "Windows: LLVM AOT from the cvcpkg llvm18"
+    platforms: [windows]
+    description: >
+      The shared Windows build enables AOT against the cvcpkg llvm18
+      (18.1.8) and smoke-tests it: wasmedgec compiles a small module to a
+      native .dll, which wasmedge then runs in AOT mode.  Static Windows
+      builds are built without LLVM (interpreter only): WasmEdge's
+      static-archive bundling of LLVM (cmake/Helper.cmake) hardcodes Unix
+      archive names, and a static cvcpkg build uses the static CRT (/MT)
+      while llvm18 is built against the DLL CRT (/MD).  llvm18's exported
+      LLVMDebugInfoPDB target names the DIA SDK's diaguids.lib by the
+      absolute Visual Studio 2022 Enterprise path of the runner that built
+      it, so the build needs that same path -- windows-2022 runners have it.
