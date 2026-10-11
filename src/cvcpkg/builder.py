@@ -4252,6 +4252,38 @@ def _server_cache_download(
     return dest
 
 
+def _accept_server_hit(
+    cache: Any,
+    archive: Path,
+    name: str,
+    version: str,
+    chain_hash_val: str,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> bool:
+    """Store a server-cache download in the local *cache*; ``False`` if unusable.
+
+    A download only counts as a hit once it restores.  The server holds
+    whatever was published under that chain hash -- a packed bundle from
+    ``pack-all``, a Windows ``.zip`` -- and one this host cannot extract must
+    fall back to building the recipe, not abort the run.  Deletes *archive*
+    when it is rejected.
+    """
+    srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
+    try:
+        cache.restore(archive, srv_restore)
+        cache.store(srv_restore, name, version, chain_hash_val, platform, arch, config, link)
+    except Exception as exc:  # noqa: BLE001 -- any failure here means "build it"
+        print(f"  server cache archive unusable ({exc}); building instead")
+        archive.unlink(missing_ok=True)
+        return False
+    finally:
+        shutil.rmtree(srv_restore, ignore_errors=True)
+    return True
+
+
 def _server_cache_push(
     base_url: str,
     token: str,
@@ -4264,14 +4296,16 @@ def _server_cache_push(
     recipe_version: str,
     org: str,
 ) -> bool:
-    """Publish an archive to the server cache via ``POST /v1/publish``.
+    """Publish a build cache archive to the server cache via ``POST /v1/publish``.
 
+    Only ``build-all`` pushes this way: it packs nothing, so the raw install
+    tree is all it has.  ``pack-all`` publishes the bundle it packs instead.
     The server cache IS the catalog: this creates the same row ``cvcpkg
-    publish`` would, and a later ``cvcpkg publish`` of the packed bundle
-    skips it as already published.  So it must send the same catalog
-    metadata -- above all ``required_deps``, which the resolver walks on
-    install.  The cached archive has no manifest to read them from, so they
-    come from the recipe, via the helper :func:`generate_manifest` uses.
+    publish`` would, and a later ``cvcpkg publish`` of that variant skips it
+    as already published.  So it must send the same catalog metadata --
+    above all ``required_deps``, which the resolver walks on install.  The
+    cached archive has no manifest to read them from, so they come from the
+    recipe, via the helper :func:`generate_manifest` uses.
 
     Returns ``True`` on success, ``False`` on failure.
     """
@@ -4603,7 +4637,17 @@ def build_all(
                             tmp_archive,
                             expected_sha256=probe.get("sha256", ""),
                         )
-                        if result is not None:
+                        if result is not None and _accept_server_hit(
+                            cache,
+                            result,
+                            ht_recipe.name,
+                            ht_recipe.full_version,
+                            ht_chain_hash,
+                            ht_platform,
+                            ht_arch,
+                            config,
+                            link,
+                        ):
                             ht_cached = result
                             ht_server_hit = True
 
@@ -4616,23 +4660,6 @@ def build_all(
                 cache.restore(ht_cached, _bp)
                 _rewrite_pc_prefixes(_bp)
                 _rewrite_script_prefixes(_bp)
-                # Populate local cache from server download.
-                if ht_server_hit and cache is not None:
-                    srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
-                    try:
-                        cache.restore(ht_cached, srv_restore)
-                        cache.store(
-                            srv_restore,
-                            ht_recipe.name,
-                            ht_recipe.full_version,
-                            ht_chain_hash,
-                            ht_platform,
-                            ht_arch,
-                            config,
-                            link,
-                        )
-                    finally:
-                        shutil.rmtree(srv_restore, ignore_errors=True)
                 if ht_server_hit and ht_cached.is_file():
                     ht_cached.unlink(missing_ok=True)
             else:
@@ -4801,29 +4828,20 @@ def build_all(
                         tmp_archive,
                         expected_sha256=probe.get("sha256", ""),
                     )
-                    if result is not None:
+                    if result is not None and _accept_server_hit(
+                        cache,
+                        result,
+                        recipe.name,
+                        recipe.full_version,
+                        recipe_chain_hash,
+                        eff_platform,
+                        eff_arch,
+                        config,
+                        link,
+                    ):
                         cached_archive = result
                         server_hit = True
                         print(f"  <- server cache hit ({recipe_chain_hash[:12]}...)")
-                        # Populate local cache for future runs.
-                        if cache is not None:
-                            import shutil as _shutil_srv
-
-                            srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
-                            try:
-                                cache.restore(tmp_archive, srv_restore)
-                                cache.store(
-                                    srv_restore,
-                                    recipe.name,
-                                    recipe.full_version,
-                                    recipe_chain_hash,
-                                    eff_platform,
-                                    eff_arch,
-                                    config,
-                                    link,
-                                )
-                            finally:
-                                _shutil_srv.rmtree(srv_restore, ignore_errors=True)
 
         # Build-closure recipes stage into the build prefix; everything else
         # into the deliverable prefix.

@@ -270,7 +270,9 @@ jobs:
           # server storage, never the local pack output). Globbing *.tar.zst here
           # matched nothing, so this guard silently skipped publishing after a
           # successful pack (exit 0) — the reason python311/windows never landed.
-          ARCHIVES=($(ls "$DIST"/*.zip 2>/dev/null || true))
+          # A recipe served by its `any` entry packs an any-noarch .tar.gz even
+          # here, and `publish --all` picks those up too, so count them.
+          ARCHIVES=($(ls "$DIST"/*.zip "$DIST"/*.tar.gz 2>/dev/null || true))
           if [ ${#ARCHIVES[@]} -eq 0 ]; then
             echo "::warning::No archives found in dist/ — nothing to publish"
             exit 0
