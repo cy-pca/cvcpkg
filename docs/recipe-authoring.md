@@ -204,8 +204,12 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   `/usr/lib` and `/System` (Homebrew, MacPorts). On linux, a library the
   bundle or one of its runtime deps ships must also be reachable through the
   object's own `$ORIGIN` RUNPATH (the pass adds missing entries with patchelf);
-  otherwise the loader quietly takes the host's copy. The fix is almost always in
-  the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
+  otherwise the loader quietly takes the host's copy. Only the runtime closure
+  counts — `depends.runtime` and what those packages require in turn, read
+  from their installed manifests. Build dependencies share the job's prefix but
+  are not installed beside the bundle, so their libraries (the gfortran
+  toolchain's `lib64/libgcc_s.so.1`) are never reached for. The fix is almost
+  always in the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
   `depends.runtime`, and do not let an optional feature pick up whatever the
   build host has installed (see `recipes/boost/build.sh`). For a library at a
   fixed system location the bundle cannot carry, list its prefix under

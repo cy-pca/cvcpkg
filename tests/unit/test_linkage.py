@@ -10,6 +10,7 @@ import pytest
 from cvcpkg.linkage import (
     audit_tree,
     builder_path_reason,
+    index_files,
     library_index,
     origin_dirs,
     read_linkage,
@@ -275,6 +276,18 @@ def test_library_index_and_origin_dirs(tmp_path):
     assert origin_dirs("bin", ["$ORIGIN/../../outside"]) == set()
 
 
+def test_index_files_matches_a_walk(tmp_path):
+    # An installed manifest's contents.files indexes like the tree it lists.
+    _openssl_cvc6(tmp_path)
+    files = [p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()]
+    assert index_files([*files, "libtop.so.1", "share/doc/README"]) == {
+        **library_index([tmp_path]),
+        "libtop.so.1": {"."},
+    }
+    merged = library_index([tmp_path], {"libz.so.1": ["lib"], "libssl.so.3": {"lib64"}})
+    assert merged["libz.so.1"] == {"lib"} and merged["libssl.so.3"] == {"lib", "lib64"}
+
+
 def test_audit_linux_openssl_cvc6_reaches_the_hosts_libssl(tmp_path):
     _openssl_cvc6(tmp_path)
     found = {(f.path, f.value) for f in audit_tree(tmp_path, "linux").findings}
@@ -301,7 +314,7 @@ def test_audit_linux_reachable_and_dependency_libraries(tmp_path):
     elf(deps / "lib" / "libcurl.so.4.8.0", kind="dyn")
     elf(root / "bin" / "cmake", needed=["libcurl.so.4.8.0"])
     assert audit_tree(root, "linux").ok  # without the deps prefix: the host's problem
-    (f,) = audit_tree(root, "linux", lib_roots=[deps]).findings
+    (f,) = audit_tree(root, "linux", dep_libs=library_index([deps])).findings
     assert (f.path, f.field, f.value) == ("bin/cmake", "NEEDED", "libcurl.so.4.8.0")
 
 
