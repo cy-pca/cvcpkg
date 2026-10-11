@@ -103,6 +103,8 @@ foreach ($required in @($header, $implib)) {
 $vcpkgLeft = @(Get-ChildItem -LiteralPath $env:CVC_INSTALL_DIR -Recurse -Force |
     Where-Object { $_.Name -match '(?i)vcpkg' })
 if ($vcpkgLeft.Count -gt 0) { throw "gmp: vcpkg-named file in the install tree: $($vcpkgLeft[0].FullName)" }
+# One configuration per bundle: no vcpkg-style debug\ tree beside the release one.
+if (Test-Path -LiteralPath (Join-Path $env:CVC_INSTALL_DIR 'debug')) { throw "gmp: install tree has a debug\ subtree (vcpkg's layout)" }
 
 $dll = $null
 if ($env:CVC_LINK -ne 'static') {
