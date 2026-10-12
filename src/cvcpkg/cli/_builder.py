@@ -1994,7 +1994,13 @@ def builder_run(
 
     httpx = require_httpx("builder")
 
-    from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
+    from cvcpkg.builder import (
+        Recipe,
+        _rewrite_pc_prefixes,
+        _rewrite_script_prefixes,
+        build_recipe,
+        pack_recipe,
+    )
     from cvcpkg.platform import detect_arch, detect_platform
     from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env, split_names
 
@@ -2592,6 +2598,38 @@ def builder_run(
             order.append(name)
         return order
 
+    def _local_only_recipe(dep_name: str) -> Path | None:
+        """*dep_name*'s fetched recipe dir if it is ``redistributable: false``.
+
+        Such a dependency is never in the catalog -- its license forbids
+        publishing the built tree (the NVIDIA CUDA toolkit, NVIDIA's
+        proprietary wheels) -- so a job that needs it builds it into its own
+        deps prefix, as ``cvcpkg install`` does on a consumer's machine.
+        """
+        try:
+            rdir = _fetch_recipe(dep_name)
+            return None if Recipe.load(rdir).redistributable else rdir
+        except Exception:
+            return None
+
+    def _deps_first(local: dict[str, Path], job_platform: str) -> list[str]:
+        """Order the local-only deps so each follows the local-only deps it needs."""
+        order: list[str] = []
+        seen: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in seen:
+                return
+            seen.add(name)
+            for sub in _extract_dep_names(local[name], job_platform):
+                if sub in local:
+                    visit(sub)
+            order.append(name)
+
+        for name in local:
+            visit(name)
+        return order
+
     def _install_deps(
         recipe_dir: Path,
         prefix: Path,
@@ -2607,12 +2645,20 @@ def builder_run(
         the server catalog for each dep, downloads the matching
         archive, and extracts it into the shared prefix so that
         dependent builds can find headers/libraries.
+
+        A dep with no usable catalog variant whose recipe is
+        ``redistributable: false`` is built into the prefix from its recipe
+        instead, after every catalog dep is in place (a wheel needs its
+        interpreter) and dependencies first.  A failure there fails the job:
+        unlike a missing catalog dep, it is not something the build can
+        plausibly do without.
         """
         dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
         if not dep_names:
             return
 
         prefix.mkdir(parents=True, exist_ok=True)
+        local: dict[str, Path] = {}
         with httpx.Client(timeout=120) as client:
             for dep_name in dep_names:
                 # Find the package on the server
@@ -2621,6 +2667,10 @@ def builder_run(
                     headers=headers,
                 )
                 if resp.status_code >= 400:
+                    local_dir = _local_only_recipe(dep_name)
+                    if local_dir is not None:
+                        local[dep_name] = local_dir
+                        continue
                     log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
                     continue
 
@@ -2654,6 +2704,10 @@ def builder_run(
                             match = p
                             break
                 if match is None:
+                    local_dir = _local_only_recipe(dep_name)
+                    if local_dir is not None:
+                        local[dep_name] = local_dir
+                        continue
                     log_cb(
                         f"  dep {dep_name}: no matching variant for "
                         f"{job_platform}/{job_arch} (skipping)\n"
@@ -2726,6 +2780,31 @@ def builder_run(
         # reuse the same helpers so the builder agrees with local builds.
         # Rewriting once after the loop (not per dep) keeps this O(prefix), and
         # both helpers are idempotent.
+        _rewrite_pc_prefixes(prefix)
+        _rewrite_script_prefixes(prefix)
+
+        if not local:
+            return
+        for dep_name in _deps_first(local, job_platform):
+            log_cb(
+                f"  Building dep {dep_name} from its recipe (redistributable: false, "
+                f"so never in the catalog)\n"
+            )
+            try:
+                build_recipe(
+                    local[dep_name],
+                    platform=job_platform,
+                    config=job_config,
+                    link=job_link,
+                    prefix=prefix,
+                    work_dir_root=prefix.parent,
+                    log_callback=log_cb,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"dep {dep_name} (redistributable: false) failed to build locally: {exc}"
+                ) from exc
+        # The local builds merged trees installed under their own work dirs.
         _rewrite_pc_prefixes(prefix)
         _rewrite_script_prefixes(prefix)
 
