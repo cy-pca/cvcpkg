@@ -136,6 +136,8 @@ A column falls back to `python_wheel` only for a documented reason
 2. PyPI publishes no sdist for the pinned version;
 3. a required PEP-517 backend has no cvcpkg recipe yet;
 4. the operator asked for it (`--source-mode wheel` / `--pure-policy wheel`).
+5. the published sdist cannot build as shipped (`_UNBUILDABLE_SDIST`: ccxt's
+   `setup.py` reads a `README.md` its sdist does not include).
 
 ## The `python:` block
 

@@ -198,6 +198,16 @@ _PREBUILT_ONLY: list[tuple[str, str]] = [
     ),
 ]
 
+# Packages whose published sdist cannot build as shipped -- a packaging defect
+# upstream, not a missing backend.  They stay on their (pure) prebuilt wheel
+# until upstream fixes the sdist; the reason is printed and recorded in the
+# recipe like every other fallback.
+_UNBUILDABLE_SDIST: dict[str, str] = {
+    # setup.py opens README.md for long_description, but the sdist ships only
+    # README.rst, so every metadata build dies with FileNotFoundError.
+    "ccxt": "PyPI sdist cannot build: setup.py reads README.md, which the sdist does not ship",
+}
+
 
 def prebuilt_only_reason(base: str) -> str | None:
     """Why *base* must stay a prebuilt wheel, or None if it may be source-built."""
@@ -248,16 +258,21 @@ _LEGACY_BUILD_REQ = ["setuptools", "wheel"]
 # downloading the wheel. A miss here degrades to an undeclared same-version
 # bin/ overlap (last extract wins), which file_conflicts.py can audit offline.
 SCRIPT_PACKAGES = {
+    "aioimaplib": ["imap-testing-server"],
     "alembic": ["alembic"],
     "black": ["black", "blackd"],
     "charset-normalizer": ["normalizer"],
     "cython": ["cython", "cythonize", "cygdb"],
+    "email-validator": ["email_validator"],
+    "fabric": ["fab"],
+    "faker": ["faker"],
     "fastapi": ["fastapi"],
     "httpx": ["httpx"],
     "idna": ["idna"],
     "invoke": ["invoke", "inv"],
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
+    "pydle": ["pydle", "pydle-irccat"],
     "pygments": ["pygmentize"],
     "pytest": ["pytest", "py.test"],
     "scikit-build-core": ["scikit-build", "scikit-build-core"],
@@ -957,6 +972,474 @@ SEED_PACKAGES = {
         # markdown is markdown.markdown(), so exercise that.
         "check": "import markdown; assert markdown.markdown('*x*') == '<p><em>x</em></p>'",
     },
+    # ── txwtf / atxcf-catx runtime closure ──────────────────────────────────
+    # Everything the txwtf FastAPI server (plus its optional extras) and the
+    # atxcf-catx bots import, so both apps can take every runtime dependency
+    # from cvcpkg.  Versions are the apps' poetry.lock pins (the newer one where
+    # the two locks disagree) unless a note says why not; the apps re-lock to
+    # this set.  deps are the UNCONDITIONAL requires-dist (extras are not
+    # materialized), plus python_version-gated ones that apply to some column.
+    # The four hand-written native-library families these lean on (coincurve,
+    # pycares, maxminddb, zlib-ng) are HANDWRITTEN_DEP_BASES below.
+    #
+    # The aio-libs stack builds its C/Cython speedups (see _PREFER_BINARY): their
+    # in-tree PEP-517 backend (frozenlist, propcache, yarl) cythonizes at build
+    # time and asks for Cython only via get_requires_for_build_wheel, which
+    # --no-build-isolation never consults — hence the explicit build_deps.
+    "pdm-backend": {
+        # PEP-517 backend of asyncer and sqlmodel.  Self-hosting (empty
+        # [build-system] requires, backend-path = src), like poetry-core.  The
+        # wheel ships the pdm/backend/ subpackage of a `pdm` namespace.
+        "version": "2.5.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pdm/backend/", "*.dist-info/"],
+        "check": "import pdm.backend",
+    },
+    "expandvars": {
+        # Build-only: the aio-libs in-tree backend's [build-system] requirement.
+        "version": "1.1.2",
+        "license": "MIT",
+        "deps": [],
+        "files": ["expandvars.py", "*.dist-info/"],
+        "check": (
+            "from expandvars import expandvars; "
+            "assert expandvars('${CVCPKG_EXPANDVARS_PROBE_UNSET:-ok}') == 'ok'"
+        ),
+    },
+    "frozenlist": {
+        "version": "1.8.0",
+        "license": "Apache-2.0",
+        "deps": [],
+        "build_deps": ["cython"],
+        "files": ["frozenlist/", "*.dist-info/"],
+        "check": (
+            "import frozenlist; from frozenlist import _frozenlist; "
+            "assert frozenlist.FrozenList is _frozenlist.FrozenList, 'C extension not used'"
+        ),
+    },
+    "multidict": {
+        "version": "6.7.1",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["multidict/", "*.dist-info/"],
+        "check": (
+            "import multidict; from multidict import _multidict; "
+            "assert multidict.MultiDict is _multidict.MultiDict, 'C extension not used'"
+        ),
+    },
+    "propcache": {
+        "version": "0.5.2",
+        "license": "Apache-2.0",
+        "deps": [],
+        "build_deps": ["cython"],
+        "files": ["propcache/", "*.dist-info/"],
+        "check": (
+            "from propcache import _helpers, _helpers_c; "
+            "assert _helpers.cached_property is _helpers_c.cached_property, 'C extension not used'"
+        ),
+    },
+    "yarl": {
+        "version": "1.24.2",
+        "license": "Apache-2.0",
+        "deps": ["idna", "multidict", "propcache"],
+        "build_deps": ["cython"],
+        "files": ["yarl/", "*.dist-info/"],
+        "check": (
+            "import yarl; from yarl import _quoting, _quoting_c; "
+            "assert _quoting._Quoter is _quoting_c._Quoter, 'C extension not used'; "
+            "assert str(yarl.URL('http://h/a b').with_query(q='x y')) == 'http://h/a%20b?q=x+y'"
+        ),
+    },
+    "aiosignal": {
+        "version": "1.4.0",
+        "license": "Apache-2.0",
+        "deps": ["frozenlist", "typing-extensions"],
+        "files": ["aiosignal/", "*.dist-info/"],
+        "check": "import aiosignal",
+    },
+    "aiohappyeyeballs": {
+        "version": "2.7.1",
+        "license": "PSF-2.0",
+        "deps": [],
+        "files": ["aiohappyeyeballs/", "*.dist-info/"],
+        "check": "import aiohappyeyeballs; assert aiohappyeyeballs.start_connection",
+    },
+    "aiohttp": {
+        # 3.14.1 (txwtf's lock).  3.14.2/3.14.3 are later patch releases with the
+        # same requirements; 3.14.4+ need yarl >= 1.25.1.
+        "version": "3.14.1",
+        # aiohttp itself is Apache-2.0; the vendored llhttp parser it compiles in
+        # is MIT (PyPI metadata: "Apache-2.0 AND MIT").
+        "license": "Apache-2.0 AND MIT",
+        "deps": [
+            "aiohappyeyeballs",
+            "aiosignal",
+            "attrs",
+            "frozenlist",
+            "multidict",
+            "propcache",
+            "typing-extensions",
+            "yarl",
+        ],
+        "files": ["aiohttp/", "*.dist-info/"],
+        "check": (
+            "import aiohttp; from aiohttp import http_parser, _http_parser; "
+            "assert http_parser.HttpRequestParser is http_parser.HttpRequestParserC, "
+            "'C HTTP parser not built'"
+        ),
+    },
+    "aiohttp-fast-zlib": {
+        # Its zlib_ng extra is materialized as a hard dep: without zlib-ng (or
+        # isal) enable() has nothing faster to swap in, and zlib-ng is the
+        # reason the apps install this.
+        "version": "0.3.0",
+        "license": "Apache-2.0",
+        "deps": ["aiohttp", "zlib-ng"],
+        "files": ["aiohttp_fast_zlib/", "*.dist-info/"],
+        "check": (
+            "import aiohttp_fast_zlib, zlib_ng; "
+            "aiohttp_fast_zlib.enable(); aiohttp_fast_zlib.disable()"
+        ),
+    },
+    "aioitertools": {
+        "version": "0.13.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["aioitertools/", "*.dist-info/"],
+        "check": "import aioitertools",
+    },
+    "aiobotocore": {
+        # NOT the apps' 2.25.1 lock: aiobotocore pins botocore to a narrow window
+        # and cvcpkg ships botocore/boto3 1.43.49.  3.9.0 is the only release
+        # whose window (>=1.43.3,<1.43.57) contains 1.43.49 (3.8.0 stops at
+        # <1.43.47, 3.9.1 starts at 1.43.66).  aioboto3 is NOT packaged: every
+        # aioboto3 release (latest 15.5.0) pins aiobotocore 2.x, i.e. botocore
+        # 1.40.x.
+        "version": "3.9.0",
+        "license": "Apache-2.0",
+        "deps": [
+            "aiohttp",
+            "aioitertools",
+            "botocore",
+            "jmespath",
+            "multidict",
+            "python-dateutil",
+            "wrapt",
+        ],
+        "files": ["aiobotocore/", "*.dist-info/"],
+        "check": (
+            "import aiobotocore.session; "
+            "assert 's3' in aiobotocore.session.get_session().get_available_services()"
+        ),
+    },
+    "aiodns": {
+        "version": "4.0.4",
+        "license": "MIT",
+        "deps": ["pycares"],
+        "files": ["aiodns/", "*.dist-info/"],
+        "check": (
+            "import asyncio, aiodns; loop = asyncio.new_event_loop(); "
+            "r = aiodns.DNSResolver(loop=loop, nameservers=['127.0.0.1']); loop.close()"
+        ),
+    },
+    "aiofiles": {
+        "version": "25.1.0",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["aiofiles/", "*.dist-info/"],
+        "check": "import aiofiles, aiofiles.os",
+    },
+    "aioimaplib": {
+        # GPL-3.0-or-later (source headers: "either version 3 ... or any later").
+        "version": "2.0.1",
+        "license": "GPL-3.0-or-later",
+        "deps": [],
+        "files": ["aioimaplib/", "*.dist-info/"],
+        "check": "import aioimaplib",
+    },
+    "aiokafka": {
+        # Not locked by either app (txwtf `kafka` extra): latest release.
+        "version": "0.14.0",
+        "license": "Apache-2.0",
+        "deps": ["async-timeout", "packaging", "typing-extensions"],
+        "files": ["aiokafka/", "*.dist-info/"],
+        "check": "import aiokafka; from aiokafka.record import _crecords",
+    },
+    "aiosmtplib": {
+        "version": "5.1.2",
+        "license": "MIT",
+        "deps": [],
+        "files": ["aiosmtplib/", "*.dist-info/"],
+        "check": "import aiosmtplib",
+    },
+    "asyncer": {
+        "version": "0.0.18",
+        "license": "MIT",
+        "deps": ["anyio", "sniffio", "typing-extensions"],
+        "files": ["asyncer/", "*.dist-info/"],
+        "check": "import asyncer",
+    },
+    "asyncssh": {
+        # Not locked by either app (txwtf `sftp` extra).  2.23.1, not the newest
+        # 2.24.x: 2.24.0 raised the floor to cryptography>=48.0.1 and cvcpkg
+        # ships cryptography 48.0.0.
+        "version": "2.23.1",
+        "license": "EPL-2.0 OR GPL-2.0-or-later",
+        "deps": ["cryptography", "typing-extensions"],
+        "files": ["asyncssh/", "*.dist-info/"],
+        "check": "import asyncssh; asyncssh.generate_private_key('ssh-ed25519')",
+    },
+    "soupsieve": {
+        "version": "2.8.4",
+        "license": "MIT",
+        "deps": [],
+        "files": ["soupsieve/", "*.dist-info/"],
+        # soupsieve imports bs4 at module scope (soupsieve/__init__.py and
+        # css_match.py) while beautifulsoup4 depends on soupsieve, so it cannot be
+        # imported on its own; locate it without executing it.  beautifulsoup4's
+        # check drives soupsieve for real (select_one).
+        "check": (
+            "import importlib.metadata as m, importlib.util as u; "
+            "assert u.find_spec('soupsieve') and m.version('soupsieve')"
+        ),
+    },
+    "beautifulsoup4": {
+        "version": "4.15.0",
+        "license": "MIT",
+        "deps": ["soupsieve", "typing-extensions"],
+        "files": ["bs4/", "*.dist-info/"],
+        "check": (
+            "from bs4 import BeautifulSoup; "
+            "assert BeautifulSoup('<p>x</p>', 'html.parser').p.text == 'x'; "
+            "assert BeautifulSoup('<p class=a>y</p>', 'html.parser').select_one('p.a').text == 'y'"
+        ),
+    },
+    "ccxt": {
+        # 4.5.64, NOT the apps' 4.5.66 lock: from 4.5.65 on, ccxt exact-pins its
+        # whole closure (cryptography==49.0.0, certifi==2026.6.17,
+        # setuptools==82.0.1, typing_extensions==4.16.0, idna==3.18, ...), which no
+        # cvcpkg set can satisfy, so the apps could not re-lock.  4.5.64 is the
+        # last release with >= floors.  coincurve's marker is python_version <=
+        # 3.13, which every column satisfies.
+        "version": "4.5.64",
+        "license": "MIT",
+        "deps": [
+            "aiodns",
+            "aiohttp",
+            "certifi",
+            "coincurve",
+            "cryptography",
+            "requests",
+            "setuptools",
+            "typing-extensions",
+            "yarl",
+        ],
+        "files": ["ccxt/", "*.dist-info/"],
+        "check": "import ccxt, ccxt.async_support; assert 'binance' in ccxt.exchanges",
+    },
+    "decorator": {
+        "version": "5.3.1",
+        "license": "BSD-2-Clause",
+        "deps": [],
+        "files": ["decorator/", "*.dist-info/"],
+        "check": "import decorator",
+    },
+    "wrapt": {
+        # 2.2.1 (atxcf-catx's lock; txwtf locks 1.17.3).  deprecated (<3) and
+        # aiobotocore 3.x (<3.0.0) both accept 2.x.
+        "version": "2.2.1",
+        "license": "BSD-2-Clause",
+        "deps": [],
+        "files": ["wrapt/", "*.dist-info/"],
+        "check": (
+            "import wrapt; from wrapt import __wrapt__, _wrappers; "
+            "assert __wrapt__._using_c_extension, 'C extension not used'; "
+            "assert wrapt.FunctionWrapper is _wrappers.FunctionWrapper"
+        ),
+    },
+    "deprecated": {
+        "version": "1.3.1",
+        "license": "MIT",
+        "deps": ["wrapt"],
+        "files": ["deprecated/", "*.dist-info/"],
+        "check": "from deprecated import deprecated",
+    },
+    "dnspython": {
+        "version": "2.8.0",
+        "license": "ISC",
+        "deps": [],
+        "files": ["dns/", "*.dist-info/"],
+        "check": "import dns.message, dns.name; dns.message.make_query('example.com', 'A')",
+    },
+    "email-validator": {
+        "version": "2.3.0",
+        "license": "Unlicense",
+        "deps": ["dnspython", "idna"],
+        "files": ["email_validator/", "*.dist-info/"],
+        "check": (
+            "from email_validator import validate_email; "
+            "assert validate_email('a@example.com', check_deliverability=False).normalized"
+        ),
+    },
+    "fabric": {
+        "version": "3.2.2",
+        "license": "BSD-2-Clause",
+        "deps": ["decorator", "deprecated", "invoke", "paramiko"],
+        "files": ["fabric/", "*.dist-info/"],
+        "check": "import fabric; assert fabric.Connection",
+    },
+    "tzdata": {
+        "version": "2026.3",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["tzdata/", "*.dist-info/"],
+        "check": (
+            "import importlib.resources as r; "
+            "assert r.files('tzdata').joinpath('zoneinfo', 'UTC').is_file()"
+        ),
+    },
+    "faker": {
+        # tzdata is a Windows-only requirement upstream; columns carry no
+        # platform markers, so it is a plain edge (a pure data package).
+        "version": "40.31.0",
+        "license": "MIT",
+        "deps": ["tzdata"],
+        "files": ["faker/", "*.dist-info/"],
+        "check": "from faker import Faker; assert Faker().name()",
+    },
+    "flask-cors": {
+        "version": "6.0.2",
+        "license": "MIT",
+        "deps": ["flask", "werkzeug"],
+        "files": ["flask_cors/", "*.dist-info/"],
+        "check": "import flask, flask_cors; flask_cors.CORS(flask.Flask('x'))",
+    },
+    "geoip2": {
+        # Stays a PREBUILT py3-none-any wheel for now: 5.2.0's PEP-517 backend is
+        # uv_build, a Rust binary with no cvcpkg recipe (source_mode_for reason 3).
+        "version": "5.2.0",
+        "license": "Apache-2.0",
+        "deps": ["aiohttp", "maxminddb", "requests"],
+        "files": ["geoip2/", "*.dist-info/"],
+        "check": "import geoip2.database, geoip2.webservice",
+    },
+    "httptools": {
+        # Self-contained C extension: compiles the llhttp + http-parser sources
+        # vendored in the sdist (no cvcpkg llhttp recipe exists), MIT.
+        "version": "0.8.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["httptools/", "*.dist-info/"],
+        "check": (
+            "import httptools; from httptools.parser import parser; "
+            "assert httptools.HttpRequestParser is parser.HttpRequestParser; "
+            "assert httptools.parse_url(b'http://h:8/p?q').port == 8"
+        ),
+    },
+    "psutil": {
+        "version": "7.2.2",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["psutil/", "*.dist-info/"],
+        "check": (
+            "import psutil; assert psutil.cpu_count() >= 1; "
+            "assert psutil.Process().memory_info().rss > 0"
+        ),
+    },
+    "pydle": {
+        "version": "1.1.0",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["pydle/", "*.dist-info/"],
+        "check": "import pydle; assert pydle.Client",
+    },
+    "python-decouple": {
+        "version": "3.8",
+        "license": "MIT",
+        "deps": [],
+        "files": ["decouple.py", "*.dist-info/"],
+        "check": "from decouple import config, Csv",
+    },
+    "redis": {
+        # redis-py (MIT) — the client library, not the server.
+        "version": "8.0.1",
+        "license": "MIT",
+        "deps": [],
+        "files": ["redis/", "*.dist-info/"],
+        "check": "import redis, redis.asyncio; redis.Redis(host='127.0.0.1', port=1)",
+    },
+    "requests-file": {
+        "version": "3.0.1",
+        "license": "Apache-2.0",
+        "deps": ["requests"],
+        "files": ["requests_file/", "*.dist-info/"],
+        "check": "from requests_file import FileAdapter",
+    },
+    "restrictedpython": {
+        "version": "8.4",
+        "license": "ZPL-2.1",
+        "deps": [],
+        "files": ["RestrictedPython/", "*.dist-info/"],
+        "check": (
+            "from RestrictedPython import compile_restricted; "
+            "compile_restricted('x = 1', '<s>', 'exec')"
+        ),
+    },
+    "sexpdata": {
+        "version": "1.0.2",
+        "license": "BSD-2-Clause",
+        "deps": [],
+        "files": ["sexpdata.py", "*.dist-info/"],
+        "check": "import sexpdata; assert sexpdata.loads('(a 1)')",
+    },
+    "simplejson": {
+        "version": "4.1.1",
+        "license": "MIT OR AFL-2.1",
+        "deps": [],
+        "files": ["simplejson/", "*.dist-info/"],
+        "check": (
+            "import simplejson; from simplejson import _speedups; "
+            "assert simplejson.loads('[1]') == [1]"
+        ),
+    },
+    "slack-sdk": {
+        "version": "3.42.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["slack_sdk/", "slack/", "*.dist-info/"],
+        # Not slack_sdk.web.async_client: that imports aiohttp, an optional extra.
+        "check": "import slack_sdk, slack_sdk.web; slack_sdk.WebClient(token='xoxb-cvcpkg')",
+    },
+    "sniffio": {
+        "version": "1.3.1",
+        "license": "MIT OR Apache-2.0",
+        "deps": [],
+        "files": ["sniffio/", "*.dist-info/"],
+        "check": "import sniffio",
+    },
+    "sqlmodel": {
+        "version": "0.0.39",
+        "license": "MIT",
+        "deps": ["pydantic", "sqlalchemy", "typing-extensions"],
+        "files": ["sqlmodel/", "*.dist-info/"],
+        "check": "from sqlmodel import SQLModel, create_engine; create_engine('sqlite://')",
+    },
+    "wcwidth": {
+        "version": "0.8.2",
+        "license": "MIT",
+        "deps": [],
+        "files": ["wcwidth/", "*.dist-info/"],
+        "check": "import wcwidth; assert wcwidth.wcswidth('ab') == 2",
+    },
+    "urwid": {
+        # LGPL-2.1-only.  3.0.5 (lock); 4.x is a major bump.
+        "version": "3.0.5",
+        "license": "LGPL-2.1-only",
+        "deps": ["wcwidth"],
+        "files": ["urwid/", "*.dist-info/"],
+        "check": "import urwid; urwid.Text('x')",
+    },
 }
 
 # ── Hand-written column families the generated matrix may depend on ──────────
@@ -973,7 +1456,11 @@ SEED_PACKAGES = {
 # (recipes/<base>-cpNNN/recipe.yaml), so the truth stays with the recipes and a
 # hand-written family that gains or loses a column is picked up by the next
 # run.  A base listed here with no columns on disk aborts the run.
-HANDWRITTEN_DEP_BASES = ("numpy",)
+#
+# coincurve, pycares, maxminddb and zlib-ng link cvcpkg native libraries
+# (secp256k1, c-ares, libmaxminddb, zlib-ng) with an $ORIGIN rpath pass, so they
+# are hand-written too; ccxt, aiodns, geoip2 and aiohttp-fast-zlib depend on them.
+HANDWRITTEN_DEP_BASES = ("numpy", "coincurve", "pycares", "maxminddb", "zlib-ng")
 
 
 def handwritten_columns(out: Path, interps: list[str]) -> dict[str, list[str]]:
@@ -1098,7 +1585,10 @@ def _spdx(info: dict) -> str:
     return lic[:60] or "NOASSERTION"
 
 
-_MARKER_CMP = re.compile(r'python_version\s*(<=|>=|<|>|==|!=)\s*"(\d+(?:\.\d+)*)"')
+# PEP 508 allows either quote style; [build-system] requires written by hand
+# often use single quotes (frozenlist/propcache/yarl: "tomli; python_version <
+# '3.11'"), which a double-quote-only pattern silently kept as an edge.
+_MARKER_CMP = re.compile(r"""python_version\s*(<=|>=|<|>|==|!=)\s*["'](\d+(?:\.\d+)*)["']""")
 
 
 def marker_ok(dep_spec, interp: str) -> bool:
@@ -1272,14 +1762,15 @@ def source_mode_for(
     accumulation of special cases:
 
       1. PREBUILT_ONLY wins over everything, including --source-mode sdist:
-         those packages have no source to build.
+         those packages have no source to build.  _UNBUILDABLE_SDIST (a
+         published sdist that cannot build as shipped) is treated the same.
       2. --source-mode pins the rest (an operator override, reported as such).
       3. No sdist on PyPI -> nothing to build from.
       4. Pure (noarch) packages follow --pure-policy; the DEFAULT is sdist,
          because a py3-none-any wheel is still a third-party binary artifact.
       5. A missing build-backend recipe blocks the source build.
       6. Otherwise: build from source."""
-    reason = prebuilt_only_reason(base)
+    reason = prebuilt_only_reason(base) or _UNBUILDABLE_SDIST.get(base)
     if reason:
         return "wheel", reason
     if forced == "wheel":
@@ -1320,7 +1811,25 @@ def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
 # of the none-any→pure shortcut so each column is classified compiled and
 # published per-platform.  This is the deliberate per-package decision the
 # note below describes.
-_PREFER_BINARY = {"cython", "protobuf", "sqlalchemy"}
+#
+# The aio-libs C/Cython speedups (frozenlist, multidict, propcache, yarl,
+# aiohttp), wrapt and simplejson are the same shape: a py3-none-any fallback
+# wheel on PyPI, but an sdist build that compiles the extension by default.
+# They are compiled here (per platform) rather than forced pure: aiohttp's
+# request path runs through all of them, and each seed's check asserts the
+# compiled module is the one in use.
+_PREFER_BINARY = {
+    "aiohttp",
+    "cython",
+    "frozenlist",
+    "multidict",
+    "propcache",
+    "protobuf",
+    "simplejson",
+    "sqlalchemy",
+    "wrapt",
+    "yarl",
+}
 
 # The other way out of the same trap, for an extension that is OPTIONAL and
 # that the sdist's own build can be told to skip: keep the build-once noarch
@@ -1530,7 +2039,12 @@ def resolve_source_modes(
         reqs: list[str] = []
         missing: list[str] = []
         # Only pay for the sdist download when the answer can still be "sdist".
-        if m["sdist"] and not prebuilt_only_reason(base) and forced != "wheel":
+        if (
+            m["sdist"]
+            and not prebuilt_only_reason(base)
+            and base not in _UNBUILDABLE_SDIST
+            and forced != "wheel"
+        ):
             try:
                 reqs = sdist_build_requires(m["sdist"], cache)
             except Exception as e:  # noqa: BLE001
@@ -1950,6 +2464,44 @@ def _write_recipe(recipe_dir: Path, body_with_rev: str, floor: int = 1) -> None:
     path.write_text(body_with_rev.replace("{rev}", str(rev)), encoding="utf-8", newline="\n")
 
 
+def _disk_platforms(recipe_dir: Path) -> set[str]:
+    """The ``build.matrix`` platforms of an on-disk recipe (empty if absent)."""
+    y = recipe_dir / "recipe.yaml"
+    if not y.is_file():
+        return set()
+    text = y.read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*-\s*platform:\s*([\w-]+)\s*$", text, re.MULTILINE))
+
+
+def _windows_gap(
+    out: Path,
+    base: str,
+    interp: str,
+    meta: dict,
+    extra_universe=frozenset(),
+    _seen: set[str] | None = None,
+) -> list[str]:
+    """Hand-written columns in *base*'s runtime closure (for *interp*) that have
+    no Windows build — read from disk, like their column set.  Generated deps are
+    walked through (they claim Windows themselves), so a gap two levels down
+    (ccxt -> aiodns -> pycares) still surfaces."""
+    seen = set() if _seen is None else _seen
+    m = meta.get(base)
+    if not m or "deps" not in m:
+        return []
+    gap: list[str] = []
+    for dep in deps_for_column(m, interp, set(meta) | set(extra_universe)):
+        if dep in seen:
+            continue
+        seen.add(dep)
+        if dep in extra_universe:
+            if not _disk_platforms(out / f"{dep}-cp{interp}") & {"windows", "any"}:
+                gap.append(f"{dep}-cp{interp}")
+        else:
+            gap += _windows_gap(out, dep, interp, meta, extra_universe, seen)
+    return gap
+
+
 def sdist_platforms(kind: str, plats: list[str]) -> list[tuple[str, str]]:
     """(platform, script) matrix entries for a from-source column.
 
@@ -2146,6 +2698,16 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             plats.append(("macos", "build.sh"))
         if any(k.startswith("windows") for k in arts):
             plats.append(("windows", "build.ps1"))
+    # A column claims Windows only when its whole runtime closure builds there.
+    # Generated columns always do; a hand-written dep family may not (pycares,
+    # coincurve, ... link cvcpkg native libraries and are linux/macos only), and
+    # claiming Windows over one is the phantom closure edge
+    # scripts/validate_all_recipes.py rejects.  The noarch `any` build stays.
+    if any(p == "windows" for p, _ in plats):
+        gap = _windows_gap(out, base, interp, meta, extra_universe)
+        if gap:
+            plats = [(p, s) for p, s in plats if p != "windows"]
+            print(f"  no-windows {name}: no Windows build for {', '.join(gap)}", file=sys.stderr)
     env = ""
     if kind == "pure" and base in _PURE_BUILD_ENV:
         env = "      env:\n" + "".join(
@@ -2191,6 +2753,12 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             dist=m["pypi_name"],
             version=m["version"],
             backends=", ".join(backends) or "(none declared)",
+            # An any-only column (Windows dropped by _windows_gap) is a noarch
+            # recipe in the strict sense: it builds once on whichever host claims
+            # it, so it must not read CVC_PLATFORM (tests/unit/test_noarch_recipes).
+            env_block=(
+                _SDIST_NOARCH_ENV_BLOCK if all(p == "any" for p, _ in plats) else _SDIST_ENV_BLOCK
+            ),
         ),
         encoding="utf-8",
         newline="\n",
@@ -2261,6 +2829,12 @@ _TOPPKG = {
     # files glob would name a `pillow/` dir that never exists (the shipped
     # hand-written recipes glob PIL/ correctly).
     "pillow": "PIL",
+    "beautifulsoup4": "bs4",
+    "dnspython": "dns",
+    "python-decouple": "decouple",
+    "restrictedpython": "RestrictedPython",
+    # PEP-420 namespace like poetry-core: the wheel ships pdm/backend/ only.
+    "pdm-backend": "pdm.backend",
 }
 
 
@@ -2316,6 +2890,19 @@ Invoke-CvcPythonCheck '{check}'
 # openblas, h5py -> hdf5) must NOT use this generated script: it needs an
 # $ORIGIN/@loader_path rpath pass so the extension resolves the library out of
 # the merged prefix.  Those stay hand-written.
+#
+# {env_block} is _SDIST_ENV_BLOCK, except for an any-only column (see
+# _emit_column), which must not read CVC_PLATFORM at all.
+_SDIST_ENV_BLOCK = """# Platform toolchain/env.  Sourced conditionally: a noarch (platform: any)
+# column can be claimed by a builder whose platform ships no env-*.sh.
+_CVC_ENV="${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM:-linux}.sh"
+# shellcheck disable=SC1090
+[ -f "${_CVC_ENV}" ] && . "${_CVC_ENV}"
+"""
+_SDIST_NOARCH_ENV_BLOCK = """# Noarch column (platform: any only): built once on whichever
+# host claims it, so it sources no platform env script -- a pure-Python build
+# needs no toolchain.
+"""
 _BUILD_SH_SDIST = """#!/usr/bin/env bash
 # recipes/{name}/build.sh — build {dist} {version} FROM SOURCE (generated).
 #
@@ -2338,12 +2925,7 @@ _BUILD_SH_SDIST = """#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Platform toolchain/env.  Sourced conditionally: a noarch (platform: any)
-# column can be claimed by a builder whose platform ships no env-*.sh.
-_CVC_ENV="${{SCRIPT_DIR}}/../_common/env-${{CVC_PLATFORM:-linux}}.sh"
-# shellcheck disable=SC1090
-[ -f "${{_CVC_ENV}}" ] && . "${{_CVC_ENV}}"
-# shellcheck disable=SC1091
+{env_block}# shellcheck disable=SC1091
 . "${{SCRIPT_DIR}}/../_common/python-wheel.sh"   # cvc_python_exe, cvc_python_check
 
 # ── 1. Resolve this column's interpreter inside the prefix ──────────────────

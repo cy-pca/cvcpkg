@@ -227,7 +227,7 @@ class TestHandWrittenDepColumns:
             d.mkdir()
             (d / "recipe.yaml").write_text("recipe:\n  name: numpy\n")
         (tmp_path / "numpy-cp312").mkdir()  # dir without recipe.yaml: not a column
-        assert gen.handwritten_columns(tmp_path, INTERPS) == {"numpy": ["311", "313t"]}
+        assert gen.handwritten_columns(tmp_path, INTERPS)["numpy"] == ["311", "313t"]
 
     def test_dep_edge_resolves_against_extra_universe(self):
         meta = self._seed_meta()
@@ -291,6 +291,14 @@ class TestHandWrittenDepColumns:
 
 
 class TestMarkers:
+    def test_single_quoted_python_version_marker(self):
+        # PEP 508 allows either quote style; aio-libs' hand-written
+        # [build-system] requires use single quotes.
+        spec = {"markers": "python_version < '3.11'"}
+        assert not gen.marker_ok(spec, "311")
+        assert gen.backend_edges(["tomli; python_version < '3.11'"], "313t") == []
+        assert gen.backend_edges(["tomli; python_version < '3.11'"], "310") == ["tomli-cp310"]
+
     def test_python_version_lt(self):
         spec = {"markers": 'python_version < "3.11"'}
         assert not gen.marker_ok(spec, "311")
@@ -1345,3 +1353,77 @@ class TestResolveSourceModes:
             platforms=["linux"],
         )
         assert meta["torch"]["mode"] == "wheel"
+
+
+class TestWindowsGap:
+    """A generated column claims Windows only when its runtime closure builds
+    there.  Generated deps always do; a hand-written family (columns and
+    platforms read from disk) may not — claiming Windows over one is the phantom
+    closure edge scripts/validate_all_recipes.py rejects."""
+
+    def _family(self, tmp_path, name, platforms):
+        d = tmp_path / name
+        d.mkdir()
+        matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
+        (d / "recipe.yaml").write_text(
+            f"recipe:\n  name: {name}\nbuild:\n  matrix:\n{matrix}", encoding="utf-8"
+        )
+
+    def _emit_pure(self, tmp_path, family_platforms):
+        self._family(tmp_path, "native-cp311", family_platforms)
+        m = _meta_sdist(
+            kind="pure", wheels=PURE, deps=["native"], seed=True, build_requires=["setuptools"]
+        )
+        gen._emit_column(
+            tmp_path, "widget", m, "311", {"widget": m}, {"widget": ["311"]}, {"native"}
+        )
+        d = tmp_path / "widget-cp311"
+        return (d / "recipe.yaml").read_text(encoding="utf-8"), d
+
+    def test_windows_dropped_over_a_family_without_windows(self, tmp_path, capsys):
+        y, d = self._emit_pure(tmp_path, ["linux", "macos"])
+        assert "- platform: any" in y
+        assert "- platform: windows" not in y
+        assert "Lib/site-packages" not in y
+        assert not (d / "build.ps1").exists()
+        # any-only == noarch: the script must not read CVC_PLATFORM (test_noarch_recipes).
+        sh = (d / "build.sh").read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in sh.splitlines() if not ln.lstrip().startswith("#"))
+        assert "CVC_PLATFORM" not in code
+        err = capsys.readouterr().err
+        assert "no-windows widget-cp311: no Windows build for native-cp311" in err
+
+    def test_windows_kept_when_the_family_builds_there(self, tmp_path):
+        y, d = self._emit_pure(tmp_path, ["linux", "macos", "windows"])
+        assert "- platform: windows" in y
+        assert (d / "build.ps1").exists()
+        assert "env-${CVC_PLATFORM:-linux}.sh" in (d / "build.sh").read_text(encoding="utf-8")
+
+    def test_gap_is_found_through_a_generated_dep(self, tmp_path):
+        # ccxt -> aiodns -> pycares: the gap is two levels down.
+        self._family(tmp_path, "native-cp311", ["linux"])
+        meta = {
+            "mid": _meta_sdist(kind="pure", wheels=PURE, deps=["native"], seed=True),
+            "top": _meta_sdist(kind="pure", wheels=PURE, deps=["mid"], seed=True),
+        }
+        assert gen._windows_gap(tmp_path, "top", "311", meta, {"native"}) == ["native-cp311"]
+
+    def test_no_gap_without_hand_written_deps(self, tmp_path):
+        meta = {"widget": _meta_sdist(), "colorama": {}}
+        assert gen._windows_gap(tmp_path, "widget", "311", meta) == []
+
+
+class TestUnbuildableSdist:
+    """A published sdist that cannot build as shipped stays on its wheel."""
+
+    def test_falls_back_to_the_wheel_even_when_sdist_is_forced(self):
+        mode, reason = gen.source_mode_for(
+            "ccxt", kind="pure", has_sdist=True, missing=[], pure_policy="sdist", forced="sdist"
+        )
+        assert mode == "wheel"
+        assert "README.md" in reason
+
+    def test_other_packages_still_build_from_source(self):
+        assert gen.source_mode_for(
+            "widget", kind="pure", has_sdist=True, missing=[], pure_policy="sdist"
+        ) == ("sdist", "built from the PyPI sdist")
