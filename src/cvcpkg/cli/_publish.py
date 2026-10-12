@@ -395,27 +395,36 @@ def _resolve_all_archives(
 
 
 def _extract_manifest(archive_path: Path) -> dict:
-    """Extract manifest.yaml from a cvcpkg archive."""
+    """Extract manifest.yaml from a cvcpkg archive.
+
+    The reader is chosen by magic bytes, not the suffix: an archive fetched
+    back from cvcpkg.org carries the server's ``.tar.zst`` storage name even
+    when it is a Windows zip.
+    """
     import tarfile
     import zipfile
 
+    from cvcpkg._archive import archive_format, open_tar
+    from cvcpkg.errors import InstallError
+
     manifest = None
     try:
-        if archive_path.name.endswith(".zip"):
+        fmt = archive_format(archive_path)
+        if fmt == "zip":
             with zipfile.ZipFile(archive_path) as zf:
                 for entry in zf.namelist():
                     if entry.endswith("manifest.yaml"):
                         manifest = yaml.safe_load(zf.read(entry))
                         break
         else:
-            with tarfile.open(archive_path, mode="r:*") as tf:
+            with open_tar(archive_path, fmt=fmt) as tf:
                 for member in tf.getmembers():
                     if member.name.endswith("manifest.yaml"):
                         f = tf.extractfile(member)
                         if f:
                             manifest = yaml.safe_load(f.read())
                         break
-    except (tarfile.TarError, zipfile.BadZipFile) as exc:
+    except (tarfile.TarError, zipfile.BadZipFile, InstallError) as exc:
         raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}") from exc
 
     if not manifest:
