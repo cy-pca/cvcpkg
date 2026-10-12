@@ -40,9 +40,20 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
+# NUM_THREADS is compiled in as MAX_CPU_NUMBER: the most threads OpenBLAS will
+# ever use, and (x2) the buffers that bound how many threads may call BLAS at
+# once. Left unset, CMake takes the BUILD host's core count -- +cvc.8's linux
+# bundle, from a 4-core builder, reports MAX_THREADS=4 on every machine it runs
+# on, and a 1-core builder would turn threading off. Past that many concurrent
+# callers OpenBLAS warns "precompiled NUM_THREADS exceeded" and can crash
+# (+cvc.8 with 64 threads calling dgemm: the warning every run, a segfault in
+# 2 of 10). 64 is upstream's suggested value for distributed builds
+# (docs/distributing.md); it costs ~120 bytes of static data per thread, and at
+# run time OpenBLAS still uses no more threads than the machine has cores.
 cvc_cmake_build \
     -DBUILD_TESTING=OFF \
     -DNO_LAPACKE=OFF \
     -DDYNAMIC_ARCH=ON \
     -DTARGET=GENERIC \
+    -DNUM_THREADS=64 \
     "${OPENBLAS_EXTRA[@]}"
