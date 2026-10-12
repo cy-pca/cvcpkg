@@ -1784,6 +1784,53 @@ class DbPackageIndex:
             result = await session.execute(stmt)
             return result.rowcount
 
+    async def backfill_deps(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str,
+        arch: str,
+        build_type: str,
+        link: str,
+        org_slug: str,
+        required_deps: str,
+        provides: str,
+    ) -> dict[str, int]:
+        """Fill one variant's EMPTY ``required_deps`` / ``provides`` in place.
+
+        Each column is written only where it still holds ``[]``, so a row that
+        already records its edges is never touched -- the backfill can only add
+        what a pre-#152 publish left out, never rewrite a correct row.  Returns
+        how many rows each column changed.
+        """
+        counts: dict[str, int] = {}
+        async with get_session() as session:
+            for column, value in (
+                (PackageRow.required_deps, required_deps),
+                (PackageRow.provides, provides),
+            ):
+                if value == "[]":
+                    counts[column.key] = 0
+                    continue
+                stmt = (
+                    update(PackageRow)
+                    .where(
+                        PackageRow.name == name,
+                        PackageRow.version == version,
+                        PackageRow.platform == platform,
+                        PackageRow.arch == arch,
+                        PackageRow.build_type == build_type,
+                        PackageRow.link == link,
+                        PackageRow.org_slug == org_slug,
+                        column == "[]",
+                    )
+                    .values({column.key: value})
+                )
+                result = await session.execute(stmt)
+                counts[column.key] = result.rowcount
+        return counts
+
     async def delete(
         self,
         name: str,
