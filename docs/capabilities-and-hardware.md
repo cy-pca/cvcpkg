@@ -51,7 +51,7 @@ daemon degrades to "capability absent" instead of hanging the CLI.
 
 | capability | probe |
 |---|---|
-| `cuda` | `nvcc` on `PATH`, or `$CUDA_PATH`/`$CUDA_HOME/bin/nvcc(.exe)`. Deliberately **not** `nvidia-smi` or a loadable libcuda — those ship with the driver, and the question is "can this host *compile* CUDA", not "does it have a GPU". |
+| `cuda` | `nvcc` on `PATH`, or `$CUDA_PATH`/`$CUDA_HOME/bin/nvcc(.exe)`. Deliberately **not** `nvidia-smi` or a loadable libcuda — those ship with the driver, and the question is "can this host *compile* CUDA", not "does it have a GPU". A prefix with the `cuda-toolkit` recipe installed satisfies it once activated (Linux puts a `bin/nvcc` wrapper on `PATH`), or with `CUDA_PATH=<prefix>/cuda`. |
 | `incus` | `incus info` exits 0 — proves the client exists, incusd is running, and this user may open its socket. |
 | `lxd` | `lxc info` exits 0 **and** the dump reports `server: lxd` (rejects an `lxc` compatibility shim fronting Incus); unrecognised output falls back to whether LXD's own daemon binary is installed. |
 | `lxc` | classic LXC: `lxc-create`, `lxc-start` and `lxc-ls` all present, `lxc-ls -1` exits 0, and a non-root user holds subuid/subgid delegation. |

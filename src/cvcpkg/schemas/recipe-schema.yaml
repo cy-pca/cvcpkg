@@ -116,6 +116,19 @@ properties:
       2.39, so `cuda` + `glibc2.35` was unsatisfiable and torch-cp311-cuda
       could not be built at all.
 
+  redistributable:
+    type: boolean
+    description: >
+      False when the payload's license forbids publishing the built tree,
+      e.g. the NVIDIA CUDA toolkit, whose EULA allows redistributing only a
+      few runtime libraries and never nvcc or the SDK as a stand-alone
+      product.  Such a recipe is only ever built on the machine that installs
+      it: `cvcpkg install` builds it from the recipe instead of looking for a
+      bundle, and every path that would turn it into one refuses (`cvcpkg
+      pack`, pack-all, `builds submit`/`submit-dag`, build-all's server-cache
+      push, and the server's /v1/publish).  The recipe itself (urls and
+      checksums) is still pushed and browsable.  Default true.
+
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
 

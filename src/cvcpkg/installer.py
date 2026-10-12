@@ -396,6 +396,48 @@ def install_entry(
     return archive
 
 
+def _find_recipe_dir(name: str, recipes_dirs: list[Path] | None) -> Path | None:
+    """The first ``<dir>/<name>`` holding a recipe.yaml; *recipes_dirs* empty
+    means the default recipes directory."""
+    from cvcpkg.builder import RecipeError, find_recipes_dir
+
+    search_dirs = recipes_dirs or []
+    if not search_dirs:
+        try:
+            search_dirs = [find_recipes_dir()]
+        except RecipeError:
+            return None
+    for rdir in search_dirs:
+        candidate = rdir / name
+        if (candidate / "recipe.yaml").is_file():
+            return candidate
+    return None
+
+
+def not_redistributable_components(names: list[str], recipes_dirs: list[Path] | None) -> list[str]:
+    """Those of *names* whose recipe declares ``redistributable: false``.
+
+    Such a component is never in the catalog, so building it from its recipe
+    is the only way to install it -- ``cvcpkg install`` does that whether or
+    not ``--fallback-to-source`` was passed.
+    """
+    import yaml
+
+    from cvcpkg.builder import Recipe, RecipeError
+
+    out: list[str] = []
+    for name in names:
+        recipe_dir = _find_recipe_dir(name, recipes_dirs)
+        if recipe_dir is None:
+            continue
+        try:
+            if not Recipe.load(recipe_dir).redistributable:
+                out.append(name)
+        except (RecipeError, OSError, ValueError, yaml.YAMLError):
+            continue
+    return out
+
+
 def build_from_source_fallback(
     name: str,
     prefix: Path,
@@ -418,23 +460,14 @@ def build_from_source_fallback(
     log = logging.getLogger("cvcpkg")
     log.info("falling back to source build for %s", name)
 
-    # Locate the recipe directory for this component.
-    search_dirs = recipes_dirs or []
-    if not search_dirs:
+    if not recipes_dirs:
         try:
-            search_dirs = [find_recipes_dir()]
+            find_recipes_dir()
         except RecipeError:
             raise InstallError(
                 f"no prebuilt binary and no recipes directory found for {name}"
             ) from None
-
-    recipe_dir: Path | None = None
-    for rdir in search_dirs:
-        candidate = rdir / name
-        if (candidate / "recipe.yaml").is_file():
-            recipe_dir = candidate
-            break
-
+    recipe_dir = _find_recipe_dir(name, recipes_dirs)
     if recipe_dir is None:
         raise InstallError(f"no prebuilt binary and no recipe found for '{name}'")
 
