@@ -1,0 +1,96 @@
+schema_version: 1
+recipe:
+  name: lcov
+  upstream_version: "2.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/linux-test-project/lcov
+  license: GPL-2.0-or-later
+  tags: [tools, coverage, gcov, testing, perl]
+  description: >-
+    LCOV 2.0, the gcov front end (lcov, geninfo, genhtml, gendesc, genpng),
+    running on cvcpkg's perl with the CPAN modules it needs bundled
+    (Capture::Tiny, DateTime and its dependencies, TimeDate, and
+    Cpanel::JSON::XS for fast gcov JSON parsing), so coverage
+    reports need no system lcov, perl or CPAN install. 2.0 is the release
+    Ubuntu 24.04 ships, so a CI that moves off apt's lcov keeps the same
+    capture, filtering and --ignore-errors behaviour. gcov itself comes from
+    the compiler.
+
+source:
+  type: tarball
+  url: https://github.com/linux-test-project/lcov/releases/download/v2.0/lcov-2.0.tar.gz
+  sha256: "1857bb18e27abe8bcec701a907d5c47e01db4d4c512fc098d1a6acd29267bf46"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # perl at build time compiles the XS modules (Clone, DateTime,
+  # Cpanel::JSON::XS) against the same perl that runs them, so the bundle is
+  # per platform.
+  build:
+    - perl
+  runtime:
+    - perl
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  files:
+    - bin/lcov
+    - bin/geninfo
+    - bin/genhtml
+    - bin/gendesc
+    - bin/genpng
+    - libexec/lcov/
+    - share/lcov/
+    - share/man/man1/lcov.1
+    - share/man/man1/geninfo.1
+    - share/man/man1/genhtml.1
+    - share/man/man1/gendesc.1
+    - share/man/man1/genpng.1
+    - share/man/man5/lcovrc.5
+
+notes:
+  - title: "Layout"
+    platforms: [linux, macos]
+    description: >-
+      bin/{lcov,geninfo,genhtml,gendesc,genpng} are small /bin/sh launchers.
+      Each finds its prefix from its own path, puts <prefix>/bin first on PATH
+      (lcov runs geninfo through its #!/usr/bin/env perl line, which must
+      resolve to cvcpkg's perl, not the host's) and PERL5LIB at the bundled
+      modules, then runs lcov's own script from libexec/lcov/bin under
+      <prefix>/bin/perl. libexec/lcov keeps lcov's source layout (bin/ next to
+      lib/lcovutil.pm, found through FindBin), which is relocatable as is;
+      upstream's `make install` is not used, because it bakes absolute lib/bin
+      paths and /usr/bin/perl into the scripts. The CPAN modules live in
+      libexec/lcov/perl5, private to lcov.
+  - title: "Bundled CPAN modules"
+    platforms: [linux, macos]
+    description: >-
+      cpan-modules.txt pins every distribution (version, URL, sha256), in
+      install order. lcov 2.0 loads Capture::Tiny, DateTime and Date::Parse;
+      the rest is DateTime's dependency closure, plus Cpanel::JSON::XS, which
+      geninfo prefers over the much slower core JSON::PP for gcov's JSON. They
+      are under the Perl licence (Artistic or GPL) except where a
+      distribution says otherwise.
+      Memory::Process (only for --memory) and DateTime::Format::W3CDTF (lcov
+      falls back to its own parser) are optional and not bundled, nor is GD,
+      which only genpng needs.
+  - title: "lcovrc"
+    platforms: [linux, macos]
+    description: >-
+      lcov reads ~/.lcovrc, /etc/lcovrc or /usr/local/etc/lcovrc, else its
+      built-in defaults. The upstream sample is installed as
+      share/lcov/lcovrc for reference; pass --config-file to use it.
