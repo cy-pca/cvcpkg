@@ -1,0 +1,68 @@
+cvcpkg: let lupa build lupa.lua54 / lupa.luajit21 against INSTALLED Lua libraries.
+
+Upstream setup.py either compiles the Lua sources bundled under third-party/
+into each extension (modules lupa.lua54, lupa.luajit21, ...) or, with
+--no-bundle, links ONE pkg-config-discovered Lua into a single module named
+lupa.lua. Neither builds the per-version modules against an external Lua.
+This adds $LUPA_EXTERNAL_LUA: a JSON object mapping module name -> include
+dirs / library dirs / libraries, one extension per entry. Without the variable
+setup.py behaves exactly as upstream.
+
+--- a/setup.py
++++ b/setup.py
+@@ -150,6 +150,37 @@
+         ]
+ 
+ 
++def get_lua_builds_from_environment():
++    """Build one extension module per installed Lua named in $LUPA_EXTERNAL_LUA.
++
++    (cvcpkg addition.)  The value is a JSON object mapping a module name to the
++    Lua installation it links against, e.g.
++
++        {"lua54":    {"include_dirs": ["/p/include"],
++                      "library_dirs": ["/p/lib"], "libraries": ["lua"]},
++         "luajit21": {"include_dirs": ["/p/include/luajit-2.1"],
++                      "library_dirs": ["/p/lib"], "libraries": ["luajit-5.1"]}}
++
++    which yields lupa.lua54 and lupa.luajit21 -- the module names a bundled
++    build produces -- linked against those installed (shared) libraries
++    instead of compiling the Lua sources bundled in third-party/.
++    """
++    spec = os.environ.get('LUPA_EXTERNAL_LUA')
++    if not spec:
++        return []
++    import json
++    configs = []
++    for module_name, cfg in json.loads(spec).items():
++        print("Using external Lua for lupa.%s: %s" % (module_name, cfg))
++        configs.append(dict(
++            libversion=module_name,
++            include_dirs=cfg.get('include_dirs', []),
++            library_dirs=cfg.get('library_dirs', []),
++            libraries=cfg.get('libraries', []),
++        ))
++    return configs
++
++
+ def find_lua_build(no_luajit=False):
+     # try to find local LuaJIT2 build
+     for filename in os.listdir(basedir):
+@@ -386,7 +417,7 @@
+ option_use_bundle = has_option('--use-bundle')
+ option_no_luajit = has_option('--no-luajit')
+ 
+-configs = get_lua_build_from_arguments()
++configs = get_lua_build_from_arguments() or get_lua_builds_from_environment()
+ if not configs and not option_no_bundle:
+     configs = [
+         use_bundled_lua(lua_bundle_path, c_defines)
+@@ -436,6 +467,8 @@
+             sources=[dst] + (libs[0][1]['sources'] if libs else []),
+             extra_objects=config.get('extra_objects'),
+             include_dirs=config.get('include_dirs'),
++            library_dirs=config.get('library_dirs'),
++            libraries=config.get('libraries'),
+             define_macros=c_defines,
+             **extra_extension_args,
+         ))
