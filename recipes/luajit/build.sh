@@ -47,23 +47,30 @@ esac
 # libSystem) on Linux, macOS, FreeBSD and NetBSD, but on OpenBSD from libc++abi
 # (LLVM libunwind is built into it), which a plain C link does not pull in:
 # the dev-cluster OpenBSD build of luajit failed on exactly those symbols.
-# Name it -- the library Rust links on OpenBSD for unwinding -- and carry it
-# into what static consumers are told to link.
+# Name it -- the library Rust links on OpenBSD for unwinding -- plus the
+# libpthread it depends on (its rwlocks; OpenBSD's ld rejects the link
+# otherwise with --no-allow-shlib-undefined), and carry both into what static
+# consumers are told to link.
 # Libs.private: upstream's "-Wl,-E -lm -ldl" is Linux-shaped; the BSDs have
 # dlopen in libc and do not need -ldl.
 case "$(uname -s)" in
-    Linux)   lj_libs="";          pc_private="";                        cmake_static_libs='m;${CMAKE_DL_LIBS}' ;;
-    Darwin)  lj_libs="";          pc_private="";                        cmake_static_libs='m' ;;
-    OpenBSD) lj_libs="-lc++abi";  pc_private="-Wl,-E -lm -lc++abi";     cmake_static_libs='m;c++abi' ;;
-    *)       lj_libs="";          pc_private="-Wl,-E -lm";              cmake_static_libs='m' ;;
+    Linux)   lj_libs="";                   pc_private="";                                cmake_static_libs='m;${CMAKE_DL_LIBS}' ;;
+    Darwin)  lj_libs="";                   pc_private="";                                cmake_static_libs='m' ;;
+    OpenBSD) lj_libs="-lc++abi -lpthread"; pc_private="-Wl,-E -lm -lc++abi -lpthread";   cmake_static_libs='m;c++abi;pthread' ;;
+    *)       lj_libs="";                   pc_private="-Wl,-E -lm";                      cmake_static_libs='m' ;;
 esac
 
 # CC on the command line: the Makefile defaults to gcc, which the BSDs' clang
 # toolchains do not have. CFLAGS (-fPIC from the matrix on ELF) is appended by
 # the Makefile itself, so libluajit-5.1.a can be linked into shared objects
 # (Python extensions, plugins) as well as executables. LIBS reaches both the
-# luajit link and the libluajit shared-library link.
-"${MAKE}" -j "${CVC_JOBS}" amalg PREFIX=/usr/local CC="${CC}" ${lj_libs:+LIBS="${lj_libs}"}
+# luajit link and the libluajit shared-library link (one make argument, even
+# when it holds several -l flags).
+make_vars=(PREFIX=/usr/local "CC=${CC}")
+if [ -n "${lj_libs}" ]; then
+    make_vars+=("LIBS=${lj_libs}")
+fi
+"${MAKE}" -j "${CVC_JOBS}" amalg "${make_vars[@]}"
 "${MAKE}" install PREFIX="${CVC_INSTALL_DIR}"
 
 LIB="${CVC_INSTALL_DIR}/lib"
