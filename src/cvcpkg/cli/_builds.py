@@ -1683,15 +1683,14 @@ def builds_submit_dag(
                                 f"jobs: {', '.join(uniq)}"
                             )
                         if local_only:
-                            # Not a job and never in the catalog, and the
-                            # builder agent installs deps only from the
-                            # catalog: the dependent must get it some other
-                            # way (e.g. the `cuda` capability's system nvcc).
+                            # Never a job and never in the catalog: the builder
+                            # agent builds each into the dependent job's own
+                            # prefix from its recipe (_install_deps).
                             click.echo(
-                                f"  Warning: {plat}/{ar}: non-redistributable "
-                                f"dependency(ies) {', '.join(sorted(set(local_only)))} "
-                                f"are not built as jobs and builders do not provision "
-                                f"them; dependents must find them on the builder."
+                                f"  {plat}/{ar}: non-redistributable dependency(ies) "
+                                f"{', '.join(sorted(set(local_only)))} are not built as "
+                                f"jobs; the builder builds them into each dependent "
+                                f"job's prefix from their recipes."
                             )
                         if unbuildable:
                             uniq = sorted(set(unbuildable))
