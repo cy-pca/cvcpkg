@@ -70,6 +70,17 @@ package:
     - { glob: "lib/python3.13/site-packages/pycares-*.dist-info/", platforms: [linux, macos] }
 
 notes:
+  - title: "Patched: lookups buffer lifetime"
+    platforms: [linux, macos]
+    description: >-
+      pycares-lookups-lifetime.patch keeps the `lookups` string passed to
+      Channel(lookups=...) alive until ares_init_options() has copied it.
+      Upstream (5.0.1, still in 5.1.0) assigns a cffi temporary to the struct
+      field, so c-ares can read freed memory and resolve with the wrong lookup
+      order (seen as ARES_ECONNREFUSED, err 11; on catx-03 0/1000 failures
+      patched vs 12-54/1000 unpatched). Channel(resolvconf_path=...) has the
+      same pattern and is not patched. Drop the patch once a pycares release
+      contains the fix.
   - title: "Not built on Windows yet"
     platforms: [linux, macos]
     description: >-
