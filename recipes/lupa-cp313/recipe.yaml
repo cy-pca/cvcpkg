@@ -41,7 +41,9 @@ python:
 # setup.py can only link ONE external Lua, into a module named lupa.lua (its
 # --no-bundle/pkg-config path); the per-version modules come only from the
 # bundled sources. The patch adds $LUPA_EXTERNAL_LUA so build.sh can ask for
-# lupa.lua54 and lupa.luajit21 against the installed libraries. See its header.
+# lupa.lua54 and lupa.luajit21 against the installed libraries, and drops the
+# obsolete setup(test_suite=...) that breaks metadata generation when an old
+# setuptools dist-info is also on the path (python311). See its header.
 patches:
   - lupa-external-lua.patch
 

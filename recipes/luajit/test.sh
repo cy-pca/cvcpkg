@@ -48,8 +48,13 @@ ${leaks}"
 done
 ok "no build-time path in any relocated file"
 
-unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH || true
 unset CMAKE_PREFIX_PATH PKG_CONFIG_PATH LUA_PATH LUA_CPATH || true
+
+# Run a CONSUMER (or the relocated luajit) with the loader path cleared, so only
+# RUNPATH/@rpath can find libluajit. The build tools keep cvcpkg's environment:
+# on OpenBSD (no $ORIGIN) the cvcpkg-built cmake needs LD_LIBRARY_PATH for its
+# own libssl. A subshell, since OpenBSD's env(1) has no -u.
+noldp() { ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" ); }
 
 if [[ "${PLAT}" == "windows" ]]; then
     LJ="${R}/bin/luajit.exe"
@@ -60,7 +65,7 @@ fi
 # ── The relocated interpreter ────────────────────────────────────────────────
 # LuaJIT is the Lua 5.1 dialect (what Redis/Valkey EVAL runs): _VERSION is
 # "Lua 5.1", setfenv exists, and 5.3's // operator does not parse.
-"${LJ}" -e '
+noldp "${LJ}" -e '
 assert(_VERSION == "Lua 5.1", _VERSION)
 assert(type(setfenv) == "function")
 assert(loadstring("return 7 // 2") == nil, "// must not parse in Lua 5.1")
@@ -72,15 +77,15 @@ print("relocated " .. jit.version .. " (" .. jit.os .. "/" .. jit.arch .. "): Lu
 # The jit.* modules (-b, -jv, -jdump, -jp) live in share/luajit-2.1 on Unix and
 # bin/lua/jit on Windows (found there without LUA_PATH).
 if [[ "${PLAT}" == "windows" ]]; then
-    "${LJ}" -b -e 'return 1 + 1' "${T}/two.raw" || fail "luajit -b failed"
+    noldp "${LJ}" -b -e 'return 1 + 1' "${T}/two.raw" || fail "luajit -b failed"
 else
-    LUA_PATH="${R}/share/luajit-2.1/?.lua;;" "${LJ}" -b -e 'return 1 + 1' "${T}/two.raw" \
+    LUA_PATH="${R}/share/luajit-2.1/?.lua;;" noldp "${LJ}" -b -e 'return 1 + 1' "${T}/two.raw" \
         || fail "luajit -b with LUA_PATH=<prefix>/share/luajit-2.1 failed"
 fi
 # Inside a Lua string the path is not MSYS-converted on Windows; hand luajit.exe
 # the native spelling there.
 TL="$(cygpath -m "${T}" 2>/dev/null || echo "${T}")"
-[[ "$("${LJ}" -e "print(dofile('${TL}/two.raw'))" | tr -d '\r')" == "2" ]] || fail "bytecode from luajit -b did not run"
+[[ "$(noldp "${LJ}" -e "print(dofile('${TL}/two.raw'))" | tr -d '\r')" == "2" ]] || fail "bytecode from luajit -b did not run"
 ok "luajit -b (jit.bcsave) wrote bytecode that runs"
 
 # ── 2. The embedding program ─────────────────────────────────────────────────
@@ -147,7 +152,9 @@ liblj_of() {
     case "${PLAT}" in
         macos)   otool -L "$1" | awk '/libluajit/ {print $1}' ;;
         windows) : ;;
-        *)       ldd "$1" | awk '/libluajit/ {print $3}' ;;
+        # "name => path (addr)" on Linux/FreeBSD/NetBSD; a table with the
+        # path in the last column on OpenBSD.
+        *)       noldp ldd "$1" | awk '/libluajit/ { if (index($0, "=>")) print $3; else print $NF }' ;;
     esac
 }
 expect_in_reloc() {
@@ -198,10 +205,10 @@ if [[ "${PLAT}" == "windows" ]]; then
     echo "-- luajit smoke test passed --"
     exit 0
 fi
-"${exe}" || fail "embed_shared (luajit::luajit) failed"
+noldp "${exe}" || fail "embed_shared (luajit::luajit) failed"
 expect_in_reloc "${exe}"
 exe="$(exe_path embed_static)" || fail "embed_static not built"
-"${exe}" || fail "embed_static (luajit::luajit_static) failed"
+noldp "${exe}" || fail "embed_static (luajit::luajit_static) failed"
 expect_static "${exe}"
 ok "find_package(luajit 2.1): luajit::luajit and luajit::luajit_static built and ran from the relocated prefix"
 
@@ -223,9 +230,9 @@ done
 # shellcheck disable=SC2046
 ${CCMD} -o "${T}/pc_static" "${T}/consumer/embed.c" $(pc --cflags luajit) "${libdir}/libluajit-5.1.a" \
     ${static_extra[@]+"${static_extra[@]}"} || fail "pkg-config static link failed"
-"${T}/pc_shared" || fail "pkg-config shared program failed"
+noldp "${T}/pc_shared" || fail "pkg-config shared program failed"
 expect_in_reloc "${T}/pc_shared"
-"${T}/pc_static" || fail "pkg-config static program failed"
+noldp "${T}/pc_static" || fail "pkg-config static program failed"
 expect_static "${T}/pc_static"
 ok "pkg-config luajit: shared and static programs built and ran from the relocated prefix"
 

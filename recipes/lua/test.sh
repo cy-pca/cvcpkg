@@ -121,16 +121,23 @@ ${leaks}"
 done
 ok "no build-time path in any relocated file"
 
-# Consumers' loader path: start clean, so only RUNPATH/@rpath can find liblua.
-unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH || true
 unset CMAKE_PREFIX_PATH PKG_CONFIG_PATH || true
 
+# Run a CONSUMER with the loader path cleared, so only its RUNPATH/@rpath can
+# find liblua. Only the consumers: the build tools (cmake) keep the
+# environment cvcpkg gave the test -- on OpenBSD, whose ld.so ignores $ORIGIN,
+# the cvcpkg-built cmake needs LD_LIBRARY_PATH to find its own libssl. A
+# subshell rather than `env -u`, which OpenBSD's env(1) does not have.
+noldp() { ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" ); }
+
 # Where did EXE load liblua from? Prints nothing when it is linked statically.
+# ldd prints "name => path (addr)" on Linux/FreeBSD/NetBSD and a table whose
+# last column is the path on OpenBSD.
 liblua_of() {
     case "${PLAT}" in
         macos)   otool -L "$1" | awk '/liblua/ {print $1}' ;;
         windows) : ;;
-        *)       ldd "$1" | awk '/liblua/ {print $3}' ;;
+        *)       noldp ldd "$1" | awk '/liblua/ { if (index($0, "=>")) print $3; else print $NF }' ;;
     esac
 }
 # Assert a shared-linked EXE resolves liblua inside the relocated prefix.
@@ -262,7 +269,7 @@ run_exe() {
     if [[ "${PLAT}" == "windows" ]]; then
         PATH="${R}/bin:${PATH}" "$@"
     else
-        "$@"
+        noldp "$@"
     fi
 }
 for t in embed_shared embed_cxx; do
@@ -301,9 +308,9 @@ done
 # shellcheck disable=SC2046
 ${CCMD} -o "${T}/pc_static" "${T}/embed.c" $(pc --cflags lua5.4) "${libdir}/liblua.a" \
     ${static_extra[@]+"${static_extra[@]}"} || fail "pkg-config static link failed"
-"${T}/pc_shared" || fail "pkg-config shared program failed"
+noldp "${T}/pc_shared" || fail "pkg-config shared program failed"
 expect_liblua_in_reloc "${T}/pc_shared"
-"${T}/pc_static" || fail "pkg-config static program failed"
+noldp "${T}/pc_static" || fail "pkg-config static program failed"
 expect_static "${T}/pc_static"
 ok "pkg-config lua5.4: shared and static programs built and ran from the relocated prefix"
 
@@ -322,7 +329,7 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" && -d "${CVC_DEPS_PREFIX}/lib" ]]; then
 fi
 run_reloc_lua() {
     case "${PLAT}" in
-        macos)   DYLD_FALLBACK_LIBRARY_PATH="${depsonly}" "$@" ;;
+        macos)   ( unset DYLD_LIBRARY_PATH; DYLD_FALLBACK_LIBRARY_PATH="${depsonly}" exec "$@" ) ;;
         # OpenBSD's ld.so does not expand $ORIGIN (cvcpkg relocates OpenBSD
         # bundles at install time instead), so the bundle's lib/ is named here.
         openbsd) LD_LIBRARY_PATH="${R}/lib:${depsonly}" "$@" ;;
@@ -332,7 +339,7 @@ run_reloc_lua() {
 run_reloc_lua "${R}/bin/lua" -e 'assert(_VERSION == "Lua 5.4"); print("relocated " .. _VERSION .. " interpreter OK")' \
     || fail "relocated bin/lua failed"
 if [[ "${PLAT}" != "openbsd" && "${PLAT}" != "macos" ]]; then
-    got="$(LD_LIBRARY_PATH="${depsonly}" ldd "${R}/bin/lua" | awk '/liblua/ {print $3}')"
+    got="$(LD_LIBRARY_PATH="${depsonly}" ldd "${R}/bin/lua" | awk '/liblua/ { if (index($0, "=>")) print $3; else print $NF }')"
     [[ "$(cd "$(dirname "${got}")" && pwd -P)" == "$(cd "${R}/lib" && pwd -P)" ]] \
         || fail "relocated bin/lua loads liblua from '${got}'"
     ok "relocated bin/lua resolves liblua via \$ORIGIN: ${got}"

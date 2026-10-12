@@ -41,11 +41,29 @@ case "$(uname -s)" in
         ;;
 esac
 
+# LuaJIT unwinds Lua errors through C frames with the external (DWARF) unwinder
+# whenever the toolchain emits unwind tables, which clang does everywhere here.
+# _Unwind_* / __register_frame come from the default runtime (libgcc_s,
+# libSystem) on Linux, macOS, FreeBSD and NetBSD, but on OpenBSD from libc++abi
+# (LLVM libunwind is built into it), which a plain C link does not pull in:
+# the dev-cluster OpenBSD build of luajit failed on exactly those symbols.
+# Name it -- the library Rust links on OpenBSD for unwinding -- and carry it
+# into what static consumers are told to link.
+# Libs.private: upstream's "-Wl,-E -lm -ldl" is Linux-shaped; the BSDs have
+# dlopen in libc and do not need -ldl.
+case "$(uname -s)" in
+    Linux)   lj_libs="";          pc_private="";                        cmake_static_libs='m;${CMAKE_DL_LIBS}' ;;
+    Darwin)  lj_libs="";          pc_private="";                        cmake_static_libs='m' ;;
+    OpenBSD) lj_libs="-lc++abi";  pc_private="-Wl,-E -lm -lc++abi";     cmake_static_libs='m;c++abi' ;;
+    *)       lj_libs="";          pc_private="-Wl,-E -lm";              cmake_static_libs='m' ;;
+esac
+
 # CC on the command line: the Makefile defaults to gcc, which the BSDs' clang
 # toolchains do not have. CFLAGS (-fPIC from the matrix on ELF) is appended by
 # the Makefile itself, so libluajit-5.1.a can be linked into shared objects
-# (Python extensions, plugins) as well as executables.
-"${MAKE}" -j "${CVC_JOBS}" amalg PREFIX=/usr/local CC="${CC}"
+# (Python extensions, plugins) as well as executables. LIBS reaches both the
+# luajit link and the libluajit shared-library link.
+"${MAKE}" -j "${CVC_JOBS}" amalg PREFIX=/usr/local CC="${CC}" ${lj_libs:+LIBS="${lj_libs}"}
 "${MAKE}" install PREFIX="${CVC_INSTALL_DIR}"
 
 LIB="${CVC_INSTALL_DIR}/lib"
@@ -67,15 +85,16 @@ fi
 test -f "${LIB}/${shared_real}" || { echo "luajit: ${LIB}/${shared_real} was not installed" >&2; exit 1; }
 
 # luajit.pc: `make install` wrote prefix=<CVC_INSTALL_DIR>; anchor it at the
-# .pc file's own location so the prefix relocates.
-sed -e 's|^prefix=.*|prefix=${pcfiledir}/../..|' "${LIB}/pkgconfig/luajit.pc" > "${LIB}/pkgconfig/luajit.pc.tmp"
+# .pc file's own location so the prefix relocates; on the BSDs, also replace
+# the Linux-shaped Libs.private (see above).
+pc_sed=(-e 's|^prefix=.*|prefix=${pcfiledir}/../..|')
+if [ -n "${pc_private}" ]; then
+    pc_sed+=(-e "s|^Libs.private:.*|Libs.private: ${pc_private}|")
+fi
+sed "${pc_sed[@]}" "${LIB}/pkgconfig/luajit.pc" > "${LIB}/pkgconfig/luajit.pc.tmp"
 mv -f "${LIB}/pkgconfig/luajit.pc.tmp" "${LIB}/pkgconfig/luajit.pc"
 
-if [ "$(uname -s)" = "Darwin" ]; then
-    luajit_write_cmake_config "lib/${shared_real}" "${shared_soname}" "lib/libluajit-5.1.a" 'm'
-else
-    luajit_write_cmake_config "lib/${shared_real}" "${shared_soname}" "lib/libluajit-5.1.a" 'm;${CMAKE_DL_LIBS}'
-fi
+luajit_write_cmake_config "lib/${shared_real}" "${shared_soname}" "lib/libluajit-5.1.a" "${cmake_static_libs}"
 
 cvc_rewrite_install_paths
 
