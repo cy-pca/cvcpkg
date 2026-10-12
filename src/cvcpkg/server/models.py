@@ -47,6 +47,9 @@ class AuditAction(str, Enum):
     # by an admin's `cvcpkg nuke` or by the yank-retention GC (recorded with
     # actor "retention-gc", which holds no token).
     nuke = "nuke"
+    # An admin filling in a published row's EMPTY required_deps/provides from
+    # the recipe that built it (rows published before #152 recorded none).
+    backfill_deps = "backfill_deps"
     token_create = "token_create"
     token_revoke = "token_revoke"
     # Dashboard sign-in/sign-out.  Both were previously recorded as
@@ -584,6 +587,18 @@ class DevicePollRequest(BaseModel):
 
 class RevokeRequest(BaseModel):
     all: bool = False
+
+
+class BackfillDepsRequest(BaseModel):
+    """Edges to fill into one published variant whose row records none."""
+
+    required_deps: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Runtime deps as written at publish: [{name, org?, version?}, ...].",
+    )
+    provides: list[str] = Field(
+        default_factory=list, description="Virtual slots the package fills."
+    )
 
 
 class OrgListResponse(BaseModel):

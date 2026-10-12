@@ -69,6 +69,7 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    BackfillDepsRequest,
     DeviceAuthRequest,
     DevicePollRequest,
     RevokeRequest,
@@ -5163,6 +5164,81 @@ def create_app(
                     n += 1
                 state.save_index()
         return {"message": f"unyanked {target}", "count": n}
+
+    @app.post("/v1/admin/packages/{name}/{version}/backfill-deps", tags=["admin"])
+    async def backfill_deps(
+        name: str,
+        version: str,
+        body: BackfillDepsRequest,
+        platform: str = Query(..., description="Variant platform"),
+        arch: str = Query(..., description="Variant arch"),
+        build_type: str = Query(..., description="Variant build type (release/debug)"),
+        link: str = Query(..., description="Variant link mode (shared/static)"),
+        org: str = Query("", description="Owning org slug ('' for the public namespace)"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Fill one published variant's EMPTY required_deps / provides.
+
+        Rows published before #152 reached the catalog with no edges, so the
+        resolver installs them without their runtime dependencies.  This fills
+        a column only while it is still ``[]`` -- a row that records its edges
+        is never rewritten -- and addresses exactly one variant: every key is
+        required, so no request can touch more than the variant it names.
+        """
+        for dep in body.required_deps:
+            if not dep.get("name") or set(dep) - {"name", "org", "version"}:
+                raise HTTPException(
+                    422, f"required_deps entries are {{name, org?, version?}}, got {dep!r}"
+                )
+        if any(not p for p in body.provides):
+            raise HTTPException(422, "provides entries must be non-empty names")
+        required_json = json.dumps(body.required_deps)
+        provides_json = json.dumps(body.provides)
+        target = (
+            f"{name}=={version} [platform={platform},arch={arch},"
+            f"build_type={build_type},link={link}{',org=' + org if org else ''}]"
+        )
+        async with _audit_txn(
+            AuditAction.backfill_deps,
+            actor.name,
+            target,
+            f"required_deps={required_json} provides={provides_json}",
+        ):
+            if _use_db:
+                counts = await _db_packages.backfill_deps(
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    org_slug=org,
+                    required_deps=required_json,
+                    provides=provides_json,
+                )
+            else:
+                state = _get_state()
+                counts = {"required_deps": 0, "provides": 0}
+                for b in state.index.get("bundles", []):
+                    if (
+                        b.get("name"),
+                        b.get("version"),
+                        b.get("platform"),
+                        b.get("arch"),
+                        b.get("build_type"),
+                        b.get("link"),
+                        b.get("org") or "",
+                    ) != (name, version, platform, arch, build_type, link, org):
+                        continue
+                    for key, value in (
+                        ("required_deps", body.required_deps),
+                        ("provides", body.provides),
+                    ):
+                        if value and not b.get(key):
+                            b[key] = value
+                            counts[key] += 1
+                state.save_index()
+        return {"message": f"backfilled {target}", "count": counts}
 
     @app.post("/v1/packages/{name}/{version}/nuke", tags=["publish"])
     async def nuke(

@@ -2325,7 +2325,17 @@ def runtime_dependencies(recipe: Recipe, platform: str) -> list[dict[str, str]]:
     that haven't adopted the runtime/build split yet.  A dep whose
     ``platforms:`` list excludes *platform* is dropped.
     """
-    depends_block = recipe.raw.get("depends", {})
+    return runtime_dependencies_from_raw(recipe.raw, platform)
+
+
+def runtime_dependencies_from_raw(raw: dict[str, Any], platform: str) -> list[dict[str, str]]:
+    """:func:`runtime_dependencies` from a parsed recipe.yaml dict.
+
+    For callers that hold a recipe as data rather than a directory --
+    scripts/backfill_required_deps.py reads each published version's recipe
+    out of git history.
+    """
+    depends_block = raw.get("depends", {}) or {}
     depends = depends_block.get("runtime", depends_block.get("build", []))
 
     dep_list = []
