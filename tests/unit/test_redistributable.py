@@ -425,16 +425,153 @@ class TestServerRefuses:
 # ── install builds it instead ───────────────────────────────────
 
 
+def _bundle(name, deps=()):
+    return {
+        "name": name,
+        "version": "1.0.0+cvc.1",
+        "platform": "linux",
+        "arch": "x86_64",
+        "build_type": "release",
+        "link": "shared",
+        "sha256": "abc",
+        "size_bytes": 1,
+        "archive_url": f"https://cvcpkg.org/a/{name}.tar.gz",
+        "required_deps": [{"name": d} for d in deps],
+    }
+
+
+class TestResolverLocalOnly:
+    def _entries(self, *bundles):
+        from cvcpkg.catalog import catalog_entries
+
+        entries = catalog_entries(
+            {"schema_version": 1, "revision": 1, "bundles": list(bundles)},
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="shared",
+        )
+        out: dict = {}
+        for e in entries:
+            out.setdefault(e.name, []).append(e)
+        return out
+
+    def test_a_catalog_bundle_may_depend_on_a_local_only_name(self):
+        from cvcpkg.manifest import ComponentReq
+        from cvcpkg.resolver import resolve
+
+        cands = self._entries(_bundle("torch", ["nvwheel"]), _bundle("python311"))
+        local = {"nvwheel": ["python311"]}
+        result = resolve(
+            [ComponentReq(name="torch")], cands, capabilities=set(), local_only=local.get
+        )
+        # The local name's own deps come from the catalog, like any other dep.
+        assert sorted(result.picked) == ["python311", "torch"]
+        assert result.local == ["nvwheel"]
+
+    def test_without_the_hook_a_missing_dep_still_fails(self):
+        from cvcpkg.errors import ResolveError
+        from cvcpkg.manifest import ComponentReq
+        from cvcpkg.resolver import resolve
+
+        cands = self._entries(_bundle("torch", ["nvwheel"]))
+        with pytest.raises(ResolveError, match="nvwheel"):
+            resolve([ComponentReq(name="torch")], cands, capabilities=set())
+
+    def test_local_names_come_out_dependencies_first(self):
+        from cvcpkg.manifest import ComponentReq
+        from cvcpkg.resolver import resolve
+
+        local = {"a": ["b"], "b": ["c"], "c": []}
+        result = resolve([ComponentReq(name="a")], {}, capabilities=set(), local_only=local.get)
+        assert result.local == ["c", "b", "a"]
+
+    def test_a_capability_filtered_name_is_not_built_locally(self):
+        # Its catalog providers exist but this host cannot use them; building
+        # it from source instead would silently change what the user gets.
+        from cvcpkg.errors import ResolveError
+        from cvcpkg.manifest import ComponentReq
+        from cvcpkg.resolver import resolve
+
+        gpu = dict(_bundle("kit"), requires_capabilities=["cuda"])
+        cands = self._entries(gpu)
+        with pytest.raises(ResolveError, match="host is missing: cuda"):
+            resolve(
+                [ComponentReq(name="kit")],
+                cands,
+                capabilities=set(),
+                local_only=lambda n: [],
+            )
+
+
 class TestInstall:
-    def test_not_redistributable_components(self, tmp_path):
-        from cvcpkg.installer import not_redistributable_components
+    def test_not_redistributable_deps(self, tmp_path):
+        from cvcpkg.installer import not_redistributable_deps
 
         root = tmp_path / "recipes"
-        _write_recipe(root, "vendorkit", redistributable=False)
+        _write_recipe(root, "vendorkit", redistributable=False, deps=("python311",))
         _write_recipe(root, "zlib")
-        assert not_redistributable_components(["zlib", "vendorkit", "missing"], [root]) == [
-            "vendorkit"
-        ]
+        assert not_redistributable_deps("vendorkit", [root], "linux") == ["python311"]
+        assert not_redistributable_deps("zlib", [root], "linux") is None
+        assert not_redistributable_deps("missing", [root], "linux") is None
+
+    def test_a_dependency_of_a_catalog_bundle_is_built_after_the_catalog_installs(
+        self, tmp_path, monkeypatch
+    ):
+        # torch-cp311-cuda (published) -> nvidia-*-cu12 wheels (not
+        # redistributable) -> python311 (published): the wheels are built
+        # locally, after python311 is in the prefix.
+        from click.testing import CliRunner
+
+        from cvcpkg import installer
+        from cvcpkg.cli import cli
+
+        root = tmp_path / "recipes"
+        _write_recipe(root, "nvwheel", redistributable=False, deps=("python311",))
+        catalog = tmp_path / "catalog.yaml"
+        catalog.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "revision": 1,
+                    "bundles": [_bundle("torch", ["nvwheel", "python311"]), _bundle("python311")],
+                }
+            )
+        )
+        events: list[str] = []
+        monkeypatch.setattr(
+            installer,
+            "install_entry",
+            lambda entry, *a, **kw: events.append(f"install {entry.name}"),
+        )
+        monkeypatch.setattr(
+            installer,
+            "build_from_source_fallback",
+            lambda name, *a, **kw: events.append(f"build {name}"),
+        )
+        prefix = tmp_path / "prefix"
+        res = CliRunner().invoke(
+            cli,
+            [
+                "install",
+                "torch",
+                "--catalog",
+                str(catalog),
+                "--platform",
+                "linux",
+                "--arch",
+                "x86_64",
+                "--recipes-dir",
+                str(root),
+                "--no-default-recipes",
+                "--prefix",
+                str(prefix),
+            ],
+        )
+        assert res.exit_code == 0, res.output
+        assert events == ["install python311", "install torch", "build nvwheel"]
+        assert "nvwheel is not redistributable" in res.output
+        assert "3 component(s) installed" in res.output
 
     def test_install_builds_it_without_fallback_to_source(self, tmp_path, monkeypatch):
         from click.testing import CliRunner

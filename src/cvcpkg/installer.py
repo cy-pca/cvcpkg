@@ -414,28 +414,33 @@ def _find_recipe_dir(name: str, recipes_dirs: list[Path] | None) -> Path | None:
     return None
 
 
-def not_redistributable_components(names: list[str], recipes_dirs: list[Path] | None) -> list[str]:
-    """Those of *names* whose recipe declares ``redistributable: false``.
+def not_redistributable_deps(
+    name: str, recipes_dirs: list[Path] | None, platform: str
+) -> list[str] | None:
+    """The runtime deps of *name* if its recipe is ``redistributable: false``.
 
-    Such a component is never in the catalog, so building it from its recipe
-    is the only way to install it -- ``cvcpkg install`` does that whether or
-    not ``--fallback-to-source`` was passed.
+    ``None`` otherwise (no such recipe, or an ordinary one).  Such a component
+    is never in the catalog, so building it from its recipe is the only way to
+    install it -- ``cvcpkg install`` does that whether it was requested or is
+    a dependency of a catalog bundle, and whether or not
+    ``--fallback-to-source`` was passed.  The deps are what that local build
+    needs in the prefix first (the python interpreter, for a wheel); this is
+    the resolver's ``local_only`` hook.
     """
     import yaml
 
-    from cvcpkg.builder import Recipe, RecipeError
+    from cvcpkg.builder import Recipe, RecipeError, runtime_dependencies
 
-    out: list[str] = []
-    for name in names:
-        recipe_dir = _find_recipe_dir(name, recipes_dirs)
-        if recipe_dir is None:
-            continue
-        try:
-            if not Recipe.load(recipe_dir).redistributable:
-                out.append(name)
-        except (RecipeError, OSError, ValueError, yaml.YAMLError):
-            continue
-    return out
+    recipe_dir = _find_recipe_dir(name, recipes_dirs)
+    if recipe_dir is None:
+        return None
+    try:
+        recipe = Recipe.load(recipe_dir)
+    except (RecipeError, OSError, ValueError, yaml.YAMLError):
+        return None
+    if recipe.redistributable:
+        return None
+    return [d["name"] for d in runtime_dependencies(recipe, platform)]
 
 
 def build_from_source_fallback(

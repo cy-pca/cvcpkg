@@ -11,6 +11,7 @@ and inter-component dependency constraints.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from cvcpkg.errors import ResolveError
@@ -23,6 +24,9 @@ class ResolveResult:
     """Successful resolution: a mapping of component name → chosen entry."""
 
     picked: dict[str, CatalogEntry] = field(default_factory=dict)
+    # Names satisfied outside the catalog by *local_only*: recipes the
+    # installer builds from source, dependencies before their dependents.
+    local: list[str] = field(default_factory=list)
 
 
 def resolve(
@@ -31,6 +35,7 @@ def resolve(
     *,
     recommended: dict[str, str] | None = None,
     capabilities: set[str] | None = None,
+    local_only: Callable[[str], list[str] | None] | None = None,
 ) -> ResolveResult:
     """Resolve *requirements* against *candidates*.
 
@@ -48,6 +53,13 @@ def resolve(
         Host capabilities used to filter and rank providers of virtual
         packages.  Defaults to :func:`cvcpkg.platform.host_capabilities`
         when ``None`` (probed lazily, never at import time).
+    local_only:
+        Consulted only for a needed name with no catalog candidate at all.
+        Returns that name's own runtime dependencies when it can be built
+        locally instead -- a ``redistributable: false`` recipe, which is
+        never in the catalog -- or ``None`` when it cannot.  Such a name
+        lands in ``ResolveResult.local`` and its dependencies are resolved
+        like any other, so a catalog bundle may depend on one.
 
     Returns
     -------
@@ -115,13 +127,53 @@ def resolve(
 
     picked: dict[str, CatalogEntry] = {}
     conflict_trail: list[str] = []
+    local: dict[str, list[str]] = {}
+
+    lookup: Callable[[str], list[str] | None] | None = None
+    if local_only is not None:
+        # Memoized: backtracking may ask about the same name many times, and
+        # the answer (a recipe on disk) cannot change mid-resolve.
+        memo: dict[str, list[str] | None] = {}
+
+        def _memoized(name: str) -> list[str] | None:
+            if name not in memo:
+                memo[name] = local_only(name)
+            return memo[name]
+
+        lookup = _memoized
 
     if not _backtrack(
-        needed, constraints, sorted_candidates, picked, conflict_trail, capability_blocked
+        needed,
+        constraints,
+        sorted_candidates,
+        picked,
+        conflict_trail,
+        capability_blocked,
+        local_only=lookup,
+        local=local,
     ):
         raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(conflict_trail[-10:]))
 
-    return ResolveResult(picked=picked)
+    return ResolveResult(picked=picked, local=_deps_first(local))
+
+
+def _deps_first(local: dict[str, list[str]]) -> list[str]:
+    """Order *local* (name -> its deps) so each name follows its local deps."""
+    order: list[str] = []
+    seen: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        for dep in local[name]:
+            if dep in local:
+                visit(dep)
+        order.append(name)
+
+    for name in sorted(local):
+        visit(name)
+    return order
 
 
 def _candidate_pool(
@@ -215,17 +267,42 @@ def _backtrack(
     picked: dict[str, CatalogEntry],
     trail: list[str],
     capability_blocked: dict[str, set[str]] | None = None,
+    *,
+    local_only: Callable[[str], list[str] | None] | None = None,
+    local: dict[str, list[str]] | None = None,
 ) -> bool:
     """Recursive backtracking resolver."""
     capability_blocked = capability_blocked or {}
+    if local is None:
+        local = {}
     # Find the next unpicked component.
-    unpicked = needed - picked.keys()
+    unpicked = needed - picked.keys() - local.keys()
     if not unpicked:
         return True
 
     name = min(unpicked)  # deterministic order
     available = candidates.get(name, [])
     spec = constraints.get(name, "")
+
+    # Nothing in the catalog can ever be named this (a capability-filtered
+    # pool is a different failure): a `redistributable: false` recipe is
+    # satisfied by building it locally, and its own deps join the search.
+    if not available and name not in capability_blocked and local_only is not None:
+        deps = local_only(name)
+        if deps is not None:
+            local[name] = deps
+            if _backtrack(
+                needed | set(deps),
+                constraints,
+                candidates,
+                picked,
+                trail,
+                capability_blocked,
+                local_only=local_only,
+                local=local,
+            ):
+                return True
+            del local[name]
 
     for entry in available:
         # Check user-level version constraint.
@@ -258,7 +335,16 @@ def _backtrack(
                 else:
                     new_constraints[dep.name] = dep.version
 
-        if _backtrack(new_needed, new_constraints, candidates, picked, trail, capability_blocked):
+        if _backtrack(
+            new_needed,
+            new_constraints,
+            candidates,
+            picked,
+            trail,
+            capability_blocked,
+            local_only=local_only,
+            local=local,
+        ):
             return True
 
         # Backtrack.
