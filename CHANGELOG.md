@@ -28,6 +28,90 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.5.0
+
+**Recipes whose license forbids publishing them, starting with the NVIDIA
+CUDA toolkit.** A recipe can declare `redistributable: false`. cvcpkg then
+never packs or publishes it: `cvcpkg pack`, `pack --from-prefix`, `pack-all`,
+build-all's server-cache push, `builds submit` / `submit-dag`, and the server's
+`/v1/publish`, `/v1/builds` and `/v1/builds/dag` all refuse it. Instead, it is
+built from its recipe on the machine that needs it, which downloads the
+payload from the vendor under the vendor's license:
+
+- `cvcpkg install` does this, and with no `--fallback-to-source` needed.
+- The resolver's new `local_only` hook lets a published bundle depend on such
+  a recipe; its own deps resolve from the catalog and the local builds run
+  last, dependencies first.
+- Builder agents build such deps into a job's prefix (#169, #172, #173).
+
+- **`cuda-toolkit`** (new recipe): CUDA 12.5.1 nvcc, cudart and CCCL for
+  linux-x86_64 and windows-x86_64, laid out under `<prefix>/cuda`. The
+  archives come from NVIDIA's redist mirror and are pinned in `redist.lock`
+  (`scripts/cuda_redist_lock.py`). On Linux, `-DCMAKE_PREFIX_PATH=<prefix>`
+  alone makes `enable_language(CUDA)` and `find_package(CUDAToolkit)` work.
+  On Windows, use `CUDAToolkit_ROOT` with Ninja, or `-T cuda=<prefix>\cuda`
+  with Visual Studio.
+- The 12 proprietary `nvidia-*-cu12-cp311` wheels (cuBLAS, cuDNN, cuFFT, ...)
+  are `redistributable: false` and their bundles have been yanked from
+  cvcpkg.org. `torch-cp311-cuda` still installs with this release: its NVIDIA
+  wheels are pip-installed from PyPI on the installing machine. **Earlier
+  cvcpkg versions can no longer install `torch-cp311-cuda`; upgrade.**
+- **`msvc`** (new recipe): MSVC 14.44 and Windows SDK 26100 from Microsoft's
+  own packages, also `redistributable: false`. It sits behind a license gate:
+  a recipe can declare `license_acceptance`, and `cvcpkg install` then asks
+  for consent, interactively, through the recipe's environment variable, or
+  with `--accept-license <name>` (#170).
+
+**Packaging and builder fixes**
+- Relocatable bundles: executables are relocated, and a pack-time linkage gate
+  checks them (#143). The reach pass and the gate count only runtime deps
+  (#165).
+- `pack-all` publishes the packed bundle, not the build-cache tarball (#154),
+  and the server-cache push records the recipe's runtime deps (#152).
+  `build-all --server-cache-push` likewise publishes the packed bundle, never
+  the raw install tree (#203).
+- The server backfills the runtime deps that catalog rows published before
+  #152 were missing (#202).
+- A builder no longer re-claims a job that already ran on it (#157).
+- `cvcpkg install cvcpkg` / `install.sh` prefer the registry's own standalone
+  build (#150, #151).
+- `uninstall` identifies cached bundles by magic bytes, not filename (#175).
+- Python recipe builds ignore the builder's user site (#153), and generated
+  Python recipes scope each install layout to the platforms that produce it
+  (#161).
+
+**Recipes**
+- Windows built from cvcpkg alone, with no vcpkg or Chocolatey:
+  - gmp and mpfr native builds (#156);
+  - openmp's MSVC build (#146);
+  - llvm18 without the DIA SDK (#174);
+  - wasmedge's LLVM, on Windows (#166) and Linux/macOS (#177);
+  - shiboken6/pyside6 libclang only from llvm18 (#183).
+- New recipes:
+  - gfortran and gcc-runtime on Linux, with Fortran LAPACK in openblas and
+    quadmath in boost (#155);
+  - clang-format 18.1.8 and lcov 2.0 (#184);
+  - Valkey 9.1.2 (#179);
+  - Lua, LuaJIT and lupa (#180);
+  - Node.js 22 LTS (#186);
+  - Temurin 21 JRE and GreenMail 2.1.14 (#187).
+- llvm, llvm18 and llvm20 declare zstd, drop terminfo, and ship clang's
+  resource headers (#178). The fastapi/starlette/uvicorn/alembic/jinja2/...
+  recipe columns are refreshed (#181).
+- Other recipe fixes: openblas `NUM_THREADS=64` (#171); the macOS closure of
+  the `cvcpkg` recipe (#163). The stale `tools/cvcpkg/` recipes copy is gone
+  (#176). The POSIX/Windows site-packages globs are scoped per platform in
+  439 Python recipes, with no rebuilds needed (#185).
+
+**CI**
+- Required checks fail closed for unlisted PR actors (#160, #162).
+- populate-server counts noarch jobs (#159).
+- New required `llm-gate` check rejects AI-assistant attribution in commits
+  and PR text (#204).
+- The Docker integration job queues on its one runner instead of being
+  cancelled by its concurrency group (#205). The prod deploy job's timeout
+  goes from 30 to 50 minutes (#206).
+
 ## v2.4.0
 
 **refactor(deps)!** — breaking. The core install shrinks to `click` + `PyYAML`; every heavier dependency moves behind a role-keyed extra. Keeping the whole core off the heavy wheels is what lets cvcpkg install and run consistently across every target — down to the cosmo APE binaries and the thin-wheel BSD/Haiku platforms — where those wheels do not exist or do not build.
