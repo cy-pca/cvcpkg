@@ -215,7 +215,7 @@ def install(
     from cvcpkg.installer import (
         build_from_source_fallback,
         install_entry,
-        not_redistributable_components,
+        not_redistributable_deps,
     )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
@@ -361,6 +361,25 @@ def install(
     source_only: list[str] = []
     requested_names = [c.name for c in reqs.components]
 
+    # A `redistributable: false` recipe (the NVIDIA CUDA toolkit) is never in
+    # the catalog -- its license forbids publishing the built tree -- so it is
+    # built here from its recipe, whose script downloads the payload from the
+    # vendor under the vendor's license.  The resolver treats such a name as
+    # satisfied (requested directly or as a catalog bundle's dependency, with
+    # or without --fallback-to-source) and resolves its own deps from the
+    # catalog; local_built lists them, dependencies first.
+    _local_rdirs = (
+        _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+    )
+    _local_memo: dict[str, list[str] | None] = {}
+
+    def _local_only(name: str) -> list[str] | None:
+        if name not in _local_memo:
+            _local_memo[name] = not_redistributable_deps(name, _local_rdirs, plat)
+        return _local_memo[name]
+
+    local_built: list[str] = []
+
     # Component requests qualified with an org (e.g. "cvc/libcvc") scope
     # candidate selection to that org for that name — see the org-qualified
     # spec bugfix below: without this, "cvc/libcvc" and "libcvc" were
@@ -409,17 +428,27 @@ def install(
                 virtual_names.update(e.provides)
 
             # Only resolve components that have candidates in the catalog,
-            # either by concrete name or as a virtual package provider.
+            # either by concrete name or as a virtual package provider, or
+            # that are satisfied without one (see _local_only).
             resolvable = [
-                c for c in reqs.components if c.name in candidates or c.name in virtual_names
+                c
+                for c in reqs.components
+                if c.name in candidates
+                or c.name in virtual_names
+                or _local_only(c.name) is not None
             ]
             if resolvable:
-                result = resolve(resolvable, candidates)
+                result = resolve(resolvable, candidates, local_only=_local_only)
                 picked = result.picked
+                local_built = result.local
 
             # Components not in the catalog need source build.
             if fallback_to_source:
-                source_only = [c.name for c in reqs.components if c.name not in picked]
+                source_only = [
+                    c.name
+                    for c in reqs.components
+                    if c.name not in picked and c.name not in local_built
+                ]
         elif fallback_to_source:
             source_only = requested_names
     else:
@@ -429,30 +458,15 @@ def install(
         # flag is set).
         source_only = requested_names
 
-    # A `redistributable: false` recipe (the NVIDIA CUDA toolkit) is never in
-    # the catalog -- its license forbids publishing the built tree -- so
-    # building it here from the recipe is the only way to install it, with or
-    # without --fallback-to-source.  Its build script downloads the payload
-    # from the vendor, under the vendor's license.
-    _local_only = not_redistributable_components(
-        [
-            c.name
-            for c in reqs.components
-            if not c.exclude and c.name not in picked and c.name not in source_only
-        ],
-        (
-            _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
-            if recipes_dirs
-            else None
-        ),
-    )
-    for name in _local_only:
+    for name in local_built:
         click.echo(
             f"cvcpkg: {name} is not redistributable, so it is never published; "
             f"building it from its recipe, which downloads it from the vendor "
             f"under the vendor's license."
         )
-    source_only = list(source_only) + _local_only
+    # Built after every catalog bundle is in place (the source loop runs last),
+    # so a local build finds its catalog deps -- a wheel, its interpreter.
+    source_only = local_built + [n for n in source_only if n not in local_built]
 
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")

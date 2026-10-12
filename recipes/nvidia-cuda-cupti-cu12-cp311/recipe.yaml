@@ -16,6 +16,14 @@ recipe:
     bundled CUDA .so libraries into the python311 site-packages `nvidia/`
     namespace; torch loads them at import. NOT built from source (proprietary
     NVIDIA redistributable). CUDA torch is GPU-only — see torch-cp311-cuda.
+
+# NVIDIA's license for this library lets a developer redistribute it only inside
+# their own application, never as a stand-alone package, so cvcpkg does not
+# publish it: `cvcpkg install` (directly, or as torch-cp311-cuda's dependency)
+# pip-installs NVIDIA's own PyPI wheel on the installing machine instead. See
+# recipes/cuda-toolkit for the same model applied to the CUDA toolkit.
+redistributable: false
+
 source:
   type: python_wheel
   artifacts:
