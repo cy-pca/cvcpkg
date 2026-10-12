@@ -1,0 +1,165 @@
+schema_version: 1
+recipe:
+  name: valkey
+  upstream_version: "9.1.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://valkey.io/
+  # Valkey is BSD-3-Clause (COPYING: the Valkey contributors' notice plus the
+  # Redis Ltd. one from before Redis relicensed; Valkey forked from 7.2.4).
+  # The binaries also statically link Valkey's bundled deps/, all permissive:
+  # libvalkey (BSD-3-Clause), jemalloc and linenoise (BSD-2-Clause), Lua 5.1
+  # (MIT), fpconv (BSL-1.0), hdr_histogram (CC0-1.0 OR BSD-2-Clause) and
+  # ffc.h, the C port of fast_float (Apache-2.0 OR MIT OR BSL-1.0).  build.sh
+  # installs every notice under share/licenses/valkey/.
+  license: "BSD-3-Clause AND BSD-2-Clause AND MIT AND BSL-1.0 AND (CC0-1.0 OR BSD-2-Clause) AND (Apache-2.0 OR MIT OR BSL-1.0)"
+  tags: [database, networking]
+  description: >-
+    Valkey — the BSD-licensed fork of Redis (from 7.2.4, before Redis moved
+    to RSAL/SSPL and later AGPL): an in-memory key-value server speaking the
+    Redis protocol, with Lua EVAL scripting, RDB/AOF persistence,
+    replication, Sentinel and Cluster.  Ships valkey-server, valkey-cli,
+    valkey-benchmark, valkey-sentinel, valkey-check-aof and valkey-check-rdb,
+    the redis-* compatibility name for each, and sample valkey.conf /
+    sentinel.conf.
+
+# bin/redis-server, bin/redis-cli, ... are installed here as compatibility
+# links, so anything else that ships those names (KeyDB, an older valkey
+# pinned as its own package, a client-only split) would clobber them.  Such a
+# package declares this slot too and is then mutually exclusive with valkey by
+# construction.  The resolver also reads a slot as a virtual package, so
+# `cvcpkg install redis-server` or a `depends.runtime: redis-server` edge gets
+# valkey -- the only Redis-protocol server the licence policy admits.
+provides:
+  - redis-server
+
+source:
+  type: tarball
+  # Pinned hash matches upstream's own record in valkey-io/valkey-hashes.
+  url: https://github.com/valkey-io/valkey/archive/refs/tags/9.1.2.tar.gz
+  sha256: "19c23908e7d57e8d91ef85b41f5646307582f10f4f0fb999bbf89ed24ec9c983"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # Valkey's Makefiles need GNU make; the BSDs' base make(1) is bmake.  Staged
+    # on PATH ahead of it, as for gmp, libvpx and libopus.
+    - name: make
+      platforms: [freebsd, openbsd, netbsd]
+  runtime:
+    - name: openssl
+      version: "^3.0"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    - bin/valkey-server
+    - bin/valkey-cli
+    - bin/valkey-benchmark
+    - bin/valkey-check-aof
+    - bin/valkey-check-rdb
+    - bin/valkey-sentinel
+    - bin/redis-server
+    - bin/redis-cli
+    - bin/redis-benchmark
+    - bin/redis-check-aof
+    - bin/redis-check-rdb
+    - bin/redis-sentinel
+    - etc/valkey/valkey.conf.sample
+    - etc/valkey/sentinel.conf.sample
+    - share/licenses/valkey/
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Platform scope — Linux, macOS and the BSDs; no native Windows"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      Upstream supports Linux, macOS, FreeBSD, OpenBSD and NetBSD, and the
+      matrix lists exactly those; only linux-x86_64 was built and tested when
+      the recipe was added.  Valkey has no native Windows port (it relies on
+      fork() for BGSAVE / BGREWRITEAOF, and the archived Microsoft Redis port
+      never went past Redis 3.x), so there is no windows entry: on Windows run it
+      under WSL, which builds as linux, or in a container.  wasm, wasi and
+      cosmo are out for the same reasons as for openssh — a network daemon
+      that forks.
+  - title: "Build options"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      Built with upstream's Makefile as `make BUILD_TLS=yes USE_SYSTEMD=no
+      install`.  TLS is compiled in against the cvcpkg openssl recipe, found
+      through an $ORIGIN/../lib run path (@loader_path/../lib on macOS).
+      systemd support is off because cvcpkg has no service mechanism — run
+      valkey-server in the foreground (`daemonize no`, the default) under
+      whatever supervisor you use.  The allocator is upstream's default:
+      Valkey's bundled, defrag-patched jemalloc on Linux, the system malloc
+      elsewhere (where active defragmentation is therefore unavailable).
+      The BSDs build with GNU make, staged from the cvcpkg make recipe.  On
+      OpenBSD and NetBSD the recipe links with -rdynamic, which upstream's
+      Makefile omits there: valkey-server looks up its statically linked Lua
+      engine with dlsym() at startup and otherwise panics ("Lua engine
+      initialization failed").
+  - title: "redis-* compatibility names"
+    description: >-
+      bin/ carries redis-server, redis-cli, redis-benchmark, redis-sentinel,
+      redis-check-aof and redis-check-rdb as relative symlinks to the valkey-*
+      programs (upstream's `make install` default), so scripts and health
+      checks that call `redis-cli ping` work unchanged, and redis-py and other
+      Redis clients connect as before.  INFO reports `server_name:valkey` and
+      `valkey_version`, plus `redis_version:7.2.4` for clients that gate
+      features on it.
+  - title: "Lua scripting uses Valkey's own embedded Lua 5.1"
+    description: >-
+      EVAL / EVALSHA / FCALL run on the Lua 5.1 interpreter Valkey vendors in
+      deps/lua (with its sandboxing patches and the cjson, cmsgpack, bit and
+      struct libraries), statically linked into valkey-server as the built-in
+      scripting engine — no module to load.  It does not use, need or clash
+      with the cvcpkg lua recipe (Lua 5.4); installing both is fine.
+  - title: "Sample configuration"
+    description: >-
+      etc/valkey/valkey.conf.sample and etc/valkey/sentinel.conf.sample are
+      upstream's annotated defaults.  Copy one to valkey.conf, set at least
+      `dir` (the default ./ is the working directory) and `bind`, and start
+      `valkey-server /path/to/valkey.conf`.  Nothing in the package reads
+      etc/valkey/ on its own.
+  - title: "Migrating from Redis 7.4 or later"
+    description: >-
+      Valkey refuses the RDB format v12 that Redis 7.4 writes ("Can't handle
+      RDB format version 12"), both as dump.rdb and as the RDB base file of a
+      multi-part AOF (appendonlydir/appendonly.aof.N.base.rdb, which Redis
+      writes by default because aof-use-rdb-preamble is yes).  Valkey 8.1 and
+      9.x were verified on 2026-10-12, this recipe's 9.1.2 against
+      redis:7-alpine (Redis 7.4.11).  Working path: on the running Redis,
+      `CONFIG SET aof-use-rdb-preamble no`, then `BGREWRITEAOF` (or, if AOF is
+      off, `CONFIG SET appendonly yes`, which rewrites by itself) and wait for
+      `aof_rewrite_in_progress:0` in INFO persistence; stop Redis; start Valkey
+      on the same data directory with `--appendonly yes`.  The rewritten base
+      is plain commands, so strings, hashes, lists, sets, sorted sets, key
+      TTLs and Redis 7.4 hash-field TTLs (replayed as HPEXPIREAT) all load.
+      Valkey ignores the leftover v12 dump.rdb while AOF is on, but started
+      without `--appendonly yes` it reads that file and refuses again: keep
+      AOF on, or run BGSAVE once so Valkey writes its own snapshot.
+      `--rdb-version-check relaxed` (Valkey 9) also loads a v12 file that
+      holds only types Valkey knows, but aborts on Redis-only encodings such
+      as a hash with field TTLs ("Can't handle foreign type or opcode 25"), so
+      prefer the AOF path.
