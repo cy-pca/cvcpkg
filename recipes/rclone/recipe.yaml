@@ -7,18 +7,15 @@ recipe:
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://rclone.org/
-  # rclone itself is MIT (COPYING). bin/rclone is a static Go binary, so it
-  # also carries every Go module it links; build.sh copies each module's
-  # license files to share/doc/rclone/third_party/ and FAILS the build if any
-  # of them is AGPL, SSPL, BUSL, RSAL or another source-available license, or
-  # an unreviewed GPL-family license. In v1.75.2 the 242 linked modules are
-  # MIT (98), Apache-2.0 (81), BSD-3-Clause (45), BSD-2-Clause (11),
-  # MPL-2.0 (8: hashicorp/*, anacrolix/log, anacrolix/generics), ISC (3),
-  # CC0-1.0 (zeebo/blake3) and one LGPL-3.0: github.com/cloudsoda/sddl, used
-  # by the SMB backend through cloudsoda/go-smb2. Its LICENSE file is the
-  # LGPL-3.0 text while its README says MIT; the expression takes the LICENSE
-  # file at its word (see notes).
-  license: "MIT AND Apache-2.0 AND BSD-3-Clause AND BSD-2-Clause AND MPL-2.0 AND ISC AND CC0-1.0 AND LGPL-3.0-only"
+  # rclone itself is MIT (COPYING), and that is the license this package
+  # declares. bin/rclone is a static Go binary that also links 242 Go
+  # modules: build.sh copies each module's license files to
+  # share/doc/rclone/third_party/ and FAILS the build if any of them is AGPL,
+  # SSPL, BUSL, RSAL or another source-available license, or an unreviewed
+  # GPL-family license. In v1.75.2 they are MIT (98), Apache-2.0 (81),
+  # BSD-3-Clause (45), BSD-2-Clause (11), MPL-2.0 (8), ISC (3), CC0-1.0 (1)
+  # and one LGPL-3.0 module, github.com/cloudsoda/sddl (see notes).
+  license: MIT
   tags: [storage, s3, backup, sync, tools, go]
   description: >-
     rclone -- "rsync for cloud storage": sync, copy, check and mount files
