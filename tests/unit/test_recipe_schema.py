@@ -307,7 +307,10 @@ class TestAbiOnlyWhereItMeansSomething:
             cmake_pkgs = (r.get("package") or {}).get("cmake_packages") or []
             if cmake_pkgs:
                 continue  # consumers link against it; the ABI tag is real
-            if not any(self._LIBISH.search(str(x)) for x in files):
+            # A platform-scoped {glob, platforms} entry is judged by its glob, not
+            # by its dict repr (which never starts with a path component).
+            globs = [x["glob"] if isinstance(x, dict) else str(x) for x in files]
+            if not any(self._LIBISH.search(g) for g in globs):
                 offenders.append(f"{d.name}: files={files}")
         assert not offenders, (
             "recipes declare an abi block but ship nothing to link or compile "
