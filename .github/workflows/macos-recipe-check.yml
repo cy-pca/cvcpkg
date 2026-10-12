@@ -114,9 +114,8 @@ jobs:
               "bison macos-latest catalog" "bison macos-15-intel catalog" \
               "nfft3 macos-latest catalog" \
               "postgresql-client macos-latest catalog" \
-              "autoconf macos-latest catalog" "autoconf macos-15-intel catalog" \
-              "libtool macos-15-intel catalog" \
-              "automake macos-15-intel source"
+              "autoconf macos-latest catalog" \
+              "automake macos-latest source"
           fi
           for job in "$@"; do
             echo "$job"
@@ -183,23 +182,49 @@ jobs:
           echo "$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")" >> "$GITHUB_PATH"
 
       - name: Install build tools (cvcpkg)
+        env:
+          BUILDING: ${{ matrix.recipe }}
         run: |
           set -euo pipefail
           prefix="$RUNNER_TEMP/cvcpkg-tools-prefix"
           tree="$RUNNER_TEMP/cvcpkg-tools"
-          cvcpkg install cmake ninja pkg-config meson m4 flex bison \
-            --prefix "$prefix" --platform macos --config release --link shared
-          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
-          exes="cmake ctest cpack ninja pkgconf m4 flex bison"
-          for exe in $exes meson; do
-            cp "$prefix/bin/$exe" "$tree/bin/"
+          # A tool whose recipe this job builds is left out: building it never
+          # needs its own bundle, and leaving it out is how a bundle that cannot
+          # run here gets replaced.
+          building=" $(echo "${BUILDING:-}" | tr ',' ' ') "
+          recipes=""
+          for r in cmake ninja pkg-config meson m4 flex bison; do
+            case "$building" in
+              *" $r "*) echo "leaving out $r: this job builds it" ;;
+              *) recipes="$recipes $r" ;;
+            esac
           done
-          ln -s pkgconf "$tree/bin/pkg-config"
-          ln -s flex "$tree/bin/flex++"
-          cp -R "$prefix"/share/cmake-* "$prefix/share/bison" "$tree/share/"
-          cp -R "$prefix/lib/meson" "$tree/lib/"
+          cvcpkg install $recipes --prefix "$prefix" --platform macos --config release --link shared
+          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
+          cmds=""
+          for r in $recipes; do
+            case "$r" in
+              cmake) exes="cmake ctest cpack"; cp -R "$prefix"/share/cmake-* "$tree/share/" ;;
+              pkg-config) exes="pkgconf"; ln -s pkgconf "$tree/bin/pkg-config" ;;
+              meson) exes="meson"; cp -R "$prefix/lib/meson" "$tree/lib/" ;;
+              m4) exes="m4"; echo "M4=$tree/bin/m4" >> "$GITHUB_ENV" ;;
+              flex) exes="flex"; ln -s flex "$tree/bin/flex++" ;;
+              bison)
+                exes="bison"
+                cp -R "$prefix/share/bison" "$tree/share/"
+                echo "BISON_PKGDATADIR=$tree/share/bison" >> "$GITHUB_ENV" ;;
+              *) exes="$r" ;;
+            esac
+            for exe in $exes; do cp "$prefix/bin/$exe" "$tree/bin/"; done
+            if [ "$r" = pkg-config ]; then cmds="$cmds pkg-config"; else cmds="$cmds $exes"; fi
+          done
+          echo $cmds > "$tree/commands"
           # The @rpath dylibs the executables load, and the ones those load.
-          todo=$(for exe in $exes; do echo "$tree/bin/$exe"; done)
+          todo=""
+          for f in "$tree"/bin/*; do
+            [ -L "$f" ] && continue
+            case "$(file -b "$f")" in *Mach-O*) todo="$todo $f" ;; esac
+          done
           while [ -n "$todo" ]; do
             next=""
             for f in $todo; do
@@ -212,22 +237,43 @@ jobs:
             done
             todo="$next"
           done
-          ls "$tree/lib"
           echo "$tree/bin" >> "$GITHUB_PATH"
-          echo "M4=$tree/bin/m4" >> "$GITHUB_ENV"
-          echo "BISON_PKGDATADIR=$tree/share/bison" >> "$GITHUB_ENV"
+          echo "tools: $cmds"
+          echo "dylibs: $(ls "$tree/lib" | tr '\n' ' ')"
 
       - name: Check build tools come from cvcpkg
         run: |
           set -euo pipefail
-          want="$RUNNER_TEMP/cvcpkg-tools/bin"
+          tree="$RUNNER_TEMP/cvcpkg-tools"
           rc=0
-          for t in cmake ctest cpack ninja pkg-config meson m4 flex bison; do
+          for t in $(cat "$tree/commands"); do
             got=$(command -v "$t" || true)
             case "$got" in
-              "$want"/*) echo "$t -> $got" ;;
-              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($want)"; rc=1 ;;
+              "$tree/bin/"*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
             esac
+          done
+          # A tool from the tree may load only what macOS itself provides or the
+          # tree carries; anything else means its bundle cannot run on a clean Mac.
+          for f in "$tree"/bin/* "$tree"/lib/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] || continue
+            case "$(file -b "$f")" in *Mach-O*) ;; *) continue ;; esac
+            for dep in $(otool -L "$f" | tail -n +2 | awk '!/:$/ {print $1}'); do
+              case "$dep" in
+                /usr/lib/*|/System/*|@rpath/*|@loader_path/*|@executable_path/*) ;;
+                *)
+                  name=$(basename "$f")
+                  case "$name" in
+                    ctest|cpack) recipe=cmake ;;
+                    pkgconf) recipe=pkg-config ;;
+                    libcurl*) recipe=curl ;;
+                    libssl*|libcrypto*) recipe=openssl ;;
+                    *) recipe=$name ;;
+                  esac
+                  echo "::error::$name loads $dep, which macOS does not provide: the cvcpkg $recipe bundle for macos-$(uname -m) needs republishing"
+                  rc=1 ;;
+              esac
+            done
           done
           set -f; IFS=:
           for d in $PATH; do
@@ -247,13 +293,14 @@ jobs:
             if [ -e "$d" ]; then echo "::error::$d is still in place; nothing may build with Homebrew"; rc=1; fi
           done
           [ "$rc" = 0 ] || exit 1
-          cmake --version | sed -n 1p
-          echo "ninja $(ninja --version)"
-          echo "pkg-config $(pkg-config --version)"
-          echo "meson $(meson --version)"
-          m4 --version | sed -n 1p
-          flex --version
-          bison --version | sed -n 1p
+          has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
+          if has cmake; then cmake --version | sed -n 1p; fi
+          if has ninja; then echo "ninja $(ninja --version)"; fi
+          if has pkg-config; then echo "pkg-config $(pkg-config --version)"; fi
+          if has meson; then echo "meson $(meson --version)"; fi
+          if has m4; then m4 --version | sed -n 1p; fi
+          if has flex; then flex --version; fi
+          if has bison; then bison --version | sed -n 1p; fi
           # Still not from cvcpkg: what these resolve to.
           for t in bash perl make python3; do echo "$t -> $(command -v "$t" || echo none)"; done
 
@@ -263,19 +310,16 @@ jobs:
       - name: Smoke-test the build tools
         run: |
           set -euo pipefail
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          # A tool this job builds itself is not in the tree; skip what needs it.
+          has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
           work=$(mktemp -d)
           cd "$work"
           printf 'int main(void) { return 0; }\n' > t.c
           printf 'cmake_minimum_required(VERSION 3.20)\nproject(t C)\nadd_executable(t t.c)\n' > CMakeLists.txt
-          cmake -G Ninja -S . -B cmake-build
-          cmake --build cmake-build
           printf "project('t', 'c')\nexecutable('t', 't.c')\n" > meson.build
-          meson setup meson-build
-          ninja -C meson-build
           mkdir pc
           printf 'Name: t\nDescription: t\nVersion: 1.2.3\nCflags: -I/t\n' > pc/t.pc
-          test "$(PKG_CONFIG_PATH="$work/pc" pkg-config --modversion t)" = 1.2.3
-          test "$(printf 'define(`x'"'"', `ok'"'"')x\n' | m4)" = ok
           cat > calc.y <<'EOF'
           %{
           #include <stdio.h>
@@ -301,11 +345,27 @@ jobs:
           [ \t]   ;
           %%
           EOF
-          bison -d calc.y
-          flex calc.l
-          cc -o calc calc.tab.c lex.yy.c
-          test "$(echo '1 + 2' | ./calc)" = 3
-          echo "cmake, ninja, meson, pkg-config, m4, bison and flex all work"
+          if has cmake && has ninja; then
+            cmake -G Ninja -S . -B cmake-build
+            cmake --build cmake-build
+          fi
+          if has meson && has ninja; then
+            meson setup meson-build
+            ninja -C meson-build
+          fi
+          if has pkg-config; then
+            test "$(PKG_CONFIG_PATH="$work/pc" pkg-config --modversion t)" = 1.2.3
+          fi
+          if has m4; then
+            test "$(printf 'define(`x'"'"', `ok'"'"')x\n' | m4)" = ok
+          fi
+          if has bison && has flex && has m4; then
+            bison -d calc.y
+            flex calc.l
+            cc -o calc calc.tab.c lex.yy.c
+            test "$(echo '1 + 2' | ./calc)" = 3
+          fi
+          echo "smoke-tested: $(cat "$tree/commands")"
 
       - name: Validate recipe
         env:
