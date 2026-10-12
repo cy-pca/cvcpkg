@@ -122,6 +122,12 @@ jobs:
           # by default (bison's configure linked Homebrew's libtextstyle from
           # there). Move the formulae aside, so every Homebrew file and every
           # link to one is unreachable, whatever looks for it.
+          # Moving Homebrew aside is only safe on an ephemeral GitHub-hosted
+          # runner; on a persistent self-hosted Mac it would break the host.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move Homebrew aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
           for d in /opt/homebrew /usr/local/Cellar; do
             if [ -e "$d" ]; then
               sudo mv "$d" "$d.hidden-from-builds"
