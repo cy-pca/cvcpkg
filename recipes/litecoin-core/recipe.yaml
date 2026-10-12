@@ -1,0 +1,175 @@
+schema_version: 1
+recipe:
+  name: litecoin-core
+  # Upstream is Litecoin Core 0.21.5.8.  cvcpkg versions must be three-part
+  # SemVer, so the meaningless leading "0." is dropped (0.a.b.c -> a.b.c,
+  # 0.a.b -> a.b.0), which keeps every Litecoin release in order; see notes.
+  upstream_version: "21.5.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://litecoin.org/
+  # Litecoin Core is MIT, as are its in-tree libmw (MWEB), secp256k1-zkp,
+  # univalue, ctaes, ghc::filesystem and mio; scrypt is BSD-2-Clause; LevelDB,
+  # crc32c and the MWEB caches library are BSD-3-Clause.  The release
+  # binaries also statically link, from depends/: Berkeley DB 4.8.30
+  # (Sleepycat), OpenSSL 1.0.1k (OpenSSL), ZeroMQ 4.3.1 (LGPL-3.0+ with
+  # ZeroMQ's static-linking exception), Boost 1.70 (BSL-1.0), libevent and
+  # miniupnpc (BSD-3-Clause), {fmt} (MIT) and SQLite (public domain).  The
+  # licence texts and a third-party notice are installed under
+  # share/licenses/litecoin-core/.
+  license: "MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND Sleepycat AND OpenSSL AND LGPL-3.0-or-later WITH LGPL-3.0-linking-exception"
+  tags: [crypto, networking, server]
+  description: >-
+    Litecoin Core 0.21.5.8 — the reference Litecoin full node with MWEB
+    support: litecoind, litecoin-cli, litecoin-wallet and litecoin-tx, staged
+    from the official signed Gitian release builds, plus man pages, a sample
+    etc/litecoin/litecoin.conf and the rpcauth.py credential helper.  No GUI.
+    Runs mainnet, testnet, signet or a local regtest chain.
+
+source:
+  type: prebuilt
+  base_url: https://github.com/litecoin-project/litecoin/releases/download/v0.21.5.8
+  # sha256 values copied from the release's SHA256SUMS.asc (clearsigned by the
+  # Litecoin release key D35621D53A1CC6A3456758D03620E9D387E55666, David
+  # Burkett) and matched by two independent Gitian builders; see notes.
+  # build.sh and build.ps1 carry the same values and verify every download.
+  # The same files are on https://download.litecoin.org/litecoin-0.21.5.8/.
+  artifacts:
+    linux-x86_64:
+      file: litecoin-0.21.5.8-x86_64-linux-gnu.tar.gz
+      sha256: "43200c9f9d65ebc126ea5833ca9429e144c4b3273da6bb9f4e89fd7450ab1be9"
+    linux-aarch64:
+      file: litecoin-0.21.5.8-aarch64-linux-gnu.tar.gz
+      sha256: "129f55defb9045d5635566382c7b9f6fd227d4106a6fc07847a38b25ff9b29a1"
+    macos-x86_64:
+      file: litecoin-0.21.5.8-osx64.tar.gz
+      sha256: "32fda6b90dba7103073486e63d01c39c7586ceabe0ce06672e756e3be957be3b"
+    windows-x86_64:
+      file: litecoin-0.21.5.8-win64.zip
+      sha256: "78593091ef3545a2f06335d5f9ac5137a59e258d17e978951db693083b294109"
+
+# The payload is the upstream Gitian build (glibc >= 2.17 on Linux), not
+# something compiled on the builder.
+prebuilt_payload: true
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: bin/litecoind, platforms: [linux, macos] }
+    - { glob: bin/litecoin-cli, platforms: [linux, macos] }
+    - { glob: bin/litecoin-wallet, platforms: [linux, macos] }
+    - { glob: bin/litecoin-tx, platforms: [linux, macos] }
+    - { glob: bin/litecoind.exe, platforms: [windows] }
+    - { glob: bin/litecoin-cli.exe, platforms: [windows] }
+    - { glob: bin/litecoin-wallet.exe, platforms: [windows] }
+    - { glob: bin/litecoin-tx.exe, platforms: [windows] }
+    - share/man/man1/litecoind.1
+    - share/man/man1/litecoin-cli.1
+    - share/man/man1/litecoin-wallet.1
+    - share/man/man1/litecoin-tx.1
+    - etc/litecoin/litecoin.conf.sample
+    - share/litecoin-core/rpcauth/rpcauth.py
+    - share/licenses/litecoin-core/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt binaries; no compiler is used.  build.sh needs curl, tar and a
+    sha256 tool; build.ps1 needs Windows 10+ (Invoke-WebRequest, tar.exe).
+
+notes:
+  - title: "Official release binaries, verified"
+    description: >-
+      The archives are the Gitian release builds published on GitHub and
+      download.litecoin.org.  When pinning a version: download SHA256SUMS.asc
+      (a clearsigned SHA256SUMS) from the release, import the release keys
+      from contrib/gitian-keys/ at the release tag (davidburkett38-key.pgp,
+      losh11-key.pgp; the copies there have lapsed expiry dates, so refresh
+      them from download.litecoin.org/litecoin-<ver>/davidburkett38-key.pgp or
+      keyserver.ubuntu.com) into a throwaway GNUPGHOME, run `gpg --verify
+      SHA256SUMS.asc` and require a good signature from
+      D35621D53A1CC6A3456758D03620E9D387E55666 (David Burkett).  Then
+      cross-check against litecoin-project/gitian.sigs.ltc: verify each
+      builder's <ver>-{linux,osx-unsigned,win-signed}/<builder>/*.assert.sig
+      and require identical out_manifest sha256 values from at least two
+      builders.  For 0.21.5.8: good release signature (made 2026-09-11);
+      davidburkett38 (D35621D5...87E55666) and losh11
+      (C0921846FED0BF4CF28BE1D73B2A6315CD51A673) assert signatures good for
+      linux, osx-unsigned, osx-signed, win-unsigned and win-signed
+      (gitian.sigs.ltc at 257e8c5e), out_manifests identical, built from
+      git ec1b6489a900d09cf5991e220dce089c77a232a2 (tag v0.21.5.8), and every
+      pinned archive matched SHA256SUMS.  The source tarball
+      litecoin-0.21.5.8.tar.gz (same SHA256SUMS) is fetched only for the
+      licence texts, the sample config and rpcauth.py.
+  - title: "What is shipped"
+    description: >-
+      bin/: litecoind, litecoin-cli, litecoin-wallet and litecoin-tx.  Not
+      shipped: litecoin-qt (GUI) and test_litecoin.  etc/litecoin/
+      litecoin.conf.sample is upstream's annotated share/examples/
+      litecoin.conf; nothing reads etc/litecoin/ on its own — litecoind uses
+      -conf / -datadir (default ~/.litecoin).  Generate -rpcauth lines with
+      `python3 <prefix>/share/litecoin-core/rpcauth/rpcauth.py <user>`.
+      share/licenses/litecoin-core/ holds COPYING, the in-tree component
+      licences and THIRD-PARTY-NOTICES.txt, which lists the statically linked
+      depends/ packages with versions, licences and where to get their
+      source (the Sleepycat licence requires that pointer).
+  - title: "Version numbering"
+    description: >-
+      cvcpkg requires three-part SemVer, and Litecoin Core uses four parts
+      (0.21.5.8).  The leading "0." carries no information (Bitcoin Core
+      dropped it at 22.0), so the recipe drops it: 0.a.b.c -> a.b.c and
+      0.a.b -> a.b.0.  0.21.5.8 is therefore 21.5.8, after 0.21.4 = 21.4.0
+      and 0.21.5.1 = 21.5.1, and before any 0.21.5.9 / 0.21.6 / 0.22.
+  - title: "Wallets, MWEB and RPC compatibility"
+    description: >-
+      0.21.5.8 is the latest stable release (2026-09-12) and is based on
+      Bitcoin Core 0.21.  Wallets are legacy (Berkeley DB) only: descriptor
+      wallets are disabled upstream (createwallet with descriptors=true
+      answers "Descriptor wallets not supported"), so dumpwallet,
+      importwallet and dumpprivkey all work.  RPC differences from current
+      Bitcoin Core: litecoin-cli has no -rpcwaittimeout, and unloadwallet
+      refuses a wallet name when it is called on a /wallet/<name> endpoint
+      ("Both the RPC endpoint wallet and wallet_name parameter were
+      provided"); call it on the base URL instead.  MWEB on regtest: the
+      soft fork activates at height 432, and the activation block can only
+      be mined while a peg-in (a send to an `mweb` address,
+      `getnewaddress "" mweb`) is in the mempool; without one,
+      generatetoaddress fails with "bad-txns-vin-empty".  Regtest chains
+      that stay below 432 blocks never see MWEB.  test.sh walks through the
+      activation.
+  - title: "Platforms and architectures"
+    description: >-
+      linux (x86_64, aarch64), macos (x86_64) and windows (x86_64), exactly
+      the source.artifacts keys.  Upstream publishes no native Apple Silicon
+      build; the x86_64 macOS binaries run there under Rosetta 2, but no
+      macos-arm64 artifact is declared.  Upstream also publishes
+      arm-linux-gnueabihf and riscv64 Linux builds; add artifact entries if a
+      builder for those appears.  The Linux binaries are static apart from
+      glibc (>= 2.17).  The macOS tarball comes from the unsigned Gitian
+      stage (only the GUI .dmg is code-signed upstream); its binaries link
+      only libSystem and libc++, so relocation has nothing to rewrite.  The
+      bundled
+      OpenSSL is upstream's 1.0.1k as built into the release; it is not
+      separately patched.  On Windows test.sh only checks the versions; the
+      regtest walk runs on linux and macos.  cvcpkg has no service mechanism:
+      run litecoind in the foreground (the default) under your own supervisor.
