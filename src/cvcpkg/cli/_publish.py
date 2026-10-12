@@ -208,6 +208,8 @@ def _publish_to_server(
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
     failed: list[str] = []
+    # Variants already on the server whose catalog row lacks deps this bundle declares.
+    incomplete: list[str] = []
 
     for p in archive_paths:
         manifest = _extract_manifest(p)
@@ -222,17 +224,7 @@ def _publish_to_server(
         meta = manifest.get("meta", {})
         manifest_org = bundle.get("org", "")
 
-        # Extract runtime deps from manifest.
-        deps_block = manifest.get("dependencies", {})
-        if isinstance(deps_block, dict):
-            required_deps = deps_block.get("required", [])
-        else:
-            required_deps = []
-        # Fallback: legacy flat "depends" list.
-        if not required_deps:
-            legacy = manifest.get("depends", [])
-            if isinstance(legacy, list):
-                required_deps = legacy
+        required_deps = _manifest_required_deps(manifest, p.name)
 
         # Virtual slots (manifest top-level `provides`, written by the
         # builder from the recipe's provides: list).
@@ -247,8 +239,22 @@ def _publish_to_server(
         display_name = f"{org or manifest_org}/{name}" if (org or manifest_org) else name
         label = f"{display_name}=={version} ({plat}/{arch}/{build_type}/{link})"
 
-        if _variant_exists(base, headers, name, version, plat, arch, build_type, link, org):
+        row = _find_variant(base, headers, name, version, plat, arch, build_type, link, org)
+        if row is not None:
             click.echo(f"cvcpkg: skipping {label} (already on server)")
+            # A re-publish never rewrites a row, so a row created without its
+            # deps stays that way -- and this skip is what hid it before #152.
+            missing = _missing_deps(row, required_deps)
+            if missing:
+                click.echo(
+                    f"cvcpkg: WARNING: the catalog row for {label} lacks runtime deps this "
+                    f"bundle declares ({', '.join(missing)}), so installs of it leave them "
+                    "out. Publishing again cannot change the row; an admin can fill it with "
+                    f"POST /v1/admin/packages/{name}/{version}/backfill-deps "
+                    "(scripts/backfill_required_deps.py).",
+                    err=True,
+                )
+                incomplete.append(f"{label}: missing {', '.join(missing)}")
             continue
 
         click.echo(f"cvcpkg: publishing {label} [{file_size / 1024 / 1024:.1f} MB] -> {base}")
@@ -285,6 +291,14 @@ def _publish_to_server(
             failed.append(label)
 
     click.echo(f"cvcpkg: published {ok}/{len(archive_paths)} archive(s).")
+    if incomplete:
+        click.echo(
+            f"cvcpkg: WARNING: {len(incomplete)} variant(s) already on the server record "
+            "fewer runtime deps than their bundles declare:",
+            err=True,
+        )
+        for line in incomplete:
+            click.echo(f"  - {line}", err=True)
     if failed:
         click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
         for f in failed:
@@ -451,6 +465,28 @@ def _variant_exists(
     artifact, or an identical variant under a different org, must not
     suppress the upload.
     """
+    return (
+        _find_variant(base, headers, name, version, platform, arch, build_type, link, org)
+        is not None
+    )
+
+
+def _find_variant(
+    base: str,
+    headers: dict,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    org: str,
+) -> dict | None:
+    """The server's catalog row for this exact live variant, or None.
+
+    See :func:`_variant_exists`.  The row is returned so a skipped publish can
+    still check what the catalog recorded for it (:func:`_missing_deps`).
+    """
     httpx = require_httpx("publish")
 
     try:
@@ -461,7 +497,7 @@ def _variant_exists(
                 headers=headers,
             )
         if resp.status_code != 200:
-            return False
+            return None
         for pkg in resp.json().get("packages", []):
             # The server treats org="" as "no filter" and older servers may
             # return yanked bundles, so both must be re-checked client-side.
@@ -475,10 +511,72 @@ def _variant_exists(
                 and pkg.get("build_type") == build_type
                 and pkg.get("link") == link
             ):
-                return True
+                return pkg
     except Exception:
         pass
-    return False
+    return None
+
+
+def _manifest_required_deps(manifest: dict, archive_name: str) -> list[dict[str, str]]:
+    """The runtime deps a bundle manifest declares, as catalog ``required_deps`` entries.
+
+    ``dependencies.required`` (what ``generate_manifest`` writes, from
+    ``runtime_dependencies``), else the legacy flat ``depends`` list.  Each entry
+    is normalized to ``{name, org?, version?}``, the shape the catalog stores and
+    the client reads back with ``d["name"]``: a legacy ``"name"`` or ``"org/name"``
+    string becomes a dict, as ``runtime_dependencies`` reads recipe deps.  An entry
+    with no name is refused rather than recorded, since a row holding one breaks
+    every client that loads the catalog.
+    """
+    deps_block = manifest.get("dependencies")
+    required = deps_block.get("required") if isinstance(deps_block, dict) else None
+    if not required:
+        # Legacy manifests: a flat top-level ``depends`` list.
+        legacy = manifest.get("depends")
+        required = legacy if isinstance(legacy, list) else []
+    if not isinstance(required, list):
+        raise click.ClickException(
+            f"{archive_name}: manifest dependencies.required must be a list, got {required!r}"
+        )
+    deps: list[dict[str, str]] = []
+    for dep in required:
+        if isinstance(dep, str) and dep.strip():
+            dep = dep.strip()
+            if "/" in dep:
+                dep_org, dep_name = dep.split("/", 1)
+                entry = {"name": dep_name, "org": dep_org}
+            else:
+                entry = {"name": dep}
+        elif isinstance(dep, dict) and str(dep.get("name") or "").strip():
+            entry = {"name": str(dep["name"]).strip()}
+            for key in ("org", "version"):
+                if dep.get(key):
+                    entry[key] = str(dep[key])
+        else:
+            raise click.ClickException(
+                f"{archive_name}: manifest runtime dependency {dep!r} has no name; "
+                "entries are {name, org?, version?}"
+            )
+        deps.append(entry)
+    return deps
+
+
+def _dep_key(dep) -> str:
+    """``org/name`` (or ``name``) of a ``required_deps`` entry."""
+    if not isinstance(dep, dict):
+        return str(dep)
+    return "/".join(str(part) for part in (dep.get("org"), dep.get("name")) if part)
+
+
+def _missing_deps(row: dict, required_deps: list[dict[str, str]]) -> list[str]:
+    """Deps in *required_deps* that a catalog *row*'s ``required_deps`` lacks.
+
+    Compared by ``org/name``: a row that records more, or other versions, is
+    not flagged.  Rows ``pack-all --server-cache-push`` created before #152
+    recorded none at all, so the resolver installs those packages without them.
+    """
+    recorded = {_dep_key(d) for d in (row.get("required_deps") or [])}
+    return [_dep_key(d) for d in required_deps if _dep_key(d) not in recorded]
 
 
 def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:
