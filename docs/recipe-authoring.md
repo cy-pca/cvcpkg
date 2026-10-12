@@ -227,8 +227,13 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   `--server-cache-push`, `builds submit-dag` (skips it, and never auto-adds it
   as a dependency), and the server's `/v1/publish`, `/v1/builds` and
   `/v1/builds/dag`. The recipe itself (urls and checksums, no vendor bits) is
-  still pushed and browsable. Builder agents do not provision such a
-  dependency for other jobs yet, so a fleet-built recipe cannot depend on one.
+  still pushed and browsable. A fleet-built recipe may depend on one: the
+  builder agent builds it into that job's dependency prefix from its recipe,
+  after the catalog dependencies are installed. It has no installed manifest
+  there, so the pack-time reach pass counts every library in the prefix as
+  shipped for that job (its documented fallback), and a bundle that links a
+  non-redistributable library dynamically relies on the consumer's prefix
+  holding it -- which `cvcpkg install` arranges.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of
