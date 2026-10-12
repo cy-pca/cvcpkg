@@ -151,18 +151,140 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install system build tools
+      # The runner image ships Homebrew (/opt/homebrew on Apple Silicon,
+      # /usr/local on Intel) with cmake, pkgconf, autoconf, automake, libtool,
+      # perl, gettext, llvm, gcc and more installed and on PATH. Strip it for
+      # every later step so no recipe build can find and use any of it; "Check
+      # build tools come from cvcpkg" fails if Homebrew is still reachable.
+      # The one survivor is the image's bash, which the build scripts run under
+      # (numpy, h5py and pillow use bash 4's readarray; /bin/bash is 3.2). It is
+      # kept through a symlink in a directory of its own, never through
+      # Homebrew's bin directory.
+      - name: Remove Homebrew from the environment
         run: |
-          brew install ninja autoconf automake libtool pkg-config libomp meson flex bison
-          brew install llvm@18 2>/dev/null || true
-          # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with cmake 4.x
-          pip3 install --break-system-packages "cmake>=3.31,<4"
+          set -euo pipefail
+          brew_dir() {
+            case "$1" in
+              /opt/homebrew|/opt/homebrew/*) return 0 ;;
+              /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
+              /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
+              # Intel: Homebrew's links fill /usr/local/bin and /usr/local/sbin.
+              /usr/local/bin|/usr/local/sbin) [ -d /usr/local/Homebrew ] ;;
+              *) return 1 ;;
+            esac
+          }
+          clean=""
+          bash_now=$(command -v bash)
+          if brew_dir "$(dirname "$bash_now")"; then
+            mkdir -p "$RUNNER_TEMP/runner-bash"
+            ln -sf "$bash_now" "$RUNNER_TEMP/runner-bash/bash"
+            clean="$RUNNER_TEMP/runner-bash"
+            echo "keeping the image's bash $("$bash_now" -c 'echo $BASH_VERSION'): $RUNNER_TEMP/runner-bash/bash -> $bash_now"
+          fi
+          set -f; IFS=:
+          for d in $PATH; do
+            [ -n "$d" ] || continue
+            if brew_dir "$d"; then echo "dropping from PATH: $d"; continue; fi
+            clean="${clean:+$clean:}$d"
+          done
+          unset IFS; set +f
+          echo "PATH=$clean" >> "$GITHUB_ENV"
 
       - name: Install cvcpkg
         run: |
           pip3 install --break-system-packages '.[publish]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      # Build tools from cvcpkg: cmake (3.31.7, the version Boost 1.86's
+      # configs expect), ninja, pkg-config (pkgconf), meson, m4, flex and bison.
+      # They serve what recipes use without a depends.build entry: cmake/ninja
+      # almost everywhere, and the host_tools of assimp, imagemagick, bison,
+      # libtool and postgresql-*, which install-deps does not install. A tool a
+      # recipe declares in depends.build comes from its bundle in the prefix,
+      # which is ahead of this tree on PATH. autoconf, automake and libtool are
+      # only ever used that way on macOS (nfft3, swig), so they are not here.
+      #
+      # The tools are copied into a tree holding only them: CMake searches its
+      # own install prefix (the parent of share/cmake-X.Y) for packages, and the
+      # prefix cvcpkg installs it into also holds the curl and openssl headers,
+      # libraries and pkg-config files a recipe build would otherwise find
+      # instead of its declared deps. bin/cmake loads libcurl (and through it
+      # libssl/libcrypto) from @executable_path/../lib, so those dylibs come
+      # along, under their versioned install names only, which find_library
+      # never matches. bison has the absolute paths of its build-time pkgdatadir
+      # and m4 compiled in; BISON_PKGDATADIR and M4 point it at the tree.
+      - name: Install build tools (cvcpkg)
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/cvcpkg-tools-prefix"
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          cvcpkg install cmake ninja pkg-config meson m4 flex bison \
+            --prefix "$prefix" --platform macos --config release --link shared
+          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
+          exes="cmake ctest cpack ninja pkgconf m4 flex bison"
+          for exe in $exes meson; do
+            cp "$prefix/bin/$exe" "$tree/bin/"
+          done
+          ln -s pkgconf "$tree/bin/pkg-config"
+          ln -s flex "$tree/bin/flex++"
+          cp -R "$prefix"/share/cmake-* "$prefix/share/bison" "$tree/share/"
+          cp -R "$prefix/lib/meson" "$tree/lib/"
+          # The @rpath dylibs the executables load, and the ones those load.
+          todo=$(for exe in $exes; do echo "$tree/bin/$exe"; done)
+          while [ -n "$todo" ]; do
+            next=""
+            for f in $todo; do
+              for lib in $(otool -L "$f" | sed -n 's|^[[:space:]]*@rpath/\([^ ]*\) .*|\1|p'); do
+                if [ ! -e "$tree/lib/$lib" ]; then
+                  cp "$prefix/lib/$lib" "$tree/lib/$lib"
+                  next="$next $tree/lib/$lib"
+                fi
+              done
+            done
+            todo="$next"
+          done
+          ls "$tree/lib"
+          echo "$tree/bin" >> "$GITHUB_PATH"
+          echo "M4=$tree/bin/m4" >> "$GITHUB_ENV"
+          echo "BISON_PKGDATADIR=$tree/share/bison" >> "$GITHUB_ENV"
+
+      - name: Check build tools come from cvcpkg
+        run: |
+          set -euo pipefail
+          want="$RUNNER_TEMP/cvcpkg-tools/bin"
+          rc=0
+          for t in cmake ctest cpack ninja pkg-config meson m4 flex bison; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$want"/*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($want)"; rc=1 ;;
+            esac
+          done
+          set -f; IFS=:
+          for d in $PATH; do
+            case "$d" in
+              /opt/homebrew*|/usr/local/Homebrew*|/usr/local/Cellar*|/usr/local/opt*|/usr/local/Caskroom*)
+                echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
+              /usr/local/bin|/usr/local/sbin)
+                if [ -d /usr/local/Homebrew ]; then echo "::error::Homebrew directory on PATH: $d"; rc=1; fi ;;
+            esac
+          done
+          unset IFS; set +f
+          if command -v brew >/dev/null 2>&1; then
+            echo "::error::brew is on PATH ($(command -v brew)); nothing may build with Homebrew"
+            rc=1
+          fi
+          [ "$rc" = 0 ] || exit 1
+          cmake --version | sed -n 1p
+          echo "ninja $(ninja --version)"
+          echo "pkg-config $(pkg-config --version)"
+          echo "meson $(meson --version)"
+          m4 --version | sed -n 1p
+          flex --version
+          bison --version | sed -n 1p
+          # Still not from cvcpkg: what these resolve to.
+          for t in bash perl make python3; do echo "$t -> $(command -v "$t" || echo none)"; done
 
       - name: Build shard ${{ matrix.shard }} (pack-all)
         env:
@@ -185,7 +307,8 @@ jobs:
               echo "::group::install-deps $r (macos)"
               # pack does NOT resolve deps -- it builds against whatever is
               # already in --prefix. Install the closure first, or the recipe's
-              # build.sh cannot find what it needs. Host tools come from brew.
+              # build.sh cannot find what it needs. Host tools not in the closure
+              # come from the cvcpkg tools tree installed above.
               cvcpkg install-deps "recipes/$r" \
                 --platform macos \
                 --config "${{ inputs.config }}" \
