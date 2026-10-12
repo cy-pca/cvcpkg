@@ -28,6 +28,13 @@ cvcpkg already ships **hermetic toolchains** for the non-native ecosystems:
   `new-dependencies.md`'s shipped ledger.
 - **Haskell** → our own GHC (Phase 7.5, "Our GHC, Our ABI").
 - **Python** → hermetic interpreters (`python311/312/313`, Phase 7).
+- **Node.js** → `nodejs22` (`provides: nodejs`): the official nodejs.org
+  release binaries, SHA-256-pinned from the release's signed
+  `SHASUMS256.txt`, with `node`/`npm`/`npx` in `bin/` and no corepack. CI that
+  needs Node (static-site generators, JS tooling, Playwright) installs it
+  instead of taking the runner's Node or a `node:22` container; the recipe's
+  notes cover pinning npm's cache and userconfig per job and `npm ci
+  --offline`.
 
 The **native C/C++ compiler is the one ecosystem still floating to the system default.** Close the gap:
 
