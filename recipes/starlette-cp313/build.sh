@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/starlette-cp313/build.sh — build starlette 1.0.1 FROM SOURCE (generated).
+# recipes/starlette-cp313/build.sh — build starlette 1.7.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

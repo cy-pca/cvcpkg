@@ -1,4 +1,4 @@
-# recipes/idna-cp312/build.ps1 — build idna 3.16 FROM SOURCE (generated).
+# recipes/idna-cp312/build.ps1 — build idna 3.20 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

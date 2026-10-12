@@ -1,4 +1,4 @@
-# recipes/alembic-cp311/build.ps1 — build alembic 1.18.4 FROM SOURCE (generated).
+# recipes/alembic-cp311/build.ps1 — build alembic 1.20.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

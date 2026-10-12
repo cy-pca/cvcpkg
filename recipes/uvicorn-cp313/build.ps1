@@ -1,4 +1,4 @@
-# recipes/uvicorn-cp313/build.ps1 — build uvicorn 0.47.0 FROM SOURCE (generated).
+# recipes/uvicorn-cp313/build.ps1 — build uvicorn 0.53.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
