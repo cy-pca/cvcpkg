@@ -10,9 +10,9 @@
 # from PATH, and cmake, ninja, pkg-config, meson, m4, flex and bison from cvcpkg.
 #
 # Usage:
-#   gh workflow run macos-recipe-check -f recipe=fftw3
-#   gh workflow run macos-recipe-check -f recipe=nfft3 -f runner=macos-15-intel
-#   gh workflow run macos-recipe-check -f recipe=gsl -f deps=source
+#   gh workflow run macos-recipe-check -f recipe=fontconfig
+#   gh workflow run macos-recipe-check -f recipe=bison -f runner=macos-15-intel
+#   gh workflow run macos-recipe-check -f recipe=automake -f deps=source
 # deps=catalog (the default) is macos-build.yml's targeted path minus the
 # publish: install the recipe's PUBLISHED build + runtime closure, then
 # `cvcpkg pack` the recipe into dist/.  pack runs the relocatability gate, which
@@ -22,9 +22,9 @@
 # two images macos-build.yml publishes from.
 #
 # The pull_request trigger fires only when this file or one of the macOS
-# workflows that share its tool setup changes.  It builds a fixed set of
-# recipes chosen to put every tool in the cvcpkg tools tree to work, on both
-# architectures, instead of adding macOS jobs to every recipe PR.
+# workflows that share its tool setup changes.  It smoke-tests the tools tree
+# and builds a small fixed set of recipes on both architectures, instead of
+# adding macOS jobs to every recipe PR.
 
 name: macOS recipe check
 
@@ -34,7 +34,7 @@ on:
       recipe:
         description: "Recipe to build (single name)"
         required: true
-        default: "fftw3"
+        default: "fontconfig"
         type: string
       config:
         description: "Build config"
@@ -104,18 +104,18 @@ jobs:
           else
             # Each recipe puts different tools to work. The tools tree serves
             # what a recipe uses without declaring it; a depends.build tool
-            # comes from its catalog bundle in the prefix.
-            #   fontconfig  meson, ninja, pkg-config, gperf (depends.build)
-            #   bison       autotools configure + make, m4 from the tree (host_tools)
-            #   nfft3       autoconf/automake/libtool bundles + configure (depends.build)
-            #   postgresql-client  meson, ninja, flex, bison, pkg-config from the tree (host_tools)
+            # comes from its catalog bundle in the prefix. Every job also
+            # smoke-tests the whole tree first.
+            #   fontconfig  meson, ninja, pkg-config, gperf bundles (depends.build)
+            #   bison       autotools configure + make, with m4 from the tree (host_tools)
+            #   autoconf    autotools configure + make, with the m4 and perl bundles
+            # Intel builds only bison until the macOS x86_64 bison bundle is
+            # republished: it loads Homebrew's libtextstyle, so the check refuses
+            # it in any Intel job that does not build bison itself.
             set -- \
-              "fontconfig macos-latest catalog" "fontconfig macos-15-intel catalog" \
+              "fontconfig macos-latest catalog" \
               "bison macos-latest catalog" "bison macos-15-intel catalog" \
-              "nfft3 macos-latest catalog" \
-              "postgresql-client macos-latest catalog" \
-              "autoconf macos-latest catalog" \
-              "automake macos-latest source"
+              "autoconf macos-latest catalog"
           fi
           for job in "$@"; do
             echo "$job"
