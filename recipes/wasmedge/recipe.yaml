@@ -172,7 +172,9 @@ notes:
       builds are built without LLVM (interpreter only): WasmEdge's
       static-archive bundling of LLVM (cmake/Helper.cmake) hardcodes Unix
       archive names, and a static cvcpkg build uses the static CRT (/MT)
-      while llvm18 is built against the DLL CRT (/MD).  llvm18's exported
-      LLVMDebugInfoPDB target names the DIA SDK's diaguids.lib by the
-      absolute Visual Studio 2022 Enterprise path of the runner that built
-      it, so the build needs that same path -- windows-2022 runners have it.
+      while llvm18 is built against the DLL CRT (/MD).  llvm18 from
+      18.1.8+cvc.4 on is built with LLVM_ENABLE_DIA_SDK=OFF (#174), so its
+      exported CMake package names no Visual Studio path and this builds on
+      any MSVC install.  Older llvm18 bundles linked diaguids.lib by the
+      windows-2022 runner's absolute Visual Studio 2022 Enterprise path, so
+      against those the build needs a windows-2022 host.
