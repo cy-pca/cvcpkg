@@ -13,7 +13,15 @@ recipe:
   # RPATH for relocatability, which OpenBSD's ld.so does not implement (see
   # _ELF_RPATH_PLATFORMS in builder.py) — the bundle would build but not
   # relocate.
-  cvc_revision: 3
+  # Bumped 3 -> 4: the Windows build passes LLVM_ENABLE_DIA_SDK=OFF.  With the
+  # DIA SDK on (LLVM's default whenever the building Visual Studio has one), the
+  # exported LLVMDebugInfoPDB target linked diaguids.lib by the windows-2022
+  # runner's absolute "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/
+  # DIA SDK" path, so consumers (wasmedge's AOT, through lld's COFF driver)
+  # linked only on a machine with that exact Visual Studio install.  build.ps1
+  # now fails if any installed lib/cmake file names an absolute Visual Studio or
+  # Windows Kits path.  Other platforms' bundles are unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -135,6 +143,15 @@ notes:
       LLVM_BUILD_LLVM_DYLIB=ON produces a single libLLVM.so/.dylib that
       all LLVM tools link against, keeping the total install size smaller.
       Downstream consumers can also link against it.
+  - title: "Windows: no DIA SDK"
+    platforms: [windows]
+    description: >-
+      Built with LLVM_ENABLE_DIA_SDK=OFF, so the exported CMake package names
+      no Visual Studio path and links on any MSVC install.  LLVMDebugInfoPDB
+      keeps its native PDB reader and writer (what lld-link and
+      llvm-symbolizer use by default); only the DIA-backed reader is absent:
+      `llvm-symbolizer --dia` reports that the DIA SDK is not present, and
+      `llvm-pdbutil pretty` / `diadump` need `-native`.
   - title: "llvm-cbe C backend"
     platforms: [linux, macos, windows, freebsd]
     description: >-
