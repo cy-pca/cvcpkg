@@ -471,14 +471,14 @@ class TestUninstallerHelpers:
             cache_dir, "alpha", {"bin/alpha": "#!", "lib/liba.so": "elf"}, deps=("zlib",)
         )
         opens = 0
-        real_open = uninstaller.tarfile.open
+        real_open = tarfile.open
 
         def counting_open(*args, **kwargs):
             nonlocal opens
             opens += 1
             return real_open(*args, **kwargs)
 
-        with mock.patch.object(uninstaller.tarfile, "open", counting_open):
+        with mock.patch.object(tarfile, "open", counting_open):
             files, manifest = uninstaller.read_archive(archive, "alpha")
 
         assert opens == 1
