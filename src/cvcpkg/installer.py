@@ -13,6 +13,7 @@ import zipfile
 from pathlib import Path
 
 from cvcpkg import cache as cache_mod
+from cvcpkg._archive import archive_format, open_tar
 from cvcpkg.errors import InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
 from cvcpkg.retry import with_retry
@@ -189,16 +190,16 @@ def _download_from_url(
     return path
 
 
-# ── Archive format registry ──────────────────────────────────────
+# ── Archive extractors ───────────────────────────────────────────
 #
-# Maps suffix → extractor function.  To support a new format, add
-# an entry to _EXTRACTORS.  Each extractor receives (archive, prefix)
-# and must handle path-traversal validation internally.
+# One per container format, chosen by _archive.archive_format (magic bytes,
+# then suffix).  Each receives (archive, prefix) and must handle
+# path-traversal validation internally.
 
 
 def _extract_tar(archive: Path, prefix: Path) -> None:
-    """Extract any tarball variant that Python's tarfile module supports."""
-    with tarfile.open(archive) as tf:
+    """Extract any tar flavour ``_archive.open_tar`` can open."""
+    with open_tar(archive) as tf:
         for member in tf.getmembers():
             if member.name.startswith("/") or ".." in member.name.split("/"):
                 raise InstallError(f"unsafe path in archive: {member.name}")
@@ -231,64 +232,22 @@ def _extract_7z(archive: Path, prefix: Path) -> None:
     )
 
 
-# Ordered so the longest (most specific) suffix matches first.
-_EXTRACTORS: list[tuple[tuple[str, ...], callable]] = [
-    ((".tar.gz", ".tgz"), _extract_tar),
-    ((".tar.bz2", ".tbz2"), _extract_tar),
-    ((".tar.xz", ".txz"), _extract_tar),
-    ((".tar.zst", ".tar.zstd"), _extract_tar),
-    ((".tar",), _extract_tar),
-    ((".zip",), _extract_zip),
-    ((".7z",), _extract_7z),
-]
-
-
-def _sniff_extractor(archive: Path):
-    """Sniff *archive*'s magic bytes and return the matching extractor.
-
-    Preferred over filename-extension dispatch because some publishers
-    upload archives with a mismatched suffix (e.g. a Windows zip stored
-    under a .tar.zst name).
-    """
-    try:
-        with open(archive, "rb") as fh:
-            head = fh.read(8)
-    except OSError:
-        return None
-    if head[:2] == b"\x1f\x8b":
-        return _extract_tar  # gzip (tarfile handles it)
-    if head[:3] == b"BZh":
-        return _extract_tar  # bzip2
-    if head[:6] == b"\xfd7zXZ\x00":
-        return _extract_tar  # xz
-    if head[:4] == b"\x50\x4b\x03\x04" or head[:4] == b"\x50\x4b\x05\x06":
-        return _extract_zip  # zip (also handles empty-zip end marker)
-    if head[:6] == b"\x37\x7a\xbc\xaf\x27\x1c":
-        return _extract_7z
-    # Plain ustar has "ustar" at offset 257; too deep to sniff from 8B.
-    return None
+# Every tar flavour goes through _extract_tar.
+_EXTRACTORS = {"zip": _extract_zip, "7z": _extract_7z}
 
 
 def extract_bundle(archive: Path, prefix: Path) -> None:
     """Extract *archive* into *prefix*, merging into the existing tree.
 
-    Supported formats: .tar.gz, .tgz, .tar.bz2, .tar.xz, .tar.zst,
-    .tar, .zip, .7z.  New formats can be added to ``_EXTRACTORS``.
-
-    Dispatch prefers magic-byte sniffing over the filename suffix so
-    that archives stored under a mislabeled extension still install.
+    Supported formats: tar (plain, gzip, bzip2, xz; zstd on Python 3.14+),
+    zip, 7z.  The format comes from the archive's magic bytes, falling back to
+    the filename suffix only for content with no signature, so archives stored
+    under a mislabeled extension still install -- every Windows bundle on
+    cvcpkg.org is a zip under a ``.tar.zst`` name.
     """
     prefix.mkdir(parents=True, exist_ok=True)
-    sniffed = _sniff_extractor(archive)
-    if sniffed is not None:
-        sniffed(archive, prefix)
-        return
-    name = archive.name.lower()
-    for suffixes, extractor in _EXTRACTORS:
-        if any(name.endswith(s) for s in suffixes):
-            extractor(archive, prefix)
-            return
-    raise InstallError(f"unsupported archive format: {archive.name}")
+    fmt = archive_format(archive)
+    _EXTRACTORS.get(fmt, _extract_tar)(archive, prefix)
 
 
 def _merge_move(src: Path, dst: Path) -> None:
