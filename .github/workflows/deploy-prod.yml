@@ -32,7 +32,11 @@ jobs:
   deploy:
     name: Deploy to cvcpkg.org + pkg.tx.wtf
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    timeout-minutes: 30
+    # A normal deploy takes 24-26 minutes: the cvcpkg.org deploy step 10-16,
+    # pkg.tx.wtf 1-2, then pushing recipes 10-14.  At 30 a slow server deploy
+    # (16 min in run 38276696779) let the job time out mid recipe push, after
+    # the new server was already live.
+    timeout-minutes: 50
     outputs:
       sha: ${{ steps.target.outputs.sha }}
 
