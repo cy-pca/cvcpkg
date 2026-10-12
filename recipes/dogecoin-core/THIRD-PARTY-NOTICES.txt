@@ -1,0 +1,36 @@
+Dogecoin Core 1.14.9 (cvcpkg package dogecoin-core) - third-party notices
+=========================================================================
+
+The dogecoind, dogecoin-cli and dogecoin-tx binaries in this package are the
+official Dogecoin Core 1.14.9 Gitian release builds, unmodified.  Dogecoin
+Core itself is MIT-licensed (COPYING).
+
+In-tree components (licence texts in this directory)
+----------------------------------------------------
+  libsecp256k1            MIT            secp256k1-COPYING
+  UniValue                MIT            univalue-COPYING
+  ctaes                   MIT            ctaes-COPYING
+  LevelDB                 BSD-3-Clause   leveldb-LICENSE
+  scrypt                  BSD-2-Clause   scrypt-LICENSE
+
+Statically linked from Dogecoin's depends/ system
+-------------------------------------------------
+The release build links these packages statically.  The exact source archive
+URL and sha256 of each is pinned in depends/packages/<name>.mk of the
+Dogecoin Core source at tag v1.14.9
+(https://github.com/dogecoin/dogecoin/tree/v1.14.9/depends/packages), and
+complete source code is available from the upstream locations below.
+
+  Berkeley DB   5.3.28.NC     Sleepycat
+                https://download.oracle.com/berkeley-db/db-5.3.28.NC.tar.gz
+  OpenSSL       1.0.2u        OpenSSL (OpenSSL + SSLeay licences)
+                https://www.openssl.org/source/old/1.0.2/openssl-1.0.2u.tar.gz
+  ZeroMQ        4.3.4         LGPL-3.0-or-later with ZeroMQ's static-linking
+                              exception
+                https://github.com/zeromq/libzmq/releases/tag/v4.3.4
+  Boost         1.63.0        BSL-1.0
+                https://www.boost.org/users/history/version_1_63_0.html
+  libevent      2.1.12-stable BSD-3-Clause
+                https://github.com/libevent/libevent/releases/tag/release-2.1.12-stable
+  miniupnpc     2.0.20170509  BSD-3-Clause
+                http://miniupnp.free.fr/files/miniupnpc-2.0.20170509.tar.gz
