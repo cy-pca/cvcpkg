@@ -1,0 +1,137 @@
+schema_version: 1
+recipe:
+  name: temurin-jre21
+  # Upstream tags this build jdk-21.0.12.1+1: the 21.0.12.1 respin of the
+  # July 2026 CPU (jdk-21.0.12+8). cvcpkg SemVer allows at most
+  # major.minor.patch, so -- like allegro5's 5.2.11.3 -- the series is recorded
+  # as 21.0.12 and the exact build is pinned by the artifact names + sha256
+  # below and JRE_TAG in build.sh.
+  upstream_version: "21.0.12"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://adoptium.net/
+  # OpenJDK's license. The third-party components bundled in the runtime are
+  # listed with their licenses under lib/jvm/temurin-jre21/legal/.
+  license: "GPL-2.0-only WITH Classpath-exception-2.0"
+  tags: [language, runtime, java, tools]
+  description: >-
+    Eclipse Temurin 21 LTS JRE -- a Java 21 runtime (bin/java, bin/keytool),
+    repackaged from Adoptium's official release binaries. Lets Java-based
+    tools (the greenmail SMTP/IMAP test server, ...) run from cvcpkg instead
+    of a system or container JVM. Runtime only: there is no javac.
+
+# Every Java runtime package installs bin/java; one slot so two of them (a
+# future JDK, another LTS) can never clobber each other in one prefix.
+provides: [java-runtime]
+
+# The payload is Adoptium's prebuilt binary; nothing is compiled here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core, so
+# this map DOCUMENTS what build.sh / build.ps1 download. The enforced sha256
+# values live in build.sh's sha_for() and build.ps1's $expected -- keep the
+# three in sync when bumping.
+#
+# Each value is Adoptium's published <file>.sha256.txt. The linux-x64 tarball
+# was downloaded, re-hashed, and its detached signature checked:
+#   gpg --recv-keys 3B04D753C9050D9A5D343F39843C48A565F8F04B   # Adoptium GPG Key
+#   gpg --verify OpenJDK21U-jre_x64_linux_hotspot_21.0.12.1_1.tar.gz.sig \
+#                OpenJDK21U-jre_x64_linux_hotspot_21.0.12.1_1.tar.gz
+#   -> Good signature from "Adoptium GPG Key (DEB/RPM Signing Key)
+#      <temurin-dev@eclipse.org>"
+source:
+  type: prebuilt
+  base_url: https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12.1%2B1
+  artifacts:
+    linux-x86_64:
+      file: OpenJDK21U-jre_x64_linux_hotspot_21.0.12.1_1.tar.gz
+      sha256: "2413149700df0f7d440500a84a8f764c535f21e5a5e87d38328b64eec2c5b500"
+    linux-arm64:
+      file: OpenJDK21U-jre_aarch64_linux_hotspot_21.0.12.1_1.tar.gz
+      sha256: "14be1f35ebdbd1f6e8d57eb911a3ffb74d6d9aa255abc5daf2b1302002cf2cf2"
+    macos-x86_64:
+      file: OpenJDK21U-jre_x64_mac_hotspot_21.0.12.1_1.tar.gz
+      sha256: "6717ec641fd9ce0bb209ca083ee23b42202ac68cb6fcc5753496e0e4a0f41989"
+    macos-arm64:
+      file: OpenJDK21U-jre_aarch64_mac_hotspot_21.0.12.1_1.tar.gz
+      sha256: "dec50fc6f9fcd4fe3ae8cabf5a5fa68f6afc48841f7698e468e9aa5d54beed84"
+    windows-x86_64:
+      file: OpenJDK21U-jre_x64_windows_hotspot_21.0.12.1_1.zip
+      sha256: "d35f31e712f0fcf6ac5a093edc90204fbff22f720ba3950bd09d331d5e621636"
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/jvm/temurin-jre21/
+    - glob: bin/java
+      platforms: [linux, macos]
+    - glob: bin/keytool
+      platforms: [linux, macos]
+    - glob: bin/java.cmd
+      platforms: [windows]
+    - glob: bin/keytool.cmd
+      platforms: [windows]
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. The runtime image is
+    staged whole under lib/jvm/temurin-jre21 (its JAVA_HOME) and bin/java +
+    bin/keytool point into it.
+
+notes:
+  - title: "Layout: JAVA_HOME is <prefix>/lib/jvm/temurin-jre21"
+    description: >-
+      A JRE image is a self-contained tree (bin/ lib/ conf/ legal/ release)
+      whose lib/ holds generic names such as libzip.so, so it is never spread
+      across the prefix root -- it lives under lib/jvm/temurin-jre21, the same
+      place Debian puts its JVMs. bin/java and bin/keytool are relative
+      symlinks into it (Windows: bin\java.cmd / bin\keytool.cmd shims). The
+      java launcher derives java.home from its resolved location, so the
+      `readlink -f $(command -v java)` idiom finds the real JAVA_HOME, and the
+      prefix stays relocatable (test.sh runs a moved copy and checks
+      java.home). Set JAVA_HOME=<prefix>/lib/jvm/temurin-jre21 for tools that
+      want it. On macOS the image is Contents/Home of Adoptium's .jre bundle,
+      staged without the bundle wrapper so JAVA_HOME has the same shape on
+      every platform.
+  - title: "lib/libjvm.so symlink (linux)"
+    platforms: [linux]
+    description: >-
+      The image's lib/*.so NEED libjvm.so, which is in lib/server/, while
+      their RUNPATH is $ORIGIN. The JVM loads server/libjvm.so before any of
+      them, so this works upstream, but cvcpkg's relocatability gate requires
+      every shipped NEEDED library to be reachable through the object's own
+      RUNPATH. build.sh adds a relative symlink lib/libjvm.so ->
+      server/libjvm.so instead of patchelf-ing 24 vendor binaries; the loader
+      resolves it to the same, already-loaded file.
+  - title: "Runtime only"
+    description: >-
+      The JRE image has no javac, jar or jshell (and no jdk.compiler module,
+      so `java Foo.java` source launch is unavailable). Use a JDK package for
+      compiling Java. The `java-runtime` slot is shared so a future JDK
+      package and this JRE cannot both claim bin/java in one prefix.
+  - title: "Verified platforms"
+    description: >-
+      linux-x86_64 is built and tested here. linux-arm64, macos (x86_64 and
+      arm64) and windows-x86_64 stage Adoptium's binaries for those platforms
+      through the same scripts but have not been built yet.
