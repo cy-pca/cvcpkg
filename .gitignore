@@ -22,6 +22,10 @@ htmlcov/
 coverage*.xml
 *-results.xml
 src/cvcpkg/recipes/
+# The package's pre-#164 home.  Clones older than the move to the repo root
+# still hold a deploy-time recipes copy there, and #164 deleted the .gitignore
+# that hid it -- a stray copy was committed once (c899664f).  Never track it.
+/tools/cvcpkg/
 
 # Production secrets
 .env.production
