@@ -21,8 +21,10 @@ recipe:
   # the Unix platforms and build.sh forces LLVM_ENABLE_ZSTD on, so the bundle
   # links the declared one. Also: package.files lists lib/clang/ (clang's
   # resource headers -- stddef.h, intrinsics, cuda_wrappers; clang cannot
-  # compile anything without them), which cvc.3 shipped only because its
-  # bundles were published from the unfiltered install tree; and the ncurses
+  # compile anything without them). Packing ships the whole install tree, so
+  # cvc.3 had them too; declaring them makes the pack fail if a build ever
+  # stops producing them, instead of publishing a clang that cannot compile.
+  # And the ncurses
   # build edge is gone, because LLVM 19 removed its terminfo support
   # (LLVM_ENABLE_TERMINFO no longer exists; cvc.3's libLLVM links no libtinfo).
   cvc_revision: 4
