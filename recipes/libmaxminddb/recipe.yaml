@@ -1,0 +1,93 @@
+schema_version: 1
+recipe:
+  name: libmaxminddb
+  upstream_version: "1.14.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    libmaxminddb — MaxMind's C library for reading MaxMind DB (.mmdb) files
+    such as the GeoIP2/GeoLite2 databases, plus the mmdblookup CLI. Ships the
+    shared library, the maxminddb CMake package and mmdblookup; the
+    maxminddb-cpNNN columns link it. The databases themselves are NOT
+    packaged (MaxMind's EULA forbids redistribution).
+  homepage: https://github.com/maxmind/libmaxminddb
+  license: Apache-2.0
+  tags: [networking, geoip]
+
+# The upstream release tarball (carries the generated man pages, so the build
+# needs no perl).
+source:
+  type: tarball
+  url: https://github.com/maxmind/libmaxminddb/releases/download/1.14.1/libmaxminddb-1.14.1.tar.gz
+  sha256: "ca5c87d41339f8bc4daabb53e8a9356b3c995f2d2419b85d7bff823b2ecc252d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/libmaxminddb*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/maxminddb.lib", platforms: [windows] }
+    - { glob: "bin/maxminddb.dll", platforms: [windows] }
+    - { glob: "bin/mmdblookup", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - lib/cmake/maxminddb/
+    - include/maxminddb.h
+    - include/maxminddb_config.h
+    - share/man/man3/
+  cmake_packages:
+    - { name: maxminddb, targets: ["maxminddb::maxminddb"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "CMake build: no pkg-config file, soname follows the CMake VERSION"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      Built with upstream's CMake (the one build that also covers Windows), which
+      installs the maxminddb CMake package but no libmaxminddb.pc (only the
+      autotools build generates one), and names the shared library after the
+      CMake VERSION (libmaxminddb.so.0.0.7) rather than libtool's
+      libmaxminddb.so.0.
+  - title: "mmdblookup is not built on Windows"
+    platforms: [windows]
+    description: >-
+      MAXMINDDB_BUILD_BINARIES is off on Windows; only the DLL, import library
+      and headers ship there.

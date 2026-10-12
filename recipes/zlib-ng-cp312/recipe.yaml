@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: zlib-ng-cp312
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/zlib-ng/
+  license: "PSF-2.0"
+  tags: [python, source]
+  description: >-
+    zlib-ng 1.0.0 for CPython 3.12 — the cp312 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE against cvcpkg's own zlib-ng C library (recipes/zlib-
+    ng, libz-ng.so.2) instead of the copy the PyPI sdist/wheel bundles. The
+    extension resolves the library by soname out of the merged prefix through an
+    $ORIGIN-relative RUNPATH. Installed as a real wheel (dist-info/RECORD/METADATA)
+    via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/46/7d/901c6e333fb031b5bfbd1532099200cf859f12aa83689be494eade6685ec/zlib_ng-1.0.0.tar.gz
+  sha256: "c753cea73f9e803c246e9bf01a59eb652897ed8a19334ada0f968394c7f61650"
+  strip_components: 1
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: setuptools-cp312
+    - name: setuptools-scm-cp312
+    - name: packaging-cp312
+    - name: zlib-ng
+  runtime:
+    - name: python312
+    - name: zlib-ng
+  host_tools:
+    - python312
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.12/site-packages/zlib_ng/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/zlib_ng-*.dist-info/", platforms: [linux, macos] }
+
+notes:
+  - title: "Not built on Windows yet"
+    platforms: [linux, macos]
+    description: >-
+      Upstream ships Windows wheels; a Windows column needs the zlib-ng DLL staged
+      next to the extension .pyd. Not written or verified yet.

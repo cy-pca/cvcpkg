@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: psycopg2-cp311
+  upstream_version: "2.9.13"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/psycopg2/
+  license: "LGPL-3.0-or-later"
+  tags: [python, source]
+  description: >-
+    psycopg2 2.9.13 for CPython 3.11 — the cp311 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE against cvcpkg's own libpq (recipes/libpq, libpq.so.5)
+    instead of the copy the PyPI sdist/wheel bundles. The extension resolves the
+    library by soname out of the merged prefix through an $ORIGIN-relative RUNPATH.
+    Installed as a real wheel (dist-info/RECORD/METADATA) via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/91/81/6ea19b8b28feb9405c8c87a307776614d6e404bdb98467d1ce10a39d2c1d/psycopg2-2.9.13.tar.gz
+  sha256: "d36784fc2dae69523ba4b79c7d1d1b4d6e83e87836874f111262f4db940b16a6"
+  strip_components: 1
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+    - name: setuptools-cp311
+    - name: libpq
+  runtime:
+    - name: python311
+    - name: libpq
+  host_tools:
+    - python311
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.11/site-packages/psycopg2/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/psycopg2-*.dist-info/", platforms: [linux, macos] }
+
+notes:
+  - title: "Not built on Windows yet"
+    platforms: [linux, macos]
+    description: >-
+      Upstream ships Windows wheels; a Windows column needs a pg_config shim (.cmd)
+      and libpq.dll staged next to _psycopg.pyd. Not written or verified yet;
+      alembic's PostgreSQL migrations on Windows can use asyncpg instead.

@@ -1,0 +1,72 @@
+schema_version: 1
+recipe:
+  name: nh3-cp313
+  upstream_version: "0.3.6"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/nh3/
+  license: "MIT"
+  tags: [python, source]
+  description: >-
+    nh3 0.3.6 for CPython 3.13 — the cp313 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE with maturin and cvcpkg's own Rust toolchain (a
+    stable-ABI (abi3) pyo3 extension linking no external library). Installed as a
+    real wheel (dist-info/RECORD/METADATA) via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/5e/1b/ef84624f14954d270f74060a19fc550dd4f06656399447569afb584d8c06/nh3-0.3.6.tar.gz
+  sha256: "f3736c9dd3d1856f80cd031715b84ca75cda2bbb1ac802c3da26bfce590838d7"
+  strip_components: 1
+
+python:
+  interpreter: python313
+  abi: abi3
+
+patches: []
+
+depends:
+  build:
+    - name: python313
+    - name: maturin-cp313
+    - name: rust
+  runtime:
+    - name: python313
+  host_tools:
+    - python313
+    - rust
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.13/site-packages/nh3/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/nh3-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/nh3/", platforms: [windows] }
+    - { glob: "Lib/site-packages/nh3-*.dist-info/", platforms: [windows] }
+
+notes:
+  - title: "cargo fetches crates from the network during this build"
+    platforms: [linux, macos, windows]
+    description: >-
+      The nh3 sdist ships Cargo.lock but does not vendor crate sources, so cargo
+      resolves ammonia, pyo3, ... from crates.io (lock-pinned). Set CVC_CARGO_HOME
+      to a pre-populated registry and CVC_CARGO_OFFLINE=1 for an air-gapped build.

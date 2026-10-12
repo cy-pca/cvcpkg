@@ -1,0 +1,90 @@
+schema_version: 1
+recipe:
+  name: coincurve-cp311
+  upstream_version: "21.0.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/coincurve/
+  license: "MIT OR Apache-2.0"
+  tags: [python, source]
+  description: >-
+    coincurve 21.0.0 for CPython 3.11 — the cp311 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE against cvcpkg's own libsecp256k1 (recipes/secp256k1)
+    instead of the copy the PyPI sdist/wheel bundles. The extension resolves the
+    library by soname out of the merged prefix through an $ORIGIN-relative RUNPATH.
+    Installed as a real wheel (dist-info/RECORD/METADATA) via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/6f/a2/f2a38eb05b747ed3e54e1be33be339d4a14c1f5cc6a6e2b342b5e8160d51/coincurve-21.0.0.tar.gz
+  sha256: "8b37ce4265a82bebf0e796e21a769e56fdbf8420411ccbe3fafee4ed75b6a6e5"
+  strip_components: 1
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches:
+  - coincurve-cffi-license-dir.patch
+
+depends:
+  build:
+    - name: python311
+    - name: hatchling-cp311
+    - name: packaging-cp311
+    - name: pathspec-cp311
+    - name: pluggy-cp311
+    - name: trove-classifiers-cp311
+    - name: calver-cp311
+    - name: cffi-cp311
+    - name: pycparser-cp311
+    - name: setuptools-cp311
+    - name: scikit-build-core-cp311
+    - name: cmake
+    - name: ninja
+    - name: pkg-config
+    - name: secp256k1
+    - name: libffi
+  runtime:
+    - name: python311
+    - name: secp256k1
+    - name: libffi
+  host_tools:
+    - python311
+    - cmake
+    - ninja
+    - pkg-config
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.11/site-packages/coincurve/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/coincurve-*.dist-info/", platforms: [linux, macos] }
+
+notes:
+  - title: "Not built on Windows yet"
+    platforms: [linux, macos]
+    description: >-
+      Upstream ships Windows wheels, but there the system-library path goes through
+      pkg-config in --msvc-syntax mode plus a DLL that has to be staged next to the
+      .pyd; that build.ps1 has not been written or verified. Linux is built and
+      tested; macOS uses the same build.sh (install_name_tool pass).
