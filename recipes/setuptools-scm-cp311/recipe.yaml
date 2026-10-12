@@ -88,8 +88,8 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.11/site-packages/setuptools_scm/
-    - lib/python3.11/site-packages/setuptools_scm-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/setuptools_scm/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/setuptools_scm-*.dist-info/", platforms: [any] }
     # Windows (Lib\site-packages) scheme, for a prefix staged on that host.
-    - Lib/site-packages/setuptools_scm/
-    - Lib/site-packages/setuptools_scm-*.dist-info/
+    - { glob: "Lib/site-packages/setuptools_scm/", platforms: [windows] }
+    - { glob: "Lib/site-packages/setuptools_scm-*.dist-info/", platforms: [windows] }

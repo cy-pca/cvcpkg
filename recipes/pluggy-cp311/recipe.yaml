@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/pluggy/
-    - lib/python3.11/site-packages/pluggy-*.dist-info/
-    - Lib/site-packages/pluggy/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/pluggy/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/pluggy-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pluggy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

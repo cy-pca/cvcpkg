@@ -135,14 +135,14 @@ build:
 
 package:
   files:
-    - bin/python3.13*
-    - bin/pip3.13*
-    - bin/idle3.13*
-    - bin/pydoc3.13*
-    - lib/libpython3.13*
-    - lib/python3.13/
-    - lib/pkgconfig/python-3.13*.pc
-    - include/python3.13/
+    - { glob: "bin/python3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/idle3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pydoc3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/libpython3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/python3.13/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/pkgconfig/python-3.13*.pc", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "include/python3.13/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     # Windows layout (PCbuild). CPython on Windows installs a flat tree — the
     # interpreter, the DLLs and the MSVC runtime at the ROOT, headers directly
     # under include/ (no python3.13/ level), the stdlib in Lib/, extension
@@ -150,18 +150,18 @@ package:
     # match any of it, so without these the windows build packages ZERO files
     # and `cvcpkg install python313` reports success with 0 components. Same
     # omission that was fixed in recipes/python312.
-    - python.exe
-    - pythonw.exe
-    - python313.dll
+    - { glob: "python.exe", platforms: [windows] }
+    - { glob: "pythonw.exe", platforms: [windows] }
+    - { glob: "python313.dll", platforms: [windows] }
     # The limited-API forwarder, staged by PC\layout --include-stable. Every
     # abi3 extension module names python3.dll in its import table, so without
     # this the prefix cannot load a single stable-ABI wheel.
-    - python3.dll
-    - vcruntime140*.dll
-    - DLLs/
-    - Lib/
-    - libs/
-    - include/
+    - { glob: "python3.dll", platforms: [windows] }
+    - { glob: "vcruntime140*.dll", platforms: [windows] }
+    - { glob: "DLLs/", platforms: [windows] }
+    - { glob: "Lib/", platforms: [windows] }
+    - { glob: "libs/", platforms: [windows] }
+    - { glob: "include/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

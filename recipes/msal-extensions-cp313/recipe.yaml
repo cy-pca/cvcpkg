@@ -56,7 +56,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/msal_extensions/
-    - lib/python3.13/site-packages/*.dist-info/
-    - Lib/site-packages/msal_extensions/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/msal_extensions/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/msal_extensions/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

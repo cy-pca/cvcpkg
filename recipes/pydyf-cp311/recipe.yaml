@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/pydyf/
-    - lib/python3.11/site-packages/pydyf-*.dist-info/
-    - Lib/site-packages/pydyf/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/pydyf/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/pydyf-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pydyf/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

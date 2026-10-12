@@ -60,7 +60,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/sqlalchemy/
-    - lib/python3.13/site-packages/*.dist-info/
-    - Lib/site-packages/sqlalchemy/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/sqlalchemy/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/sqlalchemy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

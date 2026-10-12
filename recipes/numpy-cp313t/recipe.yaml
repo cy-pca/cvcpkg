@@ -100,10 +100,10 @@ package:
   # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
   # NO numpy.libs/: the OpenBLAS runtime is the cvcpkg openblas package.
   files:
-    - lib/python3.13*/site-packages/numpy/
-    - lib/python3.13*/site-packages/numpy-2.4.6.dist-info/
-    - Lib/site-packages/numpy/
-    - Lib/site-packages/numpy-2.4.6.dist-info/
+    - { glob: "lib/python3.13*/site-packages/numpy/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13*/site-packages/numpy-2.4.6.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "Lib/site-packages/numpy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/numpy-2.4.6.dist-info/", platforms: [windows] }
 
 abi:
   cxx_std: 17

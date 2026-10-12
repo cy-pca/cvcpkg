@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/pyparsing/
-    - lib/python3.13/site-packages/pyparsing-*.dist-info/
-    - Lib/site-packages/pyparsing/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/pyparsing/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/pyparsing-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pyparsing/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

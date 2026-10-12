@@ -60,7 +60,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/boto3/
-    - lib/python3.11/site-packages/*.dist-info/
-    - Lib/site-packages/boto3/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/boto3/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/boto3/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

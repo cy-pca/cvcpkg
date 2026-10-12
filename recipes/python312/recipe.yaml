@@ -197,32 +197,32 @@ build:
 package:
   files:
     # POSIX layout (autotools `make install`).
-    - bin/python3.12*
-    - bin/pip3.12*
-    - bin/idle3.12*
-    - bin/pydoc3.12*
-    - lib/libpython3.12*
-    - lib/python3.12/
-    - lib/pkgconfig/python-3.12*.pc
-    - include/python3.12/
+    - { glob: "bin/python3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "bin/pip3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "bin/idle3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "bin/pydoc3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "lib/libpython3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "lib/python3.12/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "lib/pkgconfig/python-3.12*.pc", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "include/python3.12/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
     # Windows layout (PCbuild). CPython on Windows installs a flat tree — the
     # interpreter, the DLL and the MSVC runtime at the ROOT, headers directly
     # under include/ (no python3.12/ level), the stdlib in Lib/, extension
     # modules in DLLs/ and import libs in libs/. None of the POSIX globs above
     # match any of it, so without these the windows build packaged ZERO files
     # and `cvcpkg install python312` reported success with 0 components.
-    - python.exe
-    - pythonw.exe
-    - python312.dll
+    - { glob: "python.exe", platforms: [windows] }
+    - { glob: "pythonw.exe", platforms: [windows] }
+    - { glob: "python312.dll", platforms: [windows] }
     # The limited-API forwarder, staged by PC\layout --include-stable. Every
     # abi3 extension module names python3.dll in its import table, so without
     # this the prefix cannot load a single stable-ABI wheel.
-    - python3.dll
-    - vcruntime140*.dll
-    - DLLs/
-    - Lib/
-    - libs/
-    - include/
+    - { glob: "python3.dll", platforms: [windows] }
+    - { glob: "vcruntime140*.dll", platforms: [windows] }
+    - { glob: "DLLs/", platforms: [windows] }
+    - { glob: "Lib/", platforms: [windows] }
+    - { glob: "libs/", platforms: [windows] }
+    - { glob: "include/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

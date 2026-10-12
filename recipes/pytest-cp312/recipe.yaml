@@ -71,11 +71,11 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/_pytest/
-    - lib/python3.12/site-packages/pytest/
-    - lib/python3.12/site-packages/py.py
-    - lib/python3.12/site-packages/pytest-*.dist-info/
-    - bin/pytest
-    - bin/py.test
-    - Lib/site-packages/pytest/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/_pytest/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/pytest/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/py.py", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/pytest-*.dist-info/", platforms: [any] }
+    - { glob: "bin/pytest", platforms: [any] }
+    - { glob: "bin/py.test", platforms: [any] }
+    - { glob: "Lib/site-packages/pytest/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

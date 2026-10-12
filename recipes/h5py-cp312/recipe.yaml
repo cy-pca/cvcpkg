@@ -125,11 +125,11 @@ package:
   # under the interpreter's site-packages are what gets shipped. There is NO
   # h5py.libs/: the HDF5 runtime is the cvcpkg hdf5 package in the merged prefix.
   files:
-    - lib/python3.12/site-packages/h5py/
-    - lib/python3.12/site-packages/h5py-3.16.0.dist-info/
+    - { glob: "lib/python3.12/site-packages/h5py/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.12/site-packages/h5py-3.16.0.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
     # Windows (build.ps1) site-packages scheme, for when that port lands.
-    - Lib/site-packages/h5py/
-    - Lib/site-packages/h5py-3.16.0.dist-info/
+    - { glob: "Lib/site-packages/h5py/", platforms: [windows] }
+    - { glob: "Lib/site-packages/h5py-3.16.0.dist-info/", platforms: [windows] }
 
 abi:
   # The extensions embed numpy's C-API ABI and link libhdf5.so.310; bump

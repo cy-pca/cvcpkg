@@ -55,7 +55,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/tinycss2/
-    - lib/python3.11/site-packages/tinycss2-*.dist-info/
-    - Lib/site-packages/tinycss2/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/tinycss2/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/tinycss2-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/tinycss2/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

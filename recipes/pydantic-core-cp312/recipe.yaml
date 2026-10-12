@@ -121,11 +121,11 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.12/site-packages/pydantic_core/
-    - lib/python3.12/site-packages/pydantic_core-*.dist-info/
+    - { glob: "lib/python3.12/site-packages/pydantic_core/", platforms: [freebsd, linux, macos, netbsd] }
+    - { glob: "lib/python3.12/site-packages/pydantic_core-*.dist-info/", platforms: [freebsd, linux, macos, netbsd] }
     # Windows (build.ps1) site-packages scheme.
-    - Lib/site-packages/pydantic_core/
-    - Lib/site-packages/pydantic_core-*.dist-info/
+    - { glob: "Lib/site-packages/pydantic_core/", platforms: [windows] }
+    - { glob: "Lib/site-packages/pydantic_core-*.dist-info/", platforms: [windows] }
 
 notes:
   - title: "cargo fetches crates from the network during this build"

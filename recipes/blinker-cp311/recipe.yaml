@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/blinker/
-    - lib/python3.11/site-packages/blinker-*.dist-info/
-    - Lib/site-packages/blinker/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/blinker/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/blinker-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/blinker/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

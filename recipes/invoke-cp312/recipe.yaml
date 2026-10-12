@@ -56,9 +56,9 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/invoke/
-    - lib/python3.12/site-packages/*.dist-info/
-    - bin/invoke
-    - bin/inv
-    - Lib/site-packages/invoke/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/invoke/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "bin/invoke", platforms: [any] }
+    - { glob: "bin/inv", platforms: [any] }
+    - { glob: "Lib/site-packages/invoke/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

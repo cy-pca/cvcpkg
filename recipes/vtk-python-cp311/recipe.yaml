@@ -93,10 +93,10 @@ package:
     - lib/vtk*Python*.lib
     - bin/vtk*Python*
     # The importable Python package (site-packages layout differs per platform).
-    - lib/python*/site-packages/vtkmodules/
-    - lib/python*/site-packages/vtk.py
-    - Lib/site-packages/vtkmodules/
-    - Lib/site-packages/vtk.py
+    - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux] }
+    - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux] }
+    - { glob: "Lib/site-packages/vtkmodules/", platforms: [windows] }
+    - { glob: "Lib/site-packages/vtk.py", platforms: [windows] }
     # C++↔Python bridge headers (only emitted with VTK_WRAP_PYTHON=ON) — they land
     # in the SAME include/vtk-9.5 dir the `vtk` package's VTK::CommonCore already
     # puts on a consumer's include path, so `#include "vtkPythonUtil.h"` needs no

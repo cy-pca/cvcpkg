@@ -49,7 +49,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/flit_core/
-    - lib/python3.12/site-packages/flit_core-*.dist-info/
-    - Lib/site-packages/flit_core/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/flit_core/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/flit_core-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/flit_core/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
