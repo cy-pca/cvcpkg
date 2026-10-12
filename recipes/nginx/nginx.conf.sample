@@ -1,0 +1,95 @@
+# etc/nginx/nginx.conf.sample -- sample configuration for the cvcpkg nginx.
+#
+# nginx resolves every relative path (this file's includes, logs, pid, temp
+# dirs, `root`) against its *prefix*.  The prefix compiled into the cvcpkg
+# binary is a build-machine path, so always pass your own with -p, and the
+# config with -c (relative to -p, or absolute).  For a server rooted in
+# /srv/www:
+#
+#   mkdir -p /srv/www/logs /srv/www/html
+#   cp PREFIX/etc/nginx/nginx.conf.sample /srv/www/nginx.conf
+#   cp PREFIX/etc/nginx/mime.types        /srv/www/
+#   PREFIX/bin/nginx -p /srv/www -c nginx.conf -t          # check config
+#   PREFIX/bin/nginx -p /srv/www -c nginx.conf             # start
+#   PREFIX/bin/nginx -p /srv/www -c nginx.conf -s reload   # reload|reopen|quit|stop
+#
+# where PREFIX is the cvcpkg prefix nginx is installed in.  Under a process
+# supervisor (systemd, runit, a container entrypoint) add -g 'daemon off;'.
+# Ports below 1024 need root (or CAP_NET_BIND_SERVICE); this sample listens
+# on 8080.
+
+worker_processes  auto;
+
+error_log  logs/error.log notice;
+pid        logs/nginx.pid;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+    access_log  logs/access.log  main;
+
+    sendfile           on;
+    keepalive_timeout  65;
+    gzip               on;
+
+    # A load-balanced application tier, e.g. several app containers or
+    # processes on one host:
+    #
+    # upstream app {
+    #     least_conn;
+    #     server 127.0.0.1:8001;
+    #     server 127.0.0.1:8002;
+    # }
+
+    server {
+        listen       8080;
+        server_name  localhost;
+
+        location / {
+            root   html;
+            index  index.html;
+        }
+
+        # location /api/ {
+        #     proxy_pass         http://app;
+        #     proxy_http_version 1.1;
+        #     proxy_set_header   Host              $host;
+        #     proxy_set_header   X-Real-IP         $remote_addr;
+        #     proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        #     proxy_set_header   X-Forwarded-Proto $scheme;
+        #     proxy_set_header   Upgrade           $http_upgrade;
+        #     proxy_set_header   Connection        "upgrade";
+        # }
+
+        location = /nginx_status {
+            stub_status;
+            allow 127.0.0.1;
+            deny  all;
+        }
+
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {
+            root   html;
+        }
+    }
+
+    # TLS (needs a certificate and key):
+    #
+    # server {
+    #     listen       8443 ssl;
+    #     http2        on;
+    #     server_name  localhost;
+    #     ssl_certificate      cert.pem;
+    #     ssl_certificate_key  cert.key;
+    #     ssl_protocols        TLSv1.2 TLSv1.3;
+    #     location / { root html; }
+    # }
+}
