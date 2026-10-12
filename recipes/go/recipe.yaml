@@ -1,0 +1,135 @@
+schema_version: 1
+recipe:
+  name: go
+  upstream_version: "1.27.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://go.dev/
+  license: BSD-3-Clause
+  tags: [language, compiler, tools, go]
+  description: >-
+    The Go toolchain (go, gofmt, the compiler/linker and the standard
+    library sources), repackaged from the official go.dev binary
+    distribution. A build-time dependency for recipes that compile Go
+    (seaweedfs), and a hermetic Go for CI. Pinned to its own toolchain:
+    GOTOOLCHAIN defaults to `local`, so a go.mod `toolchain` line never makes
+    it download a different Go.
+
+# The payload is upstream's prebuilt distribution; nothing is compiled here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core, so
+# this map DOCUMENTS what build.sh / build.ps1 download. The enforced sha256
+# values live in build.sh's sha_for() and build.ps1's $expected -- keep the
+# three in sync when bumping.
+#
+# Each value is from https://go.dev/dl/?mode=json (and the matching
+# dl.google.com/go/<file>.sha256). The linux-amd64 tarball was downloaded,
+# re-hashed, and its detached signature checked against Google's Linux
+# package signing key, which signs Go releases:
+#   curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --import
+#   gpg --verify go1.27.2.linux-amd64.tar.gz.asc go1.27.2.linux-amd64.tar.gz
+#   -> Good signature from "Google Inc. (Linux Packages Signing Authority)"
+#      (subkey 0E225917414670F4442C250DFD533C07C264648F of EB4C1BFD...B4796)
+source:
+  type: prebuilt
+  base_url: https://dl.google.com/go
+  artifacts:
+    linux-x86_64:
+      file: go1.27.2.linux-amd64.tar.gz
+      sha256: "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5"
+    linux-arm64:
+      file: go1.27.2.linux-arm64.tar.gz
+      sha256: "94f3e30b8e374bc285e7dadc11e0865726b9bc6e85b841ccceaabc0214c6b7c8"
+    macos-x86_64:
+      file: go1.27.2.darwin-amd64.tar.gz
+      sha256: "587b59182488b23aa6e5fc25110405a3e0e5b38ed2f5b2f46ed13c32aee356fe"
+    macos-arm64:
+      file: go1.27.2.darwin-arm64.tar.gz
+      sha256: "76812b213b1b2302c978d28fa52fa92d541704b9e7d9d5db8002c50e4018c4c5"
+    freebsd-x86_64:
+      file: go1.27.2.freebsd-amd64.tar.gz
+      sha256: "3baf61eec549b0c3f638d82636388e36abf94aa14814a011f011d2648ad1eded"
+    windows-x86_64:
+      file: go1.27.2.windows-amd64.zip
+      sha256: "1314008898bd40df77af4b014f777f08873dbdfbcd3d92308728ee03304fe04f"
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/go/
+    - glob: bin/go
+      platforms: [linux, macos, freebsd]
+    - glob: bin/gofmt
+      platforms: [linux, macos, freebsd]
+    - glob: bin/go.cmd
+      platforms: [windows]
+    - glob: bin/gofmt.cmd
+      platforms: [windows]
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. GOROOT is staged
+    whole under lib/go; bin/go and bin/gofmt point into it.
+
+notes:
+  - title: "Layout: GOROOT is <prefix>/lib/go, and it relocates"
+    description: >-
+      The official distribution is a self-contained GOROOT (bin/, pkg/tool/,
+      src/, lib/, ...), so it is staged whole under lib/go instead of
+      spreading src/ and pkg/ over the prefix root. bin/go and bin/gofmt are
+      relative symlinks into lib/go/bin (Windows: bin\go.cmd / bin\gofmt.cmd
+      shims, or put lib\go\bin on PATH). The go command finds GOROOT from its
+      own resolved executable path, so nothing records the install location
+      and the prefix can be moved: test.sh builds and runs a program with a
+      relocated copy and checks `go env GOROOT` follows it. Do not set
+      GOROOT yourself.
+  - title: "GOTOOLCHAIN=local (the one change to upstream)"
+    description: >-
+      Upstream's lib/go/go.env sets GOTOOLCHAIN=auto, which makes `go`
+      download and run a newer toolchain whenever a go.mod asks for one
+      (`go 1.28` / `toolchain go1.28.x`). That silently replaces the pinned
+      compiler with an unpinned download, so build.sh sets GOTOOLCHAIN=local
+      there, as Debian and Fedora do. A module that needs a newer Go then
+      fails loudly ("go.mod requires go >= ...") instead. Export
+      GOTOOLCHAIN=auto to get upstream's behaviour back. GOPROXY
+      (proxy.golang.org) and GOSUMDB (sum.golang.org) keep upstream's
+      defaults.
+  - title: "Hermetic builds with this Go"
+    description: >-
+      Module downloads are network fetches verified against go.sum (and the
+      checksum database), the same trust model as cargo with Cargo.lock. For
+      a build that must not touch the user's environment, set GOPATH,
+      GOMODCACHE and GOCACHE into the build dir, GOENV=off (ignore the user's
+      `go env -w` file), GOFLAGS=-mod=readonly -modcacherw (go.sum is
+      authoritative; the module cache stays deletable) and CGO_ENABLED=0
+      unless C code is genuinely needed -- recipes/seaweedfs/build.sh does
+      exactly this. With CGO_ENABLED=1 Go uses the C compiler on PATH.
+  - title: "Verified platforms"
+    description: >-
+      linux-x86_64 is built and tested here. linux-arm64, macos (x86_64 and
+      arm64), freebsd-x86_64 and windows-x86_64 stage go.dev's binaries for
+      those platforms through the same scripts but have not been built yet.
