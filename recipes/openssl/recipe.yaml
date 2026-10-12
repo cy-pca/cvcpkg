@@ -113,8 +113,11 @@ package:
   files:
     - lib/libssl*
     - lib/libcrypto*
-    - lib/engines-3/
-    - lib/ossl-modules/
+    # build.sh builds OpenBSD with no-dynamic-engine no-legacy (its linker
+    # rejects the modules), so neither directory exists there; declaring them
+    # for openbsd failed every pack under strict globs.
+    - { glob: "lib/engines-3/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
+    - { glob: "lib/ossl-modules/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
     - lib/cmake/OpenSSL/
     - lib/pkgconfig/openssl*
     - lib/pkgconfig/libssl*
