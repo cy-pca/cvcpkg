@@ -1,0 +1,84 @@
+schema_version: 1
+recipe:
+  name: libuv
+  upstream_version: "1.53.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    libuv — the cross-platform asynchronous I/O library behind Node.js
+    (event loop, TCP/UDP, pipes, timers, file system, child processes,
+    thread pool). Ships the shared libuv (soname libuv.so.1) and the static
+    libuv.a, with pkg-config files and the libuv CMake package. The
+    uvloop-cpNNN columns link the shared library.
+  homepage: https://libuv.org/
+  # LICENSE is MIT; LICENSE-extra adds tree.h (BSD-2-Clause) and the
+  # inet_pton/inet_ntop implementation in src/inet.c (ISC), both compiled in.
+  license: "MIT AND BSD-2-Clause AND ISC"
+  tags: [networking, io, async]
+
+# The tagged GitHub archive (not dist.libuv.org's autotools tarball): the
+# CMake build below is the one cvcpkg drives on every platform.
+source:
+  type: tarball
+  url: https://github.com/libuv/libuv/archive/refs/tags/v1.53.0.tar.gz
+  sha256: "279f3f67a24bb9921fe999ca6cd5e332fade8d515873ef9ba054b70e70a31d9e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/libuv*", platforms: [linux, macos, freebsd, openbsd, netbsd] }  # libuv.so.1*/libuv.1.dylib + libuv.a
+    - { glob: "lib/libuv.lib", platforms: [windows] }  # static (uv_a gets a "lib" prefix on Windows)
+    - { glob: "lib/uv.lib", platforms: [windows] }     # import library for uv.dll
+    - { glob: "bin/uv.dll", platforms: [windows] }
+    - lib/pkgconfig/libuv.pc
+    - lib/pkgconfig/libuv-static.pc
+    - lib/cmake/libuv/
+    - include/uv.h
+    - include/uv/
+  cmake_packages:
+    - { name: libuv, targets: ["libuv::uv", "libuv::uv_a"] }
+  pkg_config:
+    - libuv
+    - libuv-static
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17

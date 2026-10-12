@@ -260,6 +260,7 @@ SCRIPT_PACKAGES = {
     "mako": ["mako-render"],
     "pygments": ["pygmentize"],
     "pytest": ["pytest", "py.test"],
+    "scikit-build-core": ["scikit-build", "scikit-build-core"],
     "sympy": ["isympy"],
     "tqdm": ["tqdm"],
     # NEW at 2026.6.1.19: setup.py gained a console_scripts entry point the old
@@ -683,6 +684,19 @@ SEED_PACKAGES = {
         "deps": [],
         "files": ["pybind11/", "pybind11-*.dist-info/"],
         "check": "import pybind11",
+    },
+    "scikit-build-core": {
+        # coincurve's PEP-517 build drives its CMake project through
+        # scikit-build-core (as a hatch build hook), so the hand-written
+        # coincurve-cp31X columns stage this as a build edge.  Pure Python.
+        "version": "1.1.1",
+        "license": "Apache-2.0",
+        "deps": ["packaging", "pathspec"],
+        # hatch-vcs (a [build-system] requirement) imports setuptools_scm, and
+        # staging hatch-vcs as a build edge does not stage its runtime deps.
+        "build_deps": ["setuptools-scm", "setuptools"],
+        "files": ["scikit_build_core/", "scikit_build_core-*.dist-info/"],
+        "check": "import scikit_build_core.build",
     },
     # ── plotting / imaging / schema stack ───────────────────────────────────
     # pillow is the load-bearing one: the scene-buffer ingestion path reads

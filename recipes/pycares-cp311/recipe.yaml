@@ -1,0 +1,89 @@
+schema_version: 1
+recipe:
+  name: pycares-cp311
+  upstream_version: "5.0.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/pycares/
+  license: "MIT"
+  tags: [python, source]
+  description: >-
+    pycares 5.0.1 for CPython 3.11 — the cp311 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE against cvcpkg's own c-ares (recipes/c-ares,
+    libcares.so.2) instead of the copy the PyPI sdist/wheel bundles. The extension
+    resolves the library by soname out of the merged prefix through an $ORIGIN-
+    relative RUNPATH. Installed as a real wheel (dist-info/RECORD/METADATA) via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/df/a0/9c823651872e6a0face3f0311de2a40c8bbcb9c8dcb15680bd019ac56ac7/pycares-5.0.1.tar.gz
+  sha256: "5a3c249c830432631439815f9a818463416f2a8cbdb1e988e78757de9ae75081"
+  strip_components: 1
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches:
+  # Channel(lookups=...) hands c-ares a freed cffi buffer (pending upstream,
+  # still in pycares 5.1.0); see the patch header. Drop it once a release has it.
+  - pycares-lookups-lifetime.patch
+
+depends:
+  build:
+    - name: python311
+    - name: setuptools-cp311
+    - name: wheel-cp311
+    - name: cffi-cp311
+    - name: pycparser-cp311
+    - name: c-ares
+  runtime:
+    - name: python311
+    - name: cffi-cp311
+    - name: c-ares
+  host_tools:
+    - python311
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.11/site-packages/pycares/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/pycares-*.dist-info/", platforms: [linux, macos] }
+
+notes:
+  - title: "Patched: lookups buffer lifetime"
+    platforms: [linux, macos]
+    description: >-
+      pycares-lookups-lifetime.patch keeps the `lookups` string passed to
+      Channel(lookups=...) alive until ares_init_options() has copied it.
+      Upstream (5.0.1, still in 5.1.0) assigns a cffi temporary to the struct
+      field, so c-ares can read freed memory and resolve with the wrong lookup
+      order (seen as ARES_ECONNREFUSED, err 11; on catx-03 0/1000 failures
+      patched vs 12-54/1000 unpatched). Channel(resolvconf_path=...) has the
+      same pattern and is not patched. Drop the patch once a pycares release
+      contains the fix.
+  - title: "Not built on Windows yet"
+    platforms: [linux, macos]
+    description: >-
+      Upstream ships Windows wheels; a Windows column needs cares.dll staged next to
+      _cares.pyd (Python 3.8+ ignores PATH for extension DLLs). Not written or
+      verified yet.

@@ -1,0 +1,64 @@
+schema_version: 1
+recipe:
+  name: orjson-cp313
+  upstream_version: "3.11.8"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/orjson/
+  license: "MPL-2.0 AND (Apache-2.0 OR MIT)"
+  tags: [python, source]
+  description: >-
+    orjson 3.11.8 for CPython 3.13 — the cp313 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE with maturin and cvcpkg's own Rust toolchain (a pyo3
+    extension linking no external library). Installed as a real wheel (dist-
+    info/RECORD/METADATA) via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/9d/1b/2024d06792d0779f9dbc51531b61c24f76c75b9f4ce05e6f3377a1814cea/orjson-3.11.8.tar.gz
+  sha256: "96163d9cdc5a202703e9ad1b9ae757d5f0ca62f4fa0cc93d1f27b0e180cc404e"
+  strip_components: 1
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: python313
+    - name: maturin-cp313
+    - name: rust
+  runtime:
+    - name: python313
+  host_tools:
+    - python313
+    - rust
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.13/site-packages/orjson/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/orjson-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/orjson/", platforms: [windows] }
+    - { glob: "Lib/site-packages/orjson-*.dist-info/", platforms: [windows] }
