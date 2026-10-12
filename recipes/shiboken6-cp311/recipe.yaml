@@ -8,7 +8,11 @@ recipe:
   # still carried backslashes in the remainder (\Lib -> invalid CMake escape '\L');
   # +cvc.4 passes forward-slash paths to cmake so nothing backslashed is baked.
   # Downstream find_package(Shiboken6) (pyside6) now parses cleanly.
-  cvc_revision: 4
+  # +cvc.5: libclang comes only from the cvcpkg llvm18 dependency. build.sh no
+  # longer falls back to /usr/lib/llvm-18, neither script honours an inherited
+  # LLVM_INSTALL_DIR, and both fail if libclang or Clang's resource headers
+  # are missing.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -142,9 +146,13 @@ notes: >-
   hermetically by the cvcpkg `llvm18` dependency. shiboken 6.8.2's setup_clang()
   runs find_package(Clang CONFIG REQUIRED) and warns below 18.0 (hard-fails below
   14.0); the runtime parser additionally needs the Clang builtin/resource headers
-  (lib/clang/18/include), which llvm18 packages. build.sh sets LLVM_INSTALL_DIR to
-  the dependency prefix (where llvm18 installs ClangConfig.cmake + libclang + the
-  resource headers), falling back to a system /usr/lib/llvm-18 only if absent.
+  (lib/clang/18/include), which llvm18 packages. build.sh and build.ps1 set
+  LLVM_INSTALL_DIR to whichever cvcpkg prefix (CVC_DEPS_PREFIX or
+  CVC_BUILD_PREFIX) holds llvm18's ClangConfig.cmake, pin Clang_DIR/LLVM_DIR to
+  it, and fail if llvm18, libclang or the resource headers are missing. There is
+  no fallback to a system /usr/lib/llvm-*, a Homebrew llvm, llvm-config on PATH,
+  a preinstalled C:\Program Files\LLVM, or an LLVM_INSTALL_DIR inherited from
+  the caller.
 
   LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
   .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no
