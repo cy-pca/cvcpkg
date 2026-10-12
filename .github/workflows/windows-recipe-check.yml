@@ -18,6 +18,14 @@
 # (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
 #  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
 #   gh workflow run windows-recipe-check -f recipe=openmp -f runner=windows-2022 -f deps=catalog
+#   gh workflow run windows-recipe-check --ref <branch> -f recipe=msvc -f accept_license=true
+#   gh workflow run windows-recipe-check --ref <branch> -f recipe=zlib -f msvc=cvcpkg -f accept_license=true
+# (msvc=cvcpkg skips the runner's Visual Studio: `cvcpkg install msvc` lays out
+#  Microsoft's compiler and SDK from Microsoft's packages and the recipe builds
+#  with that, through CVC_MSVC_ROOT. accept_license=true is the dispatcher's own
+#  acceptance of the vendor license of every recipe the run downloads under
+#  `license_acceptance:` -- for msvc, Microsoft's Build Tools and Windows SDK
+#  licenses. Leave it false unless you accept them; such recipes then refuse.)
 # (runner=windows-2022 + deps=catalog mirrors windows-build.yml, the job that
 #  publishes Windows bundles: VS 2022, and the dependency closure installed from
 #  the catalog. The default builds the closure from source, which cannot work
@@ -79,6 +87,19 @@ on:
         options:
           - source
           - catalog
+      msvc:
+        description: "Compiler: the runner image's Visual Studio, or cvcpkg's msvc recipe (needs accept_license)"
+        required: true
+        default: "runner"
+        type: choice
+        options:
+          - runner
+          - cvcpkg
+      accept_license:
+        description: "I accept the vendor license of every recipe this run downloads under license_acceptance (msvc: Microsoft's Build Tools and Windows SDK licenses)"
+        required: true
+        default: false
+        type: boolean
   pull_request:
     paths:
       - ".github/workflows/windows-recipe-check.yml"
@@ -101,7 +122,7 @@ on:
 concurrency:
   # Every input is in the key, so variants of one recipe (runner, deps, link,
   # config) can run side by side instead of cancelling each other.
-  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}-${{ inputs.runner || 'windows-latest' }}-${{ inputs.deps || 'source' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}-${{ inputs.runner || 'windows-latest' }}-${{ inputs.deps || 'source' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}-${{ inputs.msvc || 'runner' }}
   cancel-in-progress: true
 
 permissions:
@@ -129,6 +150,7 @@ jobs:
       # _common/env-windows.ps1 throws if it cannot find a Visual Studio
       # install, so MSVC must be active before the build step.
       - name: Set up MSVC developer environment
+        if: ${{ (inputs.msvc || 'runner') == 'runner' }}
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -165,6 +187,47 @@ jobs:
           python -m pip install --quiet '.[publish,validate]'
           PY_SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")
           echo "$PY_SCRIPTS" >> "$GITHUB_PATH"
+
+      # A recipe with `license_acceptance:` is built only after its vendor's
+      # terms are accepted.  Here the dispatcher accepts them by setting
+      # accept_license; this step records it for the recipes the run downloads
+      # (the target, and msvc when msvc=cvcpkg), never on its own.
+      - name: Accept vendor licenses (accept_license)
+        if: ${{ inputs.accept_license }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="${{ inputs.recipe || 'gsl' }}"
+          [ "${{ inputs.msvc || 'runner' }}" = cvcpkg ] && names="$names msvc"
+          for name in $names; do
+            python - "$name" >> "$GITHUB_ENV" <<'PY'
+          import sys, yaml
+          name = sys.argv[1]
+          gate = (yaml.safe_load(open(f"recipes/{name}/recipe.yaml")) or {}).get("license_acceptance")
+          if gate:
+              urls = " ".join(gate["urls"])
+              print(f"{name}: license accepted by the dispatcher (accept_license): {urls}", file=sys.stderr)
+              print(f"{gate['env']}=1")
+          PY
+          done
+
+      # msvc=cvcpkg: the compiler is cvcpkg's msvc recipe, installed the way a
+      # user would (`cvcpkg install` builds it from the recipe -- it is never
+      # published), and the build below takes it from CVC_MSVC_ROOT through
+      # _common/env-windows.ps1 instead of the runner's Visual Studio.
+      - name: Install cvcpkg's MSVC (msvc=cvcpkg)
+        if: ${{ inputs.msvc == 'cvcpkg' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.accept_license }}" != true ]; then
+            echo "::error::msvc=cvcpkg downloads Microsoft's compiler and SDK under Microsoft's licenses; re-run with accept_license=true if you accept them"
+            exit 1
+          fi
+          prefix="$(cygpath -m "$RUNNER_TEMP")/cvcpkg-msvc"
+          cvcpkg install msvc --platform windows --recipes-dir recipes --prefix "$prefix"
+          echo "CVC_MSVC_ROOT=$(cygpath -w "$prefix")\\msvc" >> "$GITHUB_ENV"
+          cat "$prefix/msvc/msvc.json"
 
       # Build tools from cvcpkg: cmake (3.31.7, the version Boost 1.86's
       # configs expect), ninja and nasm. Nothing comes from Chocolatey, vcpkg or

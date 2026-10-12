@@ -10,13 +10,18 @@ import logging
 import os
 import tarfile
 import zipfile
+from collections.abc import Callable, Collection, MutableMapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from cvcpkg import cache as cache_mod
 from cvcpkg._archive import archive_format, open_tar
 from cvcpkg.errors import InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
 from cvcpkg.retry import with_retry
+
+if TYPE_CHECKING:
+    from cvcpkg.builder import LicenseAcceptance
 
 
 def _safe_extractall(tf: tarfile.TarFile, path: Path) -> None:
@@ -400,6 +405,83 @@ def not_redistributable_deps(
     if recipe.redistributable:
         return None
     return [d["name"] for d in runtime_dependencies(recipe, platform)]
+
+
+def license_gated_components(
+    names: list[str], recipes_dirs: list[Path] | None
+) -> list[tuple[str, LicenseAcceptance]]:
+    """Those of *names* whose recipe declares ``license_acceptance:``, each with
+    its gate, in the order given."""
+    import yaml
+
+    from cvcpkg.builder import Recipe, RecipeError
+
+    out: list[tuple[str, LicenseAcceptance]] = []
+    for name in names:
+        recipe_dir = _find_recipe_dir(name, recipes_dirs)
+        if recipe_dir is None:
+            continue
+        try:
+            gate = Recipe.load(recipe_dir).license_acceptance
+        except (RecipeError, OSError, ValueError, yaml.YAMLError):
+            continue
+        if gate is not None:
+            out.append((name, gate))
+    return out
+
+
+_ACCEPT_VALUES = frozenset({"1", "y", "yes", "true"})
+
+
+def license_prompt(name: str, gate: LicenseAcceptance) -> str:
+    """The question ``cvcpkg install`` asks on a terminal."""
+    what = gate.title or "the vendor's license"
+    urls = "".join(f"\n  {u}" for u in gate.urls)
+    return (
+        f"{name} is downloaded from its vendor under {what}:{urls}\n"
+        f"Have you read these terms, and do you accept them?"
+    )
+
+
+def require_license_acceptance(
+    name: str,
+    gate: LicenseAcceptance,
+    *,
+    accepted: Collection[str] = (),
+    environ: MutableMapping[str, str] | None = None,
+    interactive: bool = False,
+    confirm: Callable[[str], bool] | None = None,
+) -> str:
+    """Make sure the user accepted *gate* before *name* is built, and record it.
+
+    Accepted when ``gate.env`` is already set (``1``/``yes``/``true``), when
+    *name* is in *accepted* (``--accept-license``), or -- only when
+    *interactive* -- when *confirm* says yes to :func:`license_prompt`.
+    cvcpkg never accepts on its own: anything else raises InstallError.  On
+    acceptance ``gate.env=1`` is set in *environ* (default ``os.environ``) so
+    the build script, which checks it as well, sees the same answer.
+
+    Returns how it was accepted: ``"env"``, ``"flag"`` or ``"prompt"``.
+    """
+    env = os.environ if environ is None else environ
+    if env.get(gate.env, "").strip().lower() in _ACCEPT_VALUES:
+        how = "env"
+    elif name in accepted:
+        how = "flag"
+    elif interactive and confirm is not None:
+        if not confirm(license_prompt(name, gate)):
+            raise InstallError(f"{name}: license not accepted, so it was not installed.")
+        how = "prompt"
+    else:
+        what = gate.title or "its vendor's license"
+        urls = "".join(f"\n  {u}" for u in gate.urls)
+        raise InstallError(
+            f"{name} is downloaded from its vendor under {what}:{urls}\n"
+            f"cvcpkg does not accept a license for you. Once you have read and "
+            f"accept the terms, pass --accept-license {name} or set {gate.env}=1."
+        )
+    env[gate.env] = "1"
+    return how
 
 
 def build_from_source_fallback(

@@ -236,6 +236,25 @@ class MatrixEntry:
 
 
 @dataclass
+class LicenseAcceptance:
+    """Parsed ``license_acceptance:`` block: a vendor license the user must
+    accept before cvcpkg builds the recipe on their machine (see
+    cvcpkg.installer.require_license_acceptance)."""
+
+    urls: list[str]
+    env: str
+    title: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> LicenseAcceptance:
+        return cls(
+            urls=[str(u) for u in d.get("urls", []) or []],
+            env=str(d.get("env", "")),
+            title=str(d.get("title", "")),
+        )
+
+
+@dataclass
 class Recipe:
     """Parsed recipe.yaml."""
 
@@ -281,6 +300,9 @@ class Recipe:
     # NVIDIA CUDA toolkit).  Built only where it is installed; never packed.
     # See ensure_redistributable.
     redistributable: bool = True
+    # A vendor license cvcpkg must get the user's explicit yes to before it
+    # builds this recipe (Microsoft's for `msvc`).  None = no gate.
+    license_acceptance: LicenseAcceptance | None = None
 
     @property
     def full_version(self) -> str:
@@ -338,6 +360,11 @@ class Recipe:
             requires_capabilities=raw.get("requires_capabilities", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
             redistributable=raw.get("redistributable", True) is not False,
+            license_acceptance=(
+                LicenseAcceptance.from_dict(raw["license_acceptance"])
+                if raw.get("license_acceptance")
+                else None
+            ),
         )
 
 
