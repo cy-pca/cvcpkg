@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/isodate/
-    - lib/python3.12/site-packages/*.dist-info/
-    - Lib/site-packages/isodate/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/isodate/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/isodate/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

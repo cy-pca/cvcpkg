@@ -75,12 +75,12 @@ build:
 
 package:
   files:
-    - lib/python3.13t/site-packages/black/
-    - lib/python3.13t/site-packages/blackd/
-    - lib/python3.13t/site-packages/blib2to3/
-    - lib/python3.13t/site-packages/_black_version.py
-    - lib/python3.13t/site-packages/black-*.dist-info/
-    - bin/black
-    - bin/blackd
-    - Lib/site-packages/black/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13t/site-packages/black/", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/blackd/", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/blib2to3/", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/_black_version.py", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/black-*.dist-info/", platforms: [any] }
+    - { glob: "bin/black", platforms: [any] }
+    - { glob: "bin/blackd", platforms: [any] }
+    - { glob: "Lib/site-packages/black/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

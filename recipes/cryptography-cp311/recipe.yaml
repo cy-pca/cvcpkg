@@ -154,11 +154,11 @@ package:
   # There is no bundled OpenSSL here: the TLS runtime is the cvcpkg openssl
   # package, resolved out of the merged prefix.
   files:
-    - lib/python3.11/site-packages/cryptography/
-    - lib/python3.11/site-packages/cryptography-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/cryptography/", platforms: [freebsd, linux, macos, netbsd] }
+    - { glob: "lib/python3.11/site-packages/cryptography-*.dist-info/", platforms: [freebsd, linux, macos, netbsd] }
     # Windows (build.ps1) site-packages scheme.
-    - Lib/site-packages/cryptography/
-    - Lib/site-packages/cryptography-*.dist-info/
+    - { glob: "Lib/site-packages/cryptography/", platforms: [windows] }
+    - { glob: "Lib/site-packages/cryptography-*.dist-info/", platforms: [windows] }
 
 notes:
   - title: "cargo fetches crates from the network during this build"

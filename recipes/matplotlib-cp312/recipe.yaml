@@ -105,9 +105,9 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/matplotlib/
-    - lib/python3.12/site-packages/mpl_toolkits/
-    - lib/python3.12/site-packages/pylab.py
-    - lib/python3.12/site-packages/matplotlib-*.dist-info/
-    - Lib/site-packages/matplotlib/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/matplotlib/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/mpl_toolkits/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/pylab.py", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/matplotlib-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/matplotlib/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

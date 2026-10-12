@@ -59,8 +59,8 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/mako/
-    - lib/python3.11/site-packages/*.dist-info/
-    - bin/mako-render
-    - Lib/site-packages/mako/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/mako/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "bin/mako-render", platforms: [any] }
+    - { glob: "Lib/site-packages/mako/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

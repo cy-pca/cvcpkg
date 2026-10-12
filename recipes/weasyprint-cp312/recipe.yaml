@@ -70,7 +70,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/weasyprint/
-    - lib/python3.12/site-packages/weasyprint-*.dist-info/
-    - Lib/site-packages/weasyprint/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/weasyprint/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/weasyprint-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/weasyprint/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

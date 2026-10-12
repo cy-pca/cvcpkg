@@ -55,7 +55,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/proto/
-    - lib/python3.12/site-packages/*.dist-info/
-    - Lib/site-packages/proto/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/proto/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/proto/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -55,7 +55,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/pyproject_metadata/
-    - lib/python3.11/site-packages/pyproject_metadata-*.dist-info/
-    - Lib/site-packages/pyproject_metadata/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/pyproject_metadata/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/pyproject_metadata-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pyproject_metadata/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

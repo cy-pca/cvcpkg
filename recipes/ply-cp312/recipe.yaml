@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/ply/
-    - lib/python3.12/site-packages/ply-*.dist-info/
-    - Lib/site-packages/ply/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/ply/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/ply-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/ply/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

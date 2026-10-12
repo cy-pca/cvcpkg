@@ -111,8 +111,8 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.13/site-packages/greenlet/
-    - lib/python3.13/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/greenlet/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13/site-packages/*.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
     # Windows (build.ps1) site-packages scheme.
-    - Lib/site-packages/greenlet/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "Lib/site-packages/greenlet/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

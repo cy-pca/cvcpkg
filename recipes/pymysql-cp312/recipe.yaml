@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/pymysql/
-    - lib/python3.12/site-packages/*.dist-info/
-    - Lib/site-packages/pymysql/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/pymysql/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pymysql/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -124,12 +124,12 @@ package:
   # dir.  `pymupdf/` holds the extensions + bundled MuPDF libs; `fitz/` is the
   # legacy-alias shim PyMuPDF still installs.
   files:
-    - lib/python3.12/site-packages/pymupdf/
-    - lib/python3.12/site-packages/fitz/
-    - lib/python3.12/site-packages/pymupdf-*.dist-info/
-    - Lib/site-packages/pymupdf/
-    - Lib/site-packages/fitz/
-    - Lib/site-packages/pymupdf-*.dist-info/
+    - { glob: "lib/python3.12/site-packages/pymupdf/", platforms: [linux] }
+    - { glob: "lib/python3.12/site-packages/fitz/", platforms: [linux] }
+    - { glob: "lib/python3.12/site-packages/pymupdf-*.dist-info/", platforms: [linux] }
+    - { glob: "Lib/site-packages/pymupdf/", platforms: [windows] }
+    - { glob: "Lib/site-packages/fitz/", platforms: [windows] }
+    - { glob: "Lib/site-packages/pymupdf-*.dist-info/", platforms: [windows] }
 
 notes:
   - title: "The MuPDF source is sha256-pinned but fetched during the build"
