@@ -4435,87 +4435,6 @@ def _accept_server_hit(
     return True
 
 
-def _server_cache_push(
-    base_url: str,
-    token: str,
-    archive_path: Path,
-    recipe: Recipe,
-    platform: str,
-    arch: str,
-    build_type: str,
-    link: str,
-    recipe_version: str,
-    org: str,
-) -> bool:
-    """Publish a build cache archive to the server cache via ``POST /v1/publish``.
-
-    Only ``build-all`` pushes this way: it packs nothing, so the raw install
-    tree is all it has.  ``pack-all`` publishes the bundle it packs instead.
-    The server cache IS the catalog: this creates the same row ``cvcpkg
-    publish`` would, and a later ``cvcpkg publish`` of that variant skips it
-    as already published.  So it must send the same catalog metadata --
-    above all ``required_deps``, which the resolver walks on install.  The
-    cached archive has no manifest to read them from, so they come from the
-    recipe, via the helper :func:`generate_manifest` uses.
-
-    Returns ``True`` on success, ``False`` on failure.
-    """
-    import json
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    if not recipe.redistributable:
-        # This push IS a publish: it creates the catalog row.
-        print(f"  -> not pushed to server cache: {recipe.not_redistributable_reason}")
-        return False
-
-    recipe_block = recipe.raw.get("recipe", {})
-    params = urllib.parse.urlencode(
-        {
-            "name": recipe.name,
-            "version": recipe.full_version,
-            "platform": platform,
-            "arch": arch,
-            "build_type": build_type,
-            "link": link,
-            "recipe_version": recipe_version,
-            "description": recipe_block.get("description", ""),
-            "homepage": recipe_block.get("homepage", ""),
-            "license": recipe_block.get("license", ""),
-            "maintainer": recipe_block.get("maintainer", "Community"),
-            "tags": ",".join(recipe.tags) if recipe.tags else "",
-            "org": org,
-            "required_deps": json.dumps(runtime_dependencies(recipe, platform)),
-            "provides": json.dumps(list(recipe.provides)),
-        }
-    )
-    url = f"{base_url.rstrip('/')}/v1/publish?{params}"
-
-    # Build multipart form data manually (avoid extra dependencies).
-    boundary = "----cvcpkg-upload-boundary"
-    filename = archive_path.name
-    body_prefix = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: application/octet-stream\r\n\r\n"
-    ).encode()
-    body_suffix = f"\r\n--{boundary}--\r\n".encode()
-
-    file_data = archive_path.read_bytes()
-    body = body_prefix + file_data + body_suffix
-
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
-    try:
-        with urllib.request.urlopen(req, timeout=600) as resp:  # noqa: S310
-            return resp.status == 200
-    except (urllib.error.URLError, OSError):
-        return False
-
-
 def build_all(
     recipes_dir: Path | list[Path],
     *,
@@ -4533,7 +4452,6 @@ def build_all(
     force_clean: bool = False,
     server_cache_url: str = "",
     server_cache_token: str = "",
-    server_cache_push: bool = False,
     no_server_cache: bool = False,
     server_cache_org: str = "",
     work_dir_root: Path | None = None,
@@ -4602,12 +4520,13 @@ def build_all(
     local cache is populated.  *server_cache_token* provides the
     bearer token for authenticated servers.
 
-    When *server_cache_push* is ``True``, successful builds are
-    published to the server cache via ``POST /v1/publish``.
+    build_all never publishes: the build cache holds a raw install tree --
+    no manifest, scripts still pointing at the build prefix -- and a catalog
+    row made from it installs without its dependencies.  ``pack-all`` and
+    ``build-all`` ``--server-cache-push`` pack each build and publish that.
 
-    *no_server_cache* disables server cache entirely (both pull and
-    push).  *server_cache_org* scopes cache queries to a specific
-    organization.
+    *no_server_cache* disables server cache lookups.  *server_cache_org*
+    scopes cache queries to a specific organization.
 
     *work_dir_root*, when given, is the parent directory in which
     per-recipe temporary work directories are created.  Otherwise
@@ -4856,29 +4775,6 @@ def build_all(
                             config,
                             link,
                         )
-                    # Push to server cache.
-                    if (
-                        server_cache_push
-                        and server_cache_url
-                        and not no_server_cache
-                        and cache is not None
-                    ):
-                        arc = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
-                        if arc is not None:
-                            ok = _server_cache_push(
-                                server_cache_url,
-                                server_cache_token,
-                                arc,
-                                ht_recipe,
-                                ht_platform,
-                                ht_arch,
-                                config,
-                                link,
-                                ht_chain_hash,
-                                server_cache_org,
-                            )
-                            if ok:
-                                print(f"  -> pushed to server cache ({ht_chain_hash[:12]}...)")
                 except (BuildError, RecipeError):
                     if not keep_going:
                         raise
@@ -5101,29 +4997,6 @@ def build_all(
                         config,
                         link,
                     )
-                    # Push to server cache.
-                    if (
-                        server_cache_push
-                        and server_cache_url
-                        and not no_server_cache
-                        and not server_hit
-                    ):
-                        arc = cache.lookup(recipe_chain_hash, eff_platform, eff_arch, config, link)
-                        if arc is not None:
-                            ok = _server_cache_push(
-                                server_cache_url,
-                                server_cache_token,
-                                arc,
-                                recipe,
-                                eff_platform,
-                                eff_arch,
-                                config,
-                                link,
-                                recipe_chain_hash,
-                                server_cache_org,
-                            )
-                            if ok:
-                                print(f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)")
             else:
                 ctx = build_recipe(
                     recipe.recipe_dir,

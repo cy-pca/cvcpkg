@@ -447,11 +447,11 @@ class TestServerCacheIntegration:
         monkeypatch.setattr("httpx.Client", PatchedClient)
 
     def test_build_and_push_to_server(self, tmp_path, monkeypatch):
-        """build_all with server_cache_push publishes to the server.
+        """A build cache archive posted to /v1/publish lands in the catalog.
 
-        TestClient uses an in-process transport, so we patch
-        ``_server_cache_push`` to call the client directly instead of
-        via ``urllib``.
+        Exercises the server's publish endpoint with an archive from a real
+        build; the CLI never pushes such an archive itself (pack-all and
+        build-all publish the packed bundle -- see test_push_records_runtime_deps).
         """
 
         from cvcpkg.builder import chain_hash as compute_chain_hash
@@ -516,15 +516,20 @@ class TestServerCacheIntegration:
         client.__exit__(None, None, None)
 
     def test_push_records_runtime_deps(self, tmp_path, monkeypatch):
-        """A ``build_all`` server-cache push records the recipe's runtime deps.
+        """``build-all --server-cache-push`` publishes packed bundles that
+        record the recipe's runtime deps.
 
-        Regression: the push sent no ``required_deps`` (nor ``provides``), the
-        server stored ``[]``, and the CI's later ``cvcpkg publish --all`` then
-        skipped the packed bundle as already published.  Over a thousand
-        CI-built catalog rows (jsonschema-cp312, anyio-cp312, httpx-cp312, ...)
-        reached the catalog with no dependency edges, so installing them left
-        their deps out of the prefix.
+        Regression: the push sent the build cache's raw install tree with no
+        ``required_deps`` (nor ``provides``); the server stored ``[]``, and the
+        CI's later ``cvcpkg publish --all`` skipped the packed bundle as
+        already published.  Over a thousand CI-built catalog rows
+        (jsonschema-cp312, anyio-cp312, httpx-cp312, ...) reached the catalog
+        with no dependency edges, so installing them left their deps out of
+        the prefix.  build-all now packs each build, as pack-all does, and
+        publishes that bundle -- manifest included.
         """
+        import tarfile
+
         monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(tmp_path / "cache"))
         # Ensure in-process server uses YAML backend (matching TokenStore)
         # even when CVCPKG_DATABASE_URL is set by the Docker test env.
@@ -550,17 +555,26 @@ class TestServerCacheIntegration:
 
         self._route_to_server(monkeypatch, client)
 
-        build_all(
-            recipes_dir,
-            platform="linux",
-            config="release",
-            link="shared",
-            prefix=tmp_path / "prefix",
-            per_component=True,
-            server_cache_url="http://testserver",
-            server_cache_token=pub_token,
-            server_cache_push=True,
+        result = CliRunner().invoke(
+            cli,
+            [
+                "build-all",
+                "--local",
+                "--no-default-recipes",
+                "--recipes-dir",
+                str(recipes_dir),
+                "--platform",
+                "linux",
+                "--prefix",
+                str(tmp_path / "prefix"),
+                "--server-cache",
+                "http://testserver",
+                "--server-cache-token",
+                pub_token,
+                "--server-cache-push",
+            ],
         )
+        assert result.exit_code == 0, result.output
 
         resp = client.get("/v1/catalog")
         assert resp.status_code == 200
@@ -568,6 +582,12 @@ class TestServerCacheIntegration:
         assert bundles["libapp"]["required_deps"] == [{"name": "libfoo"}]
         assert bundles["libapp"]["provides"] == ["app-slot"]
         assert bundles["libfoo"]["required_deps"] == []
+
+        # The packed bundle, not the build cache's raw install tree.
+        archive = tmp_path / "libapp.tar.gz"
+        archive.write_bytes(client.get(bundles["libapp"]["archive_url"]).content)
+        with tarfile.open(archive) as tar:
+            assert "share/libcvc-deps/libapp/manifest.yaml" in tar.getnames()
 
         client.__exit__(None, None, None)
 
@@ -793,7 +813,6 @@ class TestServerCacheIntegration:
             per_component=True,
             server_cache_url="http://127.0.0.1:1",  # would fail if used
             server_cache_token="fake",
-            server_cache_push=True,
             no_server_cache=True,
         )
 

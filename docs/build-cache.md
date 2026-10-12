@@ -51,7 +51,7 @@ Both `build-all` and `pack-all` accept:
 | `--force-clean` | — | Skip cache lookups (rebuild from source) but still store results. Use for guaranteed-clean release builds. |
 | `--server-cache <url>` | `CVCPKG_SERVER_CACHE` | Server cache URL; enables server-side lookups. |
 | `--server-cache-token <t>` | `CVCPKG_SERVER_CACHE_TOKEN` | Bearer token for authenticated server cache access. |
-| `--server-cache-push` | `CVCPKG_SERVER_CACHE_PUSH` | Publish successful builds to the server cache. `pack-all` publishes each packed bundle (manifest, runtime deps, relocated scripts) as soon as it is archived. `build-all` packs nothing, so it pushes the raw install tree (no manifest, scripts still pointing at the build prefix): use it only against a private cache server, never a public catalog. |
+| `--server-cache-push` | `CVCPKG_SERVER_CACHE_PUSH` | Publish successful builds to the server cache, always as the packed bundle `cvcpkg pack` makes (manifest, runtime deps, relocated scripts), never the build cache's raw install tree. `pack-all` publishes each bundle as soon as it is archived; `build-all` builds each recipe into its own install dir when pushing, then packs and publishes each one. Host tools a cross build makes for itself are not published. |
 | `--no-server-cache` | — | Disable server cache entirely (both pull and push). |
 | `--server-cache-org <slug>` | `CVCPKG_SERVER_CACHE_ORG` | Scope server cache queries to an organization. |
 

@@ -925,7 +925,10 @@ def pack(
     is_flag=True,
     default=False,
     envvar="CVCPKG_SERVER_CACHE_PUSH",
-    help="Push successful builds to the server cache.",
+    help=(
+        "Pack each successful build (as pack-all does) and publish the bundle "
+        "to the server cache."
+    ),
 )
 @click.option(
     "--no-server-cache",
@@ -983,6 +986,7 @@ def build_all_cmd(
         recipes_dirs = _try_pull_server_recipes()
 
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+    push = server_cache_push and bool(server_cache) and not no_server_cache
 
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
@@ -997,14 +1001,159 @@ def build_all_cmd(
         force_clean=force_clean,
         server_cache_url=server_cache,
         server_cache_token=server_cache_token,
-        server_cache_push=server_cache_push,
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
         work_dir_root=work_dir_root,
+        # Pushing publishes each recipe's own bundle, so it needs each recipe
+        # built into its own install dir, kept until it is packed.
+        per_component=push,
+        cleanup_work_dirs=not push,
     )
+    if push:
+        # Never the build cache's raw install tree (no manifest, scripts
+        # still pointing at the build prefix): a catalog row made from it
+        # installs without its dependencies.  Pack each build exactly as
+        # pack-all does and publish that.
+        import shutil
+        import tempfile
+
+        from cvcpkg.builder import list_recipes, load_all_recipes
+        from cvcpkg.platform import detect_arch
+
+        arch = detect_arch()
+        all_recipes = {
+            r.name: r
+            for r in (load_all_recipes(rdirs) if len(rdirs) > 1 else list_recipes(rdirs[0]))
+        }
+        for ctx in contexts:
+            try:
+                if not ctx.recipe.redistributable:
+                    click.echo(f"cvcpkg: not pushing -- {ctx.recipe.not_redistributable_reason}")
+                    continue
+                if ctx.install_dir == ctx.prefix:
+                    continue  # no isolated tree to pack (an unassigned/merged build)
+                ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
+                out = Path(tempfile.mkdtemp(prefix=f"cvcpkg-push-{ctx.recipe.name}-"))
+                try:
+                    archive_path, _sha, _size = _pack_built(
+                        ctx,
+                        ctx_plat,
+                        ctx_arch,
+                        config,
+                        link,
+                        out,
+                        all_recipes=all_recipes,
+                        org=server_cache_org,
+                    )
+                    _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
+                finally:
+                    shutil.rmtree(out, ignore_errors=True)
+            finally:
+                if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
+                    shutil.rmtree(ctx.work_dir, ignore_errors=True)
     failures = getattr(contexts, "failures", [])
     if failures:
         raise SystemExit(1)
+
+
+# ── packing a built context (pack-all, build-all --server-cache-push) ──
+
+
+def _bundle_identity(ctx, arch: str) -> tuple[str, str]:
+    """The (platform, arch) a build_all context packs under, as in pack_recipe.
+
+    A target served by the recipe's ``any`` matrix entry packs one any/noarch
+    bundle -- the identity, and chain hash, build_all caches it under.
+    Cross-compiled recipes (e.g. wasm built on linux) use their actual target
+    platform and arch, not the host's.
+    """
+    from cvcpkg.builder import _serves_target_via_any
+
+    if _serves_target_via_any(ctx.recipe, ctx.platform):
+        return "any", "noarch"
+    return ctx.platform, ("wasm32" if ctx.platform in ("wasm", "wasm-mt") else arch)
+
+
+def _pack_built(
+    ctx,
+    plat: str,
+    arch: str,
+    config: str,
+    link: str,
+    output: Path,
+    *,
+    all_recipes: dict,
+    maintainer: str = "",
+    org: str = "",
+    strict_globs: bool = False,
+) -> tuple[Path, str, int]:
+    """Stage one built context into a bundle archive under *output*.
+
+    The same bundle ``cvcpkg pack`` makes -- the package.files declaration
+    gate, a manifest with the recipe's runtime deps, shebangs rewritten off
+    the build prefix, the relocatability check -- and never the build cache's
+    raw install tree.  Returns ``(archive, sha256, size)``.
+    """
+    from cvcpkg.builder import (
+        create_archive,
+        enforce_declared_files,
+        generate_manifest,
+        stage_bundle,
+    )
+
+    # Inline staging rather than pack_recipe, so the declaration gate is
+    # called explicitly -- a check placed only in pack_recipe would miss it.
+    enforce_declared_files(
+        ctx.install_dir, ctx.recipe.package_files, plat, ctx.recipe.name, strict=strict_globs
+    )
+    manifest = generate_manifest(
+        ctx.recipe,
+        ctx.install_dir,
+        plat,
+        arch,
+        config,
+        link,
+        maintainer=maintainer,
+        all_recipes=all_recipes,
+        org_slug=org,
+    )
+    staging = ctx.work_dir / "staging"
+    staging.mkdir(exist_ok=True)
+    stage_bundle(
+        ctx.install_dir,
+        manifest,
+        staging,
+        recipe_dir=ctx.recipe.recipe_dir,
+        temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+        linkage_allow=ctx.recipe.linkage_allow,
+        dep_prefixes=(ctx.prefix,),
+    )
+    return create_archive(
+        staging, output, ctx.recipe.name, ctx.recipe.full_version, plat, arch, config, link
+    )
+
+
+def _push_packed(server: str, token: str, org: str, archive_path: Path) -> None:
+    """Publish one packed bundle; a failure warns, ``cvcpkg publish`` can retry."""
+    from cvcpkg.cli._publish import _publish_to_server
+
+    try:
+        _publish_to_server(
+            server,
+            token,
+            [archive_path],
+            release_tag="",
+            chunked_threshold=10 * 1024 * 1024,  # cvcpkg publish's default
+            org=org,
+        )
+    # Anything -- a ClickException, an httpx transport error -- must not
+    # throw away the builds still to be packed.
+    except Exception as exc:  # noqa: BLE001
+        msg = exc.format_message() if isinstance(exc, click.ClickException) else str(exc)
+        click.echo(
+            f"cvcpkg: WARNING: server-cache push of {archive_path.name} failed: {msg}",
+            err=True,
+        )
 
 
 # ── pack-all ────────────────────────────────────────────────────
@@ -1171,15 +1320,7 @@ def pack_all_cmd(
     """
     import shutil
 
-    from cvcpkg.builder import (
-        _serves_target_via_any,
-        build_all,
-        create_archive,
-        enforce_declared_files,
-        generate_manifest,
-        list_recipes,
-        stage_bundle,
-    )
+    from cvcpkg.builder import build_all, list_recipes
     from cvcpkg.platform import detect_arch
 
     plat = _auto_platform(platform)
@@ -1252,11 +1393,6 @@ def pack_all_cmd(
         force_clean=force_clean,
         server_cache_url=server_cache,
         server_cache_token=server_cache_token,
-        # Not build_all's push: that uploads the build cache's raw install
-        # tree -- no manifest, build-prefix shebangs -- and the catalog row it
-        # creates makes the later publish of the real bundle a no-op.  pack-all
-        # publishes the bundle it packs instead (_push_packed below).
-        server_cache_push=False,
         no_server_cache=no_server_cache,
         server_cache_org=server_cache_org,
         work_dir_root=work_dir_root,
@@ -1264,28 +1400,6 @@ def pack_all_cmd(
     )
 
     push = server_cache_push and bool(server_cache) and not no_server_cache
-
-    def _push_packed(archive_path: Path) -> None:
-        """Publish one packed bundle; a failure warns, ``cvcpkg publish`` can retry."""
-        from cvcpkg.cli._publish import _publish_to_server
-
-        try:
-            _publish_to_server(
-                server_cache,
-                server_cache_token,
-                [archive_path],
-                release_tag="",
-                chunked_threshold=10 * 1024 * 1024,  # cvcpkg publish's default
-                org=server_cache_org,
-            )
-        # Anything -- a ClickException, an httpx transport error -- must not
-        # throw away the builds still to be packed.
-        except Exception as exc:  # noqa: BLE001
-            msg = exc.format_message() if isinstance(exc, click.ClickException) else str(exc)
-            click.echo(
-                f"cvcpkg: WARNING: server-cache push of {archive_path.name} failed: {msg}",
-                err=True,
-            )
 
     output.mkdir(parents=True, exist_ok=True)
     for ctx in contexts:
@@ -1296,17 +1410,7 @@ def pack_all_cmd(
             if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
                 shutil.rmtree(ctx.work_dir, ignore_errors=True)
             continue
-        # The package identity follows the matrix entry that drives this
-        # build, exactly as in pack_recipe: a target served by the recipe's
-        # `any` entry packs one any/noarch bundle (the identity -- and chain
-        # hash -- build_all caches it under).  Cross-compiled recipes (e.g.
-        # wasm built on linux) use their actual target platform and arch,
-        # not the host's.
-        if _serves_target_via_any(ctx.recipe, ctx.platform):
-            ctx_plat, ctx_arch = "any", "noarch"
-        else:
-            ctx_plat = ctx.platform
-            ctx_arch = "wasm32" if ctx_plat in ("wasm", "wasm-mt") else arch
+        ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
         # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
         # mutable and full_version derives from it, so this flows into both the
         # manifest and the archive name below.
@@ -1329,47 +1433,17 @@ def pack_all_cmd(
 
                 _bump_revision_in_yaml(ctx.recipe.recipe_dir / "recipe.yaml", override)
             ctx.recipe.cvc_revision = override
-        # pack-all stages inline rather than going through pack_recipe, so it
-        # needs the declaration gate explicitly -- this is the third staging
-        # site, and the one a check placed only in pack_recipe would miss.
-        enforce_declared_files(
-            ctx.install_dir,
-            ctx.recipe.package_files,
-            ctx_plat,
-            ctx.recipe.name,
-            strict=strict_globs,
-        )
-        manifest = generate_manifest(
-            ctx.recipe,
-            ctx.install_dir,
+        archive_path, sha256, size = _pack_built(
+            ctx,
             ctx_plat,
             ctx_arch,
             config,
             link,
-            maintainer=maintainer,
-            all_recipes=all_recipes,
-            org_slug=org,
-        )
-        staging = ctx.work_dir / "staging"
-        staging.mkdir(exist_ok=True)
-        stage_bundle(
-            ctx.install_dir,
-            manifest,
-            staging,
-            recipe_dir=ctx.recipe.recipe_dir,
-            temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
-            linkage_allow=ctx.recipe.linkage_allow,
-            dep_prefixes=(ctx.prefix,),
-        )
-        archive_path, sha256, size = create_archive(
-            staging,
             output,
-            ctx.recipe.name,
-            ctx.recipe.full_version,
-            ctx_plat,
-            ctx_arch,
-            config,
-            link,
+            all_recipes=all_recipes,
+            maintainer=maintainer,
+            org=org,
+            strict_globs=strict_globs,
         )
         click.echo(f"  {archive_path.name} ({size:,} bytes, sha256={sha256})")
         if signing_key:
@@ -1380,7 +1454,7 @@ def pack_all_cmd(
             write_signature(sig, sig_path)
             click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
         if push:
-            _push_packed(archive_path)
+            _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
 
         # Clean up per-component work directory now that the archive
         # has been created (build_all was called with
