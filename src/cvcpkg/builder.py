@@ -56,6 +56,10 @@ class PackError(CvcpkgError):
     """Packaging stage failed (staging, manifest, or archiving)."""
 
 
+class NotRedistributableError(PackError):
+    """The recipe declares ``redistributable: false``; it is never packed."""
+
+
 @dataclass
 class BuildFailure:
     """Record of a recipe that failed during ``build_all``."""
@@ -273,10 +277,24 @@ class Recipe:
     # own capability gate, which controls only whether the test runs.
     vm_test: dict[str, Any] | None = None
     python: PythonSpec | None = None
+    # False for a payload whose license forbids publishing the built tree (the
+    # NVIDIA CUDA toolkit).  Built only where it is installed; never packed.
+    # See ensure_redistributable.
+    redistributable: bool = True
 
     @property
     def full_version(self) -> str:
         return f"{self.upstream_version}+cvc.{self.cvc_revision}"
+
+    @property
+    def not_redistributable_reason(self) -> str:
+        """Why this recipe is never packed, for refusals and skip messages."""
+        return (
+            f"{self.name} is not redistributable (redistributable: false in its "
+            f"recipe.yaml): its license does not allow publishing the built tree, "
+            f"so cvcpkg never packs or publishes it. `cvcpkg install {self.name}` "
+            f"builds it from the recipe on the installing machine instead."
+        )
 
     @classmethod
     def load(cls, recipe_dir: Path) -> Recipe:
@@ -319,6 +337,7 @@ class Recipe:
             provides=raw.get("provides", []) or [],
             requires_capabilities=raw.get("requires_capabilities", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
+            redistributable=raw.get("redistributable", True) is not False,
         )
 
 
@@ -2332,6 +2351,17 @@ def runtime_dependencies(recipe: Recipe, platform: str) -> list[dict[str, str]]:
     return dep_list
 
 
+def ensure_redistributable(recipe: Recipe) -> None:
+    """Refuse to turn a ``redistributable: false`` recipe into a bundle.
+
+    Called up front by every packing entry point, so the refusal comes before
+    the build, and again from :func:`generate_manifest`, which every staging
+    site goes through, so a new packing path cannot forget it.
+    """
+    if not recipe.redistributable:
+        raise NotRedistributableError(recipe.not_redistributable_reason)
+
+
 def generate_manifest(
     recipe: Recipe,
     install_dir: Path,
@@ -2356,6 +2386,8 @@ def generate_manifest(
     declares ``cross_toolchain.target_platforms`` is a host tool); pass an
     explicit bool to override.
     """
+    # A manifest exists only to go into a bundle.
+    ensure_redistributable(recipe)
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
@@ -3575,6 +3607,8 @@ def pack_recipe(
     from cvcpkg.platform import detect_arch, detect_platform
 
     recipe = Recipe.load(recipe_dir)
+    # Before the build: no point downloading a toolkit only to refuse it.
+    ensure_redistributable(recipe)
 
     if not arch:
         arch = detect_arch()
@@ -3764,6 +3798,7 @@ def pack_from_prefix(
         raise RecipeError(f"prefix directory does not exist: {prefix}")
 
     recipe = Recipe.load(recipe_dir)
+    ensure_redistributable(recipe)
 
     if version_override:
         # Preserve the recipe's ``+cvc.<rev>`` cvc_revision suffix so the
@@ -4419,6 +4454,11 @@ def _server_cache_push(
     import urllib.error
     import urllib.parse
     import urllib.request
+
+    if not recipe.redistributable:
+        # This push IS a publish: it creates the catalog row.
+        print(f"  -> not pushed to server cache: {recipe.not_redistributable_reason}")
+        return False
 
     recipe_block = recipe.raw.get("recipe", {})
     params = urllib.parse.urlencode(

@@ -214,6 +214,21 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   build host has installed (see `recipes/boost/build.sh`). For a library at a
   fixed system location the bundle cannot carry, list its prefix under
   **`package.linkage_allow`**; that never excuses a build-machine path.
+- **`redistributable: false`** — for a vendor payload whose license forbids
+  publishing the built tree. The NVIDIA CUDA toolkit is the example
+  (`recipes/cuda-toolkit`): its EULA lets a developer ship a few runtime
+  libraries inside an application, never nvcc or the SDK as a stand-alone
+  product. Such a recipe is built only on the machine that installs it:
+  `cvcpkg install <name>` builds it from the recipe (no `--fallback-to-source`
+  needed), its build script downloads the payload from the vendor and checks
+  pinned sha256s, and nothing is ever published. Every path that would make a
+  bundle or a fleet job refuses it: `cvcpkg pack` (before building), `pack
+  --from-prefix`, `pack-all` (builds it, does not pack it), build-all's
+  `--server-cache-push`, `builds submit-dag` (skips it, and never auto-adds it
+  as a dependency), and the server's `/v1/publish`, `/v1/builds` and
+  `/v1/builds/dag`. The recipe itself (urls and checksums, no vendor bits) is
+  still pushed and browsable. Builder agents do not provision such a
+  dependency for other jobs yet, so a fleet-built recipe cannot depend on one.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of

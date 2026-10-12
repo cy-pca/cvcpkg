@@ -1289,6 +1289,13 @@ def pack_all_cmd(
 
     output.mkdir(parents=True, exist_ok=True)
     for ctx in contexts:
+        if not ctx.recipe.redistributable:
+            # Built like any other recipe -- a dependent may need it in the
+            # prefix -- but never packed, so never published.
+            click.echo(f"cvcpkg: not packing -- {ctx.recipe.not_redistributable_reason}")
+            if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
+                shutil.rmtree(ctx.work_dir, ignore_errors=True)
+            continue
         # The package identity follows the matrix entry that drives this
         # build, exactly as in pack_recipe: a target served by the recipe's
         # `any` entry packs one any/noarch bundle (the identity -- and chain

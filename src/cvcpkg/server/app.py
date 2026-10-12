@@ -3166,6 +3166,71 @@ def create_app(
                     out[f"_common/{f.relative_to(common).as_posix()}"] = f.read_bytes()
         return out or None
 
+    def _recipe_doc_sync(name: str, org: str, bundle_path: str | None) -> dict | None:
+        """recipe.yaml of *name*, parsed: the pushed bundle (*bundle_path*) when
+        there is one, else the server's own recipe tree -- the precedence
+        :func:`_recipe_files` uses.  Reads that one member, not the whole
+        recipe, so a large DAG can afford one call per recipe."""
+        import tarfile as _tf
+
+        body: bytes | None = None
+        if bundle_path and Path(bundle_path).is_file():
+            try:
+                with _tf.open(bundle_path, "r:gz") as tar:
+                    for member in tar:
+                        if member.isfile() and member.name.lstrip("./") == f"{name}/recipe.yaml":
+                            fh = tar.extractfile(member)
+                            body = fh.read() if fh is not None else None
+                            break
+            except (OSError, _tf.TarError):
+                body = None
+        if body is None and not org:
+            from cvcpkg.builder import RecipeError, find_recipes_dir
+
+            try:
+                path = find_recipes_dir() / name / "recipe.yaml"
+                body = path.read_bytes() if path.is_file() else None
+            except (RecipeError, OSError):
+                body = None
+        if body is None:
+            return None
+        try:
+            doc = yaml.safe_load(body)
+        except yaml.YAMLError:
+            return None
+        return doc if isinstance(doc, dict) else None
+
+    async def _not_redistributable(names: set[str], org: str = "") -> list[str]:
+        """Those of *names* whose recipe declares ``redistributable: false``.
+
+        Such a payload (the NVIDIA CUDA toolkit) may never be published, so it
+        is never built as a job either: ``cvcpkg install`` builds it where it is
+        installed.  The CLI refuses to pack or submit one; checking here as well
+        covers clients and builders older than that refusal.  A name with no
+        recipe the server can see is unaffected.
+        """
+        out: list[str] = []
+        for name in sorted(names):
+            if not _RECIPE_NAME_RE.match(name) or (org and not _RECIPE_NAME_RE.match(org)):
+                continue
+            bundle_path = None
+            if _use_db and _db_recipes is not None:
+                try:
+                    bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org)
+                except Exception:  # pragma: no cover - store/back-end hiccup
+                    bundle_path = None
+            doc = await asyncio.to_thread(_recipe_doc_sync, name, org, bundle_path)
+            if doc is not None and doc.get("redistributable") is False:
+                out.append(name)
+        return out
+
+    def _not_redistributable_detail(names: list[str]) -> str:
+        return (
+            f"{', '.join(names)}: redistributable: false -- the payload's license does "
+            f"not allow publishing it, so it is never built or published here; "
+            f"`cvcpkg install` builds it on the installing machine"
+        )
+
     async def _load_recipe_or_error(name: str, org: str, caller: TokenRecord | None):
         """Shared guard: validate, authorize, load.  Returns (files, None) or
         (None, JSONResponse)."""
@@ -4317,6 +4382,10 @@ def create_app(
             err = validate_org_slug(org)
             if err:
                 raise HTTPException(422, err)
+
+        blocked = await _not_redistributable({name}, org)
+        if blocked:
+            raise HTTPException(403, _not_redistributable_detail(blocked))
 
         # Validate org membership and storage limit if publishing to an org
         if org and _use_db and _db_orgs is not None:
@@ -8988,6 +9057,9 @@ def create_app(
         if body.org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
             if not await _db_orgs.is_member(body.org_slug, actor.name):
                 raise HTTPException(403, "not a member of this organization")
+        blocked = await _not_redistributable({body.recipe_name}, body.org_slug)
+        if blocked:
+            raise HTTPException(422, _not_redistributable_detail(blocked))
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
         if body.platform in ("wasm", "wasm-mt", "wasi", "cosmo") and link != "static":
@@ -9038,6 +9110,13 @@ def create_app(
 
         if not _re_dag.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", dag_id):
             raise HTTPException(422, "invalid dag_id (allowed: letters, digits, . _ -)")
+        blocked: list[str] = []
+        for _org in {j.org_slug for j in body.jobs}:
+            blocked += await _not_redistributable(
+                {j.recipe_name for j in body.jobs if j.org_slug == _org}, _org
+            )
+        if blocked:
+            raise HTTPException(422, _not_redistributable_detail(sorted(set(blocked))))
         jobs_dicts = [
             {
                 "recipe_name": j.recipe_name,

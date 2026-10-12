@@ -56,6 +56,8 @@ def fake_recipe(
     r.package_files = list(package_files)
     # package.linkage_allow, passed to the pack-time relocatability gate.
     r.linkage_allow = []
+    # pack-all skips a `redistributable: false` recipe instead of packing it.
+    r.redistributable = True
     return r
 
 
