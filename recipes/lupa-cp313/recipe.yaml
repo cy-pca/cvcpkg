@@ -1,0 +1,124 @@
+schema_version: 1
+recipe:
+  name: lupa-cp313
+  upstream_version: "2.8"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/scoder/lupa
+  # PyPI's metadata says "MIT style"; LICENSE.txt is the MIT license text.
+  license: "MIT"
+  tags: [python, wheel, scripting]
+  description: >-
+    lupa 2.8 for CPython 3.13 (cp313) — Python bindings for Lua: run Lua code
+    from Python, exchange tables/functions/objects both ways. The cp313 column
+    of cvcpkg's per-interpreter matrix, BUILT FROM SOURCE against cvcpkg's OWN
+    Lua libraries rather than the copies of Lua that lupa's wheels compile in:
+    lupa.lua54 links the lua recipe's liblua.so.5.4 (Lua 5.4) and
+    lupa.luajit21 links the luajit recipe's libluajit-5.1.so.2 (LuaJIT 2.1,
+    the Lua 5.1 dialect Redis/Valkey scripts use), both found by soname out of
+    the merged prefix through an $ORIGIN-relative RUNPATH. `import lupa`
+    picks lua54. Installed as a proper wheel (real dist-info/RECORD/METADATA)
+    via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies this tarball and extracts it to CVC_SOURCE_DIR; build.sh
+# compiles it there with pip + the backends already in the build prefix. The
+# sha256 is upstream's own sdist digest from the PyPI JSON API, re-derived from
+# the downloaded tarball.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/c3/a6/0f869fbb07c393f15473b1eefefb7b5bec162fb7481803d040ed4dc46002/lupa-2.8.tar.gz
+  sha256: "d8022641b9ec8ecf2c5ecbe9f47e5a70e0b87c4b5ae921b92cb02a638e0acd08"
+  strip_components: 1
+
+python:
+  interpreter: python313
+  abi: cp313
+
+# setup.py can only link ONE external Lua, into a module named lupa.lua (its
+# --no-bundle/pkg-config path); the per-version modules come only from the
+# bundled sources. The patch adds $LUPA_EXTERNAL_LUA so build.sh can ask for
+# lupa.lua54 and lupa.luajit21 against the installed libraries, and drops the
+# obsolete setup(test_suite=...) that breaks metadata generation when an old
+# setuptools dist-info is also on the path (python311). See its header.
+patches:
+  - lupa-external-lua.patch
+
+depends:
+  build:
+    # The interpreter the extensions are compiled against and installed into.
+    - name: python313
+    # PEP-517 backend (pyproject: setuptools; bdist_wheel is built into it).
+    - name: setuptools-cp313
+    # Regenerates the C from lupa/_lupa.pyx (pyproject requires Cython>=3.2.4).
+    - name: cython-cp313
+    # Headers + shared libraries the two extension modules link.
+    - name: lua
+    - name: luajit
+  runtime:
+    # At import, lupa.lua54 / lupa.luajit21 load liblua / libluajit out of the
+    # merged prefix.
+    - name: python313
+    - name: lua
+    - name: luajit
+  host_tools:
+    # The interpreter drives pip, Cython and the compile on the BUILDER;
+    # patchelf stamps the relocatable $ORIGIN RUNPATH into the extensions on
+    # ELF platforms (Linux/BSD).
+    - python313
+    - patchelf
+
+build:
+  # The CPython extension ABI does not vary with cvcpkg's Release/Debug build
+  # type, so build once, optimized.
+  build_type_independent: true
+  # Every platform where lua, luajit and the cp313 interpreter + backends all
+  # build. wasm/wasi/cosmo stay out: static interpreter, no extension modules.
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        # Same floor as python313, lua and luajit.
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  # Not a filter -- stage_bundle ships the whole CVC_INSTALL_DIR, which build.sh
+  # fills by pip-installing --prefix into an initially empty dir -- but `cvcpkg
+  # pack` fails on an entry matching nothing, so each site-packages scheme is
+  # scoped to the platforms that use it.
+  files:
+    - { glob: "lib/python3.13/site-packages/lupa/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/python3.13/site-packages/lupa-*.dist-info/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # Windows (build.ps1) site-packages scheme.
+    - { glob: "Lib/site-packages/lupa/", platforms: [windows] }
+    - { glob: "Lib/site-packages/lupa-*.dist-info/", platforms: [windows] }
+
+notes:
+  - title: "Modules and dialects"
+    description: >-
+      lupa.lua54 is Lua 5.4 (recipes/lua); lupa.luajit21 is LuaJIT 2.1
+      (recipes/luajit), i.e. Lua 5.1 semantics plus the FFI — the dialect
+      Redis/Valkey EVAL scripts run under. `import lupa; lupa.LuaRuntime()`
+      uses lua54 (upstream's rule: plain Lua over LuaJIT). Both modules can be
+      imported in one process; each resolves the Lua C API from its own
+      library. Do not combine both with lupa.allow_lua_module_loading()
+      (RTLD_GLOBAL): the two libraries export the same lua_* symbol names.
+  - title: "No cp313t column"
+    description: >-
+      lupa 2.8 does not declare free-threading support (its extension
+      modules leave Py_mod_gil at Py_MOD_GIL_USED; upstream publishes cp314t
+      wheels but none for cp313t), so a 3.13t interpreter re-enables the GIL
+      on import and cvcpkg's no-GIL guarantee for cp313t columns cannot hold.

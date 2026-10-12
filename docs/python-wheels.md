@@ -116,14 +116,15 @@ Two kinds of from-source column exist:
 - **Generated** (the bulk): emitted by `tools/gen_python_recipes.py`, which
   reads each sdist's `[build-system] requires` and wires the backend edges.
 - **Hand-written**: `numpy`, `h5py`, `cffi`, `pyyaml`, `markupsafe`,
-  `greenlet`, `pillow`. These carry native-library edges the generator cannot
-  infer — numpy links cvcpkg's `libopenblas.so.0` by soname, h5py links
-  `libhdf5.so.310` — plus `$ORIGIN`-relative RUNPATH passes and per-platform
-  gates. No auditwheel-vendored `*.libs/` directory ships; the native runtime
-  is the corresponding cvcpkg package, resolved out of the same activated
-  prefix. The generator never emits or prunes these families; it declares
-  `numpy` in `HANDWRITTEN_DEP_BASES` so generated packages (matplotlib,
-  gymnasium, …) can depend on its columns, which are read from disk.
+  `greenlet`, `pillow`, `lupa`. These carry native-library edges the generator
+  cannot infer — numpy links cvcpkg's `libopenblas.so.0` by soname, h5py links
+  `libhdf5.so.310`, lupa links `liblua.so.5.4` and `libluajit-5.1.so.2` — plus
+  `$ORIGIN`-relative RUNPATH passes and per-platform gates. No
+  auditwheel-vendored `*.libs/` directory ships; the native runtime is the
+  corresponding cvcpkg package, resolved out of the same activated prefix. The
+  generator never emits or prunes these families; it declares `numpy` in
+  `HANDWRITTEN_DEP_BASES` so generated packages (matplotlib, gymnasium, …) can
+  depend on its columns, which are read from disk.
 
 For **new** packages, from-source is the generator default — pure `py3-none-any`
 packages included, because even a pure wheel is a third-party binary artifact.
