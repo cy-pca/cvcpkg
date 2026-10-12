@@ -149,7 +149,6 @@ autotools and libraries are otherwise found instead of cvcpkg's.
 |------|-------|
 | Python 3 | Runs cvcpkg itself, and meson |
 | Perl | Ships with macOS; `openssl`, `qt6`, `autoconf` and `automake` declare cvcpkg's `perl` in `depends.build` |
-| bash 4+ | Some recipe scripts need it (`numpy`, `h5py`, `pillow` use `readarray`); `/bin/bash` is 3.2 |
 
 ### System frameworks
 

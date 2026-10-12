@@ -93,8 +93,8 @@ jobs:
           python-version: "3.12"
 
       # Everything the builds use comes from cvcpkg, never Homebrew: the same
-      # three steps as macos-build.yml, which explains each of them. Strip the
-      # image's Homebrew from PATH (keeping only its bash, via a symlink)...
+      # three steps as macos-build.yml, which explains each of them. Take the
+      # image's Homebrew off PATH and move it aside...
       - name: Remove Homebrew from the environment
         run: |
           set -euo pipefail
@@ -103,19 +103,12 @@ jobs:
               /opt/homebrew|/opt/homebrew/*) return 0 ;;
               /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
               /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
-              # Intel: Homebrew's links fill /usr/local/bin and /usr/local/sbin.
-              /usr/local/bin|/usr/local/sbin) [ -d /usr/local/Homebrew ] ;;
+              # Intel: Homebrew owns all of /usr/local (bin, sbin, lib/ruby/gems/*/bin, ...).
+              /usr/local|/usr/local/*) [ -d /usr/local/Homebrew ] ;;
               *) return 1 ;;
             esac
           }
           clean=""
-          bash_now=$(command -v bash)
-          if brew_dir "$(dirname "$bash_now")"; then
-            mkdir -p "$RUNNER_TEMP/runner-bash"
-            ln -sf "$bash_now" "$RUNNER_TEMP/runner-bash/bash"
-            clean="$RUNNER_TEMP/runner-bash"
-            echo "keeping the image's bash $("$bash_now" -c 'echo $BASH_VERSION'): $RUNNER_TEMP/runner-bash/bash -> $bash_now"
-          fi
           set -f; IFS=:
           for d in $PATH; do
             [ -n "$d" ] || continue
@@ -124,6 +117,17 @@ jobs:
           done
           unset IFS; set +f
           echo "PATH=$clean" >> "$GITHUB_ENV"
+          # Off PATH is not enough on Intel: Homebrew links its formulae into
+          # /usr/local/include and /usr/local/lib, where Apple clang and ld look
+          # by default (bison's configure linked Homebrew's libtextstyle from
+          # there). Move the formulae aside, so every Homebrew file and every
+          # link to one is unreachable, whatever looks for it.
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then
+              sudo mv "$d" "$d.hidden-from-builds"
+              echo "moved aside: $d"
+            fi
+          done
 
       - name: Install cvcpkg
         run: |
@@ -187,7 +191,7 @@ jobs:
             case "$d" in
               /opt/homebrew*|/usr/local/Homebrew*|/usr/local/Cellar*|/usr/local/opt*|/usr/local/Caskroom*)
                 echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
-              /usr/local/bin|/usr/local/sbin)
+              /usr/local|/usr/local/*)
                 if [ -d /usr/local/Homebrew ]; then echo "::error::Homebrew directory on PATH: $d"; rc=1; fi ;;
             esac
           done
@@ -196,6 +200,9 @@ jobs:
             echo "::error::brew is on PATH ($(command -v brew)); nothing may build with Homebrew"
             rc=1
           fi
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then echo "::error::$d is still in place; nothing may build with Homebrew"; rc=1; fi
+          done
           [ "$rc" = 0 ] || exit 1
           cmake --version | sed -n 1p
           echo "ninja $(ninja --version)"

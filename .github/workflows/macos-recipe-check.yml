@@ -95,36 +95,37 @@ jobs:
           EVENT: ${{ github.event_name }}
           RECIPE: ${{ inputs.recipe }}
           RUNNER: ${{ inputs.runner }}
+          DEPS: ${{ inputs.deps }}
         run: |
           set -euo pipefail
+          # One "recipe runner deps" line per job.
           if [ "$EVENT" = workflow_dispatch ]; then
-            set -- "$RECIPE $RUNNER"
+            set -- "$RECIPE $RUNNER $DEPS"
           else
             # Each recipe puts different tools to work. The tools tree serves
             # what a recipe uses without declaring it; a depends.build tool
             # comes from its catalog bundle in the prefix.
-            #   fftw3       cmake + ninja (depends.build)
             #   fontconfig  meson, ninja, pkg-config, gperf (depends.build)
-            #   assimp      cmake, ninja, pkg-config from the tree (host_tools)
             #   bison       autotools configure + make, m4 from the tree (host_tools)
             #   nfft3       autoconf/automake/libtool bundles + configure (depends.build)
             #   postgresql-client  meson, ninja, flex, bison, pkg-config from the tree (host_tools)
             set -- \
-              "fftw3 macos-latest" "fftw3 macos-15-intel" \
-              "fontconfig macos-latest" "fontconfig macos-15-intel" \
-              "assimp macos-latest" "assimp macos-15-intel" \
-              "bison macos-latest" "bison macos-15-intel" \
-              "nfft3 macos-latest" "nfft3 macos-15-intel" \
-              "postgresql-client macos-latest"
+              "fontconfig macos-latest catalog" "fontconfig macos-15-intel catalog" \
+              "bison macos-latest catalog" "bison macos-15-intel catalog" \
+              "nfft3 macos-latest catalog" \
+              "postgresql-client macos-latest catalog" \
+              "autoconf macos-latest catalog" "autoconf macos-15-intel catalog" \
+              "libtool macos-15-intel catalog" \
+              "automake macos-15-intel source"
           fi
-          for pair in "$@"; do
-            echo "$pair"
-          done | jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ") | {recipe: .[0], runner: .[1]})' > matrix.json
+          for job in "$@"; do
+            echo "$job"
+          done | jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ") | {recipe: .[0], runner: .[1], deps: .[2]})' > matrix.json
           cat matrix.json
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.recipe }} on ${{ matrix.runner }}
+    name: Build ${{ matrix.recipe }} on ${{ matrix.runner }} (${{ matrix.deps }} deps)
     needs: plan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
@@ -149,19 +150,12 @@ jobs:
               /opt/homebrew|/opt/homebrew/*) return 0 ;;
               /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
               /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
-              # Intel: Homebrew's links fill /usr/local/bin and /usr/local/sbin.
-              /usr/local/bin|/usr/local/sbin) [ -d /usr/local/Homebrew ] ;;
+              # Intel: Homebrew owns all of /usr/local (bin, sbin, lib/ruby/gems/*/bin, ...).
+              /usr/local|/usr/local/*) [ -d /usr/local/Homebrew ] ;;
               *) return 1 ;;
             esac
           }
           clean=""
-          bash_now=$(command -v bash)
-          if brew_dir "$(dirname "$bash_now")"; then
-            mkdir -p "$RUNNER_TEMP/runner-bash"
-            ln -sf "$bash_now" "$RUNNER_TEMP/runner-bash/bash"
-            clean="$RUNNER_TEMP/runner-bash"
-            echo "keeping the image's bash $("$bash_now" -c 'echo $BASH_VERSION'): $RUNNER_TEMP/runner-bash/bash -> $bash_now"
-          fi
           set -f; IFS=:
           for d in $PATH; do
             [ -n "$d" ] || continue
@@ -170,6 +164,17 @@ jobs:
           done
           unset IFS; set +f
           echo "PATH=$clean" >> "$GITHUB_ENV"
+          # Off PATH is not enough on Intel: Homebrew links its formulae into
+          # /usr/local/include and /usr/local/lib, where Apple clang and ld look
+          # by default (bison's configure linked Homebrew's libtextstyle from
+          # there). Move the formulae aside, so every Homebrew file and every
+          # link to one is unreachable, whatever looks for it.
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then
+              sudo mv "$d" "$d.hidden-from-builds"
+              echo "moved aside: $d"
+            fi
+          done
 
       - name: Install cvcpkg
         run: |
@@ -229,7 +234,7 @@ jobs:
             case "$d" in
               /opt/homebrew*|/usr/local/Homebrew*|/usr/local/Cellar*|/usr/local/opt*|/usr/local/Caskroom*)
                 echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
-              /usr/local/bin|/usr/local/sbin)
+              /usr/local|/usr/local/*)
                 if [ -d /usr/local/Homebrew ]; then echo "::error::Homebrew directory on PATH: $d"; rc=1; fi ;;
             esac
           done
@@ -238,6 +243,9 @@ jobs:
             echo "::error::brew is on PATH ($(command -v brew)); nothing may build with Homebrew"
             rc=1
           fi
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then echo "::error::$d is still in place; nothing may build with Homebrew"; rc=1; fi
+          done
           [ "$rc" = 0 ] || exit 1
           cmake --version | sed -n 1p
           echo "ninja $(ninja --version)"
@@ -309,7 +317,7 @@ jobs:
           RECIPE: ${{ matrix.recipe }}
           CONFIG: ${{ inputs.config || 'release' }}
           LINK: ${{ inputs.link || 'shared' }}
-          DEPS: ${{ inputs.deps || 'catalog' }}
+          DEPS: ${{ matrix.deps }}
         run: |
           set -euo pipefail
           prefix="$GITHUB_WORKSPACE/prefix"
