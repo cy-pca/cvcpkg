@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: pyside6-cp311
   upstream_version: "6.8.2"
-  cvc_revision: 2
+  # Bumped 2 -> 3 (in lockstep with shiboken6): the generator's libclang comes
+  # only from the cvcpkg llvm18 dependency. build.sh no longer falls back to
+  # /usr/lib/llvm-18, neither script honours an inherited LLVM_INSTALL_DIR,
+  # and both fail if libclang or Clang's resource headers are missing.
+  # package.files entries are platform-scoped so the strict-globs pack check
+  # passes on linux and windows.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -96,25 +102,26 @@ build:
 package:
   files:
     # PySide6 runtime support library (libpyside6) linked by every module.
-    - lib/libpyside6*
+    - { glob: "lib/libpyside6*", platforms: [linux] }
     # Importable abi3 package, fanned into every interpreter (cp311/cp312/
     # cp313): QtCore/QtGui/QtWidgets/QtOpenGL(.Widgets) .so's, typesystems,
     # and Qt-for-Python glue.
-    - lib/python3.*/site-packages/PySide6/
+    - { glob: "lib/python3.*/site-packages/PySide6/", platforms: [linux] }
     # CMake config for C++ consumers that embed/extend PySide6.
     - lib/cmake/PySide6*/
     # Public headers (libpyside).
     - include/PySide6*/
     # Typesystem XML shipped for downstream binding generation.
     - share/PySide6/
-    # Windows layout (globs matching nothing are skipped): DLLs in bin/, import
-    # libs in lib/, the importable package under Lib/site-packages/.
+    # Windows layout: DLLs in bin/, import libs in lib/, the importable package
+    # under Lib/site-packages/. Layout-specific entries are scoped to the
+    # platform that produces them, because pack fails on a declared entry that
+    # matches nothing (see shiboken6-cp311). The runtime DLL installs to bin/
+    # (cvc.2 shipped bin/pyside6.abi3.dll); the old defensive lib/pyside6*.dll
+    # entry matched nothing.
     - bin/pyside6*.dll
-    # Defensive: the runtime support DLL may land in lib/ rather than bin/ —
-    # harmless if empty (see shiboken6-cp311).
-    - lib/pyside6*.dll
     - lib/pyside6*.lib
-    - Lib/site-packages/PySide6/
+    - { glob: "Lib/site-packages/PySide6/", platforms: [windows] }
   cmake_packages:
     - { name: PySide6, targets: ["PySide6::pyside6"] }
 

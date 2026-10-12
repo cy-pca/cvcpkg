@@ -30,23 +30,35 @@ foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX, $env:CVC_INSTAL
 if (-not $pyExe) { throw "shiboken6: could not find python (3.11) in the dependency closure" }
 Write-Host "shiboken6: building against $pyExe"
 
-# ── Hermetic libclang 18 (cvcpkg llvm18) for ApiExtractor ────────────────────
-# shiboken's setup_clang() reads LLVM_INSTALL_DIR to find ClangConfig.cmake +
-# libclang and, at generation time, the Clang builtin/resource headers under
-# ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include. Prefer the cvcpkg llvm18 in the
-# dependency prefix (a hermetic dep of this recipe).
-if (-not $env:LLVM_INSTALL_DIR) {
-    foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX, $env:CVC_INSTALL_DIR)) {
-        if ($root -and (Test-Path "$root\lib\cmake\clang\ClangConfig.cmake")) {
-            $env:LLVM_INSTALL_DIR = $root; break
-        }
+# ── libclang 18 from the cvcpkg llvm18 dependency, and from nowhere else ─────
+# shiboken's setup_clang() reads LLVM_INSTALL_DIR to find ClangConfig.cmake and
+# libclang. The generator reads it again at run time to find Clang's builtin
+# (resource) headers under $LLVM_INSTALL_DIR\lib\clang\<ver>\include, and it
+# runs during this build: shibokenmodule's wrappers are generated with it.
+# llvm18 is a declared dependency, so it is in the runtime closure
+# (CVC_DEPS_PREFIX) or the build closure (CVC_BUILD_PREFIX). Look there only:
+# an LLVM_INSTALL_DIR / CLANG_INSTALL_DIR inherited from the runner is
+# discarded, so a preinstalled C:\Program Files\LLVM is never picked up.
+$env:LLVM_INSTALL_DIR = $null
+$env:CLANG_INSTALL_DIR = $null
+foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX)) {
+    if ($root -and (Test-Path "$root\lib\cmake\clang\ClangConfig.cmake")) {
+        $env:LLVM_INSTALL_DIR = $root; break
     }
 }
-if (-not $env:LLVM_INSTALL_DIR) { throw "shiboken6: llvm18 (ClangConfig.cmake) not found in the closure" }
-Write-Host "shiboken6: LLVM_INSTALL_DIR=$($env:LLVM_INSTALL_DIR)"
-if (-not (Test-Path "$($env:LLVM_INSTALL_DIR)\lib\cmake\clang\ClangConfig.cmake")) {
-    throw "shiboken6: ClangConfig.cmake missing under $($env:LLVM_INSTALL_DIR)"
+if (-not $env:LLVM_INSTALL_DIR) {
+    throw ("shiboken6: llvm18 not found: no lib\cmake\clang\ClangConfig.cmake under " +
+        "CVC_DEPS_PREFIX='$($env:CVC_DEPS_PREFIX)' or CVC_BUILD_PREFIX='$($env:CVC_BUILD_PREFIX)'. " +
+        "Install this recipe's dependency closure (cvcpkg install-deps).")
 }
+# The generator loads libclang.dll (linked through libclang.lib), and libclang
+# cannot parse the Qt or MSVC STL headers without the resource headers.
+foreach ($need in @('bin\libclang.dll', 'lib\libclang.lib', 'lib\clang\18\include\stddef.h')) {
+    if (-not (Test-Path "$($env:LLVM_INSTALL_DIR)\$need")) {
+        throw "shiboken6: $($env:LLVM_INSTALL_DIR)\$need is missing; the llvm18 bundle is incomplete"
+    }
+}
+Write-Host "shiboken6: LLVM_INSTALL_DIR=$($env:LLVM_INSTALL_DIR) (cvcpkg llvm18)"
 
 # The shiboken6 generator is invoked during THIS build (it self-generates); it
 # links Qt6Core + libclang + libshiboken. On Windows those resolve off PATH
@@ -70,6 +82,7 @@ $sitePackages = "$installFwd/Lib/site-packages"
 $prefixPathFwd = $prefixPathRaw -replace '\\', '/'
 $pyExeFwd = $pyExe -replace '\\', '/'
 $pyRootFwd = $pyRoot -replace '\\', '/'
+$llvmFwd = $env:LLVM_INSTALL_DIR -replace '\\', '/'
 
 $allArgs = @(
     '-G', 'Ninja',
@@ -82,6 +95,8 @@ $allArgs = @(
     "-DPython_ROOT_DIR=$pyRootFwd",
     '-DPython_FIND_STRATEGY=LOCATION',
     "-DPYTHON_SITE_PACKAGES=$sitePackages",
+    "-DClang_DIR=$llvmFwd/lib/cmake/clang",
+    "-DLLVM_DIR=$llvmFwd/lib/cmake/llvm",
     '-DSHIBOKEN_BUILD_TOOLS=ON',
     '-DSHIBOKEN_BUILD_LIBS=ON',
     '-DFORCE_LIMITED_API=yes',
