@@ -234,6 +234,30 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   shipped for that job (its documented fallback), and a bundle that links a
   non-redistributable library dynamically relies on the consumer's prefix
   holding it -- which `cvcpkg install` arranges.
+- **`license_acceptance:`** — for a vendor payload that may only be downloaded
+  once the user accepts the vendor's terms. `recipes/msvc` is the example: it
+  lays out Microsoft's compiler and Windows SDK from Microsoft's own packages,
+  under the Visual Studio Build Tools and Windows SDK licenses.
+
+  ```yaml
+  redistributable: false
+  license_acceptance:
+    title: "the Microsoft Visual Studio Build Tools and Windows SDK licenses"
+    urls:
+      - https://go.microsoft.com/fwlink/?LinkId=2179911
+      - https://aka.ms/WinSDKLicenseURL
+    env: CVCPKG_ACCEPT_MSVC_LICENSE
+  ```
+
+  Before `cvcpkg install` (or `install-deps`) builds such a recipe it shows the
+  URLs and asks on a terminal. Without a terminal it refuses unless the user
+  passed `--accept-license <name>` or set `<env>=1`; cvcpkg never accepts on
+  the user's behalf. On acceptance it exports `<env>=1` to the build script,
+  which should check it as well, so `cvcpkg build <name>` stays behind the same
+  gate. CI accepts explicitly: `windows-recipe-check.yml`'s `accept_license`
+  input is the dispatcher's own yes. A builder agent that builds such a recipe
+  as a job dependency (see above) gets no prompt: the build script refuses
+  unless the builder's own environment sets `<env>=1`.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of

@@ -54,15 +54,45 @@ $env:CXX = 'cl'
 # PowerShell prompt) cl.exe / link.exe / rc.exe are NOT on PATH.
 # GitHub Actions runs ilammy/msvc-dev-cmd before invoking us; the
 # self-hosted builder does not, so do it ourselves here if needed.
+#
+# Where the compiler comes from, first match wins:
+#   1. CVC_MSVC_ROOT -- cvcpkg's own MSVC (recipes/msvc), named explicitly:
+#      `cvcpkg install msvc --prefix <dir>` lays it out in <dir>\msvc.
+#   2. a cl.exe already on PATH (a Developer prompt, ilammy/msvc-dev-cmd).
+#   3. cvcpkg's MSVC installed in the build or deps prefix.
+#   4. the newest Visual Studio with the C++ workload, via vswhere.
 function Import-CvcMsvcEnv {
+    if ($env:CVC_MSVC_ROOT) {
+        $setup = Join-Path $env:CVC_MSVC_ROOT 'setup_x64.ps1'
+        if (-not (Test-Path -LiteralPath $setup)) {
+            throw "CVC_MSVC_ROOT=$env:CVC_MSVC_ROOT has no setup_x64.ps1 -- point it at the msvc directory that 'cvcpkg install msvc' created."
+        }
+        & $setup
+        return
+    }
     if (Get-Command cl.exe -ErrorAction SilentlyContinue) { return }
+
+    $cvcMsvc = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) |
+        Where-Object { $_ } |
+        ForEach-Object { Join-Path $_ 'msvc' } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ 'setup_x64.ps1') } |
+        Select-Object -First 1
+    if ($cvcMsvc) {
+        & (Join-Path $cvcMsvc 'setup_x64.ps1')
+        if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+            throw "Import-CvcMsvcEnv ran $cvcMsvc\setup_x64.ps1 but cl.exe is still not on PATH."
+        }
+        return
+    }
 
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (-not (Test-Path $vswhere)) {
         $vswhere = "$env:ProgramFiles\Microsoft Visual Studio\Installer\vswhere.exe"
     }
     if (-not (Test-Path $vswhere)) {
-        throw "cl.exe not on PATH and vswhere.exe not found — install Visual Studio Build Tools or run from a Developer PowerShell."
+        throw ("cl.exe not on PATH and vswhere.exe not found. Install cvcpkg's MSVC " +
+               "('cvcpkg install msvc --prefix <dir>', then set CVC_MSVC_ROOT=<dir>\msvc), " +
+               "install Visual Studio Build Tools, or run from a Developer PowerShell.")
     }
 
     $vsRoot = & $vswhere -latest -products '*' `

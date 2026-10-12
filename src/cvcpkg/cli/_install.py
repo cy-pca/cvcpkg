@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,21 @@ if TYPE_CHECKING:
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import CatalogEntry
     from cvcpkg.uninstaller import InstalledPackage
+
+# A recipe with `license_acceptance:` is built only once the user accepts its
+# vendor's terms (see cvcpkg.installer.require_license_acceptance).
+_accept_license_opt = click.option(
+    "--accept-license",
+    "accept_licenses",
+    multiple=True,
+    metavar="NAME",
+    help=(
+        "Accept the vendor license of component NAME (repeatable).  A recipe "
+        "with license_acceptance (e.g. msvc) is built only after you accept its "
+        "terms: on a terminal cvcpkg asks; otherwise pass this flag or set the "
+        "recipe's CVCPKG_ACCEPT_<NAME>_LICENSE=1."
+    ),
+)
 
 # ── install ─────────────────────────────────────────────────────
 
@@ -117,6 +133,7 @@ if TYPE_CHECKING:
     default=False,
     help="Build from source recipe when no prebuilt binary is available.",
 )
+@_accept_license_opt
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
@@ -171,6 +188,7 @@ def install(
     keep_build_prefix: bool,
     keep_host_tools: bool | None,
     trust_mirror: bool | None,
+    accept_licenses: tuple[str, ...] = (),
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -215,7 +233,9 @@ def install(
     from cvcpkg.installer import (
         build_from_source_fallback,
         install_entry,
+        license_gated_components,
         not_redistributable_deps,
+        require_license_acceptance,
     )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
@@ -467,6 +487,33 @@ def install(
     # Built after every catalog bundle is in place (the source loop runs last),
     # so a local build finds its catalog deps -- a wheel, its interpreter.
     source_only = local_built + [n for n in source_only if n not in local_built]
+
+    # A recipe with `license_acceptance:` (msvc: Microsoft's Build Tools and
+    # Windows SDK licenses) downloads its payload under terms only the user can
+    # accept.  Get that yes for every such component before building anything;
+    # cvcpkg never assumes it.
+    _interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    for name, gate in license_gated_components(
+        list(source_only),
+        (
+            _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+            if recipes_dirs
+            else None
+        ),
+    ):
+        try:
+            how = require_license_acceptance(
+                name,
+                gate,
+                accepted=accept_licenses,
+                interactive=_interactive,
+                confirm=lambda text: click.confirm(text, default=False),
+            )
+        except InstallError as exc:
+            raise click.ClickException(str(exc)) from None
+        if how != "prompt":
+            via = "--accept-license" if how == "flag" else gate.env
+            click.echo(f"cvcpkg: {name}: license accepted ({via}): {' '.join(gate.urls)}")
 
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
@@ -919,6 +966,7 @@ def _find_dep_recipe(name: str, dirs: list[Path]):  # -> Recipe | None
     default=False,
     help="Build from source recipe when no prebuilt binary is available.",
 )
+@_accept_license_opt
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
@@ -967,6 +1015,7 @@ def install_deps(
     include_host_tools: bool,
     host_platform: str,
     trust_mirror: bool | None,
+    accept_licenses: tuple[str, ...] = (),
 ) -> None:
     """Install a recipe's dependency closure into --prefix.
 
@@ -1115,6 +1164,7 @@ def install_deps(
             keep_build_prefix=False,
             keep_host_tools=None,
             trust_mirror=trust_mirror,
+            accept_licenses=accept_licenses,
         )
 
 
