@@ -1,0 +1,156 @@
+schema_version: 1
+recipe:
+  name: dogecoin-core
+  upstream_version: "1.14.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://dogecoin.com/
+  # Dogecoin Core is MIT, as are its in-tree libsecp256k1, UniValue and
+  # ctaes; scrypt is BSD-2-Clause; LevelDB is BSD-3-Clause.  The release
+  # binaries also statically link, from depends/: Berkeley DB 5.3.28
+  # (Sleepycat — the last release before Oracle moved Berkeley DB to AGPL),
+  # OpenSSL 1.0.2u (OpenSSL), ZeroMQ 4.3.4 (LGPL-3.0+ with ZeroMQ's
+  # static-linking exception), Boost 1.63 (BSL-1.0), libevent and miniupnpc
+  # (BSD-3-Clause).  The licence texts and a third-party notice are
+  # installed under share/licenses/dogecoin-core/.
+  license: "MIT AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND Sleepycat AND OpenSSL AND LGPL-3.0-or-later WITH LGPL-3.0-linking-exception"
+  tags: [crypto, networking, server]
+  description: >-
+    Dogecoin Core 1.14.9 — the reference Dogecoin full node: dogecoind,
+    dogecoin-cli and dogecoin-tx, staged from the official signed Gitian
+    release builds, plus man pages, a sample etc/dogecoin/dogecoin.conf and
+    the rpcuser.py credential helper.  No GUI.  Runs mainnet, testnet or a
+    local regtest chain.
+
+source:
+  type: prebuilt
+  base_url: https://github.com/dogecoin/dogecoin/releases/download/v1.14.9
+  # sha256 values copied from the release's SHA256SUMS.asc (clearsigned by
+  # Patrick Lodder, DC6EF4A8BF9F1B1E4DE1EE522D3A345B98D0DC1F) and matched by
+  # the Gitian builders' assertions; see notes.  build.sh and build.ps1 carry
+  # the same values and verify every download.
+  artifacts:
+    linux-x86_64:
+      file: dogecoin-1.14.9-x86_64-linux-gnu.tar.gz
+      sha256: "4f227117b411a7c98622c970986e27bcfc3f547a72bef65e7d9e82989175d4f8"
+    linux-aarch64:
+      file: dogecoin-1.14.9-aarch64-linux-gnu.tar.gz
+      sha256: "6928c895a20d0bcb6d5c7dcec753d35c884a471aaf8ad4242a89a96acb4f2985"
+    windows-x86_64:
+      file: dogecoin-1.14.9-win64.zip
+      sha256: "45864cedc210e6d573c7efd5f6694a440147d9773c4a8851a99882a2727ad804"
+
+# The payload is the upstream Gitian build (glibc >= 2.10 on Linux), not
+# something compiled on the builder.
+prebuilt_payload: true
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: bin/dogecoind, platforms: [linux] }
+    - { glob: bin/dogecoin-cli, platforms: [linux] }
+    - { glob: bin/dogecoin-tx, platforms: [linux] }
+    - { glob: bin/dogecoind.exe, platforms: [windows] }
+    - { glob: bin/dogecoin-cli.exe, platforms: [windows] }
+    - { glob: bin/dogecoin-tx.exe, platforms: [windows] }
+    - share/man/man1/dogecoind.1
+    - share/man/man1/dogecoin-cli.1
+    - share/man/man1/dogecoin-tx.1
+    - etc/dogecoin/dogecoin.conf.sample
+    - share/dogecoin-core/rpcuser/rpcuser.py
+    - share/licenses/dogecoin-core/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt binaries; no compiler is used.  build.sh needs curl, tar and a
+    sha256 tool; build.ps1 needs Windows 10+ (Invoke-WebRequest, tar.exe).
+
+notes:
+  - title: "Official release binaries, verified"
+    description: >-
+      The archives are the Gitian release builds attached to the GitHub
+      release (Dogecoin's only binary download location).  When pinning a
+      version: download SHA256SUMS.asc (a clearsigned SHA256SUMS), import the
+      maintainer keys from contrib/gitian-keys/ at the release tag into a
+      throwaway GNUPGHOME, refresh patricklodder's key from
+      keyserver.ubuntu.com (the copy in the tree has a lapsed expiry date),
+      run `gpg --verify SHA256SUMS.asc` and require a good signature from
+      DC6EF4A8BF9F1B1E4DE1EE522D3A345B98D0DC1F (Patrick Lodder).  Then
+      cross-check against dogecoin/gitian.sigs: verify
+      <ver>-{linux,win,osx}/<builder>/*.assert.sig and require that the
+      builders' out_manifest sha256 values agree with SHA256SUMS.  For
+      1.14.9: good release signature (made 2024-12-01); two Gitian builders
+      (KunNw0n, slightlyskepticalpotat; gitian.sigs at 9d1be4fb) have
+      identical out_manifests for linux, win and osx, built from git
+      e0a1c157791544e818c901bd9341896965afbf9d (tag v1.14.9).  KunNw0n's
+      assertion signature verifies with ed25519 key
+      7E453C9D37AC2EB246645C4B75055E4030051C37 (from github.com/KunNw0n.gpg);
+      slightlyskepticalpotat's key 48C7B3FCBB060C957E5E468F38198FBB972B765A
+      is not published usably (keys.openpgp.org holds only a revoked copy),
+      so that assertion was compared but not signature-checked.  Every
+      pinned archive matched SHA256SUMS.
+  - title: "What is shipped"
+    description: >-
+      bin/: dogecoind, dogecoin-cli and dogecoin-tx (1.14.x has no
+      dogecoin-wallet tool).  Not shipped: dogecoin-qt (GUI), test_dogecoin
+      and libdogecoinconsensus with its bitcoinconsensus.h header.  The
+      release source tarball lacks several tree files, so the sample config
+      (contrib/debian/examples/dogecoin.conf, installed as
+      etc/dogecoin/dogecoin.conf.sample), share/rpcuser/rpcuser.py and the
+      licence texts are fetched from raw.githubusercontent.com at the release
+      commit e0a1c157 and each is sha256-pinned in build.sh/build.ps1 (the
+      COPYING, secp256k1, univalue and scrypt files match the signed source
+      tarball byte for byte).  Nothing reads etc/dogecoin/ on its own —
+      dogecoind uses -conf / -datadir (default ~/.dogecoin).  Generate
+      -rpcauth lines with `python3 <prefix>/share/dogecoin-core/rpcuser/rpcuser.py <user>`.
+      share/licenses/dogecoin-core/THIRD-PARTY-NOTICES.txt lists the
+      statically linked depends/ packages, their licences and where to get
+      their source.
+  - title: "Version choice and RPC compatibility"
+    description: >-
+      1.14.9 (2024-12-01) is the latest stable release; Dogecoin Core 1.14.x
+      is based on Bitcoin Core 0.14, so the RPC surface is old: one legacy
+      (Berkeley DB) wallet, wallet.dat, no multiwallet — no createwallet,
+      loadwallet, unloadwallet, listwallets, getbalances or /wallet/<name>
+      endpoint (HTTP 404 with an empty body).  getnewaddress, getbalance,
+      listtransactions and sendmany still use the old "account" argument
+      ("" / "*" behave as label-less / all).  generate and generatetoaddress
+      both exist.  estimatesmartfee takes nblocks only (a second
+      estimate_mode argument is a usage error).  listtransactions has no
+      blockheight field.  dumpwallet and backupwallet ignore any directory in
+      their argument and write <datadir>/<chain>/backups/<basename>
+      (importwallet still reads the path it is given).  On regtest the block
+      reward is 500,000 DOGE and coinbase maturity is 60 blocks, so 101
+      blocks leave 20,500,000 DOGE spendable.
+  - title: "Platforms and architectures"
+    description: >-
+      linux (x86_64, aarch64) and windows (x86_64), exactly the
+      source.artifacts keys.  No macOS: upstream publishes only an unsigned
+      GUI .dmg (the Qt app bundle), not the osx64 daemon/CLI tarball its
+      Gitian build also produces.  Upstream also publishes arm-linux-gnueabihf, i686 Linux and
+      win32 builds; add artifact entries if a builder for those appears.  The
+      Linux binaries are static apart from glibc (>= 2.10).  The Windows
+      executables are not Authenticode-signed upstream.  The bundled OpenSSL
+      is upstream's 1.0.2u as built into the release; it is not separately
+      patched.  On Windows test.sh only checks the versions; the regtest walk
+      runs on linux.  cvcpkg has no service mechanism: run dogecoind in the
+      foreground (the default) under your own supervisor.
