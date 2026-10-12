@@ -55,6 +55,11 @@ if [ "$(uname -s)" = "Darwin" ]; then
     # The Makefile sets the install name from the BUILD prefix
     # (/usr/local/lib/libluajit-5.1.2.dylib); make it @rpath-relative.
     install_name_tool -id "${shared_soname}" "${LIB}/${shared_real}"
+    # arm64 will not load a dylib whose signature install_name_tool invalidated;
+    # re-sign ad hoc if the rewrite left it broken (as recipes/cmake does).
+    if ! codesign --verify "${LIB}/${shared_real}" >/dev/null 2>&1; then
+        codesign --force --sign - "${LIB}/${shared_real}"
+    fi
 else
     shared_real="libluajit-5.1.so.${LUAJIT_R}"
     shared_soname="libluajit-5.1.so.2"

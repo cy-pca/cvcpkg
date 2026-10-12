@@ -151,6 +151,11 @@ if [ "${CVC_PLATFORM}" = "macos" ]; then
             esac
         done < <(otool -L "${_so}" | awk 'NR>1 {print $1}')
         install_name_tool -add_rpath "@loader_path/${_rel}" "${_so}" 2>/dev/null || true
+        # arm64 refuses a Mach-O whose signature the rewrites invalidated;
+        # re-sign ad hoc if they left it broken (as recipes/cmake does).
+        if ! codesign --verify "${_so}" >/dev/null 2>&1; then
+            codesign --force --sign - "${_so}"
+        fi
     done
 else
     # OpenBSD's ld.so ignores $ORIGIN (cvcpkg relocates OpenBSD bundles at
