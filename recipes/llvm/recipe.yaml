@@ -69,6 +69,11 @@ depends:
   host_tools: []
 
 build:
+  # The same LLVM+Clang+LLD build as llvm18, which needed both: it overruns the
+  # server's default 2h reap timeout on a modest fleet builder, and its Release
+  # Ninja tree runs ~20 GiB before install. See recipes/llvm18/recipe.yaml.
+  timeout_seconds: 18000
+  min_disk_gb: 25
   matrix:
     - platform: linux
       script: build.sh
