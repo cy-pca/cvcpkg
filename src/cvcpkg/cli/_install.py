@@ -212,7 +212,11 @@ def install(
         newer_revision_available,
     )
     from cvcpkg.errors import InstallError, IntegrityError
-    from cvcpkg.installer import build_from_source_fallback, install_entry
+    from cvcpkg.installer import (
+        build_from_source_fallback,
+        install_entry,
+        not_redistributable_components,
+    )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
     from cvcpkg.platform import detect_platform, is_static_only_platform
@@ -424,6 +428,31 @@ def install(
         # verified above, so this branch is only reachable when the
         # flag is set).
         source_only = requested_names
+
+    # A `redistributable: false` recipe (the NVIDIA CUDA toolkit) is never in
+    # the catalog -- its license forbids publishing the built tree -- so
+    # building it here from the recipe is the only way to install it, with or
+    # without --fallback-to-source.  Its build script downloads the payload
+    # from the vendor, under the vendor's license.
+    _local_only = not_redistributable_components(
+        [
+            c.name
+            for c in reqs.components
+            if not c.exclude and c.name not in picked and c.name not in source_only
+        ],
+        (
+            _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+            if recipes_dirs
+            else None
+        ),
+    )
+    for name in _local_only:
+        click.echo(
+            f"cvcpkg: {name} is not redistributable, so it is never published; "
+            f"building it from its recipe, which downloads it from the vendor "
+            f"under the vendor's license."
+        )
+    source_only = list(source_only) + _local_only
 
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
@@ -711,7 +740,9 @@ def install(
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not strip the build prefix: {exc}", err=True)
 
-    click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
+    click.echo(
+        f"cvcpkg: done -- {len(picked) + len(source_only)} component(s) installed to {prefix_path}"
+    )
 
     # Opt-in telemetry (Phase 2): fire-and-forget, only when the user set
     # CVCPKG_TELEMETRY=1.  Never raises, never slows the install by more

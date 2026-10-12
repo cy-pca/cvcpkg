@@ -1283,6 +1283,10 @@ def builds_submit_dag(
         d = recipe_data.get(name, {}).get("build", {}).get("min_disk_gb")
         return int(d) if d else None
 
+    def _not_redistributable(name: str) -> bool:
+        """``redistributable: false`` -- never built as a job (it would publish)."""
+        return recipe_data.get(name, {}).get("redistributable") is False
+
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
     _wasm_platforms = {"wasm", "wasm-mt", "wasi"}
@@ -1493,6 +1497,17 @@ def builds_submit_dag(
     # (build.ps1) belongs in both — one noarch bundle for the POSIX targets and
     # one windows bundle — and that overlap is what keeps the `any` entry's
     # targets from being mispublished as one arch-pinned bundle per platform.
+    #
+    # A `redistributable: false` recipe never becomes a job at all: a fleet
+    # build exists to publish, and its bundle must not be published.
+    # `cvcpkg install` builds it where it is installed instead.
+    _local_only = sorted(n for n in recipe_names if _not_redistributable(n))
+    if _local_only:
+        click.echo(
+            f"  Skipping {len(_local_only)} non-redistributable recipe(s) (built only "
+            f"where installed, never by the fleet): {', '.join(_local_only)}"
+        )
+        recipe_names = tuple(n for n in recipe_names if n not in _local_only)
     any_names = [n for n in recipe_names if _has_any_entry(n)]
     concrete_names = [n for n in recipe_names if _has_explicit_entry(n)]
 
@@ -1605,8 +1620,12 @@ def builds_submit_dag(
                         added: list[str] = []
                         cross_noarch: list[str] = []
                         unbuildable: list[str] = []
+                        local_only: list[str] = []
                         for dep in sorted(_closure(eligible, plat, ar, cfg, lnk)):
                             if dep in being_built:
+                                continue
+                            if _not_redistributable(dep):
+                                local_only.append(dep)
                                 continue
                             has_recipe = dep in recipe_data
                             # Already in the catalog → builder installs it.
@@ -1662,6 +1681,17 @@ def builds_submit_dag(
                                 f"  Auto-added {len(uniq)} unpublished noarch "
                                 f"dependency(ies), ordered ahead of this platform's "
                                 f"jobs: {', '.join(uniq)}"
+                            )
+                        if local_only:
+                            # Not a job and never in the catalog, and the
+                            # builder agent installs deps only from the
+                            # catalog: the dependent must get it some other
+                            # way (e.g. the `cuda` capability's system nvcc).
+                            click.echo(
+                                f"  Warning: {plat}/{ar}: non-redistributable "
+                                f"dependency(ies) {', '.join(sorted(set(local_only)))} "
+                                f"are not built as jobs and builders do not provision "
+                                f"them; dependents must find them on the builder."
                             )
                         if unbuildable:
                             uniq = sorted(set(unbuildable))
