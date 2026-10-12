@@ -114,6 +114,16 @@ notes:
       want it. On macOS the image is Contents/Home of Adoptium's .jre bundle,
       staged without the bundle wrapper so JAVA_HOME has the same shape on
       every platform.
+  - title: "lib/libjvm.so symlink (linux)"
+    platforms: [linux]
+    description: >-
+      The image's lib/*.so NEED libjvm.so, which is in lib/server/, while
+      their RUNPATH is $ORIGIN. The JVM loads server/libjvm.so before any of
+      them, so this works upstream, but cvcpkg's relocatability gate requires
+      every shipped NEEDED library to be reachable through the object's own
+      RUNPATH. build.sh adds a relative symlink lib/libjvm.so ->
+      server/libjvm.so instead of patchelf-ing 24 vendor binaries; the loader
+      resolves it to the same, already-loaded file.
   - title: "Runtime only"
     description: >-
       The JRE image has no javac, jar or jshell (and no jdk.compiler module,

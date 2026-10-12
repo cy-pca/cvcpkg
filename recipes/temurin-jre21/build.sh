@@ -81,6 +81,17 @@ cp -pR "${SRC}/." "${JH}/"
 # overwrite them. Nothing depends on those modes.
 chmod -R u+w "${JH}"
 
+# The image's lib/*.so NEED libjvm.so, which lives in lib/server/, while their
+# RUNPATH is only $ORIGIN (=lib/). At run time that is fine -- the launcher has
+# already loaded server/libjvm.so (SONAME libjvm.so) before any of them -- but
+# cvcpkg's pack gate rightly sees a shipped library their RUNPATH cannot
+# reach, and would otherwise need patchelf to add $ORIGIN/server to 24
+# vendor binaries. A relative symlink lib/libjvm.so -> server/libjvm.so makes
+# the shipped copy reachable without modifying any Adoptium binary.
+if [ "${OS}" = "linux" ] && [ -f "${JH}/lib/server/libjvm.so" ] && [ ! -e "${JH}/lib/libjvm.so" ]; then
+    ln -s server/libjvm.so "${JH}/lib/libjvm.so"
+fi
+
 # Relative symlinks: the java launcher resolves its own path to find
 # java.home, so a link (unlike a copy) keeps working, and keeps the
 # `readlink -f $(command -v java)` JAVA_HOME idiom honest.
