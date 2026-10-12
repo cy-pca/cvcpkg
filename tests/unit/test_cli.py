@@ -1801,7 +1801,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple", return_value="published"
             ) as mock_simple,
@@ -1820,7 +1820,7 @@ class TestPublishToServer:
             assert args[0][2]["name"] == "zlib"  # params
 
     def test_publish_skips_existing_variant(self, tmp_path, capsys):
-        """_publish_to_server skips when _variant_exists returns True."""
+        """_publish_to_server skips a variant the server already has."""
         from cvcpkg.cli import _publish_to_server
 
         archive = self._make_manifest_archive(
@@ -1828,7 +1828,9 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=True),
+            mock.patch(
+                "cvcpkg.cli._publish._find_variant", return_value={"version": "1.3.1+cvc.1"}
+            ),
             mock.patch("cvcpkg.cli._publish._publish_simple") as mock_simple,
         ):
             _publish_to_server(
@@ -1858,7 +1860,7 @@ class TestPublishToServer:
             info.size = len(content)
             tf.addfile(info, io.BytesIO(content))
 
-        with mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False):
+        with mock.patch("cvcpkg.cli._publish._find_variant", return_value=None):
             with pytest.raises(click.ClickException, match="manifest missing name"):
                 _publish_to_server(
                     "https://pkg.example.com",
@@ -1878,7 +1880,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple", return_value="published"
             ) as mock_simple,
@@ -1906,7 +1908,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_chunked", return_value="published"
             ) as mock_chunked,
@@ -1933,7 +1935,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple",
                 side_effect=click.ClickException("upload failed"),
@@ -1963,7 +1965,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             _publish_to_server(
@@ -2598,7 +2600,7 @@ class TestPublishCLIIntegration:
         )
         with (
             mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"),
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             ret = main(
