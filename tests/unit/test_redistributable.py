@@ -122,31 +122,61 @@ class TestPackingRefuses:
         manifest = generate_manifest(recipe, install, "linux", "x86_64", "release", "shared")
         assert manifest["bundle"]["name"] == "zlib"
 
-    def test_server_cache_push_publishes_nothing(self, tmp_path, monkeypatch, capsys):
-        # build-all's server-cache push creates the catalog row: a publish.
+    def test_build_all_push_publishes_nothing(self, tmp_path, monkeypatch):
+        # build-all --server-cache-push publishes the bundles it packs, and
+        # creates catalog rows doing so: a redistributable:false build is
+        # never one of them.
+        from click.testing import CliRunner
+
         from cvcpkg import builder
+        from cvcpkg.cli import _build, cli
 
-        def _no_network(*a, **kw):
-            raise AssertionError("pushed a non-redistributable tree")
-
-        monkeypatch.setattr("urllib.request.urlopen", _no_network)
-        recipe = Recipe.load(_write_recipe(tmp_path, "vendorkit", redistributable=False))
-        archive = tmp_path / "a.tar.gz"
-        archive.write_bytes(b"x")
-        ok = builder._server_cache_push(
-            "http://s.example",
-            "tok",
-            archive,
-            recipe,
-            "linux",
-            "x86_64",
-            "release",
-            "shared",
-            "h",
-            "",
+        rdir = _write_recipe(tmp_path / "recipes", "vendorkit", redistributable=False)
+        work = tmp_path / "work"
+        work.mkdir()
+        ctx = SimpleNamespace(
+            recipe=Recipe.load(rdir),
+            platform="linux",
+            work_dir=work,
+            prefix=tmp_path / "prefix",
+            install_dir=work / "install",
         )
-        assert ok is False
-        assert "not pushed to server cache" in capsys.readouterr().out
+
+        class _Contexts(list):
+            failures: list = []
+
+        seen: dict = {}
+
+        def fake_build_all(*a, **kw):
+            seen.update(kw)
+            return _Contexts([ctx])
+
+        def no_push(*a, **kw):
+            raise AssertionError("pushed a non-redistributable build")
+
+        monkeypatch.setattr(builder, "build_all", fake_build_all)
+        monkeypatch.setattr(_build, "_push_packed", no_push)
+        res = CliRunner().invoke(
+            cli,
+            [
+                "build-all",
+                "--platform",
+                "linux",
+                "--recipes-dir",
+                str(tmp_path / "recipes"),
+                "--no-default-recipes",
+                "--local",
+                "--server-cache",
+                "http://s.example",
+                "--server-cache-token",
+                "tok",
+                "--server-cache-push",
+            ],
+        )
+        assert res.exit_code == 0, res.output
+        assert "not pushing" in res.output and "vendorkit" in res.output
+        # Pushing packs each recipe's own tree: built per component, kept.
+        assert seen["per_component"] is True and seen["cleanup_work_dirs"] is False
 
     def test_pack_all_builds_but_does_not_pack(self, tmp_path, monkeypatch):
         from click.testing import CliRunner
