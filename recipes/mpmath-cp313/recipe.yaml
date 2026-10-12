@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: mpmath-cp313
   upstream_version: "1.3.0"
-  cvc_revision: 2
+  # cvc.3 (freethreaded-leak fix): the published cvc.2 non-t artifact mis-installed to
+  # lib/python3.13t/site-packages (a python313t shadowed python3.13 at pip-install time,
+  # predating _common/python-wheel.sh's cvc_python_check guard), so python3.13 could not import
+  # it and every cp313 build depending on it (sympy/pytest/hatch-vcs) failed. Rebuild lays it
+  # under lib/python3.13/ (the guard now fails the build loudly if it ever mislays again).
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
