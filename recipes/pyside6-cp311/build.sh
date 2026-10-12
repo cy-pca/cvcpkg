@@ -2,8 +2,8 @@
 # recipes/pyside6/build.sh — build the sources/pyside6 CMake project from the
 # pinned Qt-for-Python pyside-setup 6.8.2 tarball, against the cvcpkg python311
 # interpreter, the cvcpkg qt6 6.8.2, and the already-installed cvcpkg shiboken6.
-# The shiboken6 generator (which parses Qt headers with the SYSTEM libclang-18)
-# emits the C++ bindings; cmake compiles + installs the PySide6 module.
+# The shiboken6 generator parses the Qt headers with the cvcpkg llvm18 libclang
+# and emits the C++ bindings; cmake compiles + installs the PySide6 module.
 #
 # NO-BUNDLE CONTRACT (the reason this recipe exists): -DSTANDALONE=0 links the
 # cvcpkg qt6 by soname and copies NO Qt libraries into the install tree, so the
@@ -29,20 +29,35 @@ fi
 PY_ROOT="$(cd "$(dirname "${PY_EXE}")/.." && pwd)"
 echo "pyside6: building against ${PY_EXE}"
 
-# ── Hermetic libclang 18 (cvcpkg llvm18) — the shiboken6 generator runs during
-# THIS build to parse Qt headers and links libclang. Prefer the cvcpkg llvm18 in
-# the dependency prefix (pulled in transitively via shiboken6); system
-# /usr/lib/llvm-18 only as a last-resort fallback.
+# ── libclang 18 from the cvcpkg llvm18 dependency, and from nowhere else ─────
+# The shiboken6 generator runs during THIS build to parse the Qt headers. It
+# links libclang.so.18.1 and reads LLVM_INSTALL_DIR at run time to find Clang's
+# builtin (resource) headers under ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include.
+# llvm18 is a declared build dependency (and a runtime one of shiboken6), so it
+# is in the runtime closure (CVC_DEPS_PREFIX) or the build closure
+# (CVC_BUILD_PREFIX). Look there only: no /usr/lib/llvm-*, no Homebrew keg, no
+# llvm-config on PATH, and no LLVM_INSTALL_DIR / CLANG_INSTALL_DIR inherited
+# from the caller.
+unset LLVM_INSTALL_DIR CLANG_INSTALL_DIR
+for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
+    if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
+        LLVM_INSTALL_DIR="${_llvm}"; break
+    fi
+done
 if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
-    for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}" "${CVC_INSTALL_DIR}"; do
-        if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
-            LLVM_INSTALL_DIR="${_llvm}"; break
-        fi
-    done
-    : "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+    echo "pyside6: llvm18 not found: no lib/cmake/clang/ClangConfig.cmake under" \
+         "CVC_DEPS_PREFIX='${CVC_DEPS_PREFIX:-}' or CVC_BUILD_PREFIX='${CVC_BUILD_PREFIX:-}'." \
+         "Install this recipe's dependency closure (cvcpkg install-deps)." >&2
+    exit 1
 fi
+for _need in lib/libclang.so.18.1 lib/clang/18/include/stddef.h; do
+    if [[ ! -e "${LLVM_INSTALL_DIR}/${_need}" ]]; then
+        echo "pyside6: ${LLVM_INSTALL_DIR}/${_need} is missing; the llvm18 bundle is incomplete" >&2
+        exit 1
+    fi
+done
 export LLVM_INSTALL_DIR
-echo "pyside6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR}"
+echo "pyside6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR} (cvcpkg llvm18)"
 
 # The generator (bin/shiboken6, from the shiboken6 package) needs to resolve, at
 # RUN time during this build: libclang (cvcpkg llvm18), libQt6Core (cvcpkg qt6),
