@@ -1,4 +1,4 @@
-# recipes/pillow-cp313/build.ps1 — build Pillow 11.1.0 FROM SOURCE against the
+# recipes/pillow-cp313/build.ps1 — build Pillow 12.3.0 FROM SOURCE against the
 # prefix's zlib / libjpeg-turbo / libtiff (hand-converted; see build.sh for the
 # full why).  Verified end-to-end on Windows by the from-source-python-stack
 # fix: pillow links zlib1/jpeg62/tiff out of <prefix>\bin, and the interpreter
@@ -33,11 +33,12 @@ New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 # zlib/jpeg/tiff are `enable` (= hard-require: those three are what the
 # Windows build verified).  freetype/webp stay auto until a Windows build
 # proves them; everything without a cvcpkg recipe is disabled so nothing
-# leaks in from the builder.
+# leaks in from the builder (avif — PIL._avif, new since Pillow 11.2 — needs
+# libavif, which has no cvcpkg recipe).
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `
     -C zlib=enable -C jpeg=enable -C tiff=enable `
     -C raqm=disable -C lcms=disable -C jpeg2000=disable `
-    -C imagequant=disable -C xcb=disable `
+    -C imagequant=disable -C xcb=disable -C avif=disable `
     --wheel-dir $wheelhouse $env:CVC_SOURCE_DIR
 if ($LASTEXITCODE -ne 0) { throw "pillow-cp313: pip wheel failed ($LASTEXITCODE)" }
 

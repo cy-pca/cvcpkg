@@ -470,7 +470,7 @@ SEED_PACKAGES = {
         "check": "import iniconfig",
     },
     "jinja2": {
-        "version": "3.1.4",
+        "version": "3.1.6",
         "license": "BSD-3-Clause",
         "deps": ["markupsafe"],
         "files": ["jinja2/", "jinja2-*.dist-info/"],
@@ -498,7 +498,7 @@ SEED_PACKAGES = {
         "check": "import mypy_extensions",
     },
     "networkx": {
-        "version": "3.4.2",
+        "version": "3.6.1",
         "license": "BSD-3-Clause",
         "deps": [],
         "files": ["networkx/", "networkx-*.dist-info/"],
@@ -699,11 +699,11 @@ SEED_PACKAGES = {
     # their `pillow` dep edges against this universe; a regeneration prints
     # "keep pillow-cp31X: hand-written" instead of overwriting.
     "pillow": {
-        "version": "11.1.0",
+        "version": "12.3.0",
         "license": "MIT-CMU",
         "deps": [],
         # Capped: the hand conversion covers exactly these columns.  Without
-        # the cap a full regeneration would see 11.1.0's cp313t wheels, emit a
+        # the cap a full regeneration would see 12.3.0's cp313t wheels, emit a
         # GENERATED pillow-cp313t (no native edges, silently codec-less) and
         # let matplotlib/imageio claim cp313t columns over it.  Extend the cap
         # only together with a hand-written, verified pillow-cp313t.

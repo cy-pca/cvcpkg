@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/idna-cp311/build.sh — build idna 3.16 FROM SOURCE (generated).
+# recipes/idna-cp311/build.sh — build idna 3.20 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the
