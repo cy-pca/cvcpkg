@@ -30,7 +30,10 @@ python:
   interpreter: python312
   abi: cp312
 
-patches: []
+patches:
+  # Channel(lookups=...) hands c-ares a freed cffi buffer (pending upstream,
+  # still in pycares 5.1.0); see the patch header. Drop it once a release has it.
+  - pycares-lookups-lifetime.patch
 
 depends:
   build:
