@@ -1,0 +1,50 @@
+# etc/mariadb/my.cnf.sample -- sample configuration for the cvcpkg
+# mariadb-server package (MariaDB 11.4).
+#
+# Copy this file somewhere writable, replace PREFIX with the cvcpkg prefix
+# mariadb-server is installed in and /var/lib/mariadb with your data
+# directory, then:
+#
+#   PREFIX/bin/mariadb-install-db --defaults-file=/path/to/my.cnf
+#   PREFIX/bin/mariadbd --defaults-file=/path/to/my.cnf
+#   PREFIX/bin/mariadb --defaults-file=/path/to/my.cnf      # as the OS user
+#                                                           # that ran install-db
+#
+# --defaults-file (or --no-defaults) must be the FIRST option.  Without it
+# the server and the clients also read /etc/my.cnf, /etc/mysql/my.cnf and
+# ~/.my.cnf.
+#
+# basedir matters: cvcpkg installs into an arbitrary prefix, and the server
+# finds its plugins (lib/mysql/plugin), error messages and character sets
+# (share/mariadb) relative to basedir.
+
+[client-server]
+port   = 3306
+socket = /var/lib/mariadb/mariadb.sock
+
+[mariadbd]
+basedir      = PREFIX
+datadir      = /var/lib/mariadb/data
+pid-file     = /var/lib/mariadb/mariadbd.pid
+log-error    = /var/lib/mariadb/mariadbd.err
+# Listen on loopback only; use 0.0.0.0 (and real passwords) to serve a LAN,
+# or skip-networking for a socket-only server.
+bind-address = 127.0.0.1
+
+# mariadbd refuses to run as root unless told which account to use.
+#user = mysql
+
+character-set-server = utf8mb4
+
+# Small-server sizing; raise innodb_buffer_pool_size to ~50-70% of RAM on a
+# dedicated host.
+innodb_buffer_pool_size = 256M
+innodb_log_file_size    = 64M
+max_connections         = 151
+
+[mariadb-install-db]
+basedir = PREFIX
+datadir = /var/lib/mariadb/data
+# The OS user running install-db gets a passwordless unix_socket admin
+# account; root@localhost is created with unix_socket auth too.
+auth-root-authentication-method = socket
