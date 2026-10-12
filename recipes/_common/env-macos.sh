@@ -14,8 +14,17 @@ source "${_COMMON_DIR}/rewrite-install-paths.sh"
 : "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
 : "${MACOSX_DEPLOYMENT_TARGET:=13.0}"
 
-export CC="${CC:-clang}"
-export CXX="${CXX:-clang++}"
+# The system (Apple) compiler, by absolute path -- never a bare `clang`.  The
+# builder puts the build prefix's and deps prefix's bin/ ahead of /usr/bin on
+# PATH, and cvcpkg's llvm, llvm18 and llvm20 bundles ship a `clang`.  With one
+# of them in the prefix -- a recipe that depends on it, or any recipe a pack-all
+# shard builds after it -- a bare name compiles with cvcpkg's clang instead, and
+# links with ld64.lld (llvm and llvm18 build clang with lld as its default
+# linker).  xcrun follows DEVELOPER_DIR / xcode-select; /usr/bin/clang is its
+# shim.  An explicit CC / CXX still wins.
+_cvc_apple_tool() { xcrun -f "$1" 2>/dev/null || echo "/usr/bin/$1"; }
+export CC="${CC:-$(_cvc_apple_tool clang)}"
+export CXX="${CXX:-$(_cvc_apple_tool clang++)}"
 export MACOSX_DEPLOYMENT_TARGET
 
 # clang 16+ promotes several legacy-C diagnostics to hard errors by default

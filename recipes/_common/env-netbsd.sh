@@ -14,13 +14,16 @@ source "${_COMMON_DIR}/rewrite-install-paths.sh"
 : "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
 
 # NetBSD base ships GCC; clang is available via pkgsrc.
-# Prefer clang if available, fall back to GCC.
-if command -v clang >/dev/null 2>&1; then
-    export CC="${CC:-clang}"
-    export CXX="${CXX:-clang++}"
+# Prefer pkgsrc's clang if installed, fall back to base GCC.  By absolute path,
+# not `command -v clang`: that also finds the `clang` cvcpkg's llvm, llvm18 and
+# llvm20 bundles ship, once one is in the prefix (see env-macos.sh).  An
+# explicit CC / CXX still wins.
+if [[ -x /usr/pkg/bin/clang && -x /usr/pkg/bin/clang++ ]]; then
+    export CC="${CC:-/usr/pkg/bin/clang}"
+    export CXX="${CXX:-/usr/pkg/bin/clang++}"
 else
-    export CC="${CC:-gcc}"
-    export CXX="${CXX:-g++}"
+    export CC="${CC:-/usr/bin/gcc}"
+    export CXX="${CXX:-/usr/bin/g++}"
 fi
 
 _build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
