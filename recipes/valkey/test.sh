@@ -44,8 +44,13 @@ cleanup() {
         wait "${SERVER_PID}" 2>/dev/null || true
     fi
     if [[ ${rc} -ne 0 && -f "${WORK}/server.log" ]]; then
+        # A crash report ends in pages of INFO/CONFIG dump; print the cause
+        # (warnings, assertion, panic) last so it survives a tail of this log.
         echo "--- server log (tail) ---" >&2
-        tail -n 40 "${WORK}/server.log" >&2 || true
+        tail -n 10 "${WORK}/server.log" >&2 || true
+        echo "--- server log: warnings and crash cause ---" >&2
+        grep -E ' # |ASSERTION|crashed by signal|Guru Meditation' "${WORK}/server.log" \
+            | head -n 20 >&2 || true
     fi
     rm -rf "${WORK}"
     exit "${rc}"

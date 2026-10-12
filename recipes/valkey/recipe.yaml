@@ -114,7 +114,11 @@ notes:
       whatever supervisor you use.  The allocator is upstream's default:
       Valkey's bundled, defrag-patched jemalloc on Linux, the system malloc
       elsewhere (where active defragmentation is therefore unavailable).
-      The BSDs build with GNU make, staged from the cvcpkg make recipe.
+      The BSDs build with GNU make, staged from the cvcpkg make recipe.  On
+      OpenBSD and NetBSD the recipe links with -rdynamic, which upstream's
+      Makefile omits there: valkey-server looks up its statically linked Lua
+      engine with dlsym() at startup and otherwise panics ("Lua engine
+      initialization failed").
   - title: "redis-* compatibility names"
     description: >-
       bin/ carries redis-server, redis-cli, redis-benchmark, redis-sentinel,

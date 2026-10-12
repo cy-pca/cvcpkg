@@ -57,12 +57,23 @@ case "${CVC_PLATFORM}" in
     *)                    RPATH_LDFLAGS='' ;;
 esac
 
+# valkey-server finds its statically linked Lua engine at startup with
+# dlsym() on itself (ValkeyModule_OnLoad_lua), so the executable must export
+# its symbols.  Upstream's Makefile does that on Linux, macOS and FreeBSD, but
+# its OpenBSD and NetBSD branches that add -rdynamic sit behind earlier ones
+# for the same OS that never do, and the server then panics at startup ("Lua
+# engine initialization failed").
+case "${CVC_PLATFORM}" in
+    openbsd|netbsd) EXPORT_LDFLAGS='-rdynamic' ;;
+    *)              EXPORT_LDFLAGS='' ;;
+esac
+
 MAKE_ARGS=(
     BUILD_TLS=yes
     USE_SYSTEMD=no
     MALLOC="${MALLOC}"
     OPENSSL_PREFIX="${CVC_DEPS_PREFIX}"
-    SERVER_LDFLAGS="${RPATH_LDFLAGS}"
+    SERVER_LDFLAGS="${RPATH_LDFLAGS}${EXPORT_LDFLAGS:+ ${EXPORT_LDFLAGS}}"
     PREFIX="${CVC_INSTALL_DIR}"
 )
 
