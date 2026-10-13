@@ -244,7 +244,10 @@ jobs:
             case "$building" in
               *" $r "*) echo "leaving out $r: this job builds it"; continue ;;
             esac
-            if cvcpkg search "$r" --platform linux --arch arm64 --build-type release --link shared --limit 200 --json \
+            # A search that fails (the server is down) fails the step here; only
+            # a search that answers without $r records it as missing.
+            found=$(cvcpkg search "$r" --platform linux --arch arm64 --build-type release --link shared --limit 200 --json)
+            if printf '%s' "$found" \
                 | python3 -c 'import json, sys; sys.exit(not any(p["name"] == sys.argv[1] for p in json.load(sys.stdin)["packages"]))' "$r"; then
               recipes="$recipes $r"
             else
