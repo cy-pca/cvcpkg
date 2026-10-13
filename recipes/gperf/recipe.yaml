@@ -59,7 +59,9 @@ package:
     - bin/gperf*
     - share/man/man1/gperf*
     - share/info/gperf*
-    - share/doc/gperf/
+    # The manual is one file: gperf installs share/doc/gperf.html (htmldir is
+    # share/doc), never a share/doc/gperf/ directory.
+    - share/doc/gperf.html
 
 toolchain:
   cc:
