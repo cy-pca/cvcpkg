@@ -1,26 +1,29 @@
-# Build ONE recipe on linux/arm64 and throw the result away.
+# Build recipes on linux/arm64 and throw the result away.
 #
 # linux-arm-build.yml is the only other linux/arm64 recipe path, and it
 # publishes every bundle it packs to cvcpkg.org.  That is the wrong tool for
 # "does this recipe build on linux/arm64?" and for proving a change to the
 # linux/arm64 tool setup.
 #
-# This workflow builds a single named recipe on the GitHub-hosted
-# ubuntu-22.04-arm runner linux-arm-build.yml publishes from, and never
-# publishes: no CVCPKG_PUBLISHER_TOKEN, no `cvcpkg publish`, no
-# --server-cache-push.  Its tool setup is linux-arm-build.yml's: nothing from
-# apt or pip, and cmake, ninja, pkg-config, meson, m4, flex, bison and make
-# from cvcpkg.
+# This workflow builds the named recipes on the GitHub-hosted ubuntu-22.04-arm
+# runner linux-arm-build.yml publishes from, and never publishes: no
+# CVCPKG_PUBLISHER_TOKEN, no `cvcpkg publish`, no --server-cache-push.  Its tool
+# setup is linux-arm-build.yml's: the image's own build tools moved aside,
+# nothing from apt or pip, and cmake, ninja, pkg-config, meson, m4, flex, bison
+# and make from cvcpkg.
 #
 # Usage:
 #   gh workflow run linux-arm-recipe-check -f recipe=krb5
-#   gh workflow run linux-arm-recipe-check -f recipe=llvm18
+#   gh workflow run linux-arm-recipe-check -f recipe="cmake llvm18"
 #   gh workflow run linux-arm-recipe-check -f recipe=automake -f deps=source
-# deps=catalog (the default) is linux-arm-build.yml's targeted path minus the
-# publish: install the recipe's PUBLISHED build + runtime closure, then
-# `cvcpkg pack` the recipe into dist/.  pack runs the glibc-floor and
-# relocatability gates.  deps=source builds the whole closure from source with
-# `cvcpkg build --with-deps` instead.
+# `recipe` takes several names, built in order, like linux-arm-build.yml's
+# `recipes`; a tool among them is left out of the tools tree.  deps=catalog
+# (the default) is linux-arm-build.yml's targeted path minus the publish:
+# install each recipe's PUBLISHED build + runtime closure, then `cvcpkg pack`
+# the recipe into dist/.  pack runs the glibc-floor and relocatability gates,
+# and a later step lists any library a packed bundle loads from the system
+# besides glibc and the compiler runtime.  deps=source builds the whole closure
+# from source with `cvcpkg build --with-deps` instead.
 #
 # The pull_request trigger fires only when this file or linux-arm-build.yml
 # changes.  It smoke-tests the tools tree and builds a small fixed set of
@@ -32,7 +35,7 @@ on:
   workflow_dispatch:
     inputs:
       recipe:
-        description: "Recipe to build (single name)"
+        description: "Recipe(s) to build, in order (space/comma separated)"
         required: true
         default: "krb5"
         type: string
@@ -88,25 +91,28 @@ jobs:
           DEPS: ${{ inputs.deps }}
         run: |
           set -euo pipefail
-          # One "recipe deps" line per job.
+          # One "recipe[,recipe...] deps" line per job.
           if [ "$EVENT" = workflow_dispatch ]; then
-            set -- "$RECIPE $DEPS"
+            set -- "$(echo "$RECIPE" | tr -s ' ,' ',' | sed 's/^,//; s/,$//') $DEPS"
           else
             # Each recipe puts different tools to work. The tools tree serves
             # what a recipe uses without declaring it; a depends.build tool
             # comes from its catalog bundle in the prefix. Every job also
             # smoke-tests the whole tree first.
+            #   cmake              bootstrap + make, with pkg-config from the tree
             #   krb5               autotools configure + make, with make, m4 and bison from the tree
             #   postgresql-client  meson, ninja, flex, bison and pkg-config from the tree (host_tools)
-            #   libpng             cmake and ninja from their bundles in the prefix (depends.build)
-            #   bison              configure + make, with m4 from the tree (host_tools); bison left out
-            #   cmake              bootstrap + make, with pkg-config from the tree; cmake left out
+            #   bison              configure + make, with m4 from the tree (host_tools)
+            # Every job builds cmake first, until the linux/arm64 cmake bundle
+            # is republished: 3.31.7+cvc.1 has RUNPATH
+            # /home/runner/work/libcvc-deps/libcvc-deps/prefix/lib and loads the
+            # image's libcurl, libcrypto and libz, so the check refuses it in
+            # any job that does not build cmake itself.
             set -- \
-              "krb5 catalog" \
-              "postgresql-client catalog" \
-              "libpng catalog" \
-              "bison catalog" \
-              "cmake catalog"
+              "cmake catalog" \
+              "cmake,krb5 catalog" \
+              "cmake,postgresql-client catalog" \
+              "cmake,bison catalog"
           fi
           for job in "$@"; do
             echo "$job"
@@ -121,6 +127,16 @@ jobs:
     # floor, and its timeout, so a recipe that passes here fits there.
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 300
+    env:
+      # Every name a build tool on the runner image may answer to. cvcpkg
+      # provides each of them, in the tools tree below or as a recipe's
+      # depends.build bundle, except texinfo's makeinfo, which nothing may use.
+      IMAGE_BUILD_TOOLS: >-
+        cmake ctest cpack ccmake ninja meson pkg-config pkgconf m4 flex flex++
+        lex bison yacc make gmake autoconf autoheader autom4te autoreconf
+        autoscan autoupdate ifnames automake aclocal libtool libtoolize msgfmt
+        msgmerge xgettext autopoint gettextize gperf nasm yasm patchelf
+        makeinfo texi2any
     strategy:
       fail-fast: false
       matrix:
@@ -133,13 +149,42 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The three tool-setup steps are linux-arm-build.yml's, which explains each.
+      # The runner image ships build tools of its own, installed with apt when
+      # the image was made: autoconf, automake, libtoolize, makeinfo and
+      # patchelf in /usr/bin among them. Move every copy aside for every later
+      # step, so a recipe that uses one without declaring it fails instead of
+      # building with the image's; "Check build tools come from cvcpkg" fails if
+      # one is still reachable. What stays is the system compiler (gcc/g++, with
+      # binutils and glibc), the one build tool taken from the system; the
+      # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
+      # rsync and file, which no recipe build runs except emsdk's build.sh, which
+      # copies its tree with rsync. Moving files out of /usr/bin is only safe on
+      # an ephemeral GitHub-hosted runner.
+      - name: Remove the image's build tools from the environment
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move the image's build tools aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
+          IFS=: read -ra dirs <<< "$PATH"
+          for d in "${dirs[@]}"; do
+            [ -d "$d" ] || continue
+            for p in $(printf "$d/%s " $IMAGE_BUILD_TOOLS) "$d"/automake-[0-9]* "$d"/aclocal-[0-9]* "$d"/*-pkg-config; do
+              if [ -e "$p" ] || [ -L "$p" ]; then
+                sudo mv "$p" "$p.hidden-from-builds"
+                echo "moved aside: $p"
+              fi
+            done
+          done
+
       - name: Install cvcpkg
         run: |
           python -m pip install --quiet --upgrade pip
           python -m pip install --quiet '.[remote,validate]'
           cvcpkg --version
 
-      # The two tool-setup steps are linux-arm-build.yml's, which explains each.
       - name: Install build tools (cvcpkg)
         env:
           BUILDING: ${{ matrix.recipe }}
@@ -166,9 +211,10 @@ jobs:
               echo "$r" >> "$tree/missing"
             fi
           done
-          if [ -n "$recipes" ]; then
-            cvcpkg install $recipes --prefix "$prefix" --platform linux --config release --link shared
-          fi
+          # zlib is not a tool: bin/cmake and libcurl load libz.so.1, which
+          # neither bundle carries or declares (both builds linked the image's
+          # zlib), so the tree takes it from the cvcpkg zlib bundle instead.
+          cvcpkg install $recipes zlib --prefix "$prefix" --platform linux --config release --link shared
           cmds=""
           for r in $recipes; do
             case "$r" in
@@ -227,6 +273,17 @@ jobs:
               *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
             esac
           done
+          # Nothing outside the tree may answer to a build tool's name: the
+          # image's copies are moved aside, and a tool left out of the tree
+          # comes from the job's prefix once the job has built it.
+          for t in $IMAGE_BUILD_TOOLS; do
+            for p in $(type -ap "$t" 2>/dev/null || true); do
+              case "$p" in
+                "$tree/bin/"*) ;;
+                *) echo "::error::$t is reachable at $p, outside cvcpkg's tree: nothing may build with the runner image's $t"; rc=1 ;;
+              esac
+            done
+          done
           # A tool from the tree may load only glibc and the compiler runtime
           # from the system, and everything else from the tree. Anything else,
           # whether a library the runner image happens to have or nothing at all
@@ -235,7 +292,8 @@ jobs:
           elf() { [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" = 7f454c46 ]; }
           system_lib() {
             case "$1" in
-              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1|libresolv.so.2|libutil.so.1|libanl.so.1) return 0 ;;
+              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1) return 0 ;;
+              libresolv.so.2|libutil.so.1|libanl.so.1|libnsl.so.1) return 0 ;;
               libgcc_s.so.1|libstdc++.so.6|libatomic.so.1|libgomp.so.1) return 0 ;;
             esac
             return 1
@@ -247,27 +305,30 @@ jobs:
             # Only what this file itself needs: a library's own needs are
             # checked, and blamed on its bundle, when the loop reaches it.
             needed=" $(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p' | tr '\n' ' ') "
+            bad=""
             while read -r lib arrow path _; do
               [ "$arrow" = "=>" ] || continue
               case "$needed" in *" $lib "*) ;; *) continue ;; esac
               case "$path" in
-                "$tree"/lib/*) continue ;;
-                not) why="nothing provides it" ;;
-                *)
-                  if system_lib "$lib"; then continue; fi
-                  why="it comes from the system's $path, which is not glibc or the compiler runtime" ;;
+                "$tree"/lib/*) ;;
+                not) bad="$bad $lib (not found)" ;;
+                *) system_lib "$lib" || bad="$bad $path" ;;
               esac
-              case "$name" in
-                ctest|cpack) recipe=cmake ;;
-                pkgconf) recipe=pkg-config ;;
-                libcurl*) recipe=curl ;;
-                libssl*|libcrypto*) recipe=openssl ;;
-                *) recipe=$name ;;
-              esac
-              echo "::error::$name needs $lib, and $why (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux-$(uname -m) needs republishing"
-              rc=1
             done < <(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$f" 2>/dev/null || true)
+            [ -n "$bad" ] || continue
+            case "$name" in
+              ctest|cpack) recipe=cmake ;;
+              pkgconf) recipe=pkg-config ;;
+              libcurl*) recipe=curl ;;
+              libssl*|libcrypto*) recipe=openssl ;;
+              *) recipe=$name ;;
+            esac
+            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/arm64 needs republishing"
+            rc=1
           done
+          # Not from cvcpkg: the compiler, what runs cvcpkg and the scripts, and
+          # the utilities no recipe build runs.
+          for t in cc gcc g++ ld readelf bash perl python3 zstd rsync file; do echo "$t -> $(command -v "$t" || echo none)"; done
           [ "$rc" = 0 ] || exit 1
           has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
           if has cmake; then cmake --version | sed -n 1p; fi
@@ -278,14 +339,6 @@ jobs:
           if has flex; then flex --version; fi
           if has bison; then bison --version | sed -n 1p; fi
           if has make; then make --version | sed -n 1p; fi
-          # Not from cvcpkg: the compiler, and what runs cvcpkg and the scripts.
-          for t in cc gcc g++ ld readelf bash perl python3; do echo "$t -> $(command -v "$t" || echo none)"; done
-          # Build tools recipes take from their cvcpkg bundles (depends.build),
-          # not from this tree. Any copy the runner image has is listed here.
-          for t in autoconf autoreconf automake aclocal libtool libtoolize makeinfo msgfmt gperf nasm yasm patchelf zstd rsync file; do
-            got=$(command -v "$t" || true)
-            if [ -n "$got" ]; then echo "image has $t: $got"; fi
-          done
 
       # Versions prove the tools start; this proves they work from the tree,
       # far from the prefix they were built in: cmake (and the libcurl it
@@ -365,12 +418,14 @@ jobs:
           echo "cpus: $(nproc)"
           free -h
           df -h / "$RUNNER_TEMP" "$GITHUB_WORKSPACE"
-          echo "glibc: $(ldd --version | head -1)"
+          ldd --version 2>/dev/null | sed -n 1p || true
 
-      - name: Validate recipe
+      - name: Validate recipes
         env:
           RECIPE: ${{ matrix.recipe }}
-        run: cvcpkg validate "recipes/$RECIPE"
+        run: |
+          set -euo pipefail
+          for r in $(echo "$RECIPE" | tr ',' ' '); do cvcpkg validate "recipes/$r"; done
 
       - name: Build ${{ matrix.recipe }}
         env:
@@ -383,25 +438,94 @@ jobs:
           prefix="$GITHUB_WORKSPACE/prefix"
           dist="$GITHUB_WORKSPACE/dist"
           mkdir -p "$prefix" "$dist"
-          if [ "$DEPS" = catalog ]; then
-            # Install the recipe's PUBLISHED build + runtime closure (its
-            # depends.build tools included, on a native build), then pack only
-            # the recipe against it, into dist/ and nowhere else.
-            echo "::group::cvcpkg install-deps recipes/$RECIPE --platform linux --link $LINK"
-            cvcpkg install-deps "recipes/$RECIPE" --platform linux --config "$CONFIG" \
-              --link "$LINK" --prefix "$prefix" --recipes-dir recipes
-            echo "::endgroup::"
-            echo "cvcpkg pack recipes/$RECIPE --platform linux --link $LINK"
-            cvcpkg pack "recipes/$RECIPE" --platform linux --config "$CONFIG" \
-              --link "$LINK" --prefix "$prefix" --output-dir "$dist" --recipes-dir recipes
-          else
-            # Build the whole closure from source first, in topological order.
-            echo "cvcpkg build $RECIPE --with-deps --platform linux --link $LINK"
-            cvcpkg build "$RECIPE" --local --recipes-dir recipes --config "$CONFIG" \
-              --prefix "$prefix" --platform linux --link "$LINK" --with-deps
-          fi
+          for r in $(echo "$RECIPE" | tr ',' ' '); do
+            if [ "$DEPS" = catalog ]; then
+              # Install the recipe's PUBLISHED build + runtime closure (its
+              # depends.build tools included, on a native build), then pack only
+              # the recipe against it, into dist/ and nowhere else. pack also
+              # merges it into the prefix, where the next recipe finds it.
+              echo "::group::cvcpkg install-deps recipes/$r --platform linux --link $LINK"
+              cvcpkg install-deps "recipes/$r" --platform linux --config "$CONFIG" \
+                --link "$LINK" --prefix "$prefix" --recipes-dir recipes
+              echo "::endgroup::"
+              echo "cvcpkg pack recipes/$r --platform linux --link $LINK"
+              cvcpkg pack "recipes/$r" --platform linux --config "$CONFIG" \
+                --link "$LINK" --prefix "$prefix" --output-dir "$dist" --recipes-dir recipes
+            else
+              # Build the whole closure from source first, in topological order.
+              echo "cvcpkg build $r --with-deps --platform linux --link $LINK"
+              cvcpkg build "$r" --local --recipes-dir recipes --config "$CONFIG" \
+                --prefix "$prefix" --platform linux --link "$LINK" --with-deps
+            fi
+          done
 
-      - name: Show the packed bundle
+      # pack's relocatability gate refuses a builder path, but not a library the
+      # runner image happens to have. Install each packed bundle with its
+      # runtime closure somewhere new and list what its programs and libraries
+      # still load from the system besides glibc and the compiler runtime.
+      - name: Check what the packed bundles load
+        if: success() && matrix.deps == 'catalog'
+        env:
+          RECIPE: ${{ matrix.recipe }}
+          CONFIG: ${{ inputs.config || 'release' }}
+          LINK: ${{ inputs.link || 'shared' }}
+        run: |
+          set -euo pipefail
+          elf() { [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" = 7f454c46 ]; }
+          system_lib() {
+            case "$1" in
+              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1) return 0 ;;
+              libresolv.so.2|libutil.so.1|libanl.so.1|libnsl.so.1) return 0 ;;
+              libgcc_s.so.1|libstdc++.so.6|libatomic.so.1|libgomp.so.1) return 0 ;;
+            esac
+            return 1
+          }
+          for r in $(echo "$RECIPE" | tr ',' ' '); do
+            shopt -s nullglob
+            archives=("$GITHUB_WORKSPACE"/dist/"$r"-[0-9]*-linux-*.tar.gz)
+            shopt -u nullglob
+            [ ${#archives[@]} -gt 0 ] || continue
+            d=$(mktemp -d)
+            deps=$(python3 - "$r" <<'PY'
+          import sys, yaml
+          y = yaml.safe_load(open(f"recipes/{sys.argv[1]}/recipe.yaml"))
+          for dep in (y.get("depends") or {}).get("runtime") or []:
+              if isinstance(dep, str):
+                  print(dep)
+              elif "linux" in dep.get("platforms", ["linux"]):
+                  print(dep["name"])
+          PY
+            )
+            if [ -n "$deps" ]; then
+              cvcpkg install $deps --prefix "$d" --platform linux --config "$CONFIG" --link "$LINK" > /dev/null
+            fi
+            tar -xzf "${archives[0]}" -C "$d"
+            echo "${archives[0]##*/} with its runtime closure:${deps:+ $(echo $deps)}"
+            for rel in $(tar -tzf "${archives[0]}" | sed 's|^\./||' | grep -E '^(bin|lib)/[^/]+$'); do
+              f="$d/$rel"
+              [ -f "$f" ] && [ ! -L "$f" ] && elf "$f" || continue
+              runpath=$(readelf -d "$f" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]$/\2/p' | paste -sd: -)
+              needed=" $(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p' | tr '\n' ' ') "
+              bad=""
+              while read -r lib arrow path _; do
+                [ "$arrow" = "=>" ] || continue
+                case "$needed" in *" $lib "*) ;; *) continue ;; esac
+                case "$path" in
+                  "$d"/*) ;;
+                  not) bad="$bad $lib (not found)" ;;
+                  *) system_lib "$lib" || bad="$bad $path" ;;
+                esac
+              done < <(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$f" 2>/dev/null || true)
+              if [ -n "$bad" ]; then
+                echo "::warning::$r: $rel loads$bad, which neither the bundle nor its runtime closure ships (RUNPATH: ${runpath:-none})"
+              else
+                echo "  $rel: RUNPATH ${runpath:-none}; loads only the bundle, its closure, glibc and the compiler runtime"
+              fi
+            done
+            rm -rf "$d"
+          done
+
+      - name: Show the packed bundles
         if: always()
         run: |
           shopt -s nullglob
@@ -412,5 +536,6 @@ jobs:
           fi
           for a in "${archives[@]}"; do
             ls -l "$a"
-            tar -tzf "$a" | sort
+            echo "$(tar -tzf "$a" | wc -l) entries; the first 300:"
+            tar -tzf "$a" | sort | sed -n 1,300p
           done

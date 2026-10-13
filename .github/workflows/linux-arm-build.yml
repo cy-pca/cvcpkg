@@ -127,6 +127,16 @@ jobs:
     # environment's glibc rather than the host's.
     runs-on: ubuntu-22.04-arm
     timeout-minutes: 300
+    env:
+      # Every name a build tool on the runner image may answer to. cvcpkg
+      # provides each of them, in the tools tree below or as a recipe's
+      # depends.build bundle, except texinfo's makeinfo, which nothing may use.
+      IMAGE_BUILD_TOOLS: >-
+        cmake ctest cpack ccmake ninja meson pkg-config pkgconf m4 flex flex++
+        lex bison yacc make gmake autoconf autoheader autom4te autoreconf
+        autoscan autoupdate ifnames automake aclocal libtool libtoolize msgfmt
+        msgmerge xgettext autopoint gettextize gperf nasm yasm patchelf
+        makeinfo texi2any
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +153,35 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The runner image ships build tools of its own, installed with apt when
+      # the image was made: autoconf, automake, libtoolize, makeinfo and
+      # patchelf in /usr/bin among them. Move every copy aside for every later
+      # step, so a recipe that uses one without declaring it fails instead of
+      # building with the image's; "Check build tools come from cvcpkg" fails if
+      # one is still reachable. What stays is the system compiler (gcc/g++, with
+      # binutils and glibc), the one build tool taken from the system; the
+      # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
+      # rsync and file, which no recipe build runs except emsdk's build.sh, which
+      # copies its tree with rsync. Moving files out of /usr/bin is only safe on
+      # an ephemeral GitHub-hosted runner.
+      - name: Remove the image's build tools from the environment
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move the image's build tools aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
+          IFS=: read -ra dirs <<< "$PATH"
+          for d in "${dirs[@]}"; do
+            [ -d "$d" ] || continue
+            for p in $(printf "$d/%s " $IMAGE_BUILD_TOOLS) "$d"/automake-[0-9]* "$d"/aclocal-[0-9]* "$d"/*-pkg-config; do
+              if [ -e "$p" ] || [ -L "$p" ]; then
+                sudo mv "$p" "$p.hidden-from-builds"
+                echo "moved aside: $p"
+              fi
+            done
+          done
+
       - name: Install cvcpkg
         run: |
           set -euo pipefail
@@ -151,11 +190,8 @@ jobs:
 
       # Build tools from cvcpkg, not apt or pip: cmake (3.31.7, the version
       # Boost 1.86's configs expect), ninja, pkg-config (pkgconf), meson, m4,
-      # flex, bison and make. Nothing is installed with apt: the runner image's
-      # gcc/g++ (with binutils and glibc) is the only build tool taken from the
-      # system, and the image's python3 and bash run cvcpkg and the recipe
-      # scripts. build-essential is gone with the rest: the image already has
-      # gcc and g++, and make comes from cvcpkg.
+      # flex, bison and make. build-essential went with the rest of the apt
+      # list: the image already has gcc and g++, and make comes from cvcpkg.
       #
       # The tree serves what recipes use without a depends.build entry: cmake
       # and ninja for llvm18 and the other LLVMs, make for every autotools
@@ -163,9 +199,9 @@ jobs:
       # postgresql-*, which install-deps does not install. A tool a recipe
       # declares in depends.build comes from its bundle in the prefix, which
       # is ahead of this tree on PATH. autoconf, automake and libtool are only
-      # ever used that way (nfft3, swig), so they are not here, and no linux
-      # recipe runs makeinfo, msgfmt, file, rsync or the zstd CLI: emsdk's
-      # rsync is the one exception, and it uses the image's.
+      # ever used that way (nfft3, swig), and so is gettext's msgfmt
+      # (postgresql-*, from the gettext bundle), so they are not here. No
+      # linux recipe runs makeinfo.
       #
       # The tools are copied into a tree holding only them: CMake searches its
       # own install prefix (the parent of share/cmake-X.Y) for packages, and the
@@ -211,9 +247,10 @@ jobs:
               echo "$r" >> "$tree/missing"
             fi
           done
-          if [ -n "$recipes" ]; then
-            cvcpkg install $recipes --prefix "$prefix" --platform linux --config release --link shared
-          fi
+          # zlib is not a tool: bin/cmake and libcurl load libz.so.1, which
+          # neither bundle carries or declares (both builds linked the image's
+          # zlib), so the tree takes it from the cvcpkg zlib bundle instead.
+          cvcpkg install $recipes zlib --prefix "$prefix" --platform linux --config release --link shared
           cmds=""
           for r in $recipes; do
             case "$r" in
@@ -272,6 +309,17 @@ jobs:
               *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
             esac
           done
+          # Nothing outside the tree may answer to a build tool's name: the
+          # image's copies are moved aside, and a tool left out of the tree
+          # comes from the job's prefix once the job has built it.
+          for t in $IMAGE_BUILD_TOOLS; do
+            for p in $(type -ap "$t" 2>/dev/null || true); do
+              case "$p" in
+                "$tree/bin/"*) ;;
+                *) echo "::error::$t is reachable at $p, outside cvcpkg's tree: nothing may build with the runner image's $t"; rc=1 ;;
+              esac
+            done
+          done
           # A tool from the tree may load only glibc and the compiler runtime
           # from the system, and everything else from the tree. Anything else,
           # whether a library the runner image happens to have or nothing at all
@@ -280,7 +328,8 @@ jobs:
           elf() { [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" = 7f454c46 ]; }
           system_lib() {
             case "$1" in
-              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1|libresolv.so.2|libutil.so.1|libanl.so.1) return 0 ;;
+              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1) return 0 ;;
+              libresolv.so.2|libutil.so.1|libanl.so.1|libnsl.so.1) return 0 ;;
               libgcc_s.so.1|libstdc++.so.6|libatomic.so.1|libgomp.so.1) return 0 ;;
             esac
             return 1
@@ -292,27 +341,30 @@ jobs:
             # Only what this file itself needs: a library's own needs are
             # checked, and blamed on its bundle, when the loop reaches it.
             needed=" $(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p' | tr '\n' ' ') "
+            bad=""
             while read -r lib arrow path _; do
               [ "$arrow" = "=>" ] || continue
               case "$needed" in *" $lib "*) ;; *) continue ;; esac
               case "$path" in
-                "$tree"/lib/*) continue ;;
-                not) why="nothing provides it" ;;
-                *)
-                  if system_lib "$lib"; then continue; fi
-                  why="it comes from the system's $path, which is not glibc or the compiler runtime" ;;
+                "$tree"/lib/*) ;;
+                not) bad="$bad $lib (not found)" ;;
+                *) system_lib "$lib" || bad="$bad $path" ;;
               esac
-              case "$name" in
-                ctest|cpack) recipe=cmake ;;
-                pkgconf) recipe=pkg-config ;;
-                libcurl*) recipe=curl ;;
-                libssl*|libcrypto*) recipe=openssl ;;
-                *) recipe=$name ;;
-              esac
-              echo "::error::$name needs $lib, and $why (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux-$(uname -m) needs republishing"
-              rc=1
             done < <(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$f" 2>/dev/null || true)
+            [ -n "$bad" ] || continue
+            case "$name" in
+              ctest|cpack) recipe=cmake ;;
+              pkgconf) recipe=pkg-config ;;
+              libcurl*) recipe=curl ;;
+              libssl*|libcrypto*) recipe=openssl ;;
+              *) recipe=$name ;;
+            esac
+            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/arm64 needs republishing"
+            rc=1
           done
+          # Not from cvcpkg: the compiler, what runs cvcpkg and the scripts, and
+          # the utilities no recipe build runs.
+          for t in cc gcc g++ ld readelf bash perl python3 zstd rsync file; do echo "$t -> $(command -v "$t" || echo none)"; done
           [ "$rc" = 0 ] || exit 1
           has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
           if has cmake; then cmake --version | sed -n 1p; fi
@@ -323,14 +375,6 @@ jobs:
           if has flex; then flex --version; fi
           if has bison; then bison --version | sed -n 1p; fi
           if has make; then make --version | sed -n 1p; fi
-          # Not from cvcpkg: the compiler, and what runs cvcpkg and the scripts.
-          for t in cc gcc g++ ld readelf bash perl python3; do echo "$t -> $(command -v "$t" || echo none)"; done
-          # Build tools recipes take from their cvcpkg bundles (depends.build),
-          # not from this tree. Any copy the runner image has is listed here.
-          for t in autoconf autoreconf automake aclocal libtool libtoolize makeinfo msgfmt gperf nasm yasm patchelf zstd rsync file; do
-            got=$(command -v "$t" || true)
-            if [ -n "$got" ]; then echo "image has $t: $got"; fi
-          done
 
       - name: Build shard ${{ matrix.shard }} (pack-all)
         env:
