@@ -6,7 +6,10 @@ recipe:
   # a runner with Homebrew in /usr/local and linked Homebrew's
   # /usr/local/opt/gettext/lib/libtextstyle.0.dylib, so it cannot start once
   # macOS CI moves Homebrew aside.  cvc.3 is the rebuild without it.
-  cvc_revision: 3
+  # cvc.4: relocatable.  Earlier bundles baked the builder's temporary prefix in
+  # as the skeleton dir and the m4 path, so every consumer had to export
+  # BISON_PKGDATADIR and M4 (libpq, mariadb-server, mesa, swig, gstreamer).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +30,9 @@ patches: []
 
 depends:
   build: []
+  # bison runs m4 for every grammar; with M4=m4 it is found on PATH.
+  runtime:
+    - m4
   host_tools:
     - m4
 
