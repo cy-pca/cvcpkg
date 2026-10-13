@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: idn2
   upstream_version: "2.3.7"
-  cvc_revision: 3
+  # cvc.4: relocatable .pc/.cmake/bin/*-config.  The published cvc.3
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

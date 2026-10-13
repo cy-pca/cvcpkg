@@ -47,6 +47,8 @@ Libs: -L\${libdir} -laspell
 Cflags: -I\${includedir}
 PC
 
-if command -v cvc_rewrite_install_paths >/dev/null 2>&1; then
-    cvc_rewrite_install_paths
-fi
+# Relocate installed .pc/.cmake files and bin/*-config scripts.  This script
+# does not source env-*.sh, so the old `command -v` guard was always false
+# and the rewrite never ran; source the helper directly.
+. "$(cd "$(dirname "$0")" && pwd)/../_common/rewrite-install-paths.sh"
+cvc_rewrite_install_paths

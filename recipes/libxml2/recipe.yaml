@@ -25,7 +25,11 @@ recipe:
   # OpenBSD too, blocking imagemagick's OpenBSD build the same way it
   # blocked NetBSD. Extended the -DLIBXML2_WITH_MODULES=OFF workaround to
   # OpenBSD (build.sh). Linux/macOS/FreeBSD/Windows bundles are unchanged.
-  cvc_revision: 4
+  # cvc.5: relocatable .pc/.cmake/bin/*-config.  The published cvc.4
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

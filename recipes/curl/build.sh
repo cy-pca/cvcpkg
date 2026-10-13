@@ -189,3 +189,8 @@ case "${CVC_PLATFORM:-}" in
         fi
         ;;
 esac
+
+# Relocate installed .pc/.cmake files and bin/*-config scripts, which keep this
+# build's temporary install dir otherwise (recipes/_common/rewrite-install-paths.sh).
+. "$(cd "$(dirname "$0")" && pwd)/../_common/rewrite-install-paths.sh"
+cvc_rewrite_install_paths
