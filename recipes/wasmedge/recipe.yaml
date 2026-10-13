@@ -23,7 +23,11 @@ recipe:
   # link; with it on (the linux/arm64 llvm18 is still cvc.1) the target is kept
   # and pinned to the cvcpkg ncurses as before.  ncurses is a runtime
   # dependency on Linux only now: every macOS llvm18 is cvc.4 or later.
-  cvc_revision: 9
+  # Bumped 9 -> 10: macOS builds pass WASMEDGE_FORCE_DISABLE_LTO=ON.  With
+  # ThinLTO, Xcode's ranlib/ld read the archives' Apple bitcode through the
+  # prefix's LLVM 18 libLTO, which cannot parse it; Xcode 26 then fails the
+  # libwasmedge link (arm64).  Linux and Windows builds are unchanged.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
