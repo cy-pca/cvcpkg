@@ -94,6 +94,36 @@ def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
         # else: a real file or symlink already occupies dst -- keep it.
 
 
+# A builder installs a job's dependencies, toolchain and host tools one after
+# another on one keep-alive client, extracting each archive before the next GET.  When an extraction
+# outlasts the server's keep-alive timeout, that GET can go out on a connection
+# the server has just closed ("Server disconnected without sending a
+# response"), and a loaded server drops the odd connection outright.  On
+# 2026-10-13 that failed pycares-, nh3- and uvloop-cp312 before they built
+# anything.  The GETs are idempotent, so transport errors are retried.
+_DEP_GET_ATTEMPTS = 4
+
+
+def _get_retrying(
+    client, url: str, *, attempts: int = _DEP_GET_ATTEMPTS, sleep=time.sleep, **kwargs
+):
+    """``client.get(url, **kwargs)``, retrying transport errors with backoff.
+
+    Only connection-level failures (httpx.TransportError: disconnects, connect
+    errors, timeouts) are retried; an HTTP error status is returned as is for
+    the caller to handle.  The last attempt's exception propagates.
+    """
+    httpx = require_httpx()
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.get(url, **kwargs)
+        except httpx.TransportError:
+            if attempt == attempts:
+                raise
+            sleep(min(2**attempt, 30) + random.random())
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _newest_first(pkg: dict) -> tuple:
     """Newest-first ordering key for a catalog entry (a dict with "version").
 
@@ -2662,7 +2692,8 @@ def builder_run(
         with httpx.Client(timeout=120) as client:
             for dep_name in dep_names:
                 # Find the package on the server
-                resp = client.get(
+                resp = _get_retrying(
+                    client,
                     f"{base}/v1/packages/{dep_name}",
                     headers=headers,
                 )
@@ -2725,7 +2756,7 @@ def builder_run(
 
                 # Download the archive
                 log_cb(f"  Installing dep: {dep_name} ({match.get('version', '')})\n")
-                dl_resp = client.get(archive_url)
+                dl_resp = _get_retrying(client, archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
                     continue
@@ -2866,7 +2897,8 @@ def builder_run(
 
             # 2. Download the pre-built package for the HOST platform
             with httpx.Client(timeout=120) as client:
-                resp = client.get(
+                resp = _get_retrying(
+                    client,
                     f"{base}/v1/packages/{tc_name}",
                     headers=headers,
                 )
@@ -2957,7 +2989,7 @@ def builder_run(
                     extract_target = tc_staging
 
                 log_cb(f"  Installing cross-toolchain: {tc_name} ({tc_version})\n")
-                dl_resp = client.get(archive_url)
+                dl_resp = _get_retrying(client, archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
                     if tc_staging is not None:
@@ -3053,7 +3085,7 @@ def builder_run(
         so the build can proceed without the tool.
         """
         with httpx.Client(timeout=120) as client:
-            resp = client.get(f"{base}/v1/packages/{pkg_name}", headers=headers)
+            resp = _get_retrying(client, f"{base}/v1/packages/{pkg_name}", headers=headers)
             if resp.status_code >= 400:
                 log_cb(f"  host_tool {pkg_name}: not found on server ({resp.status_code})\n")
                 return
@@ -3077,7 +3109,7 @@ def builder_run(
                 archive_url = f"{base}{archive_url}"
 
             log_cb(f"  Installing host tool: {pkg_name} ({match.get('version', '')})\n")
-            dl_resp = client.get(archive_url)
+            dl_resp = _get_retrying(client, archive_url)
             if dl_resp.status_code >= 400:
                 log_cb(f"  host_tool {pkg_name}: download failed ({dl_resp.status_code})\n")
                 return
