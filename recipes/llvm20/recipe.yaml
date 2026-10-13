@@ -73,6 +73,11 @@ depends:
   host_tools: []
 
 build:
+  # Without a timeout the fleet reaps a job at the server's 2h default, which
+  # killed the NetBSD build twice (jobs 14783 and 19065, cvc.3 and cvc.4) and
+  # the FreeBSD cvc.4 build once (job 19062).  10h, as for llvm and llvm18.  A
+  # build-metadata change, not a cvc_revision bump: it changes no bundle.
+  timeout_seconds: 36000
   matrix:
     - platform: linux
       script: build.sh
