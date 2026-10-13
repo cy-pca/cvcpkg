@@ -124,6 +124,32 @@ def _get_retrying(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def _pick_dep_variant(
+    pkgs: list[dict], platform: str, arch: str, config: str, link: str
+) -> dict | None:
+    """The catalog row to install for one dependency; *pkgs* is newest first.
+
+    Tiers, best first: this platform/arch with the job's build_type and link;
+    this platform/arch with any; the platform-independent any/noarch rows with
+    the job's build_type and link; any/noarch with any.  The noarch tiers used
+    to take whichever row came first, so when a debug row tied the release one
+    on version a release job got the debug bundle -- and trove-classifiers-cp313
+    cvc.6's debug bundle installs into lib/python3.13t, which failed
+    hatchling-cp313 (2026-10-13).
+    """
+
+    def same_cfg(p: dict) -> bool:
+        return p.get("build_type", "release") == config and p.get("link", "shared") == link
+
+    here = [p for p in pkgs if p.get("platform") == platform and p.get("arch") == arch]
+    noarch = [p for p in pkgs if p.get("platform") == "any" and p.get("arch") == "noarch"]
+    for group, need_cfg in ((here, True), (here, False), (noarch, True), (noarch, False)):
+        for p in group:
+            if not need_cfg or same_cfg(p):
+                return p
+    return None
+
+
 def _newest_first(pkg: dict) -> tuple:
     """Newest-first ordering key for a catalog entry (a dict with "version").
 
@@ -2709,31 +2735,11 @@ def builder_run(
                 # of a dep rather than whichever the server happened to list
                 # first (see _newest_first).
                 pkgs = sorted(resp.json().get("packages", []), key=_newest_first, reverse=True)
-                # Find best match for platform/arch/config/link
-                match = None
-                for p in pkgs:
-                    if (
-                        p.get("platform") == job_platform
-                        and p.get("arch") == job_arch
-                        and p.get("build_type", "release") == job_config
-                        and p.get("link", "shared") == job_link
-                    ):
-                        match = p
-                        break
-                # Relax: try just platform/arch
-                if match is None:
-                    for p in pkgs:
-                        if p.get("platform") == job_platform and p.get("arch") == job_arch:
-                            match = p
-                            break
-                # Final relax: a platform-independent (noarch) dependency — a
-                # pure-Python wheel — is valid on every host, so a concrete
-                # build resolves it to the single any/noarch variant.
-                if match is None:
-                    for p in pkgs:
-                        if p.get("platform") == "any" and p.get("arch") == "noarch":
-                            match = p
-                            break
+                # Best match for platform/arch/config/link, relaxing to any
+                # build_type on this platform, then to a platform-independent
+                # (noarch) variant -- a pure-Python wheel is valid on every
+                # host -- preferring the job's own build_type there too.
+                match = _pick_dep_variant(pkgs, job_platform, job_arch, job_config, job_link)
                 if match is None:
                     local_dir = _local_only_recipe(dep_name)
                     if local_dir is not None:
