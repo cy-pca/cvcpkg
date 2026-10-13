@@ -10,7 +10,11 @@ recipe:
   # fixes both at once. markupsafe links nothing but libc, so the only new
   # dependency edge is the PEP-517 backend (setuptools-cp313) that
   # --no-build-isolation requires to already be in the prefix.
-  cvc_revision: 3
+  # cvc.4 (macOS republish): the published cvc.3 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.3 is fine; this revision is for macOS.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

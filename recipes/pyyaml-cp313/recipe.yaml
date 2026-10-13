@@ -14,7 +14,11 @@ recipe:
   # hard error. New dep edges: yaml (build+runtime), cython-cp313 (the sdist
   # ships only yaml/_yaml.pyx — there is no pre-generated _yaml.c), and the
   # setuptools-cp313 PEP-517 backend.
-  cvc_revision: 3
+  # cvc.4 (macOS republish): the published cvc.3 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.3 is fine; this revision is for macOS.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
