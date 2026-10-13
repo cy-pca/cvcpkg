@@ -22,7 +22,15 @@ esac
 
 cd "${CVC_SOURCE_DIR}"
 
-./configure --prefix="${CVC_INSTALL_DIR}"
+# gperf's configure uses the old one-argument AC_INIT, so PACKAGE_TARNAME is
+# empty and the default docdir is share/doc/ itself.  Name the package's own
+# directory, so the manual installs as share/doc/gperf/gperf.html.
+./configure --prefix="${CVC_INSTALL_DIR}" \
+    --docdir="${CVC_INSTALL_DIR}/share/doc/gperf" \
+    --htmldir="${CVC_INSTALL_DIR}/share/doc/gperf"
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
+
+[ -f "${CVC_INSTALL_DIR}/share/doc/gperf/gperf.html" ] || {
+    echo "gperf: manual not at share/doc/gperf/gperf.html" >&2; exit 1; }

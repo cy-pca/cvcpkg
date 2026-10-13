@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: gperf
   upstream_version: "3.1"
-  cvc_revision: 1
+  # Bumped 1 -> 2: the HTML manual now installs to share/doc/gperf/gperf.html.
+  # gperf's old-style AC_INIT leaves PACKAGE_TARNAME empty, so the default
+  # docdir collapsed to share/doc/ and the manual landed in share/doc/ itself,
+  # never matching the share/doc/gperf/ entry below.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -59,9 +63,7 @@ package:
     - bin/gperf*
     - share/man/man1/gperf*
     - share/info/gperf*
-    # The manual is one file: gperf installs share/doc/gperf.html (htmldir is
-    # share/doc), never a share/doc/gperf/ directory.
-    - share/doc/gperf.html
+    - share/doc/gperf/
 
 toolchain:
   cc:
