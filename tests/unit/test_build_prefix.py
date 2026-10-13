@@ -116,15 +116,17 @@ class TestBuildPrefix:
         r = _recipe(tmp_path)
         bp = tmp_path / "bp"
         env = _build_env(_ctx(tmp_path, r, build_prefix=bp), r.build_matrix[0])
-        fallback = env["DYLD_FALLBACK_LIBRARY_PATH"].split(":")
-        assert fallback[0] == str((bp / "lib").resolve())
-        assert str((tmp_path / "prefix" / "lib").resolve()) in fallback
-        assert fallback[-2:] == ["/usr/local/lib", "/usr/lib"]
+        # Compared as strings, not split on ":" -- the tmp paths carry a drive
+        # letter when this runs on Windows.
+        fallback = env["DYLD_FALLBACK_LIBRARY_PATH"]
+        assert fallback.startswith(str((bp / "lib").resolve()) + ":")
+        assert str((tmp_path / "prefix" / "lib").resolve()) + ":" in fallback
+        assert fallback.endswith(":/usr/local/lib:/usr/lib")
         assert env["DYLD_LIBRARY_PATH"] == "/caller/dyld"
 
         monkeypatch.setenv("DYLD_FALLBACK_LIBRARY_PATH", "/caller/fallback")
         env = _build_env(_ctx(tmp_path, r, build_prefix=bp), r.build_matrix[0])
-        assert env["DYLD_FALLBACK_LIBRARY_PATH"].split(":")[-1] == "/caller/fallback"
+        assert env["DYLD_FALLBACK_LIBRARY_PATH"].endswith(":/caller/fallback")
 
     def test_fallback_to_prefix_when_not_separated(self, tmp_path):
         # build_prefix=None -> legacy behaviour: everything under --prefix
