@@ -189,6 +189,18 @@ if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     WASMEDGE_PLUGINS=OFF
 fi
 
+# No LTO on macOS.  A Release build turns on ThinLTO, so the component archives
+# hold Apple-clang bitcode, and Xcode's ranlib and ld read archive bitcode
+# through a libLTO.dylib -- with llvm18 in the dependency prefix they load its
+# LLVM 18 libLTO, which cannot parse newer Apple bitcode ("Invalid attribute
+# group entry (Producer: 'APPLE_1_1700...' Reader: 'LLVM 18.1.8')").  ranlib
+# then writes empty tables of contents; Xcode 16's linker got by, Xcode 26's
+# fails libwasmedge with "Undefined symbols for architecture arm64".
+_lto_args=()
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    _lto_args=(-DWASMEDGE_FORCE_DISABLE_LTO=ON)
+fi
+
 # -DBUILD_SHARED_LIBS=OFF overrides the ON that cvc_cmake_build passes for a
 # shared build: the WasmEdge components (and the fetched fmt/spdlog) become
 # static PIC libraries linked into the one libwasmedge that
@@ -215,7 +227,8 @@ cvc_cmake_build \
     -DWASMEDGE_BUILD_TOOLS=ON \
     -DWASMEDGE_BUILD_PLUGINS="${WASMEDGE_PLUGINS}" \
     -DWASMEDGE_BUILD_SHARED_LIB=ON \
-    -DWASMEDGE_BUILD_STATIC_LIB=OFF
+    -DWASMEDGE_BUILD_STATIC_LIB=OFF \
+    ${_lto_args[@]+"${_lto_args[@]}"}
 
 # ── Checks: the library, what it loads, and AOT end to end ────────────────
 bin="${CVC_INSTALL_DIR}/bin"
