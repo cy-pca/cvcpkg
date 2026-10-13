@@ -1471,6 +1471,57 @@ def handwritten_columns(out: Path, interps: list[str]) -> dict[str, list[str]]:
     }
 
 
+def handwritten_families(
+    out: Path, interps: list[str], generated: set[str], referenced: set[str]
+) -> tuple[dict[str, list[str]], str | None, list[str]]:
+    """The hand-written dep families for this run: (columns, fatal message, notes).
+
+    Columns are facts read from disk.  A family is fatal only when something
+    depends on it and it has NO recipes under *out* at all -- every edge on it
+    would silently vanish.  A family that exists on disk but has no column for
+    this run's interpreters (``--interpreters 313t`` against coincurve, which
+    has cp311/312/313 only) stays in the map with no columns, so its
+    dependents' columns for those interpreters are pruned ("dep(s) lack the
+    column") exactly as for a generated package; dropping it instead would
+    lose the edge.  An empty family nothing references (a synthetic --out, as
+    the unit-test harness uses) is ignored.
+    """
+    extra = handwritten_columns(out, interps)
+    on_disk = handwritten_columns(out, INTERPRETERS)
+    notes: list[str] = []
+    for hw_base, hw_cols in sorted(extra.items()):
+        if hw_base in generated:
+            return (
+                extra,
+                f"FATAL: {hw_base} is both a hand-written dep base and a "
+                f"generated package (lock/seed) — pick one owner.",
+                notes,
+            )
+        if hw_cols:
+            notes.append(f"hand-written dep columns: {hw_base} -> {', '.join(hw_cols)} (from disk)")
+        elif on_disk.get(hw_base):
+            notes.append(
+                f"  note: hand-written dep base '{hw_base}' has no "
+                f"{'/'.join('cp' + i for i in interps)} column (on disk: "
+                f"{', '.join(on_disk[hw_base])}); dependents' columns there are pruned"
+            )
+        elif hw_base in referenced:
+            return (
+                extra,
+                f"FATAL: hand-written dep base '{hw_base}' has no "
+                f"{hw_base}-cpNNN recipes under {out}/ but packages depend "
+                f"on it — their edges cannot resolve.",
+                notes,
+            )
+        else:
+            del extra[hw_base]
+            notes.append(
+                f"  note: hand-written dep base '{hw_base}' has no columns "
+                f"under {out}/ and nothing references it; ignored"
+            )
+    return extra, None, notes
+
+
 def norm(name: str) -> str:
     """PyPI-normalize a distribution name -> cvcpkg recipe base name."""
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -2296,35 +2347,12 @@ def main() -> int:
     for m in meta.values():
         d = m["deps"]
         referenced.update(norm(x) for x in (d if isinstance(d, (list, tuple)) else d.keys()))
-    extra = handwritten_columns(out, interps)
-    for hw_base, hw_cols in sorted(extra.items()):
-        if hw_base in meta:
-            print(
-                f"FATAL: {hw_base} is both a hand-written dep base and a "
-                f"generated package (lock/seed) — pick one owner.",
-                file=sys.stderr,
-            )
-            return 1
-        if not hw_cols:
-            if hw_base in referenced:
-                print(
-                    f"FATAL: hand-written dep base '{hw_base}' has no "
-                    f"{hw_base}-cpNNN recipes under {out}/ but packages depend "
-                    f"on it — their edges cannot resolve.",
-                    file=sys.stderr,
-                )
-                return 1
-            del extra[hw_base]
-            print(
-                f"  note: hand-written dep base '{hw_base}' has no columns "
-                f"under {out}/ and nothing references it; ignored",
-                file=sys.stderr,
-            )
-            continue
-        print(
-            f"hand-written dep columns: {hw_base} -> {', '.join(hw_cols)} (from disk)",
-            file=sys.stderr,
-        )
+    extra, fatal, notes = handwritten_families(out, interps, set(meta), referenced)
+    for note in notes:
+        print(note, file=sys.stderr)
+    if fatal:
+        print(fatal, file=sys.stderr)
+        return 1
 
     cols = compute_columns(meta, interps, extra)
 

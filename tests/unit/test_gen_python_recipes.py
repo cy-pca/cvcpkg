@@ -1466,3 +1466,41 @@ def test_package_directories_keep_the_default():
         "lib/python3.12/site-packages/idna/",
         "lib/python3.12/site-packages/*.dist-info/",
     ]
+
+
+# ── hand-written dep families vs --interpreters ──────────────────────────────
+
+
+def _hw_recipe(root, name):
+    (root / name).mkdir(parents=True)
+    (root / name / "recipe.yaml").write_text("schema_version: 1\n")
+
+
+def test_handwritten_family_missing_only_for_this_run_is_pruned_not_fatal(tmp_path):
+    """--interpreters 313t against coincurve (cp311/312/313 only) used to be
+    FATAL; now the empty family is kept so dependents' 313t columns prune."""
+    for col in ("311", "312", "313"):
+        _hw_recipe(tmp_path, f"coincurve-cp{col}")
+    extra, fatal, notes = gen.handwritten_families(tmp_path, ["313t"], set(), {"coincurve"})
+    assert fatal is None
+    assert extra["coincurve"] == []
+    assert any("coincurve" in n and "pruned" in n for n in notes)
+    # Still in the universe (so dependents prune), with no column.
+    assert gen.compute_columns({}, ["313t"], extra)["coincurve"] == []
+
+
+def test_handwritten_family_absent_everywhere_and_referenced_is_fatal(tmp_path):
+    extra, fatal, _ = gen.handwritten_families(tmp_path, ["312"], set(), {"coincurve"})
+    assert fatal and "coincurve" in fatal
+
+
+def test_handwritten_family_absent_and_unreferenced_is_ignored(tmp_path):
+    extra, fatal, notes = gen.handwritten_families(tmp_path, ["312"], set(), set())
+    assert fatal is None and "coincurve" not in extra
+    assert any("ignored" in n for n in notes)
+
+
+def test_handwritten_family_that_is_also_generated_is_fatal(tmp_path):
+    _hw_recipe(tmp_path, "coincurve-cp312")
+    _, fatal, _ = gen.handwritten_families(tmp_path, ["312"], {"coincurve"}, set())
+    assert fatal and "pick one owner" in fatal
