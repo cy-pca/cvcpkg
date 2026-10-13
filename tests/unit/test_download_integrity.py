@@ -126,7 +126,8 @@ def _entry(sha: str = GOOD_SHA) -> CatalogEntry:
 
 
 def _cache_files(cache: Path) -> list[str]:
-    return sorted(str(p.relative_to(cache)) for p in cache.rglob("*") if p.is_file())
+    # as_posix(): the expectations spell the cache layout with "/", Windows with "\".
+    return sorted(p.relative_to(cache).as_posix() for p in cache.rglob("*") if p.is_file())
 
 
 TRUNCATED = (GOOD[: 1 << 16], len(GOOD))  # first chunk only, as python311 got

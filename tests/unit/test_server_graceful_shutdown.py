@@ -74,6 +74,11 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no catchable SIGTERM: Popen.send_signal(SIGTERM) is TerminateProcess on Windows, "
+    "so no server can drain there; the server is deployed on Linux",
+)
 def test_sigterm_mid_download_lets_the_body_finish(tmp_path):
     """End to end: a real server process gets SIGTERM while a client is part
     way through an archive.  The client must receive every byte."""
