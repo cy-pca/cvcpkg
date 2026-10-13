@@ -90,6 +90,15 @@ def builds_group() -> None:
     """Manage remote build jobs."""
 
 
+# Reads and writes that scale with a DAG's size.  Creating a DAG inserts one
+# row per job and resolves its edges, and listing one serializes every job, so
+# a populate-sized DAG (hundreds of jobs) on a loaded server takes well over a
+# minute.  At 30s the client gave up while the server went on to create the DAG:
+# populate-server.yml then failed without following it and skipped its later
+# platform legs, and the follow loop retried a request that could never finish.
+_DAG_HTTP_TIMEOUT = 300.0
+
+
 @builds_group.command("list")
 @click.option(
     "--server",
@@ -131,7 +140,7 @@ def builds_list(
     if recipe_name:
         params["recipe_name"] = recipe_name
     url = f"{server.rstrip('/')}/v1/builds"
-    with httpx.Client(timeout=30) as client:
+    with httpx.Client(timeout=_DAG_HTTP_TIMEOUT) as client:
         resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
     if resp.status_code >= 400:
         detail = resp.text
@@ -544,7 +553,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: float 
             if deadline is not None and time.monotonic() >= deadline:
                 return "timeout"
             try:
-                with httpx.Client(timeout=30) as client:
+                with httpx.Client(timeout=_DAG_HTTP_TIMEOUT) as client:
                     resp = client.get(
                         f"{base}/v1/builds",
                         headers=headers,
@@ -1909,6 +1918,7 @@ def builds_submit_dag(
             f"{server.rstrip('/')}/v1/builds/dag",
             token,
             json=body,
+            timeout=_DAG_HTTP_TIMEOUT,
         )
         dag_ids.append(data["dag_id"])
         _edges = sum(len(j["depends_on"]) for j in jobs)
