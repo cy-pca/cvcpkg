@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: proto-plus-cp313
   upstream_version: "1.28.1"
-  cvc_revision: 2
+  # cvc.3 (freethreaded-leak republish): the published cvc.2 any/noarch bundle
+  # installs to lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 when it was built -- so python3.13 cannot import it and cp313 builds that
+  # depend on it fail (aiokafka-cp313 on async-timeout-cp313, 2026-10-13).  Rebuilding
+  # lays it under lib/python3.13/.  Found by auditing every published cp313 bundle.
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
