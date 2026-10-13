@@ -14,13 +14,20 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 COMMON = Path(__file__).resolve().parents[2] / "recipes" / "_common"
 
-pytestmark = pytest.mark.skipif(not shutil.which("bash"), reason="the env scripts are bash")
+# These scripts run only on macOS and BSD builders; Windows builds source
+# env-windows.ps1.  On the windows-latest runners, `bash -c '. <script>'` exits 1
+# before the script runs.
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"),
+    reason="the env scripts are bash, for macOS and the BSDs",
+)
 
 _STUBS = ("clang", "clang++", "gcc", "g++", "cc", "c++")
 
