@@ -1,0 +1,416 @@
+# Build ONE recipe on linux/arm64 and throw the result away.
+#
+# linux-arm-build.yml is the only other linux/arm64 recipe path, and it
+# publishes every bundle it packs to cvcpkg.org.  That is the wrong tool for
+# "does this recipe build on linux/arm64?" and for proving a change to the
+# linux/arm64 tool setup.
+#
+# This workflow builds a single named recipe on the GitHub-hosted
+# ubuntu-22.04-arm runner linux-arm-build.yml publishes from, and never
+# publishes: no CVCPKG_PUBLISHER_TOKEN, no `cvcpkg publish`, no
+# --server-cache-push.  Its tool setup is linux-arm-build.yml's: nothing from
+# apt or pip, and cmake, ninja, pkg-config, meson, m4, flex, bison and make
+# from cvcpkg.
+#
+# Usage:
+#   gh workflow run linux-arm-recipe-check -f recipe=krb5
+#   gh workflow run linux-arm-recipe-check -f recipe=llvm18
+#   gh workflow run linux-arm-recipe-check -f recipe=automake -f deps=source
+# deps=catalog (the default) is linux-arm-build.yml's targeted path minus the
+# publish: install the recipe's PUBLISHED build + runtime closure, then
+# `cvcpkg pack` the recipe into dist/.  pack runs the glibc-floor and
+# relocatability gates.  deps=source builds the whole closure from source with
+# `cvcpkg build --with-deps` instead.
+#
+# The pull_request trigger fires only when this file or linux-arm-build.yml
+# changes.  It smoke-tests the tools tree and builds a small fixed set of
+# recipes, instead of adding arm64 jobs to every recipe PR.
+
+name: Linux arm64 recipe check
+
+on:
+  workflow_dispatch:
+    inputs:
+      recipe:
+        description: "Recipe to build (single name)"
+        required: true
+        default: "krb5"
+        type: string
+      config:
+        description: "Build config"
+        required: true
+        default: "release"
+        type: choice
+        options:
+          - release
+          - debug
+      link:
+        description: "Link mode"
+        required: true
+        default: "shared"
+        type: choice
+        options:
+          - shared
+          - static
+      deps:
+        description: "Dependency closure: install the published bundles, or build it from source"
+        required: true
+        default: "catalog"
+        type: choice
+        options:
+          - catalog
+          - source
+  pull_request:
+    paths:
+      - ".github/workflows/linux-arm-recipe-check.yml"
+      - ".github/workflows/linux-arm-build.yml"
+
+concurrency:
+  # Every input is in the key, so variants of one recipe can run side by side
+  # instead of cancelling each other.
+  group: linux-arm-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'pr' }}-${{ inputs.deps || 'catalog' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RECIPE: ${{ inputs.recipe }}
+          DEPS: ${{ inputs.deps }}
+        run: |
+          set -euo pipefail
+          # One "recipe deps" line per job.
+          if [ "$EVENT" = workflow_dispatch ]; then
+            set -- "$RECIPE $DEPS"
+          else
+            # Each recipe puts different tools to work. The tools tree serves
+            # what a recipe uses without declaring it; a depends.build tool
+            # comes from its catalog bundle in the prefix. Every job also
+            # smoke-tests the whole tree first.
+            #   krb5               autotools configure + make, with make, m4 and bison from the tree
+            #   postgresql-client  meson, ninja, flex, bison and pkg-config from the tree (host_tools)
+            #   libpng             cmake and ninja from their bundles in the prefix (depends.build)
+            #   bison              configure + make, with m4 from the tree (host_tools); bison left out
+            #   cmake              bootstrap + make, with pkg-config from the tree; cmake left out
+            set -- \
+              "krb5 catalog" \
+              "postgresql-client catalog" \
+              "libpng catalog" \
+              "bison catalog" \
+              "cmake catalog"
+          fi
+          for job in "$@"; do
+            echo "$job"
+          done | jq -R -s -c 'split("\n") | map(select(length > 0) | split(" ") | {recipe: .[0], deps: .[1]})' > matrix.json
+          cat matrix.json
+          echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.recipe }} on linux/arm64 (${{ matrix.deps }} deps)
+    needs: plan
+    # linux-arm-build.yml's runner: ubuntu-22.04-arm is glibc 2.35, the fleet
+    # floor, and its timeout, so a recipe that passes here fits there.
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cvcpkg
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet '.[remote,validate]'
+          cvcpkg --version
+
+      # The two tool-setup steps are linux-arm-build.yml's, which explains each.
+      - name: Install build tools (cvcpkg)
+        env:
+          BUILDING: ${{ matrix.recipe }}
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/cvcpkg-tools-prefix"
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
+          # A tool whose recipe this job builds is left out: building it never
+          # needs its own bundle, and leaving it out is how a bundle that cannot
+          # run here gets replaced.
+          building=" $(echo "${BUILDING:-}" | tr ',' ' ') "
+          recipes=""
+          : > "$tree/missing"
+          for r in cmake ninja pkg-config meson m4 flex bison make; do
+            case "$building" in
+              *" $r "*) echo "leaving out $r: this job builds it"; continue ;;
+            esac
+            if cvcpkg search "$r" --platform linux --arch arm64 --build-type release --link shared --limit 200 --json \
+                | python3 -c 'import json, sys; sys.exit(not any(p["name"] == sys.argv[1] for p in json.load(sys.stdin)["packages"]))' "$r"; then
+              recipes="$recipes $r"
+            else
+              echo "$r has no linux/arm64 bundle"
+              echo "$r" >> "$tree/missing"
+            fi
+          done
+          if [ -n "$recipes" ]; then
+            cvcpkg install $recipes --prefix "$prefix" --platform linux --config release --link shared
+          fi
+          cmds=""
+          for r in $recipes; do
+            case "$r" in
+              cmake) exes="cmake ctest cpack"; cp -R "$prefix"/share/cmake-* "$tree/share/" ;;
+              pkg-config) exes="pkgconf"; ln -s pkgconf "$tree/bin/pkg-config" ;;
+              meson) exes="meson"; cp -R "$prefix/lib/meson" "$tree/lib/" ;;
+              m4) exes="m4"; echo "M4=$tree/bin/m4" >> "$GITHUB_ENV" ;;
+              flex) exes="flex"; ln -s flex "$tree/bin/flex++" ;;
+              bison)
+                exes="bison"
+                cp -R "$prefix/share/bison" "$tree/share/"
+                echo "BISON_PKGDATADIR=$tree/share/bison" >> "$GITHUB_ENV" ;;
+              *) exes="$r" ;;
+            esac
+            for exe in $exes; do cp "$prefix/bin/$exe" "$tree/bin/"; done
+            if [ "$r" = pkg-config ]; then cmds="$cmds pkg-config"; else cmds="$cmds $exes"; fi
+          done
+          echo $cmds > "$tree/commands"
+          # The shared libraries the executables load from the prefix, and the
+          # ones those load.
+          elf() { [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" = 7f454c46 ]; }
+          todo=""
+          for f in "$tree"/bin/*; do
+            [ -L "$f" ] && continue
+            if elf "$f"; then todo="$todo $f"; fi
+          done
+          while [ -n "$todo" ]; do
+            next=""
+            for f in $todo; do
+              for lib in $(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'); do
+                if [ -e "$prefix/lib/$lib" ] && [ ! -e "$tree/lib/$lib" ]; then
+                  cp -L "$prefix/lib/$lib" "$tree/lib/$lib"
+                  next="$next $tree/lib/$lib"
+                fi
+              done
+            done
+            todo="$next"
+          done
+          echo "$tree/bin" >> "$GITHUB_PATH"
+          echo "tools: $cmds"
+          echo "libraries: $(cd "$tree/lib" && ls -p | grep -v / | tr '\n' ' ')"
+
+      - name: Check build tools come from cvcpkg
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          rc=0
+          for r in $(cat "$tree/missing"); do
+            echo "::error::cvcpkg has no linux/arm64 $r bundle, so $r cannot come from cvcpkg: publish one (linux-arm-build.yml with recipes=$r)"
+            rc=1
+          done
+          for t in $(cat "$tree/commands"); do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$tree/bin/"*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
+            esac
+          done
+          # A tool from the tree may load only glibc and the compiler runtime
+          # from the system, and everything else from the tree. Anything else,
+          # whether a library the runner image happens to have or nothing at all
+          # because a RUNPATH points into the machine that built the bundle,
+          # means the bundle cannot run on a clean system.
+          elf() { [ "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" = 7f454c46 ]; }
+          system_lib() {
+            case "$1" in
+              ld-linux*.so.*|libc.so.6|libm.so.6|libmvec.so.1|libdl.so.2|libpthread.so.0|librt.so.1|libresolv.so.2|libutil.so.1|libanl.so.1) return 0 ;;
+              libgcc_s.so.1|libstdc++.so.6|libatomic.so.1|libgomp.so.1) return 0 ;;
+            esac
+            return 1
+          }
+          for f in "$tree"/bin/* "$tree"/lib/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] && elf "$f" || continue
+            name=$(basename "$f")
+            runpath=$(readelf -d "$f" | sed -n 's/.*(R\(UN\)\{0,1\}PATH).*\[\(.*\)\]$/\2/p' | paste -sd: -)
+            # Only what this file itself needs: a library's own needs are
+            # checked, and blamed on its bundle, when the loop reaches it.
+            needed=" $(readelf -d "$f" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p' | tr '\n' ' ') "
+            while read -r lib arrow path _; do
+              [ "$arrow" = "=>" ] || continue
+              case "$needed" in *" $lib "*) ;; *) continue ;; esac
+              case "$path" in
+                "$tree"/lib/*) continue ;;
+                not) why="nothing provides it" ;;
+                *)
+                  if system_lib "$lib"; then continue; fi
+                  why="it comes from the system's $path, which is not glibc or the compiler runtime" ;;
+              esac
+              case "$name" in
+                ctest|cpack) recipe=cmake ;;
+                pkgconf) recipe=pkg-config ;;
+                libcurl*) recipe=curl ;;
+                libssl*|libcrypto*) recipe=openssl ;;
+                *) recipe=$name ;;
+              esac
+              echo "::error::$name needs $lib, and $why (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux-$(uname -m) needs republishing"
+              rc=1
+            done < <(env -u LD_LIBRARY_PATH -u LD_PRELOAD ldd "$f" 2>/dev/null || true)
+          done
+          [ "$rc" = 0 ] || exit 1
+          has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
+          if has cmake; then cmake --version | sed -n 1p; fi
+          if has ninja; then echo "ninja $(ninja --version)"; fi
+          if has pkg-config; then echo "pkg-config $(pkg-config --version)"; fi
+          if has meson; then echo "meson $(meson --version)"; fi
+          if has m4; then m4 --version | sed -n 1p; fi
+          if has flex; then flex --version; fi
+          if has bison; then bison --version | sed -n 1p; fi
+          if has make; then make --version | sed -n 1p; fi
+          # Not from cvcpkg: the compiler, and what runs cvcpkg and the scripts.
+          for t in cc gcc g++ ld readelf bash perl python3; do echo "$t -> $(command -v "$t" || echo none)"; done
+          # Build tools recipes take from their cvcpkg bundles (depends.build),
+          # not from this tree. Any copy the runner image has is listed here.
+          for t in autoconf autoreconf automake aclocal libtool libtoolize makeinfo msgfmt gperf nasm yasm patchelf zstd rsync file; do
+            got=$(command -v "$t" || true)
+            if [ -n "$got" ]; then echo "image has $t: $got"; fi
+          done
+
+      # Versions prove the tools start; this proves they work from the tree,
+      # far from the prefix they were built in: cmake (and the libcurl it
+      # loads), meson and make drive builds, bison and flex find their m4 and
+      # skeletons.
+      - name: Smoke-test the build tools
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          # A tool this job builds itself is not in the tree; skip what needs it.
+          has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
+          work=$(mktemp -d)
+          cd "$work"
+          printf 'int main(void) { return 0; }\n' > t.c
+          printf 'cmake_minimum_required(VERSION 3.20)\nproject(t C)\nadd_executable(t t.c)\n' > CMakeLists.txt
+          printf "project('t', 'c')\nexecutable('t', 't.c')\n" > meson.build
+          printf 't: t.c\n\t$(CC) -o $@ t.c\n' > Makefile
+          mkdir pc
+          printf 'Name: t\nDescription: t\nVersion: 1.2.3\nCflags: -I/t\n' > pc/t.pc
+          cat > calc.y <<'EOF'
+          %{
+          #include <stdio.h>
+          int yylex(void);
+          static void yyerror(const char *s) { fprintf(stderr, "%s\n", s); }
+          %}
+          %token NUM
+          %left '+'
+          %%
+          line: expr '\n' { printf("%d\n", $1); } ;
+          expr: NUM | expr '+' expr { $$ = $1 + $3; } ;
+          %%
+          int main(void) { return yyparse(); }
+          EOF
+          cat > calc.l <<'EOF'
+          %{
+          #include "calc.tab.h"
+          %}
+          %option noyywrap nounput noinput
+          %%
+          [0-9]+  { yylval = atoi(yytext); return NUM; }
+          [+\n]   { return yytext[0]; }
+          [ \t]   ;
+          %%
+          EOF
+          if has cmake && has ninja; then
+            cmake -G Ninja -S . -B cmake-build
+            cmake --build cmake-build
+          fi
+          if has cmake && has make; then
+            cmake -G "Unix Makefiles" -S . -B cmake-make-build
+            cmake --build cmake-make-build
+          fi
+          if has meson && has ninja; then
+            meson setup meson-build
+            ninja -C meson-build
+          fi
+          if has make; then
+            make CC=cc t
+            ./t
+          fi
+          if has pkg-config; then
+            test "$(PKG_CONFIG_PATH="$work/pc" pkg-config --modversion t)" = 1.2.3
+          fi
+          if has m4; then
+            test "$(printf 'define(`x'"'"', `ok'"'"')x\n' | m4)" = ok
+          fi
+          if has bison && has flex && has m4; then
+            bison -d calc.y
+            flex calc.l
+            cc -o calc calc.tab.c lex.yy.c
+            test "$(echo '1 + 2' | ./calc)" = 3
+          fi
+          echo "smoke-tested: $(cat "$tree/commands")"
+
+      - name: Runner resources
+        run: |
+          echo "cpus: $(nproc)"
+          free -h
+          df -h / "$RUNNER_TEMP" "$GITHUB_WORKSPACE"
+          echo "glibc: $(ldd --version | head -1)"
+
+      - name: Validate recipe
+        env:
+          RECIPE: ${{ matrix.recipe }}
+        run: cvcpkg validate "recipes/$RECIPE"
+
+      - name: Build ${{ matrix.recipe }}
+        env:
+          RECIPE: ${{ matrix.recipe }}
+          CONFIG: ${{ inputs.config || 'release' }}
+          LINK: ${{ inputs.link || 'shared' }}
+          DEPS: ${{ matrix.deps }}
+        run: |
+          set -euo pipefail
+          prefix="$GITHUB_WORKSPACE/prefix"
+          dist="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$prefix" "$dist"
+          if [ "$DEPS" = catalog ]; then
+            # Install the recipe's PUBLISHED build + runtime closure (its
+            # depends.build tools included, on a native build), then pack only
+            # the recipe against it, into dist/ and nowhere else.
+            echo "::group::cvcpkg install-deps recipes/$RECIPE --platform linux --link $LINK"
+            cvcpkg install-deps "recipes/$RECIPE" --platform linux --config "$CONFIG" \
+              --link "$LINK" --prefix "$prefix" --recipes-dir recipes
+            echo "::endgroup::"
+            echo "cvcpkg pack recipes/$RECIPE --platform linux --link $LINK"
+            cvcpkg pack "recipes/$RECIPE" --platform linux --config "$CONFIG" \
+              --link "$LINK" --prefix "$prefix" --output-dir "$dist" --recipes-dir recipes
+          else
+            # Build the whole closure from source first, in topological order.
+            echo "cvcpkg build $RECIPE --with-deps --platform linux --link $LINK"
+            cvcpkg build "$RECIPE" --local --recipes-dir recipes --config "$CONFIG" \
+              --prefix "$prefix" --platform linux --link "$LINK" --with-deps
+          fi
+
+      - name: Show the packed bundle
+        if: always()
+        run: |
+          shopt -s nullglob
+          archives=("$GITHUB_WORKSPACE"/dist/*.tar.gz)
+          if [ ${#archives[@]} -eq 0 ]; then
+            echo "no bundle in dist/"
+            exit 0
+          fi
+          for a in "${archives[@]}"; do
+            ls -l "$a"
+            tar -tzf "$a" | sort
+          done
