@@ -237,6 +237,16 @@ the requested arch list. The runner pin matters: 22.04 is glibc 2.35, the
 fleet floor — a 24.04-arm runner (glibc 2.39) would emit `GLIBC_2.38+`
 references that `cvcpkg pack` rejects outright.
 
+Nothing on that runner comes from apt or pip. The image's own build tools are
+moved aside, cmake, ninja, pkg-config, meson, m4, flex, bison, make and
+patchelf are installed from cvcpkg into a tree that holds only them, and the
+job fails if a build tool resolves anywhere else or a tool from the tree loads
+anything from the system besides glibc and the compiler runtime. The image's
+gcc/g++ is the one build tool taken from the system.
+`linux-arm-recipe-check.yml` builds recipes with the same setup and never
+publishes; use it to prove a recipe or a change to the setup before
+`linux-arm-build.yml` publishes anything.
+
 ## Multi-tenant / shared fleet
 
 A builder can serve **several namespaces** and register with **several servers**

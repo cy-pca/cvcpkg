@@ -9,8 +9,8 @@
 # runner linux-arm-build.yml publishes from, and never publishes: no
 # CVCPKG_PUBLISHER_TOKEN, no `cvcpkg publish`, no --server-cache-push.  Its tool
 # setup is linux-arm-build.yml's: the image's own build tools moved aside,
-# nothing from apt or pip, and cmake, ninja, pkg-config, meson, m4, flex, bison
-# and make from cvcpkg.
+# nothing from apt or pip, and cmake, ninja, pkg-config, meson, m4, flex, bison,
+# make and patchelf from cvcpkg.
 #
 # Usage:
 #   gh workflow run linux-arm-recipe-check -f recipe=krb5
@@ -99,10 +99,13 @@ jobs:
             # what a recipe uses without declaring it; a depends.build tool
             # comes from its catalog bundle in the prefix. Every job also
             # smoke-tests the whole tree first.
-            #   cmake              bootstrap + make, with pkg-config from the tree
-            #   krb5               autotools configure + make, with make, m4 and bison from the tree
-            #   postgresql-client  meson, ninja, flex, bison and pkg-config from the tree (host_tools)
-            #   bison              configure + make, with m4 from the tree (host_tools)
+            #   cmake    bootstrap + make, with pkg-config from the tree
+            #   krb5     autotools configure + make, with make, m4 and bison from the
+            #            tree, and patchelf from the tree for pack's RUNPATH rewrite
+            #   pixman   meson, ninja and pkg-config from their bundles (depends.build)
+            #   bison    configure + make, with m4 from the tree (host_tools)
+            #   llvm18   cmake and ninja from the tree (here, the prefix's fresh cmake);
+            #            measures whether it fits linux-arm-build.yml's 300 minutes
             # Every job builds cmake first, until the linux/arm64 cmake bundle
             # is republished: 3.31.7+cvc.1 has RUNPATH
             # /home/runner/work/libcvc-deps/libcvc-deps/prefix/lib and loads the
@@ -111,8 +114,9 @@ jobs:
             set -- \
               "cmake catalog" \
               "cmake,krb5 catalog" \
-              "cmake,postgresql-client catalog" \
-              "cmake,bison catalog"
+              "cmake,pixman catalog" \
+              "cmake,bison catalog" \
+              "cmake,llvm18 catalog"
           fi
           for job in "$@"; do
             echo "$job"
@@ -150,12 +154,12 @@ jobs:
           python-version: "3.12"
 
       # The three tool-setup steps are linux-arm-build.yml's, which explains each.
-      # The runner image ships build tools of its own, installed with apt when
-      # the image was made: autoconf, automake, libtoolize, makeinfo and
-      # patchelf in /usr/bin among them. Move every copy aside for every later
-      # step, so a recipe that uses one without declaring it fails instead of
-      # building with the image's; "Check build tools come from cvcpkg" fails if
-      # one is still reachable. What stays is the system compiler (gcc/g++, with
+      # The runner image ships build tools of its own: cmake and ninja in
+      # /usr/local/bin, and make, m4, flex, bison, pkg-config, autoconf,
+      # automake, libtoolize, makeinfo and patchelf in /usr/bin. Move every copy
+      # aside for every later step, so a recipe that uses one without declaring
+      # it fails instead of building with the image's; "Check build tools come
+      # from cvcpkg" fails if one is still reachable. What stays is the system compiler (gcc/g++, with
       # binutils and glibc), the one build tool taken from the system; the
       # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
       # rsync and file, which no recipe build runs except emsdk's build.sh, which
@@ -172,6 +176,7 @@ jobs:
           for d in "${dirs[@]}"; do
             [ -d "$d" ] || continue
             for p in $(printf "$d/%s " $IMAGE_BUILD_TOOLS) "$d"/automake-[0-9]* "$d"/aclocal-[0-9]* "$d"/*-pkg-config; do
+              case "$p" in *.hidden-from-builds) continue ;; esac
               if [ -e "$p" ] || [ -L "$p" ]; then
                 sudo mv "$p" "$p.hidden-from-builds"
                 echo "moved aside: $p"
@@ -199,7 +204,7 @@ jobs:
           building=" $(echo "${BUILDING:-}" | tr ',' ' ') "
           recipes=""
           : > "$tree/missing"
-          for r in cmake ninja pkg-config meson m4 flex bison make; do
+          for r in cmake ninja pkg-config meson m4 flex bison make patchelf; do
             case "$building" in
               *" $r "*) echo "leaving out $r: this job builds it"; continue ;;
             esac
@@ -339,11 +344,12 @@ jobs:
           if has flex; then flex --version; fi
           if has bison; then bison --version | sed -n 1p; fi
           if has make; then make --version | sed -n 1p; fi
+          if has patchelf; then patchelf --version; fi
 
       # Versions prove the tools start; this proves they work from the tree,
       # far from the prefix they were built in: cmake (and the libcurl it
-      # loads), meson and make drive builds, bison and flex find their m4 and
-      # skeletons.
+      # loads), meson and make drive builds, patchelf rewrites a RUNPATH, bison
+      # and flex find their m4 and skeletons.
       - name: Smoke-test the build tools
         run: |
           set -euo pipefail
@@ -398,6 +404,11 @@ jobs:
           if has make; then
             make CC=cc t
             ./t
+            if has patchelf; then
+              patchelf --set-rpath '$ORIGIN' t
+              test "$(patchelf --print-rpath t)" = '$ORIGIN'
+              ./t
+            fi
           fi
           if has pkg-config; then
             test "$(PKG_CONFIG_PATH="$work/pc" pkg-config --modversion t)" = 1.2.3

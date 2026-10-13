@@ -153,12 +153,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      # The runner image ships build tools of its own, installed with apt when
-      # the image was made: autoconf, automake, libtoolize, makeinfo and
-      # patchelf in /usr/bin among them. Move every copy aside for every later
-      # step, so a recipe that uses one without declaring it fails instead of
-      # building with the image's; "Check build tools come from cvcpkg" fails if
-      # one is still reachable. What stays is the system compiler (gcc/g++, with
+      # The runner image ships build tools of its own: cmake and ninja in
+      # /usr/local/bin, and make, m4, flex, bison, pkg-config, autoconf,
+      # automake, libtoolize, makeinfo and patchelf in /usr/bin. Move every copy
+      # aside for every later step, so a recipe that uses one without declaring
+      # it fails instead of building with the image's; "Check build tools come
+      # from cvcpkg" fails if one is still reachable. What stays is the system compiler (gcc/g++, with
       # binutils and glibc), the one build tool taken from the system; the
       # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
       # rsync and file, which no recipe build runs except emsdk's build.sh, which
@@ -175,6 +175,7 @@ jobs:
           for d in "${dirs[@]}"; do
             [ -d "$d" ] || continue
             for p in $(printf "$d/%s " $IMAGE_BUILD_TOOLS) "$d"/automake-[0-9]* "$d"/aclocal-[0-9]* "$d"/*-pkg-config; do
+              case "$p" in *.hidden-from-builds) continue ;; esac
               if [ -e "$p" ] || [ -L "$p" ]; then
                 sudo mv "$p" "$p.hidden-from-builds"
                 echo "moved aside: $p"
@@ -190,13 +191,16 @@ jobs:
 
       # Build tools from cvcpkg, not apt or pip: cmake (3.31.7, the version
       # Boost 1.86's configs expect), ninja, pkg-config (pkgconf), meson, m4,
-      # flex, bison and make. build-essential went with the rest of the apt
-      # list: the image already has gcc and g++, and make comes from cvcpkg.
+      # flex, bison, make and patchelf. build-essential went with the rest of
+      # the apt list: the image already has gcc and g++, and make comes from
+      # cvcpkg.
       #
       # The tree serves what recipes use without a depends.build entry: cmake
       # and ninja for llvm18 and the other LLVMs, make for every autotools
       # build, m4 and bison for krb5, and the host_tools of bison, libtool and
-      # postgresql-*, which install-deps does not install. A tool a recipe
+      # postgresql-*, which install-deps does not install. patchelf is what
+      # `cvcpkg pack` itself rewrites shared libraries' RUNPATHs with, and it
+      # looks for one on PATH when the prefix has none. A tool a recipe
       # declares in depends.build comes from its bundle in the prefix, which
       # is ahead of this tree on PATH. autoconf, automake and libtool are only
       # ever used that way (nfft3, swig), and so is gettext's msgfmt
@@ -235,7 +239,7 @@ jobs:
           building=" $(echo "${BUILDING:-}" | tr ',' ' ') "
           recipes=""
           : > "$tree/missing"
-          for r in cmake ninja pkg-config meson m4 flex bison make; do
+          for r in cmake ninja pkg-config meson m4 flex bison make patchelf; do
             case "$building" in
               *" $r "*) echo "leaving out $r: this job builds it"; continue ;;
             esac
@@ -375,6 +379,7 @@ jobs:
           if has flex; then flex --version; fi
           if has bison; then bison --version | sed -n 1p; fi
           if has make; then make --version | sed -n 1p; fi
+          if has patchelf; then patchelf --version; fi
 
       - name: Build shard ${{ matrix.shard }} (pack-all)
         env:
