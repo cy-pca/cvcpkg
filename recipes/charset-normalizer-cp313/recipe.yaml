@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: charset-normalizer-cp313
   upstream_version: "3.4.9"
-  cvc_revision: 3
+  # cvc.4 (debug-twin republish): the cvc.3 release bundle is fine, but its
+  # same-version debug bundle installs to lib/python3.13t, and builders before #217
+  # could install that debug row for a release job (hatchling-cp313 failed on
+  # trove-classifiers-cp313 this way, 2026-10-13).  A newer release revision wins
+  # outright.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
