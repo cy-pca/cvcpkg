@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: maturin-cp313
   upstream_version: "1.14.1"
-  cvc_revision: 1
+  # cvc.2 (macOS republish): the published cvc.1 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.1 is fine; this revision is for macOS.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
