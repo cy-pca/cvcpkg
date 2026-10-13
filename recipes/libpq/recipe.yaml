@@ -78,11 +78,12 @@ build:
 
 package:
   files:
+    # build.sh passes --libdir=lib, so libpq lands in lib/ on every builder
+    # (meson's default is lib/<multiarch>/ on Debian-family hosts, which left
+    # half of these globs matching nothing whichever host built it).
     - lib/libpq*
-    - lib/*/libpq*
-    - lib/pq*
+    - { glob: "lib/pq*", platforms: [windows] }
     - lib/pkgconfig/libpq.pc
-    - lib/*/pkgconfig/libpq.pc
     - include/libpq-fe.h
     - include/libpq-events.h
     - include/libpq/
