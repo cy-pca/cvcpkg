@@ -745,11 +745,12 @@ def pack(
       cvcpkg pack cvcpkg/recipes/libcvc --from-prefix stage \\
           --bump --server https://cvcpkg.org --org cvc --output-dir dist
     """
-    from cvcpkg.builder import Recipe, pack_from_prefix, pack_recipe
-    from cvcpkg.platform import detect_arch
+    from cvcpkg.builder import Recipe, _detect_arch_for_platform, pack_from_prefix, pack_recipe
 
     plat = _auto_platform(platform)
-    arch = detect_arch()
+    # The arch the bundle is tagged with (wasm32 for wasm), not the host's: the
+    # --bump revision lookup must ask about the variant being packed.
+    arch = _detect_arch_for_platform(plat)
 
     if bump and cvc_revision is not None:
         raise click.UsageError("--bump and --cvc-revision are mutually exclusive.")
@@ -1663,20 +1664,20 @@ def next_revision_cmd(
       REV=$(cvcpkg next-revision libcvc --server https://cvcpkg.org --org cvc)
       cvcpkg pack cvcpkg/recipes/libcvc --from-prefix stage --cvc-revision "$REV" ...
     """
-    from cvcpkg.builder import Recipe
+    from cvcpkg.builder import Recipe, _detect_arch_for_platform
     from cvcpkg.config import default_server_url
-    from cvcpkg.platform import detect_arch
     from cvcpkg.revisions import compute_pack_revision
 
     recipe_dir = _resolve_recipe_dir(recipe_name, recipes_dirs, no_default=no_default_recipes)
     recipe = Recipe.load(recipe_dir)
+    plat = _auto_platform(platform)
     rev = compute_pack_revision(
         recipe,
         server=server or default_server_url(),
         org=org,
         token=token,
-        platform=_auto_platform(platform),
-        arch=detect_arch(),
+        platform=plat,
+        arch=_detect_arch_for_platform(plat),
         build_type=config,
         link=link,
         scope=bump_scope,
@@ -1759,9 +1760,8 @@ def cascade_bump_cmd(
       cvcpkg cascade-bump libcvc --server https://cvcpkg.org --org cvc
       cvcpkg cascade-bump libcvc --offline          # plain +1, no server
     """
-    from cvcpkg.builder import Recipe, rev_bump
+    from cvcpkg.builder import Recipe, _detect_arch_for_platform, rev_bump
     from cvcpkg.config import default_server_url
-    from cvcpkg.platform import detect_arch
     from cvcpkg.revisions import compute_pack_revision
 
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
@@ -1771,8 +1771,8 @@ def cascade_bump_cmd(
             recipes_dir = rd
 
     srv = "" if offline else (server or default_server_url())
-    arch = detect_arch()
     plat = _auto_platform(platform)
+    arch = _detect_arch_for_platform(plat)
 
     def _revision_for(recipe: Recipe) -> int:
         if not srv:

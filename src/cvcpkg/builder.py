@@ -3641,19 +3641,22 @@ def pack_recipe(
     what lets ``builds submit-dag`` schedule such a recipe once and publish it
     once, rather than fanning out an arch-pinned bundle per host.
     """
-    from cvcpkg.platform import detect_arch, detect_platform
+    from cvcpkg.platform import detect_platform
 
     recipe = Recipe.load(recipe_dir)
     # Before the build: no point downloading a toolkit only to refuse it.
     ensure_redistributable(recipe)
 
-    if not arch:
-        arch = detect_arch()
     # The platform this bundle is being built FOR; empty means "this host".
     target_platform = platform or detect_platform()
     # The host we actually build on. "any" is not a real host, so fall back to
     # the detected platform for the compile/install step.
     build_platform = detect_platform() if target_platform == "any" else target_platform
+    if not arch:
+        # From the platform being built, not the host: a wasm bundle packed on an
+        # x86_64 host is wasm32, as pack_from_prefix and install already have it.
+        # detect_arch() here tagged it x86_64, so it never resolved for consumers.
+        arch = _detect_arch_for_platform(build_platform)
     # The package identity follows the matrix entry that drives THIS build: a
     # target served by the `any` fallback publishes one noarch bundle shared by
     # every such target, a target with its own entry publishes under that name.
@@ -3779,6 +3782,29 @@ def pack_recipe(
     return archive_path, sha256, size
 
 
+def _other_bundle_manifests(prefix: Path, name: str) -> list[str]:
+    """Packages other than *name* with a cvcpkg manifest installed in *prefix*.
+
+    Looks where installed bundles keep theirs: ``share/libcvc-deps/<pkg>/manifest.yaml``,
+    and the flat ``share/libcvc-deps/manifest.yaml`` of older bundles (named by its
+    ``bundle.name``).  *name*'s own manifest, e.g. from re-packing an installed
+    copy, is not counted.
+    """
+    meta = prefix / "share" / "libcvc-deps"
+    if not meta.is_dir():
+        return []
+    others = [m.parent.name for m in sorted(meta.glob("*/manifest.yaml")) if m.parent.name != name]
+    flat = meta / "manifest.yaml"
+    if flat.is_file():
+        try:
+            owner = (yaml.safe_load(flat.read_text(encoding="utf-8")) or {})["bundle"]["name"]
+        except (OSError, yaml.YAMLError, KeyError, TypeError):
+            owner = ""
+        if owner != name:
+            others.append(owner or "share/libcvc-deps/manifest.yaml")
+    return others
+
+
 def pack_from_prefix(
     recipe_dir: Path,
     prefix: Path,
@@ -3829,13 +3855,24 @@ def pack_from_prefix(
         ``(archive_path, sha256, size_bytes)`` — same shape as
         :func:`pack_recipe`.
     """
-    from cvcpkg.platform import detect_arch
-
     if not prefix.is_dir():
         raise RecipeError(f"prefix directory does not exist: {prefix}")
 
     recipe = Recipe.load(recipe_dir)
     ensure_redistributable(recipe)
+
+    # The whole prefix is staged, so another package's manifest in it would ship
+    # in this bundle: installing it overwrites that package's record, and publish
+    # cannot tell which manifest is the bundle's (it refuses such archives).
+    others = _other_bundle_manifests(prefix, recipe.name)
+    if others:
+        raise PackError(
+            f"{recipe.name}: --from-prefix {prefix} also holds the cvcpkg manifests of "
+            f"{', '.join(others)}, so the bundle would carry those packages too. This is "
+            "a prefix with dependencies installed in it, not this package's install "
+            "tree: pack from a directory holding only what its build installed (or run "
+            "`cvcpkg pack` without --from-prefix, which isolates the install itself)."
+        )
 
     if version_override:
         # Preserve the recipe's ``+cvc.<rev>`` cvc_revision suffix so the

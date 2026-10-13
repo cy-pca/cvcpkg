@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import click
@@ -110,9 +111,10 @@ def publish(
     Passing archive file paths directly still works but is deprecated
     and will be removed in a future release.
 
-    **Server mode** (``--server``): reads the embedded manifest.yaml
-    from each archive to extract component metadata, then uploads to
-    the cvcpkg-server REST API.  Small archives (< 10 MB) upload in
+    **Server mode** (``--server``): reads the bundle's own manifest.yaml
+    (``share/libcvc-deps/<name>/``) from each archive to extract component
+    metadata, then uploads to the cvcpkg-server REST API.  An archive that
+    carries several packages' manifests is refused.  Small archives (< 10 MB) upload in
     a single request; larger archives use chunked upload with resume.
 
     **Storage-backend mode** (``--dest``): uploads archive files to a
@@ -145,10 +147,11 @@ def publish(
     if not packages and not publish_all:
         raise click.UsageError("provide recipe names, archive paths, or use --all.")
 
-    from cvcpkg.platform import detect_arch
+    from cvcpkg.builder import _detect_arch_for_platform
 
     plat = _auto_platform(platform)
-    arc = detect_arch()
+    # The arch pack tags bundles with (wasm32 for wasm), not the host's.
+    arc = _detect_arch_for_platform(plat)
 
     # Resolve each package argument to archive file path(s).
     if publish_all:
@@ -408,8 +411,19 @@ def _resolve_all_archives(
     return [m for m in matches if m.is_file() and not m.name.endswith(".sig")]
 
 
+# Where a bundle keeps its own manifest: share/libcvc-deps/<name>/manifest.yaml
+# (stage_bundle), or the flat share/libcvc-deps/manifest.yaml of older bundles.
+_BUNDLE_MANIFEST_RE = re.compile(r"^(?:\./)?share/libcvc-deps/(?:[^/]+/)?manifest\.yaml$")
+
+
 def _extract_manifest(archive_path: Path) -> dict:
-    """Extract manifest.yaml from a cvcpkg archive.
+    """Extract the bundle's own manifest.yaml from a cvcpkg archive.
+
+    That is the one under ``share/libcvc-deps/`` (:data:`_BUNDLE_MANIFEST_RE`); an
+    archive with none there falls back to the first ``manifest.yaml`` anywhere in
+    it.  An archive carrying the manifests of several packages is refused (see
+    :func:`_bundle_manifest`) instead of being published under whichever sorts
+    first.
 
     The reader is chosen by magic bytes, not the suffix: an archive fetched
     back from cvcpkg.org carries the server's ``.tar.zst`` storage name even
@@ -421,31 +435,72 @@ def _extract_manifest(archive_path: Path) -> dict:
     from cvcpkg._archive import archive_format, open_tar
     from cvcpkg.errors import InstallError
 
-    manifest = None
+    found: list[tuple[str, bytes]] = []  # share/libcvc-deps manifests, archive order
+    fallback: bytes | None = None  # the first other *manifest.yaml
     try:
         fmt = archive_format(archive_path)
         if fmt == "zip":
             with zipfile.ZipFile(archive_path) as zf:
                 for entry in zf.namelist():
-                    if entry.endswith("manifest.yaml"):
-                        manifest = yaml.safe_load(zf.read(entry))
-                        break
+                    if _BUNDLE_MANIFEST_RE.match(entry):
+                        found.append((entry, zf.read(entry)))
+                    elif fallback is None and entry.endswith("manifest.yaml"):
+                        fallback = zf.read(entry)
         else:
             with open_tar(archive_path, fmt=fmt) as tf:
                 for member in tf.getmembers():
-                    if member.name.endswith("manifest.yaml"):
-                        f = tf.extractfile(member)
-                        if f:
-                            manifest = yaml.safe_load(f.read())
-                        break
+                    own = _BUNDLE_MANIFEST_RE.match(member.name) is not None
+                    other = fallback is None and member.name.endswith("manifest.yaml")
+                    if not (own or other):
+                        continue
+                    f = tf.extractfile(member)
+                    data = f.read() if f else b""
+                    if own:
+                        found.append((member.name, data))
+                    else:
+                        fallback = data
     except (tarfile.TarError, zipfile.BadZipFile, InstallError) as exc:
         raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}") from exc
+
+    if found:
+        manifest = _bundle_manifest(archive_path, found)
+    else:
+        manifest = yaml.safe_load(fallback) if fallback else None
 
     if not manifest:
         raise click.ClickException(
             f"{archive_path.name}: no manifest.yaml found -- is this a cvcpkg archive?"
         )
     return manifest
+
+
+def _bundle_manifest(archive_path: Path, found: list[tuple[str, bytes]]) -> dict | None:
+    """The single package manifest among *found* (``(member name, bytes)`` pairs).
+
+    A bundle carries one: its own.  Manifests of several packages mean the archive
+    is a prefix with other packages installed in it -- e.g. ``pack --from-prefix``
+    of a dependency closure -- holding their files as well, and taking the first
+    one published such a pycvc-gl bundle as ``assimp``.  So that is refused.  The
+    same package's per-name and older flat copies together are fine; the per-name
+    one wins.
+    """
+    by_pkg: dict[str, list[tuple[str, dict]]] = {}
+    for entry, raw in found:
+        manifest = yaml.safe_load(raw)
+        bundle = manifest.get("bundle") if isinstance(manifest, dict) else None
+        pkg = str(bundle.get("name", "")) if isinstance(bundle, dict) else ""
+        by_pkg.setdefault(pkg, []).append((entry, manifest))
+    if len(by_pkg) > 1:
+        names = sorted(p or "<unnamed>" for p in by_pkg)
+        shown = ", ".join(names[:10]) + (f", ... ({len(names)} in all)" if len(names) > 10 else "")
+        raise click.ClickException(
+            f"{archive_path.name}: carries the manifests of {len(names)} packages ({shown}); "
+            "a bundle carries only its own. It holds those packages' files too -- typically "
+            "`cvcpkg pack --from-prefix` of a prefix with dependencies installed in it. "
+            "Re-pack from this package's install tree alone."
+        )
+    (entries,) = by_pkg.values()
+    return max(entries, key=lambda e: e[0].count("/"))[1]
 
 
 def _variant_exists(
