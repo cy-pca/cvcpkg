@@ -12,6 +12,20 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 
+# cvcpkg's bison bakes its own build-time prefix in as the location of its
+# m4 skeletons and of m4; point it at the relocated copies (as mariadb-server,
+# mesa and gstreamer do), never at the host's.
+for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+    [[ -n "${_root}" ]] || continue
+    if [[ -d "${_root}/share/bison" && -z "${BISON_PKGDATADIR:-}" ]]; then
+        export BISON_PKGDATADIR="${_root}/share/bison"
+    fi
+    if [[ -x "${_root}/bin/m4" && -z "${M4:-}" ]]; then
+        export M4="${_root}/bin/m4"
+    fi
+done
+unset _root
+
 # krb5 ships its configure inside the src/ subdirectory.
 cd "${CVC_SOURCE_DIR}/src"
 
@@ -28,3 +42,8 @@ cd "${CVC_SOURCE_DIR}/src"
 
 make -j "${CVC_JOBS}"
 make install
+
+# Ensure installed .pc/.cmake files are relocatable.  Without this the
+# krb5*.pc files kept the builder's temporary install dir as prefix=, so a
+# consumer that finds GSSAPI through pkg-config (libpq) got a dead -I path.
+cvc_rewrite_install_paths

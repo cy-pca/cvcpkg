@@ -29,12 +29,11 @@ depends:
     - pkg-config
     - bison
     - flex
-    # build.sh passes -Dreadline=enabled, which only affects psql -- and this
-    # recipe ships just lib/libpq* + headers, not bin/psql.  libpq itself does
-    # not link readline, so it is build-time only and must not ship.
-    - name: readline
-      version: "^8.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    # bison runs m4 at build time (as mariadb-server and mesa declare).
+    - m4
+    # No readline: it is psql's line editor, libpq never links it, and this
+    # recipe ships just lib/libpq* + headers, not bin/psql.  build.sh passes
+    # -Dreadline=disabled (as build.ps1 already does).
   runtime:
     - name: openssl
       version: "^3.0"
