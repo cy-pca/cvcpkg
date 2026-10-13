@@ -73,3 +73,8 @@ for lib in ncurses form menu panel; do
         [[ -e "lib${lib}${suf}" ]] || ln -sf "lib${lib}w${suf}" "lib${lib}${suf}" 2>/dev/null || true
     done
 done
+
+# Relocate installed .pc/.cmake files and bin/*-config scripts, which keep this
+# build's temporary install dir otherwise (recipes/_common/rewrite-install-paths.sh).
+. "$(cd "$(dirname "$0")" && pwd)/../_common/rewrite-install-paths.sh"
+cvc_rewrite_install_paths
