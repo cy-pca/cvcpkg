@@ -1427,3 +1427,42 @@ class TestUnbuildableSdist:
         assert gen.source_mode_for(
             "widget", kind="pure", has_sdist=True, missing=[], pure_policy="sdist"
         ) == ("sdist", "built from the PyPI sdist")
+
+
+# ── single-file modules from poetry.lock ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "base,module", [("six", "six"), ("typing-extensions", "typing_extensions")]
+)
+@pytest.mark.parametrize("interp", INTERPS)
+def test_lock_single_module_globs_name_the_file_not_a_dir(base, module, interp):
+    """six and typing-extensions install one top-level .py file.  Without a
+    seed of their own they used to get the "<module>/" default, which matches
+    nothing and fails a strict-globs build (six-cp313, 2026-10-13)."""
+    ver = gen.col_version(interp)
+    globs = gen._files_globs({}, base, interp, windows=True)
+    assert f"lib/python{ver}/site-packages/{module}.py" in globs
+    assert f"Lib/site-packages/{module}.py" in globs
+    assert not any(g.endswith(f"/{module}/") for g in globs)
+
+
+def test_seed_files_override_also_drives_windows_globs():
+    """A seed's "files" list is used for the Windows Lib/ layout too, not just
+    the POSIX one (mypy_extensions.py, not mypy_extensions/)."""
+    globs = gen._files_globs(
+        {"files": ["mypy_extensions.py", "mypy_extensions-*.dist-info/"]},
+        "mypy-extensions",
+        "312",
+        windows=True,
+    )
+    assert "Lib/site-packages/mypy_extensions.py" in globs
+    assert "Lib/site-packages/mypy_extensions/" not in globs
+
+
+def test_package_directories_keep_the_default():
+    globs = gen._files_globs({}, "idna", "312", windows=False)
+    assert globs[:2] == [
+        "lib/python3.12/site-packages/idna/",
+        "lib/python3.12/site-packages/*.dist-info/",
+    ]
