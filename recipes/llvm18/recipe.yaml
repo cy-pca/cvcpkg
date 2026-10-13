@@ -78,9 +78,12 @@ depends:
 
 build:
   # A full LLVM+Clang+LLD build exceeds the server's default 2h reap timeout on
-  # the fleet (it reached ~76% compile in 2h on a modest builder). Give it 5h so
-  # it can finish, link, install and publish. submit-dag propagates this per job.
-  timeout_seconds: 18000
+  # the fleet (it reached ~76% compile in 2h on a modest builder). 5h was not
+  # enough either: the FreeBSD cvc.3 build took 5h17m and cvc.4 (job 19061) was
+  # reaped at 5h.  Give it 10h so it can finish, link, install and publish.
+  # submit-dag propagates this per job.  A build-metadata change, not a
+  # cvc_revision bump: it changes no bundle.
+  timeout_seconds: 36000
   # The monorepo source (~4 GiB unpacked) plus a Release Ninja tree for
   # llvm+clang+lld with three targets and the LLVM dylib runs ~20 GiB of
   # objects and archives before the install prefix is even staged.  20 GiB
