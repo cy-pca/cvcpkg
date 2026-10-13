@@ -1167,6 +1167,25 @@ class BuildContext:
 _LDCONFIG_HINTS_PLATFORMS = frozenset({"openbsd", "freebsd"})
 
 
+def _macos_fallback_lib_path(env: dict[str, str], lib_dirs: list[str]) -> None:
+    """Put *lib_dirs* on macOS's dyld search path without shadowing the system.
+
+    ``DYLD_LIBRARY_PATH`` is searched by leaf name BEFORE a library's own
+    install path, for every process in the build -- Apple's toolchain
+    included.  The llvm, llvm18 and llvm20 bundles ship ``lib/libLTO.dylib``,
+    so with one of them in the prefix Xcode's ranlib and ld loaded LLVM's
+    libLTO instead of Xcode's.  That libLTO cannot read Apple clang's bitcode,
+    so every -flto archive got an empty table of contents and the link failed
+    (wasmedge on macOS arm64: undefined fmt symbols from libfmt.a).
+    ``DYLD_FALLBACK_LIBRARY_PATH`` is only searched when a library is not found
+    at its install path (or through the binary's rpaths), which is all a prefix
+    tool needs.  Setting it replaces dyld's default fallback, so that default
+    stays at the end.  A caller's own ``DYLD_LIBRARY_PATH`` is left alone.
+    """
+    existing = env.get("DYLD_FALLBACK_LIBRARY_PATH", "") or "/usr/local/lib:/usr/lib"
+    env["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join([*lib_dirs, existing])
+
+
 def _install_ldconfig_shim(ctx: BuildContext) -> Path | None:
     """Stage a no-op ``ldconfig`` for the build to find ahead of the real one.
 
@@ -1347,8 +1366,7 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     if _bp_lib not in lib_dirs:
         lib_dirs.insert(0, _bp_lib)
     if sys.platform == "darwin":
-        existing = env.get("DYLD_LIBRARY_PATH", "")
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        _macos_fallback_lib_path(env, lib_dirs)
     elif ctx.platform not in ("wasm", "wasm-mt"):
         # Not always LD_LIBRARY_PATH: Haiku's runtime_loader reads LIBRARY_PATH
         # and ignores LD_LIBRARY_PATH outright, so the wrong name here would
@@ -2192,8 +2210,7 @@ def run_test(
         (ctx.prefix / "lib").as_posix(),
     ]
     if sys.platform == "darwin":
-        existing = env.get("DYLD_LIBRARY_PATH", "")
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        _macos_fallback_lib_path(env, lib_dirs)
     else:
         # Haiku reads LIBRARY_PATH, not LD_LIBRARY_PATH — see lib_path_var.
         lib_var = lib_path_var(ctx.platform)
