@@ -100,36 +100,55 @@ headers, and the Accelerate framework for BLAS/LAPACK):
 xcode-select --install
 ```
 
-### Build systems & utilities
+### Build systems and utilities (from cvcpkg)
 
-Install via Homebrew:
+Everything comes from cvcpkg: no Homebrew, no pip-installed cmake, no
+system copies.
 
-```sh
-brew install ninja autoconf automake libtool pkg-config libomp
-```
-
-| Tool | Homebrew formula | Notes |
-|------|-----------------|-------|
+| Tool | cvcpkg component | Notes |
+|------|------------------|-------|
+| CMake | `cmake` (3.31.7) | Pinned < 4.x for Boost compat |
 | Ninja | `ninja` | CMake generator |
-| Autotools | `autoconf automake libtool` | NFFT3 |
-| pkg-config | `pkg-config` | Find modules |
-| libomp | `libomp` | OpenMP runtime for FFTW3 threads |
+| pkg-config | `pkg-config` (pkgconf) | Find modules, configure scripts |
+| Meson | `meson` | Runs under the `python3` on PATH |
+| m4, flex, bison | `m4`, `flex`, `bison` | Parser generators (postgresql-*, libpq, gstreamer) |
+| Autotools | `autoconf`, `automake`, `libtool` | Not on PATH: the recipes that need them (`nfft3`, `swig`) declare them in `depends.build`, so `cvcpkg install-deps` puts them in the prefix |
 
-### CMake
-
-Boost 1.86's CMake files are incompatible with CMake 4.x, so pin
-to 3.x:
+Install them into a tools prefix, then put **only the tools** on PATH,
+the way `macos-build.yml` and `macos-recipe-check.yml` do. CMake
+searches its own install prefix for packages, and that prefix also holds
+the curl/openssl headers and libraries cvcpkg installed with cmake, which
+a recipe build would otherwise pick up instead of its declared deps.
+`bin/cmake` loads libcurl, libssl and libcrypto from `../lib`, so those
+three dylibs come along under their versioned names (which
+`find_library` never matches), and bison is told where its data and m4
+are:
 
 ```sh
-pip3 install --break-system-packages "cmake>=3.31,<4"
+cvcpkg install cmake ninja pkg-config meson m4 flex bison \
+  --prefix ~/cvcpkg-tools-prefix --config release --link shared
+p=~/cvcpkg-tools-prefix t=~/cvcpkg-tools
+mkdir -p "$t/bin" "$t/lib" "$t/share"
+for exe in cmake ctest cpack ninja pkgconf meson m4 flex bison; do
+  cp "$p/bin/$exe" "$t/bin/"
+done
+ln -s pkgconf "$t/bin/pkg-config"
+cp -R "$p"/share/cmake-* "$p/share/bison" "$t/share/"
+cp -R "$p/lib/meson" "$t/lib/"
+cp "$p/lib/libcurl.4.dylib" "$p/lib/libssl.3.dylib" "$p/lib/libcrypto.3.dylib" "$t/lib/"
+export PATH="$t/bin:$PATH" M4="$t/bin/m4" BISON_PKGDATADIR="$t/share/bison"
 ```
+
+If Homebrew is installed, take it off PATH for the build (CI strips
+`/opt/homebrew` and, on Intel, `/usr/local`): its cmake, pkgconf,
+autotools and libraries are otherwise found instead of cvcpkg's.
 
 ### Interpreters
 
 | Tool | Notes |
 |------|-------|
-| Python 3 | Ships with macOS / Homebrew |
-| Perl | Ships with macOS (used by OpenSSL Configure, Qt6) |
+| Python 3 | Runs cvcpkg itself, and meson |
+| Perl | Ships with macOS; `openssl`, `qt6`, `autoconf` and `automake` declare cvcpkg's `perl` in `depends.build` |
 
 ### System frameworks
 
@@ -225,7 +244,7 @@ Which recipes require which non-standard tools beyond the baseline
 | nmake | `openssl` (Windows) |
 | pkg-config | `nfft3`, various `find_package` module-mode lookups |
 | patchelf | Post-build RPATH fixup (Linux shared only) |
-| libomp | `fftw3` (macOS — OpenMP threading) |
+| OpenMP runtime (`openmp`) | None on macOS: Apple clang ships no libomp, so `openblas` and `nfft3` build without OpenMP there, and `fftw3` threads with pthreads |
 
 ## Environment variables
 

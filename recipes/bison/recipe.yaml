@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: bison
   upstream_version: "3.8.2"
-  cvc_revision: 2
+  # Bumped 2 -> 3: the published macos-x86_64 bundle (cvc.2) was configured on
+  # a runner with Homebrew in /usr/local and linked Homebrew's
+  # /usr/local/opt/gettext/lib/libtextstyle.0.dylib, so it cannot start once
+  # macOS CI moves Homebrew aside.  cvc.3 is the rebuild without it.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
