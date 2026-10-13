@@ -5230,8 +5230,13 @@ def create_app(
         a column only while it is still ``[]`` -- a row that records its edges
         is never rewritten -- and addresses exactly one variant: every key is
         required, so no request can touch more than the variant it names.
+
+        With ``expect_required_deps`` it corrects a backfill instead: the row's
+        required_deps is replaced (possibly by ``[]``) only while it records
+        exactly the expected entries, so a row anything else has changed since
+        is left alone.
         """
-        for dep in body.required_deps:
+        for dep in [*body.required_deps, *(body.expect_required_deps or [])]:
             if not dep.get("name") or set(dep) - {"name", "org", "version"}:
                 raise HTTPException(
                     422, f"required_deps entries are {{name, org?, version?}}, got {dep!r}"
@@ -5240,6 +5245,9 @@ def create_app(
             raise HTTPException(422, "provides entries must be non-empty names")
         required_json = json.dumps(body.required_deps)
         provides_json = json.dumps(body.provides)
+        expect_json = (
+            None if body.expect_required_deps is None else json.dumps(body.expect_required_deps)
+        )
         target = (
             f"{name}=={version} [platform={platform},arch={arch},"
             f"build_type={build_type},link={link}{',org=' + org if org else ''}]"
@@ -5248,7 +5256,8 @@ def create_app(
             AuditAction.backfill_deps,
             actor.name,
             target,
-            f"required_deps={required_json} provides={provides_json}",
+            f"required_deps={required_json} provides={provides_json}"
+            + ("" if expect_json is None else f" expect_required_deps={expect_json}"),
         ):
             if _use_db:
                 counts = await _db_packages.backfill_deps(
@@ -5261,6 +5270,7 @@ def create_app(
                     org_slug=org,
                     required_deps=required_json,
                     provides=provides_json,
+                    expect_required_deps=expect_json,
                 )
             else:
                 state = _get_state()
@@ -5276,13 +5286,16 @@ def create_app(
                         b.get("org") or "",
                     ) != (name, version, platform, arch, build_type, link, org):
                         continue
-                    for key, value in (
-                        ("required_deps", body.required_deps),
-                        ("provides", body.provides),
-                    ):
-                        if value and not b.get(key):
-                            b[key] = value
-                            counts[key] += 1
+                    if body.expect_required_deps is not None:
+                        if (b.get("required_deps") or []) == body.expect_required_deps:
+                            b["required_deps"] = body.required_deps
+                            counts["required_deps"] += 1
+                    elif body.required_deps and not b.get("required_deps"):
+                        b["required_deps"] = body.required_deps
+                        counts["required_deps"] += 1
+                    if body.provides and not b.get("provides"):
+                        b["provides"] = body.provides
+                        counts["provides"] += 1
                 state.save_index()
         return {"message": f"backfilled {target}", "count": counts}
 

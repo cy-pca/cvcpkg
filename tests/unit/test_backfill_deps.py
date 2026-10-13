@@ -118,6 +118,41 @@ class TestEndpoint:
             )
             assert resp.status_code == 422, key
 
+    def test_corrects_a_backfill_only_where_it_still_matches(self, server_env):
+        # A backfill that wrote host tools (cmake/ninja) into a row that is
+        # correctly empty is undone by compare-and-set: the row changes only
+        # while it records exactly what that backfill wrote.
+        client, admin, pub = server_env
+        _publish(client, pub)
+        _publish(client, pub, platform="macos", arch="arm64")
+        wrong = [{"name": "cmake"}, {"name": "ninja"}]
+        assert _backfill(client, admin, {"required_deps": wrong}).status_code == 200
+        assert (
+            _backfill(
+                client, admin, {"required_deps": [{"name": "kept"}]}, platform="macos", arch="arm64"
+            ).status_code
+            == 200
+        )
+
+        stale = _backfill(
+            client, admin, {"required_deps": [], "expect_required_deps": [{"name": "cmake"}]}
+        )
+        assert stale.json()["count"]["required_deps"] == 0
+        assert _rows(client)[("linux", "x86_64")]["required_deps"] == wrong
+
+        resp = _backfill(client, admin, {"required_deps": [], "expect_required_deps": wrong})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["count"] == {"required_deps": 1, "provides": 0}
+        rows = _rows(client)
+        assert rows[("linux", "x86_64")]["required_deps"] == []
+        assert rows[("macos", "arm64")]["required_deps"] == [{"name": "kept"}]
+
+    def test_correction_entries_are_validated(self, server_env):
+        client, admin, pub = server_env
+        _publish(client, pub)
+        resp = _backfill(client, admin, {"required_deps": [], "expect_required_deps": [{"n": "x"}]})
+        assert resp.status_code == 422
+
     @pytest.mark.parametrize(
         "body",
         [
@@ -216,6 +251,35 @@ class TestStore:
         assert counts == {"required_deps": 0, "provides": 0}
         (row,) = asyncio.run(db.get_catalog_dict())["bundles"]
         assert row["required_deps"] == [{"name": "kept"}]
+
+    def test_compare_and_set_replaces_only_an_exact_match(self, db):
+        _add(db, required_deps='[{"name": "cmake"}, {"name": "ninja"}]')
+        _add(
+            db,
+            platform="macos",
+            arch="arm64",
+            archive_url="/b.tar.gz",
+            required_deps='[{"name": "cmake"}]',
+        )
+
+        def correct(**variant):
+            return asyncio.run(
+                db.backfill_deps(
+                    "libapp",
+                    "1.0+cvc.1",
+                    org_slug="",
+                    required_deps="[]",
+                    provides="[]",
+                    expect_required_deps='[{"name": "cmake"}, {"name": "ninja"}]',
+                    **{**VARIANT, **variant},
+                )
+            )
+
+        assert correct() == {"required_deps": 1, "provides": 0}
+        assert correct(platform="macos", arch="arm64") == {"required_deps": 0, "provides": 0}
+        rows = {b["platform"]: b for b in asyncio.run(db.get_catalog_dict())["bundles"]}
+        assert rows["linux"]["required_deps"] == []
+        assert rows["macos"]["required_deps"] == [{"name": "cmake"}]
 
 
 # ── scripts/backfill_required_deps.py ───────────────────────────

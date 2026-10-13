@@ -1796,12 +1796,18 @@ class DbPackageIndex:
         org_slug: str,
         required_deps: str,
         provides: str,
+        expect_required_deps: str | None = None,
     ) -> dict[str, int]:
         """Fill one variant's EMPTY ``required_deps`` / ``provides`` in place.
 
         Each column is written only where it still holds ``[]``, so a row that
         already records its edges is never touched -- the backfill can only add
-        what a pre-#152 publish left out, never rewrite a correct row.  Returns
+        what a pre-#152 publish left out, never rewrite a correct row.
+
+        With *expect_required_deps* (a JSON string), ``required_deps`` is
+        instead replaced -- by ``[]`` too -- only where it equals that string
+        exactly: a compare-and-set that corrects a backfill without touching a
+        row anything else has changed.  ``provides`` stays fill-only.  Returns
         how many rows each column changed.
         """
         counts: dict[str, int] = {}
@@ -1810,7 +1816,10 @@ class DbPackageIndex:
                 (PackageRow.required_deps, required_deps),
                 (PackageRow.provides, provides),
             ):
-                if value == "[]":
+                current = "[]"
+                if column is PackageRow.required_deps and expect_required_deps is not None:
+                    current = expect_required_deps
+                elif value == "[]":
                     counts[column.key] = 0
                     continue
                 stmt = (
@@ -1823,7 +1832,7 @@ class DbPackageIndex:
                         PackageRow.build_type == build_type,
                         PackageRow.link == link,
                         PackageRow.org_slug == org_slug,
-                        column == "[]",
+                        column == current,
                     )
                     .values({column.key: value})
                 )
