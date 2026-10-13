@@ -599,6 +599,14 @@ class BackfillDepsRequest(BaseModel):
     provides: list[str] = Field(
         default_factory=list, description="Virtual slots the package fills."
     )
+    expect_required_deps: list[dict[str, str]] | None = Field(
+        default=None,
+        description=(
+            "Correct a row instead of filling it: replace required_deps only where "
+            "the row currently records exactly these entries (an empty list is "
+            "allowed as the replacement).  provides stays fill-only."
+        ),
+    )
 
 
 class OrgListResponse(BaseModel):
