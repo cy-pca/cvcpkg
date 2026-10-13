@@ -13,12 +13,12 @@ from cvcpkg.optional import require_httpx
 # ── remote token management (client → server API) ──────────────
 
 
-def _api_request(method: str, url: str, token: str, **kwargs):
+def _api_request(method: str, url: str, token: str, *, timeout: float = 30, **kwargs):
     """Make an authenticated HTTP request; return parsed JSON or raise."""
     httpx = require_httpx()
 
     headers = {"Authorization": f"Bearer {token}"}
-    with httpx.Client(timeout=30) as client:
+    with httpx.Client(timeout=timeout) as client:
         resp = getattr(client, method)(url, headers=headers, **kwargs)
     if resp.status_code >= 400:
         detail = resp.text
