@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - { glob: "lib/python3.12/site-packages/typing_extensions/", platforms: [any] }
-    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/typing_extensions/", platforms: [windows] }
-    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
+    - { glob: "lib/python3.12/site-packages/typing_extensions.py", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/typing_extensions-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/typing_extensions.py", platforms: [windows] }
+    - { glob: "Lib/site-packages/typing_extensions-*.dist-info/", platforms: [windows] }

@@ -2781,19 +2781,35 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
         ps1.unlink()
 
 
+# package.files for poetry.lock packages that install a single top-level module
+# file rather than a package directory.  Seeds say this with their own "files";
+# lock-derived packages have no seed entry, so without this they got the
+# default "<module>/" glob, which matches nothing and fails a strict-globs
+# build (six-cp313 and typing-extensions-cp313, 2026-10-13).  Found by scanning
+# every published cp312 bundle whose recipe used the directory default.
+_LOCK_FILES = {
+    "six": ["six.py", "six-*.dist-info/"],
+    "typing-extensions": ["typing_extensions.py", "typing_extensions-*.dist-info/"],
+}
+
+
 def _files_globs(m, base, interp, windows: bool) -> list[str]:
     """package.files for one column.  The payload lands only under this
     column's interpreter dir, so the globs pin the exact version dir."""
     ver = col_version(interp)
     prefix = f"lib/python{ver}/site-packages/"
-    if m.get("files"):  # seed override: paths relative to site-packages
-        globs = [prefix + f for f in m["files"]]
+    files = m.get("files") or _LOCK_FILES.get(base)  # paths relative to site-packages
+    if files:
+        globs = [prefix + f for f in files]
     else:
         globs = [prefix + f"{_toppath(base)}/", prefix + "*.dist-info/"]
     for script in SCRIPT_PACKAGES.get(base, ()):
         globs.append(f"bin/{script}")
     if windows:
-        globs += [f"Lib/site-packages/{_toppath(base)}/", "Lib/site-packages/*.dist-info/"]
+        if files:
+            globs += ["Lib/site-packages/" + f for f in files]
+        else:
+            globs += [f"Lib/site-packages/{_toppath(base)}/", "Lib/site-packages/*.dist-info/"]
     return globs
 
 

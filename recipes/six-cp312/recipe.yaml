@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - { glob: "lib/python3.12/site-packages/six/", platforms: [any] }
-    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/six/", platforms: [windows] }
-    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
+    - { glob: "lib/python3.12/site-packages/six.py", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/six-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/six.py", platforms: [windows] }
+    - { glob: "Lib/site-packages/six-*.dist-info/", platforms: [windows] }
