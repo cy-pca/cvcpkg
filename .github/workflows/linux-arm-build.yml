@@ -10,8 +10,8 @@
 # generally available), which is why this lane never existed before.
 #
 # Triggered manually via workflow_dispatch, or by populate-server when 'arm64'
-# is in the arch list. linux-arm-recipe-check.yml builds one recipe with the
-# same tool setup and never publishes; use it to prove a change here first.
+# is in the arch list. linux-arm-recipe-check.yml builds recipes with the same
+# tool setup and never publishes; use it to prove a change here first.
 #
 # Required repo secrets:
 #   CVCPKG_PUBLISHER_TOKEN  — a publisher-role token for cvcpkg.org
@@ -158,12 +158,12 @@ jobs:
       # automake, libtoolize, makeinfo and patchelf in /usr/bin. Move every copy
       # aside for every later step, so a recipe that uses one without declaring
       # it fails instead of building with the image's; "Check build tools come
-      # from cvcpkg" fails if one is still reachable. What stays is the system compiler (gcc/g++, with
-      # binutils and glibc), the one build tool taken from the system; the
-      # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
-      # rsync and file, which no recipe build runs except emsdk's build.sh, which
-      # copies its tree with rsync. Moving files out of /usr/bin is only safe on
-      # an ephemeral GitHub-hosted runner.
+      # from cvcpkg" fails if one is still reachable. What stays is the system
+      # compiler (gcc/g++, with binutils and glibc), the one build tool taken
+      # from the system; the python3, perl and bash that run cvcpkg and the
+      # recipe scripts; and zstd, rsync and file, which no recipe build runs
+      # except emsdk's build.sh, which copies its tree with rsync. Moving files
+      # out of /usr/bin is only safe on an ephemeral GitHub-hosted runner.
       - name: Remove the image's build tools from the environment
         run: |
           set -euo pipefail
@@ -199,8 +199,9 @@ jobs:
       # and ninja for llvm18 and the other LLVMs, make for every autotools
       # build, m4 and bison for krb5, and the host_tools of bison, libtool and
       # postgresql-*, which install-deps does not install. patchelf is what
-      # `cvcpkg pack` itself rewrites shared libraries' RUNPATHs with, and it
-      # looks for one on PATH when the prefix has none. A tool a recipe
+      # `cvcpkg pack` itself rewrites shared libraries' RUNPATHs with, looking
+      # on PATH when the prefix has none, and 45 recipes (the Python wheels
+      # among them) list it in host_tools. A tool a recipe
       # declares in depends.build comes from its bundle in the prefix, which
       # is ahead of this tree on PATH. autoconf, automake and libtool are only
       # ever used that way (nfft3, swig), and so is gettext's msgfmt

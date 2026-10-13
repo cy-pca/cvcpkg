@@ -104,8 +104,6 @@ jobs:
             #            tree, and patchelf from the tree for pack's RUNPATH rewrite
             #   pixman   meson, ninja and pkg-config from their bundles (depends.build)
             #   bison    configure + make, with m4 from the tree (host_tools)
-            #   llvm18   cmake and ninja from the tree (here, the prefix's fresh cmake);
-            #            measures whether it fits linux-arm-build.yml's 300 minutes
             # Every job builds cmake first, until the linux/arm64 cmake bundle
             # is republished: 3.31.7+cvc.1 has RUNPATH
             # /home/runner/work/libcvc-deps/libcvc-deps/prefix/lib and loads the
@@ -115,8 +113,7 @@ jobs:
               "cmake catalog" \
               "cmake,krb5 catalog" \
               "cmake,pixman catalog" \
-              "cmake,bison catalog" \
-              "cmake,llvm18 catalog"
+              "cmake,bison catalog"
           fi
           for job in "$@"; do
             echo "$job"
@@ -159,12 +156,12 @@ jobs:
       # automake, libtoolize, makeinfo and patchelf in /usr/bin. Move every copy
       # aside for every later step, so a recipe that uses one without declaring
       # it fails instead of building with the image's; "Check build tools come
-      # from cvcpkg" fails if one is still reachable. What stays is the system compiler (gcc/g++, with
-      # binutils and glibc), the one build tool taken from the system; the
-      # python3, perl and bash that run cvcpkg and the recipe scripts; and zstd,
-      # rsync and file, which no recipe build runs except emsdk's build.sh, which
-      # copies its tree with rsync. Moving files out of /usr/bin is only safe on
-      # an ephemeral GitHub-hosted runner.
+      # from cvcpkg" fails if one is still reachable. What stays is the system
+      # compiler (gcc/g++, with binutils and glibc), the one build tool taken
+      # from the system; the python3, perl and bash that run cvcpkg and the
+      # recipe scripts; and zstd, rsync and file, which no recipe build runs
+      # except emsdk's build.sh, which copies its tree with rsync. Moving files
+      # out of /usr/bin is only safe on an ephemeral GitHub-hosted runner.
       - name: Remove the image's build tools from the environment
         run: |
           set -euo pipefail
