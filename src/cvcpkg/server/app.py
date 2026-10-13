@@ -281,6 +281,26 @@ def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
         )
 
 
+def _reject_overlong_package_fields(**fields: str) -> None:
+    """422 when a value cannot fit its ``packages`` column.
+
+    PostgreSQL and MySQL refuse an over-long VARCHAR only at INSERT, which
+    surfaced as a bare 500 once the whole archive had been uploaded; the
+    builder logs nothing but "publish completed with 1 error(s)".  The limits
+    are read from the ORM, so they follow the schema.
+    """
+    from cvcpkg.server.db import PackageRow
+
+    cols = PackageRow.__table__.c
+    for column, value in fields.items():
+        limit = getattr(cols[column].type, "length", None)
+        if limit is not None and value and len(value) > limit:
+            raise HTTPException(
+                422,
+                f"{column} is {len(value)} characters; the catalog stores at most {limit}",
+            )
+
+
 def _edge_public_publish_warning(org: str) -> str:
     """Advise (or, in strict mode, forbid) a local public publish on an edge.
 
@@ -4373,6 +4393,19 @@ def create_app(
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
         _reject_noncanonical_platform_arch(platform, arch)
+        _reject_overlong_package_fields(
+            name=name,
+            version=version,
+            build_type=build_type,
+            link=link,
+            key_fingerprint=key_fingerprint,
+            release_tag=release_tag,
+            recipe_version=recipe_version,
+            homepage=homepage,
+            license=pkg_license,
+            maintainer=maintainer,
+            org_slug=org,
+        )
         _check_rate_limit(request)
         state = _get_state()
 
@@ -4651,6 +4684,19 @@ def create_app(
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)
         _reject_noncanonical_platform_arch(platform, arch)
+        _reject_overlong_package_fields(
+            name=name,
+            version=version,
+            build_type=build_type,
+            link=link,
+            key_fingerprint=key_fingerprint,
+            release_tag=release_tag,
+            recipe_version=recipe_version,
+            homepage=homepage,
+            license=pkg_license,
+            maintainer=maintainer,
+            org_slug=org,
+        )
         if org:
             from cvcpkg.server.models import validate_org_slug
 
