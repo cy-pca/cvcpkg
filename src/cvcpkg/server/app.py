@@ -2298,16 +2298,17 @@ def create_app(
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
-        # Register graceful shutdown on SIGTERM (only works in main thread)
-        import threading
-
-        if threading.current_thread() is threading.main_thread():
-
-            def _handle_sigterm(signum, frame):
-                logger.info("received SIGTERM — shutting down gracefully")
-                raise SystemExit(0)
-
-            signal.signal(signal.SIGTERM, _handle_sigterm)
+        # No SIGTERM handler here: SIGTERM belongs to uvicorn.  uvicorn installs
+        # its own before running this lifespan, and that one shuts down
+        # gracefully: stop accepting, let in-flight responses finish (bounded
+        # by --graceful-timeout, see server/cli.py), then run the shutdown
+        # half of this lifespan.  A handler that raised SystemExit used to sit
+        # here and replaced it, so every `docker stop` -- every deploy -- tore
+        # the event loop down mid-response.  Each archive being downloaded at
+        # that moment was cut off at a 64 KiB chunk boundary, and the cvcpkg
+        # client, seeing a clean EOF, hashed the partial file: on 2026-10-12
+        # CI jobs failed with "sha256 mismatch" for python311 (first 65,536
+        # bytes received) and emsdk (first 40,632,320) during a prod deploy.
 
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:

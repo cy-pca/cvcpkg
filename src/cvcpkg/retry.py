@@ -16,13 +16,17 @@ before any dependency of ours is available.
 What is and is not retried is the whole design:
 
 * **Retried** — 408, 425, 429, 502, 503, 504, and the connection-level faults
-  (reset, timeout, incomplete read, remote disconnect). These say "ask again".
+  (reset, timeout, incomplete read -- including a body that ends short of its
+  Content-Length, see backends.https -- remote disconnect). These say "ask
+  again".
 * **Not retried** — every 4xx (the request is wrong; asking again wastes time
   and hides the error) and, pointedly, **500**. A 500 is a deterministic
   application bug: retrying it burns the budget to arrive at the same answer.
-* **Never retried** — TLS certificate verification failures (an ``OSError``,
-  so easy to sweep up by accident) and SHA-256 mismatches. A hash mismatch is
-  a verdict on the bytes, not a transport hiccup.
+* **Never retried here** — TLS certificate verification failures (an
+  ``OSError``, so easy to sweep up by accident) and SHA-256 mismatches. A hash
+  mismatch is a verdict on the bytes, not a transport hiccup; downloading the
+  file again after one is a separate, deliberately small budget owned by
+  ``installer.download_bundle``.
 * **Only idempotent requests.** GET and HEAD. ``PUT``/``POST`` are untouched:
   re-sending a publish is a correctness question, not a reliability one.
 
@@ -86,7 +90,10 @@ def is_transient(exc: BaseException, _depth: int = 0) -> bool:
     if isinstance(exc, _TRANSIENT_EXC):
         return True
     # An integrity failure is a verdict on the bytes; never look past it.
-    if type(exc).__name__ == "IntegrityError":
+    # (Matched by name, subclasses included, to keep this module stdlib-only.)
+    # Downloading again after one is a deliberate, separately bounded policy:
+    # see installer.download_bundle.
+    if any(c.__name__ == "IntegrityError" for c in type(exc).__mro__):
         return False
     if _depth < 4:
         cause = exc.__cause__ or exc.__context__
@@ -110,7 +117,7 @@ def retry_after_seconds(exc: BaseException) -> float | None:
         return None
 
 
-def _delay(attempt: int, base: float, cap: float) -> float:
+def backoff_delay(attempt: int, base: float, cap: float) -> float:
     """Exponential backoff with full jitter.
 
     Jitter is not decoration: a 20-way build matrix that all retried on the
@@ -150,7 +157,7 @@ def with_retry(
                 break
             wait = retry_after_seconds(exc)
             if wait is None:
-                wait = _delay(attempt, base_delay_s, max_delay_s)
+                wait = backoff_delay(attempt, base_delay_s, max_delay_s)
             elapsed = time.monotonic() - started
             if elapsed + wait >= budget_s:
                 _log.warning(

@@ -59,6 +59,12 @@ services:
         image: cvcpkg-server:${CVCPKG_RELEASE:-dev}
         container_name: cvcpkg-prod-backend
         restart: unless-stopped
+        # `up -d --force-recreate` (every deploy) stops this container with
+        # SIGTERM, then SIGKILL after this grace period.  The server spends up
+        # to its --graceful-timeout (30s) letting in-flight archive downloads
+        # finish; Docker's default of 10s would SIGKILL it first and cut those
+        # downloads off mid-body.  Keep this above the server's timeout.
+        stop_grace_period: 45s
         depends_on:
             postgres:
                 condition: service_healthy

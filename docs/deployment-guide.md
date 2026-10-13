@@ -158,7 +158,9 @@ version):
 
     ProxyPreserveHost On
     # upgrade=websocket: tunnel the builder WebSocket (/v1/builders/{id}/ws).
-    ProxyPass / http://127.0.0.1:8420/ upgrade=websocket
+    # retry=0: after a failed connect (the backend restarting in a deploy),
+    # try it again on the next request instead of answering 503 for 60s more.
+    ProxyPass / http://127.0.0.1:8420/ upgrade=websocket retry=0
     ProxyPassReverse / http://127.0.0.1:8420/
 
     Header always set Strict-Transport-Security "max-age=63072000"
@@ -176,7 +178,7 @@ backend ahead of the plain `ProxyPass`:
     RewriteRule ^/(.*) ws://127.0.0.1:8420/$1 [P,L]
 
     ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:8420/
+    ProxyPass / http://127.0.0.1:8420/ retry=0
     ProxyPassReverse / http://127.0.0.1:8420/
 ```
 
