@@ -14,7 +14,16 @@ recipe:
   # the cvc.6 Linux libwasmedge.so needed per-component .so files (and libfmt,
   # libspdlog) that the bundle never shipped.  zlib, zstd and ncurses (what
   # llvm18's LLVMSupport links) are runtime dependencies on Linux and macOS.
-  cvc_revision: 8
+  # Bumped 8 -> 9 (cvc.8 was never published): build.sh follows the staged
+  # llvm18's LLVM_ENABLE_TERMINFO.  cvc.8 always rewrote Helper.cmake's tinfo/
+  # ncurses to Terminfo::terminfo, but llvm18 18.1.8+cvc.4 (#178) is built
+  # with terminfo off, so its LLVMConfig.cmake defines no such target and the
+  # linux/x86_64 configure failed ("links to: Terminfo::terminfo but the target
+  # was not found").  With terminfo off, tinfo/ncurses are now dropped from the
+  # link; with it on (the linux/arm64 llvm18 is still cvc.1) the target is kept
+  # and pinned to the cvcpkg ncurses as before.  ncurses is a runtime
+  # dependency on Linux only now: every macOS llvm18 is cvc.4 or later.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -46,16 +55,20 @@ depends:
     # into libwasmedge / wasmedge.dll loads zlib (zlib1.dll on Windows).
     - name: zlib
       version: "^1.3"
-    # On Linux/macOS llvm18's LLVMSupport also links zstd (LLVM_ENABLE_ZSTD)
-    # and terminfo (LLVM_ENABLE_TERMINFO), which cvcpkg's ncurses provides.
-    # build.sh pins all three to the cvcpkg copies; the Windows llvm18 links
-    # neither.
+    # On Linux/macOS llvm18's LLVMSupport also links zstd (LLVM_ENABLE_ZSTD).
+    # build.sh pins zlib and zstd to the cvcpkg copies; the Windows llvm18
+    # links no zstd.
     - name: zstd
       version: "^1.5"
       platforms: [linux, macos]
+    # Terminfo, which cvcpkg's ncurses provides, is linked only when the staged
+    # llvm18 was built with LLVM_ENABLE_TERMINFO on: bundles before
+    # 18.1.8+cvc.4, which today means the linux/arm64 llvm18 (cvc.1).  Against
+    # cvc.4 or later libwasmedge links no ncurses (build.sh fails if it loads
+    # it), so there this edge goes unused.  No macOS llvm18 has terminfo on.
     - name: ncurses
       version: "^6.0"
-      platforms: [linux, macos]
+      platforms: [linux]
   host_tools: []
 
 toolchain:
@@ -142,10 +155,16 @@ notes:
       cmake/Helper.cmake names zlib, terminfo and zstd by bare name
       (-lz -ltinfo, or -lncurses -lz -lxar on macOS) and as libzstd.a;
       build.sh rewrites those to the targets LLVMConfig.cmake defines and
-      pins them to the cvcpkg zlib, zstd and ncurses (runtime
-      dependencies), so no host library is linked.  The build ends with
-      an AOT smoke test: wasmedgec compiles a small module to a native
-      .so/.dylib, which wasmedge then runs in AOT mode.
+      pins them to the cvcpkg zlib and zstd (runtime dependencies), so no
+      host library is linked.  Terminfo follows the llvm18 it builds
+      against, as LLVMConfig.cmake records it (LLVM_ENABLE_TERMINFO).
+      llvm18 18.1.8+cvc.4 and later are built without terminfo, so
+      tinfo/ncurses are dropped from the link and libwasmedge loads no
+      ncurses (the build fails if it does).  Against an older llvm18
+      with terminfo on (still the only linux/arm64 one, cvc.1) they
+      become Terminfo::terminfo, pinned to the cvcpkg ncurses.  The build
+      ends with an AOT smoke test: wasmedgec compiles a small module to a
+      native .so/.dylib, which wasmedge then runs in AOT mode.
   - title: "Static library bundling broken"
     platforms: [linux]
     description: >

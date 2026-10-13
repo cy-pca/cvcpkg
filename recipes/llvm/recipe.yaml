@@ -27,6 +27,9 @@ recipe:
   # And the ncurses
   # build edge is gone, because LLVM 19 removed its terminfo support
   # (LLVM_ENABLE_TERMINFO no longer exists; cvc.3's libLLVM links no libtinfo).
+  # Not bumped for the package.files platform scoping below: it changes only
+  # what the Windows pack checks, not what any platform builds, and no
+  # Windows bundle of this recipe has been published.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -92,29 +95,46 @@ build:
 
 package:
   files:
+    # Entries scoped to the Unix platforms are Unix spellings with no suffix
+    # (.so, .dll, .exe, ...) from which the strict-globs check can tell that
+    # Windows never produces them, so unscoped they would be required there too
+    # and fail the Windows pack (as they did for llvm18).  Their Windows
+    # spellings are declared below.
     - bin/clang*
     - bin/lld*
-    - bin/ld.lld
-    - bin/ld64.lld
+    - { glob: "bin/ld.lld", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/ld64.lld", platforms: [linux, macos, freebsd, netbsd] }
     - bin/llvm-*
-    - bin/opt
-    - bin/llc
-    - bin/lli
-    - lib/libLLVM*
+    - { glob: "bin/opt", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/llc", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/lli", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/libLLVM*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/libclang*
-    - lib/liblld*
+    - { glob: "lib/liblld*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/cmake/llvm/
     - lib/cmake/clang/
     - lib/cmake/lld/
     # Clang builtin/resource headers (lib/clang/<ver>/include -- stddef.h,
     # arm_acle.h, immintrin.h, cuda_wrappers, ...).  clang looks for them next
-    # to itself; without them it cannot compile even a hello world.
+    # to itself; without them it cannot compile even a hello world.  Installed
+    # at the same path on Windows.
     - lib/clang/
     - include/llvm/
     - include/llvm-c/
     - include/clang/
     - include/clang-c/
     - include/lld/
+    # Windows (the .exe/.lib suffix limits these to it).  The tools are .exe
+    # files (ld.lld.exe and ld64.lld.exe are copies of lld.exe where Unix has
+    # symlinks).  MSVC cannot build the libLLVM DLL (LLVM_BUILD_LLVM_DYLIB is
+    # forced off there), so LLVM and lld ship as their component libraries.
+    - bin/ld.lld.exe
+    - bin/ld64.lld.exe
+    - bin/opt.exe
+    - bin/llc.exe
+    - bin/lli.exe
+    - lib/LLVM*.lib
+    - lib/lld*.lib
   cmake_packages:
     - { name: LLVM, targets: ["LLVM"] }
     - { name: Clang, targets: ["clang", "clangTooling"] }
