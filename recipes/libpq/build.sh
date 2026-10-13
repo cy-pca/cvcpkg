@@ -43,6 +43,7 @@ cd "${CVC_SOURCE_DIR}"
 # readline build dep moved to CVC_BUILD_PREFIX, which this script never searched.)
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
+    --libdir=lib \
     --buildtype=release \
     --pkg-config-path="${_PC}" \
     -Dssl=openssl \
@@ -66,7 +67,8 @@ cat > "${CVC_INSTALL_DIR}/lib/cmake/PostgreSQL/PostgreSQLConfig.cmake" <<'EOF'
 get_filename_component(_PG_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
 
 add_library(PostgreSQL::PostgreSQL UNKNOWN IMPORTED)
-# Meson installs into lib/<multiarch>/ on Debian-family builders.
+# build.sh passes --libdir=lib, but bundles before cvc.7 put libpq in
+# lib/<multiarch>/ (meson's default on Debian-family builders).
 find_library(_PG_LIB NAMES pq PATHS "${_PG_PREFIX}/lib"
     PATH_SUFFIXES "" x86_64-linux-gnu aarch64-linux-gnu riscv64-linux-gnu
                   powerpc64le-linux-gnu s390x-linux-gnu
