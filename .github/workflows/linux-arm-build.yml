@@ -342,6 +342,7 @@ jobs:
             esac
             return 1
           }
+          tree_real=$(readlink -f "$tree")
           for f in "$tree"/bin/* "$tree"/lib/*; do
             [ -f "$f" ] && [ ! -L "$f" ] && elf "$f" || continue
             name=$(basename "$f")
@@ -353,8 +354,14 @@ jobs:
             while read -r lib arrow path _; do
               [ "$arrow" = "=>" ] || continue
               case "$needed" in *" $lib "*) ;; *) continue ;; esac
+              # ldd reports a library found through an $ORIGIN RUNPATH as
+              # <tree>/bin/../lib/...: compare the resolved path.
               case "$path" in
-                "$tree"/lib/*) ;;
+                /*) real=$(readlink -f "$path" 2>/dev/null || printf '%s' "$path") ;;
+                *) real=$path ;;  # "not" (found)
+              esac
+              case "$real" in
+                "$tree_real"/lib/*) ;;
                 not) bad="$bad $lib (not found)" ;;
                 *) system_lib "$lib" || bad="$bad $path" ;;
               esac
