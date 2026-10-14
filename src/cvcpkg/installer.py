@@ -334,25 +334,30 @@ def _header_int(headers: object, name: str) -> int | None:
 # path-traversal validation internally.
 
 
-def _extract_tar(archive: Path, prefix: Path) -> None:
-    """Extract any tar flavour ``_archive.open_tar`` can open."""
+def _extract_tar(archive: Path, prefix: Path) -> list[str]:
+    """Extract any tar flavour ``_archive.open_tar`` can open; return member names."""
     with open_tar(archive) as tf:
-        for member in tf.getmembers():
+        members = tf.getmembers()
+        for member in members:
             if member.name.startswith("/") or ".." in member.name.split("/"):
                 raise InstallError(f"unsafe path in archive: {member.name}")
         _safe_extractall(tf, prefix)
+        return [m.name for m in members]
 
 
-def _extract_zip(archive: Path, prefix: Path) -> None:
+def _extract_zip(archive: Path, prefix: Path) -> list[str]:
+    """Extract a zip; return member names."""
     with zipfile.ZipFile(archive) as zf:
-        for info in zf.infolist():
+        infos = zf.infolist()
+        for info in infos:
             if info.filename.startswith("/") or ".." in info.filename.split("/"):
                 raise InstallError(f"unsafe path in archive: {info.filename}")
         zf.extractall(path=prefix)
+        return [i.filename for i in infos]
 
 
 def _extract_7z(archive: Path, prefix: Path) -> None:
-    """Extract a 7z archive via the system ``7z`` command."""
+    """Extract a 7z archive via the system ``7z`` command (member names unknown)."""
     import shutil
     import subprocess
 
@@ -373,7 +378,7 @@ def _extract_7z(archive: Path, prefix: Path) -> None:
 _EXTRACTORS = {"zip": _extract_zip, "7z": _extract_7z}
 
 
-def extract_bundle(archive: Path, prefix: Path) -> None:
+def extract_bundle(archive: Path, prefix: Path) -> list[str] | None:
     """Extract *archive* into *prefix*, merging into the existing tree.
 
     Supported formats: tar (plain, gzip, bzip2, xz; zstd on Python 3.14+),
@@ -381,10 +386,138 @@ def extract_bundle(archive: Path, prefix: Path) -> None:
     the filename suffix only for content with no signature, so archives stored
     under a mislabeled extension still install -- every Windows bundle on
     cvcpkg.org is a zip under a ``.tar.zst`` name.
+
+    Returns the archive's member names, or ``None`` when the extractor cannot
+    list them (7z).
     """
     prefix.mkdir(parents=True, exist_ok=True)
     fmt = archive_format(archive)
-    _EXTRACTORS.get(fmt, _extract_tar)(archive, prefix)
+    return _EXTRACTORS.get(fmt, _extract_tar)(archive, prefix)
+
+
+# ── Bundle manifests ─────────────────────────────────────────────
+#
+# A bundle's manifest belongs at share/libcvc-deps/<name>/manifest.yaml, the
+# layout stage_bundle has used since 2026-08-21 so co-installed bundles do not
+# overwrite each other's manifest.  Bundles published earlier ship it flat at
+# share/libcvc-deps/manifest.yaml, where each extraction overwrites the last,
+# and a few ship none.  The installer settles every bundle into the per-name
+# slot, so verify, repair and uninstall can find each one.
+
+_META_DIR = ("share", "libcvc-deps")
+_FLAT_MANIFEST = "share/libcvc-deps/manifest.yaml"
+
+
+def _member_path(name: str) -> str:
+    """An archive member name as a prefix-relative POSIX path."""
+    p = name.replace("\\", "/")
+    while p.startswith("./"):
+        p = p[2:]
+    return p.rstrip("/")
+
+
+def _flat_manifest_owner(flat: Path) -> str | None:
+    """The ``bundle.name`` of a legacy flat manifest, if it is a usable one."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(flat.read_text())
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("bundle"), dict):
+        return None
+    name = data["bundle"].get("name")
+    if not isinstance(name, str) or not name or name in (".", ".."):
+        return None
+    if "/" in name or "\\" in name:
+        return None
+    return name
+
+
+def _pin_flat_manifest(prefix: Path) -> None:
+    """Copy a legacy flat manifest to its owner's per-name slot.
+
+    Run before extracting another bundle, which may overwrite the flat file:
+    without this, the bundle that owned it would be left with no manifest.
+    """
+    import shutil
+
+    meta = prefix.joinpath(*_META_DIR)
+    flat = meta / "manifest.yaml"
+    if not flat.is_file():
+        return
+    owner = _flat_manifest_owner(flat)
+    if owner is None:
+        return
+    dest = meta / owner / "manifest.yaml"
+    if dest.exists():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(flat, dest)
+
+
+def _synthesized_manifest(entry: CatalogEntry) -> dict:
+    """A minimal manifest for a bundle that shipped none, from its catalog entry."""
+    return {
+        "schema_version": 3,
+        "bundle": {
+            "name": entry.name,
+            "version": entry.version,
+            "upstream_version": entry.upstream_version,
+            "cvc_revision": entry.cvc_revision,
+            "platform": entry.platform,
+            "arch": entry.arch,
+            "build_type": entry.build_type,
+            "link": entry.link,
+        },
+        "dependencies": {
+            "required": [
+                {"name": d.name, "version": d.version} if d.version else {"name": d.name}
+                for d in entry.required_deps
+            ],
+        },
+        "integrity": {"sha256": entry.sha256, "size_bytes": entry.size_bytes},
+        "meta": {
+            "synthesized": True,
+            "description": "Written by cvcpkg install: the bundle archive carried no manifest.",
+        },
+    }
+
+
+def settle_bundle_manifest(entry: CatalogEntry, members: list[str] | None, prefix: Path) -> Path:
+    """Make sure *entry* has its manifest at ``share/libcvc-deps/<name>/``.
+
+    *members* is what the archive just extracted.  A per-name manifest among
+    them is left alone.  A flat one written by this bundle is copied into the
+    per-name slot.  Otherwise a manifest is synthesized from the catalog entry.
+    With *members* unknown (7z), an existing per-name manifest is trusted.
+    Returns the per-name path.
+    """
+    import shutil
+
+    import yaml
+
+    meta = prefix.joinpath(*_META_DIR)
+    dest = meta / entry.name / "manifest.yaml"
+    per_name_rel = f"share/libcvc-deps/{entry.name}/manifest.yaml"
+
+    names = None if members is None else {_member_path(m) for m in members}
+    if names is None and dest.is_file():
+        return dest
+    if names is not None and per_name_rel in names:
+        return dest
+
+    flat = meta / "manifest.yaml"
+    shipped_flat = names is None or _FLAT_MANIFEST in names
+    if shipped_flat and flat.is_file() and _flat_manifest_owner(flat) == entry.name:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(flat, dest)
+        return dest
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "w") as f:
+        yaml.safe_dump(_synthesized_manifest(entry), f, default_flow_style=False, sort_keys=False)
+    return dest
 
 
 def _merge_move(src: Path, dst: Path) -> None:
@@ -484,7 +617,11 @@ def install_entry(
         except SigningError as e:
             raise IntegrityError(f"Signature verification failed for {entry.name}: {e}") from e
 
-    extract_bundle(archive, prefix)
+    # A legacy flat manifest already in the prefix belongs to an earlier
+    # bundle; save it before this extraction can overwrite it.
+    _pin_flat_manifest(prefix)
+    members = extract_bundle(archive, prefix)
+    settle_bundle_manifest(entry, members, prefix)
     # On Windows, relocate any noarch python package from the Unix site path to
     # the Lib\site-packages the python.org-layout interpreter actually searches.
     if target_platform == "windows":

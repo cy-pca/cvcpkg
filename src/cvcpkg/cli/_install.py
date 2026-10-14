@@ -1794,13 +1794,16 @@ def repair(
 
     click.echo(f"cvcpkg: repaired {repaired} bundle(s).")
 
-    # Final pass: re-classify what we repaired against a fresh view of the
-    # prefix; anything still broken means the restore did not take.
+    # Final pass: re-classify every targeted bundle against a fresh view of
+    # the prefix, not only the ones repaired -- reinstalling one bundle can
+    # break a sibling (a legacy flat manifest overwritten), and that must not
+    # be reported as a successful repair.
     fresh = uninstaller.load_installed(lock, cache_dir, recipe_dirs=rdirs)
     still_broken = [
         n
-        for n in broken
-        if _diagnose_bundle(fresh[n], lock, prefix_path, cache_dir, force=False)[0] == "broken"
+        for n in targeted
+        if statuses[n][0] != "unrepairable"
+        and _diagnose_bundle(fresh[n], lock, prefix_path, cache_dir, force=False)[0] == "broken"
     ]
     if still_broken:
         raise click.ClickException(f"repair could not restore: {', '.join(still_broken)}")
