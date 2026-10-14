@@ -882,10 +882,14 @@ SEED_PACKAGES = {
     # libpangoft2-1.0, libharfbuzz, libharfbuzz-subset and libfontconfig at
     # import time.  cvcpkg has recipes for all of them and each declares a
     # windows platform, but they are NATIVE recipes rather than -cpNNN columns,
-    # so they cannot be named in `deps` here — the prefix simply has to carry
-    # them.  The import check below is what catches their absence, and it is
-    # why this toolchain installs into its own `docs-deps` prefix rather than
-    # into `dbg-deps`, which already has a freetype.dll while VTK links its own.
+    # so they go in the seed's `native_deps` (emitted as plain runtime + build
+    # edges), not `deps`.  Until they were declared there, `cvcpkg install
+    # weasyprint-cp312` produced a prefix whose `import weasyprint` failed
+    # ("cannot load library 'libpango-1.0-0'") unless pango was installed by
+    # hand; builders passed the import check only because their hosts had
+    # system pango.  This toolchain still installs into its own `docs-deps`
+    # prefix rather than into `dbg-deps`, which already has a freetype.dll
+    # while VTK links its own.
     "webencodings": {
         # 0.6.1, not the contemporaneous 0.5.1: 0.5.1 is a 2017 legacy setup.py
         # sdist with no pyproject.toml, while 0.6.1 is the same tiny API
@@ -954,6 +958,11 @@ SEED_PACKAGES = {
             "tinycss2",
             "tinyhtml5",
         ],
+        # weasyprint/text/ffi.py dlopens gobject (glib), pango + pangoft2,
+        # harfbuzz (+ subset) and fontconfig.  pango's own runtime closure
+        # carries the rest, but every library the ffi layer opens by name is
+        # listed so the edge does not hinge on pango's dependency list.
+        "native_deps": ["pango", "harfbuzz", "fontconfig", "glib"],
         "files": ["weasyprint/", "weasyprint-*.dist-info/"],
         # A real render, not a bare import: `import weasyprint` succeeds even
         # when the PDF path is broken, and emitting bytes with a %PDF header is
@@ -2317,6 +2326,8 @@ def main() -> int:
             # Build-only edges beyond the sdist's [build-system] requires, for
             # backends that consult a package opportunistically (see pytest).
             "build_deps": seed.get("build_deps", []),
+            # Native cvcpkg recipes the package loads at run time (weasyprint).
+            "native_deps": seed.get("native_deps", []),
             "seed": True,
         }
 
@@ -2573,6 +2584,11 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     # dep at module load (sqlalchemy -> typing_extensions), so it must be staged
     # in the build prefix or the check fails.
     deps = [f"python{interp}", *(f"{b}-cp{interp}" for b in dep_bases)]
+    # Native (non-Python) libraries the package loads at run time, named as
+    # their own cvcpkg recipes rather than -cpNNN columns (see the seed's
+    # "native_deps"). Runtime edges so a consumer prefix carries them, and build
+    # edges like every runtime dep so the import check can load them.
+    deps += [n for n in m.get("native_deps") or [] if n not in deps]
     # From-source columns additionally need the PEP-517 backend importable at
     # build time (--no-build-isolation); those are build-only edges.
     backends = backend_edges(m.get("build_requires", []), interp) if mode == "sdist" else []
