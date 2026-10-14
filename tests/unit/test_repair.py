@@ -17,6 +17,7 @@ the local storage backend.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from unittest import mock
 
@@ -60,8 +61,14 @@ def _build_archive(
     py_payload: bool = False,
     extra_files: dict[str, str] | None = None,
     variant: str = "",
+    layout: str = "per-name",
 ) -> tuple[Path, str, int]:
-    """Build one real bundle archive; return ``(archive, sha256, size)``."""
+    """Build one real bundle archive; return ``(archive, sha256, size)``.
+
+    *layout* is where the manifest sits in the archive: ``per-name`` (what
+    stage_bundle writes), ``flat`` (bundles published before 2026-08-21) or
+    ``none`` (a bundle that shipped no manifest).
+    """
     recipe_dir = tmp_path / "recipes" / (name + variant)
     _write_recipe(recipe_dir, name)
     recipe = Recipe.load(recipe_dir)
@@ -82,6 +89,13 @@ def _build_archive(
     staging = tmp_path / f"staging-{name}{variant}-{platform}"
     staging.mkdir()
     stage_bundle(install_dir, manifest, staging, recipe_dir=recipe_dir)
+    meta = staging / "share" / "libcvc-deps"
+    if layout == "flat":
+        for item in list((meta / name).iterdir()):
+            shutil.move(str(item), str(meta / item.name))
+        (meta / name).rmdir()
+    elif layout == "none":
+        shutil.rmtree(meta)
 
     return create_archive(
         staging, dist_dir, name, "1.0.0+cvc.1", platform, arch, "release", "shared"
@@ -328,3 +342,52 @@ class TestVerifyAndRepair:
 
         assert main(["repair", "--prefix", str(env["prefix"])]) == 0
         assert relocated.is_file()  # restored to the relocated location
+
+
+class TestLegacyManifestLayouts:
+    """Regression: on Windows, 20 of 57 installed bundles failed verify with
+    "no manifest.yaml".  17 were published before the per-name layout and
+    shipped their manifest flat at share/libcvc-deps/manifest.yaml, where each
+    extraction overwrote the last; 3 shipped no manifest at all."""
+
+    _LAYOUTS = {"alpha": "flat", "beta": "flat", "gamma": "none", "delta": "per-name"}
+
+    def _install_all(self, tmp_path, env) -> list[LockEntry]:
+        return [
+            _install_real_bundle(
+                tmp_path,
+                env["dist"],
+                env["cache"],
+                env["prefix"],
+                name,
+                platform="windows",
+                layout=layout,
+            )
+            for name, layout in self._LAYOUTS.items()
+        ]
+
+    def test_every_layout_verifies_after_install(self, tmp_path, env):
+        entries = self._install_all(tmp_path, env)
+        _write_lock(env["prefix"], entries, platform="windows")
+
+        assert main(["verify", "--prefix", str(env["prefix"])]) == 0
+        meta = env["prefix"] / "share" / "libcvc-deps"
+        for name in self._LAYOUTS:
+            data = yaml.safe_load((meta / name / "manifest.yaml").read_text())
+            assert data["bundle"]["name"] == name
+            assert data["bundle"]["version"] == "1.0.0+cvc.1"
+        synthesized = yaml.safe_load((meta / "gamma" / "manifest.yaml").read_text())
+        assert synthesized["meta"]["synthesized"] is True
+
+    def test_repair_heals_a_prefix_installed_before_the_fix(self, tmp_path, env):
+        with (
+            mock.patch("cvcpkg.installer.settle_bundle_manifest"),
+            mock.patch("cvcpkg.installer._pin_flat_manifest"),
+        ):
+            entries = self._install_all(tmp_path, env)
+        _write_lock(env["prefix"], entries, platform="windows")
+        # The old behaviour: only the last flat bundle extracted keeps a manifest.
+        assert main(["verify", "--prefix", str(env["prefix"])]) == 1
+
+        assert main(["repair", "--prefix", str(env["prefix"])]) == 0
+        assert main(["verify", "--prefix", str(env["prefix"])]) == 0
