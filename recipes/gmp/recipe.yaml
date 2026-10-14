@@ -6,7 +6,15 @@ recipe:
   # autotools, all from cvcpkg; C library only). It replaces 6.3.0+cvc.1 for
   # windows, a repackaged vcpkg build. linux/macos/BSD builds are unchanged
   # from +cvc.9.
-  cvc_revision: 10
+  # 11: portable x86_64. build.sh now configures --enable-fat on x86 hosts.
+  # Through +cvc.10 the linux/macos/BSD x86_64 bundles carried the BUILDER's
+  # CPU-specific mpn assembly (and, where CFLAGS was unset, -march=<cpu>), so
+  # they raised SIGILL on CPUs older than the builder's (BMI2/ADX mulx/adcx on a
+  # Sandy Bridge Xeon, 2026-10-14). test.sh now fails any x86 build that
+  # records -march/-mtune in gmp.h or lacks the fat CPUID dispatcher. windows
+  # (--disable-assembly) and wasm/wasi/cosmo (generic --host) were already
+  # portable and are only rebuilt for revision coherence.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -111,6 +119,9 @@ package:
     - glob: include/gmpxx.h
       platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo]
   cmake_packages: []
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17

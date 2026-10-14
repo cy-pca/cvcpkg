@@ -7,7 +7,12 @@ recipe:
   # replaces 4.2.1+cvc.1 for windows, a repackaged vcpkg build that imported
   # vcpkg's gmp-10.dll and shipped a copy of it. linux/macos/BSD builds are
   # unchanged from +cvc.5.
-  cvc_revision: 6
+  # 7: rebuild against the portable gmp 6.3.0+cvc.11 (--enable-fat on x86).
+  # macOS now sets CFLAGS explicitly: with it unset, MPFR's configure adopts
+  # gmp.h's __GMP_CFLAGS, which through gmp +cvc.10 carried the macOS
+  # builder's -march=<cpu>. linux and the BSDs already set CFLAGS and only
+  # rebuild against the new gmp.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -74,6 +79,10 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+        # Set, so MPFR's configure does not copy gmp.h's __GMP_CFLAGS. Through
+        # gmp +cvc.10 those named the macOS builder's CPU (-march=<cpu>), so this
+        # bundle could carry instructions older Intel Macs lack (see +cvc.7).
+        CFLAGS: "-O2"
     - platform: freebsd
       script: build.sh
       env:
