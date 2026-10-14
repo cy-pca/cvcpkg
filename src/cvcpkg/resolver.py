@@ -126,7 +126,7 @@ def resolve(
     needed = {req.name for req in requirements if not req.exclude}
 
     picked: dict[str, CatalogEntry] = {}
-    conflict_trail: list[str] = []
+    trail = _Trail()
     local: dict[str, list[str]] = {}
 
     lookup: Callable[[str], list[str] | None] | None = None
@@ -142,19 +142,57 @@ def resolve(
 
         lookup = _memoized
 
-    if not _backtrack(
+    failure = _backtrack(
         needed,
         constraints,
         sorted_candidates,
         picked,
-        conflict_trail,
+        trail,
         capability_blocked,
         local_only=lookup,
         local=local,
-    ):
-        raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(conflict_trail[-10:]))
+    )
+    if failure is not None:
+        raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(trail.report()))
 
     return ResolveResult(picked=picked, local=_deps_first(local))
+
+
+class _Trail:
+    """Why the search failed, kept per component rather than per attempt.
+
+    Every failed attempt used to append a line, so an unsatisfiable closure
+    grew the list without bound, and the error showed whichever ten lines came
+    last -- usually components that resolve fine.  Here each component keeps
+    its latest reason, and the report leads with components that have no
+    bundle at all for this platform, since those are the usual root cause.
+    """
+
+    _MAX_LINES = 10
+
+    def __init__(self) -> None:
+        # name -> (reason, requirers); insertion order is first-failure order.
+        self._missing: dict[str, tuple[str, frozenset[str]]] = {}
+        self._failed: dict[str, tuple[str, frozenset[str]]] = {}
+
+    def missing(self, name: str, reason: str, requirers: frozenset[str]) -> None:
+        self._missing[name] = (reason, requirers)
+
+    def failed(self, name: str, reason: str, requirers: frozenset[str]) -> None:
+        self._failed[name] = (reason, requirers)
+
+    def report(self) -> list[str]:
+        lines: list[str] = []
+        for table in (self._missing, self._failed):
+            for name, (reason, requirers) in table.items():
+                if table is self._failed and name in self._missing:
+                    continue
+                by = f" -- required by {', '.join(sorted(requirers))}" if requirers else ""
+                lines.append(reason + by)
+        if len(lines) > self._MAX_LINES:
+            extra = len(lines) - self._MAX_LINES
+            lines = lines[: self._MAX_LINES] + [f"... and {extra} more"]
+        return lines
 
 
 def _deps_first(local: dict[str, list[str]]) -> list[str]:
@@ -265,24 +303,41 @@ def _backtrack(
     constraints: dict[str, str],
     candidates: dict[str, list[CatalogEntry]],
     picked: dict[str, CatalogEntry],
-    trail: list[str],
+    trail: _Trail,
     capability_blocked: dict[str, set[str]] | None = None,
     *,
     local_only: Callable[[str], list[str] | None] | None = None,
     local: dict[str, list[str]] | None = None,
-) -> bool:
-    """Recursive backtracking resolver."""
+    required_by: dict[str, frozenset[str]] | None = None,
+) -> frozenset[str] | None:
+    """Recursive resolver with conflict-directed backjumping.
+
+    Returns ``None`` on success.  On failure it returns the *conflict set*:
+    the picked names whose choices could have caused it.  *required_by* maps
+    each needed name to the picks that required or constrained it, so a dead
+    end's conflict set is the picks above it on its dependency path.  A pick
+    that is not in the set returns it at once instead of trying its other
+    candidates -- none of them can change the outcome.  Without this, one
+    component with no bundle for the platform made the search retry every
+    combination of versions of everything picked before it.
+    """
     capability_blocked = capability_blocked or {}
     if local is None:
         local = {}
+    if required_by is None:
+        required_by = {}
     # Find the next unpicked component.
     unpicked = needed - picked.keys() - local.keys()
     if not unpicked:
-        return True
+        return None
 
     name = min(unpicked)  # deterministic order
     available = candidates.get(name, [])
     spec = constraints.get(name, "")
+    requirers = required_by.get(name, frozenset())
+    # Whatever required or constrained this name shares the blame for any
+    # failure here: a different pick there might not need it at all.
+    conflict: set[str] = set(requirers)
 
     # Nothing in the catalog can ever be named this (a capability-filtered
     # pool is a different failure): a `redistributable: false` recipe is
@@ -291,7 +346,7 @@ def _backtrack(
         deps = local_only(name)
         if deps is not None:
             local[name] = deps
-            if _backtrack(
+            sub = _backtrack(
                 needed | set(deps),
                 constraints,
                 candidates,
@@ -300,32 +355,45 @@ def _backtrack(
                 capability_blocked,
                 local_only=local_only,
                 local=local,
-            ):
-                return True
+                required_by=_add_requirer(required_by, name, deps),
+            )
+            if sub is None:
+                return None
             del local[name]
+            conflict |= sub - {name}
+            return frozenset(conflict)
 
+    rejections: list[str] = []
+    tried = False
     for entry in available:
-        # Check user-level version constraint.
+        # Check the version constraint (user-level and from the requirers).
         if spec:
             try:
-                if not satisfies(entry.version, spec):
-                    continue
+                ok = satisfies(entry.version, spec)
             except ValueError:
+                ok = False
+            if not ok:
                 continue
 
-        # Check compatibility with already-picked bundles' constraints on us.
-        if not _compatible_with_picked(name, entry, picked):
-            trail.append(f"{name}=={entry.version} conflicts with already-picked dependencies")
+        # Check compatibility with the picks already made, in both directions.
+        clash, why = _conflicts_with_picked(name, entry, picked)
+        if clash:
+            conflict |= clash
+            if len(rejections) < 3:
+                rejections.append(why)
             continue
 
         # Tentatively pick this candidate.
+        tried = True
         picked[name] = entry
 
         # Add transitive dependencies to the needed set.
         new_needed = set(needed)
         new_constraints = dict(constraints)
+        dep_names = []
         for dep in entry.required_deps:
             new_needed.add(dep.name)
+            dep_names.append(dep.name)
             if dep.version:
                 existing = new_constraints.get(dep.name, "")
                 if existing and existing != dep.version:
@@ -335,7 +403,7 @@ def _backtrack(
                 else:
                     new_constraints[dep.name] = dep.version
 
-        if _backtrack(
+        sub = _backtrack(
             new_needed,
             new_constraints,
             candidates,
@@ -344,34 +412,92 @@ def _backtrack(
             capability_blocked,
             local_only=local_only,
             local=local,
-        ):
-            return True
+            required_by=_add_requirer(required_by, name, dep_names),
+        )
+        if sub is None:
+            return None
 
         # Backtrack.
         del picked[name]
+        if name not in sub:
+            # Backjump: the failure below does not depend on this pick.
+            return sub
+        conflict |= sub - {name}
 
-    if not available and name in capability_blocked:
-        missing = ", ".join(sorted(capability_blocked[name]))
-        trail.append(
-            f"no provider for '{name}' meets required capabilities (host is missing: {missing})"
-        )
-    else:
-        trail.append(f"no candidate for '{name}' satisfies constraints (spec={spec!r})")
-    return False
+    if not tried:
+        # Record only direct failures: a name whose candidates were all
+        # rejected here.  A name that failed through its dependencies has
+        # its cause recorded further down.
+        if not available and name in capability_blocked:
+            missing = ", ".join(sorted(capability_blocked[name]))
+            trail.missing(
+                name,
+                f"no provider for '{name}' meets required capabilities (host is missing: {missing})",
+                requirers,
+            )
+        elif not available:
+            trail.missing(
+                name,
+                f"no candidate for '{name}' satisfies constraints (spec={spec!r}): "
+                "no bundle for this platform",
+                requirers,
+            )
+        else:
+            detail = f": {'; '.join(rejections)}" if rejections else ""
+            trail.failed(
+                name,
+                f"no candidate for '{name}' satisfies constraints (spec={spec!r}){detail}",
+                requirers,
+            )
+    return frozenset(conflict)
 
 
-def _compatible_with_picked(
+def _add_requirer(
+    required_by: dict[str, frozenset[str]], requirer: str, deps: list[str]
+) -> dict[str, frozenset[str]]:
+    """Return *required_by* with *requirer* added for each of *deps*."""
+    if not deps:
+        return required_by
+    out = dict(required_by)
+    for dep in deps:
+        out[dep] = out.get(dep, frozenset()) | {requirer}
+    return out
+
+
+def _conflicts_with_picked(
     name: str,
     candidate: CatalogEntry,
     picked: dict[str, CatalogEntry],
-) -> bool:
-    """Check that *candidate* doesn't violate constraints from already-picked bundles."""
-    for _picked_name, picked_entry in picked.items():
+) -> tuple[set[str], str]:
+    """Picks that rule out *candidate* for *name*, and why.
+
+    Both directions: a picked bundle whose dependency constraint on *name*
+    rejects the candidate, and a picked bundle that the candidate's own
+    constraints reject.  The second was never checked, so a dependency
+    picked before its dependent (names go in alphabetical order) kept a
+    version the dependent does not accept.
+    """
+    clash: set[str] = set()
+    why = ""
+    for picked_name, picked_entry in picked.items():
         for dep in picked_entry.required_deps:
-            if dep.name == name and dep.version:
-                try:
-                    if not satisfies(candidate.version, dep.version):
-                        return False
-                except ValueError:
-                    return False
-    return True
+            if dep.name == name and dep.version and not _satisfies(candidate.version, dep.version):
+                clash.add(picked_name)
+                why = why or f"{picked_name}=={picked_entry.version} needs {name} {dep.version}"
+    for dep in candidate.required_deps:
+        held = picked.get(dep.name)
+        if held is not None and dep.version and not _satisfies(held.version, dep.version):
+            clash.add(dep.name)
+            why = why or (
+                f"{name}=={candidate.version} needs {dep.name} {dep.version} "
+                f"(picked {held.version})"
+            )
+    return clash, why
+
+
+def _satisfies(version: str, spec: str) -> bool:
+    """``satisfies`` with an unparseable version or spec counting as no match."""
+    try:
+        return satisfies(version, spec)
+    except ValueError:
+        return False

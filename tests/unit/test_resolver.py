@@ -269,3 +269,84 @@ class TestNonSemverVersions:
         }
         with pytest.raises(ResolveError):
             resolve(reqs, candidates)
+
+
+class TestResolverUnsatisfiable:
+    """An unsatisfiable closure fails fast and names its real cause.
+
+    Regression: torch-cp311 on Windows needs jinja2-cp311, which needs
+    markupsafe-cp311, which had no Windows bundle.  Requested with a dozen
+    other components, the resolver retried every combination of their
+    versions, never finished, and grew past 3.9 GB of failure messages.
+    """
+
+    def _catalog(self, n_unrelated: int, versions_each: int) -> dict[str, list[CatalogEntry]]:
+        # Unrelated components sort before the broken chain, so the resolver
+        # picks all of them before it discovers the dead end.
+        catalog = {
+            f"aa{i:02d}": [_entry(f"aa{i:02d}", f"1.0.{v}+cvc.1") for v in range(versions_each)]
+            for i in range(n_unrelated)
+        }
+        catalog["zz-top"] = [
+            _entry("zz-top", f"2.0.{v}+cvc.1", [Dependency(name="zz-mid")]) for v in range(3)
+        ]
+        catalog["zz-mid"] = [
+            _entry("zz-mid", f"3.1.{v}+cvc.1", [Dependency(name="zz-missing")]) for v in range(3)
+        ]
+        return catalog
+
+    def test_missing_leaf_fails_fast(self):
+        import time
+
+        catalog = self._catalog(n_unrelated=12, versions_each=4)
+        reqs = [ComponentReq(name=n) for n in sorted(catalog) if n != "zz-mid"]
+        start = time.perf_counter()
+        with pytest.raises(ResolveError):
+            resolve(reqs, catalog)
+        # The old resolver would visit 4**12 assignments of the unrelated picks.
+        assert time.perf_counter() - start < 2.0
+
+    def test_error_names_the_missing_component_and_its_requirer(self):
+        catalog = self._catalog(n_unrelated=3, versions_each=2)
+        reqs = [ComponentReq(name="aa00"), ComponentReq(name="zz-top")]
+        with pytest.raises(ResolveError) as exc:
+            resolve(reqs, catalog)
+        msg = str(exc.value)
+        assert "no candidate for 'zz-missing'" in msg
+        assert "required by zz-mid" in msg
+        # Satisfiable components are not blamed.
+        assert "'aa00'" not in msg
+
+    def test_error_message_is_bounded(self):
+        catalog = self._catalog(n_unrelated=40, versions_each=3)
+        reqs = [ComponentReq(name=n) for n in sorted(catalog) if n != "zz-mid"]
+        with pytest.raises(ResolveError) as exc:
+            resolve(reqs, catalog)
+        assert len(str(exc.value).splitlines()) <= 12
+
+
+class TestResolverForwardCheck:
+    def test_dependent_constraint_applies_to_an_already_picked_dep(self):
+        """A dep picked before its dependent must still satisfy the dependent.
+
+        Names are picked alphabetically, so ``alib`` is picked (at its newest,
+        2.0.0) before ``zapp`` asks for ``^1.0``.  The pick must be revised,
+        not silently kept.
+        """
+        reqs = [ComponentReq(name="alib"), ComponentReq(name="zapp")]
+        candidates = {
+            "alib": [_entry("alib", "2.0.0+cvc.1"), _entry("alib", "1.4.0+cvc.1")],
+            "zapp": [_entry("zapp", "1.0.0+cvc.1", [Dependency(name="alib", version="^1.0")])],
+        }
+        result = resolve(reqs, candidates)
+        assert result.picked["alib"].version == "1.4.0+cvc.1"
+
+    def test_dependent_constraint_unsatisfiable_raises(self):
+        reqs = [ComponentReq(name="alib"), ComponentReq(name="zapp")]
+        candidates = {
+            "alib": [_entry("alib", "2.0.0+cvc.1")],
+            "zapp": [_entry("zapp", "1.0.0+cvc.1", [Dependency(name="alib", version="^1.0")])],
+        }
+        with pytest.raises(ResolveError) as exc:
+            resolve(reqs, candidates)
+        assert "alib" in str(exc.value)
