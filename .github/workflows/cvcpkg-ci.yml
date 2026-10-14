@@ -288,14 +288,22 @@ jobs:
     # Three overlapping exhausted the retry added in #505.
     #
     # The serialisation comes from the runner, not a concurrency group:
-    # exactly one runner (catx-03-cy-pca) carries the `docker` label, and
-    # GitHub holds every queued job for it until it is free (up to 24h).  A
-    # job-level `concurrency:` group cannot queue: it keeps one running and
-    # ONE pending job and cancels any older pending one whatever
-    # cancel-in-progress says, so with a dozen PRs in CI this job was
-    # cancelled before it ever ran.  Before giving a second runner the
-    # `docker` label, make the job safe to run in parallel (per-run compose
-    # project, container names, ports and buildx builder).
+    # exactly one runner (catx-03-cvcpkg-docker, registered to this repo)
+    # carries the `docker-integration` label, and GitHub holds every queued
+    # job for it until it is free (up to 24h).  A job-level `concurrency:`
+    # group cannot queue: it keeps one running and ONE pending job and cancels
+    # any older pending one whatever cancel-in-progress says, so with a dozen
+    # PRs in CI this job was cancelled before it ever ran.  Before giving a
+    # second runner the `docker-integration` label, make the job safe to run
+    # in parallel (per-run compose project, container names, ports and buildx
+    # builder).
+    #
+    # Its own label, not `docker`: catx-03-cy-pca carries `docker` AND
+    # `cvcpkg-prod`, so while this job ran there every prod deploy
+    # (deploy-prod.yml) queued behind each open PR's copy of it.  On the
+    # dedicated runner a deploy and this job share only the Docker daemon, and
+    # neither uses the other's names (compose project, port 8421, buildx
+    # builder).
     name: Integration tests (Docker)
     # Self-hosted runner safety.  For `pull_request`, GitHub evaluates the
     # workflow definition from the PR's own merge ref, so a fork PR can edit
@@ -309,10 +317,10 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
-    # cy-pca org runner (catx-03-cy-pca) provides Docker, and is the only
-    # runner with this label (see the note at the top of this job).  The
-    # same-repo + actor-allowlist gate above keeps fork PRs off this host.
-    runs-on: [self-hosted, Linux, X64, docker]
+    # catx-03-cvcpkg-docker provides Docker, and is the only runner with this
+    # label (see the note at the top of this job).  The same-repo +
+    # actor-allowlist gate above keeps fork PRs off this host.
+    runs-on: [self-hosted, Linux, X64, docker-integration]
     # The isolated `docker-container` builder below trades a little speed for not
     # sharing a content store with the rest of the host: a cold buildkit plus the
     # `--no-cache` rebuild of three images runs slower than the shared warm one,
