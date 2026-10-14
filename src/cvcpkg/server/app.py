@@ -10108,7 +10108,7 @@ def create_app(
                 if msg_type == "heartbeat":
                     status = data.get("status", "online")
                     current_jobs = data.get("current_jobs", 0)
-                    await _db_builders.heartbeat(
+                    beat = await _db_builders.heartbeat(
                         builder_id,
                         status=status,
                         current_jobs=current_jobs,
@@ -10117,6 +10117,17 @@ def create_app(
                         # stored figure is left alone (never zeroed).
                         free_disk_gb=data.get("free_disk_gb"),
                     )
+                    if beat is None:
+                        # The row is gone (unregistered, or the database was
+                        # reset).  Acking would keep the builder believing it
+                        # reports in while nothing is recorded; closing sends
+                        # it back to its HTTP heartbeat, whose 404 makes it
+                        # register again.
+                        logger.info(
+                            "builder %d no longer registered; closing its socket", builder_id
+                        )
+                        await websocket.close(code=4004, reason="builder not found")
+                        break
                     await websocket.send_json({"type": "heartbeat_ack"})
 
                 elif msg_type in _WS_HTTP_ONLY_JOB_FRAMES:
