@@ -90,8 +90,10 @@ build:
   build_type_independent: true
   # openblas now builds on every native platform including macOS, so every
   # NATIVE column links the same BLAS. windows is a deliberate delta: meson + MSVC
-  # + DLL discovery differ enough to need its own build.ps1 (currently a loud stub
-  # — until the port lands, windows numpy is unavailable from this recipe).
+  # + DLL discovery differ enough to need its own build.ps1. It is numpy-cp311's
+  # (2026-10-14; same revision, as no windows bundle existed): numpy's vendored
+  # meson (MESON cleared, #511), MSVC, OpenBLAS via pkg-config, and <prefix>\bin
+  # registered for DLL discovery in the verify step.
   # wasm: cross-built via meson-python with -Dallow-noblas (no openblas on wasm)
   # and a crossenv (host python3.12 drives the build, emcc compiles). wasi/cosmo
   # remain excluded.
