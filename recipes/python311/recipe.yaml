@@ -39,7 +39,12 @@ recipe:
   # downstream `import numpy` / `import pycvc` could not find the cvcpkg DLLs in
   # <prefix>\bin. The .pth registers <prefix>\bin at interpreter startup — the
   # Windows $ORIGIN analog, matching python312. Additive; unix builds unaffected.
-  cvc_revision: 8
+  # cvc.9: rebuild with no Homebrew.  The published macOS x86_64 cvc.8 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.11, libpython3.11.dylib,
+  # _dbm and _gdbm load gettext's libintl and gdbm from /usr/local/opt, so it aborts on
+  # any Mac without Homebrew.  _common/build-python.sh now also turns those off on macOS
+  # explicitly.  Every platform rebuilds.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

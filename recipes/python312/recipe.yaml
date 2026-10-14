@@ -60,7 +60,12 @@ recipe:
   # ALSO resolved the builder's ~/.local pip and skipped. cvc.13: _common/build-python.sh
   # now runs (and probes) ensurepip ISOLATED from the user site (-s + PYTHONNOUSERSITE),
   # so pip installs into the package's own site-packages. Rebuild restores pip.
-  cvc_revision: 13
+  # cvc.14: rebuild with no Homebrew.  The published macOS x86_64 cvc.8 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.12, libpython3.12.dylib,
+  # _dbm and _gdbm load gettext's libintl and gdbm from /usr/local/opt, so it aborts on
+  # any Mac without Homebrew.  _common/build-python.sh now also turns those off on macOS
+  # explicitly.  Every platform rebuilds.
+  cvc_revision: 14
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

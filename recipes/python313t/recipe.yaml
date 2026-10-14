@@ -30,7 +30,12 @@ recipe:
   # SHADOWS the non-t python column in a shared build prefix and made non-t cpX packages
   # mis-install to lib/python3.Xt/site-packages. _common/build-python.sh now strips the
   # standard names from a free-threaded column; rebuild republishes without the leak.
-  cvc_revision: 7
+  # cvc.8: rebuild with no Homebrew.  The published macOS x86_64 cvc.6 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.13t, libpython3.13t.dylib,
+  # _dbm, _gdbm and _decimal load gettext's libintl, gdbm and mpdecimal from
+  # /usr/local/opt, so it aborts on any Mac without Homebrew.  _common/build-python.sh
+  # now also turns those off on macOS explicitly.  Every platform rebuilds.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

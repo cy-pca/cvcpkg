@@ -188,6 +188,24 @@ if [ "${PYTHON_DISABLE_GIL}" = "1" ]; then
     CONFIGURE_ARGS+=(--disable-gil)
 fi
 
+# [macos] Link nothing from outside cvcpkg and the OS.  CPython's configure
+# takes libintl (gettext), gdbm and a system libmpdec whenever it can find them,
+# and a Mac with Homebrew has all three: the x86_64 3.11/3.12/3.13/3.13t bundles
+# built before CI moved Homebrew aside loaded /usr/local/opt/gettext/lib/
+# libintl.8.dylib, /usr/local/opt/gdbm/lib/libgdbm*.dylib and
+# /usr/local/opt/mpdecimal/lib/libmpdec.4.dylib, and aborted on any Mac without
+# them.  Say so explicitly, so a local build on a developer's Mac is as clean as
+# CI's: no libintl (CPython only uses it for locale.bindtextdomain & co.), the
+# bundled libmpdec, _dbm on macOS's own ndbm, and no _gdbm.
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+    CONFIGURE_ARGS+=(
+        ac_cv_lib_intl_textdomain=no
+        --without-system-libmpdec
+        --with-dbmliborder=ndbm
+        py_cv_module__gdbm=n/a
+    )
+fi
+
 # [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
 # the static libpython3.X.a but does NOT archive its bundled libmpdec objects
 # (Modules/_decimal/libmpdec/*.o), so libpython carries undefined mpd_* symbols
