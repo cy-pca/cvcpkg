@@ -2222,11 +2222,11 @@ def builder_run(
         cross_entries.append({"platform": cp, "arch": ca})
 
     # -- Advertised capabilities -----------------------------
-    # Explicit --capability flags, merged with the host probe (same probes as
-    # the install-side resolver gating: nvcc for cuda; a reachable+permitted
-    # daemon for incus and lxd, each proving WHICH server answered so an `lxc`
-    # compatibility shim fronting Incus is never advertised as lxd)
-    # unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
+    # Explicit --capability flags, merged with the host's BUILD probes (nvcc
+    # for cuda -- not the GPU, which only the install side counts; a
+    # reachable+permitted daemon for incus and lxd, each proving WHICH server
+    # answered so an `lxc` compatibility shim fronting Incus is never
+    # advertised as lxd) unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
     # authoritative inside host_capabilities() itself.  The scheduler routes a
     # job whose recipe declares requires_capabilities only to a builder
     # advertising all of them; advertising a capability never *reserves* the
@@ -2235,7 +2235,7 @@ def builder_run(
     if not no_auto_capabilities:
         from cvcpkg.platform import host_capabilities
 
-        advertised_caps |= host_capabilities()
+        advertised_caps |= host_capabilities("build")
 
         # glibc floors this machine can PRODUCE for (linux only).  Deliberately
         # not part of host_capabilities(): that set is also the install-side
