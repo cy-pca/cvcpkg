@@ -43,7 +43,7 @@ def _write_recipe(
 
     runtime_yaml = "" if runtime is None else f"\n  runtime:{deps_block(runtime)}"
     matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
-    (rdir / "recipe.yaml").write_text(f"""schema_version: 1
+    text = f"""schema_version: 1
 recipe:
   name: {name}
   upstream_version: "1.0.0"
@@ -58,7 +58,8 @@ build:
 {matrix}package:
   files:
     - bin/
-""")
+"""
+    (rdir / "recipe.yaml").write_text(text)
     (rdir / "build.sh").write_text("#!/bin/sh\nexit 0\n")
     return rdir
 
