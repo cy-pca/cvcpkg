@@ -1,0 +1,111 @@
+schema_version: 1
+recipe:
+  name: libreoffice
+  upstream_version: "26.8.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.libreoffice.org/
+  license: "MPL-2.0"
+  tags: [office, documents, conversion, tools]
+  description: >-
+    LibreOffice 26.8.1 (The Document Foundation's Linux build): Writer, Calc,
+    Impress, Draw and Math, for headless document conversion such as
+    `soffice --headless --convert-to pdf deck.pptx`. Repackaged from TDF's
+    signed release; nothing is compiled. With carlito-fonts and
+    liberation-fonts in the same prefix, documents set in Calibri, Arial,
+    Times New Roman or Courier New keep their line breaks.
+
+# The payload is TDF's prebuilt release; nothing is compiled here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by build.sh, not by cvcpkg core, so this map
+# DOCUMENTS what build.sh downloads. The enforced sha256 values are in
+# build.sh -- keep the two in sync when bumping.
+#
+# TDF's permanent archive keeps every build; 26.8.1.1 is the build released
+# as stable 26.8.1 (the stable and archive files have the same sha256, which
+# TDF's .mirrorlist pages publish). The x86-64 tarball was downloaded,
+# re-hashed, and its detached signature checked against TDF's code-signing
+# key:
+#   gpg --verify LibreOffice_26.8.1.1_Linux_x86-64_deb.tar.gz.asc ...
+#   -> Good signature from "LibreOffice Build Team (CODE SIGNING KEY)
+#      <build@documentfoundation.org>"
+#      (primary key C2839ECAD9408FBE9531C3E9F434A1EFAFEEAEA3)
+source:
+  type: prebuilt
+  base_url: https://downloadarchive.documentfoundation.org/libreoffice/old/26.8.1.1/deb
+  artifacts:
+    linux-x86_64:
+      file: x86_64/LibreOffice_26.8.1.1_Linux_x86-64_deb.tar.gz
+      sha256: "30903df3b9f61360d9660cd707de48cd2831469114492a5008ed58a0ac77d044"
+    linux-arm64:
+      file: aarch64/LibreOffice_26.8.1.1_Linux_aarch64_deb.tar.gz
+      sha256: "1b069c20dd237f6decad3ea02cb02f39fdf458b03d09c2a9facb7b9b71e6a27a"
+
+patches: []
+
+depends:
+  # extract-debs.py unpacks the .deb files (standard library only).
+  build:
+    - name: python3
+  # Libraries TDF's build links but does not bundle, needed for headless
+  # conversion: soffice.bin and libmergedlo need cairo; the oosplash launcher
+  # and the generic VCL plugin need Xinerama, Xrender and Xrandr (headless
+  # still loads them; no X server is used). fontconfig and freetype ship so the
+  # prefix's own (relocatable, cvc.4+) fontconfig finds fonts installed in the
+  # same prefix. The GTK3/GTK4 desktop plugins' libraries are deliberately not
+  # here: headless never loads those plugins.
+  runtime:
+    - name: cairo
+    - name: libxinerama
+    - name: libxrender
+    - name: libxrandr
+    - name: fontconfig
+    - name: freetype
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/libreoffice/
+    - bin/soffice
+    - bin/libreoffice
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    TDF's prebuilt Linux release, unpacked from its .deb packages without
+    dpkg. The tree TDF installs as /opt/libreoffice26.8 is lib/libreoffice;
+    bin/soffice and bin/libreoffice link to program/soffice.
+
+notes:
+  - title: "What is in it"
+    description: >-
+      Every package in TDF's deb tarball except desktop integration (menus,
+      the GNOME and KDE plugins) and the online updater: the core, Writer,
+      Calc, Impress, Draw, Math, Base, the en-US language pack, the en/es/fr
+      dictionaries, Python scripting (pyuno) and the bundled extensions.
+      Help packs and other language packs are not included.
+  - title: "Headless use"
+    description: >-
+      `soffice --headless --convert-to pdf --outdir out/ in.pptx`. Pass
+      `-env:UserInstallation=file:///some/dir` to keep the user profile out of
+      ~/.config/libreoffice (and so parallel conversions do not share one).
+      No X server is needed. Fonts come from fontconfig: install
+      carlito-fonts and liberation-fonts beside it for Calibri, Arial, Times
+      and Courier documents.
+  - title: "Linux only for now"
+    description: >-
+      TDF also publishes macOS (.dmg) and Windows (.msi) builds; staging those
+      needs hdiutil and an MSI administrative install respectively, and is not
+      done yet. linux-x86_64 is built and tested; linux-arm64 stages TDF's
+      aarch64 tarball through the same script but has not been built yet.
