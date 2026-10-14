@@ -26,10 +26,21 @@ fi
 # CPU-specific -march/-mtune (configure.ac: "If the user asked for a fat build,
 # override the path and flags"), which is what Debian and Fedora ship. It is a
 # no-op on other architectures (fat_path is x86-only), but say so explicitly.
+#
+# The fat build ALSO needs a generic build triplet. --enable-fat covers the mpn
+# assembly kernels only: configure still takes host_cpu from GMP's own
+# config.guess (skylake-pc-linux-gnu, ...) and config.h defines
+# HAVE_HOST_CPU_<that cpu>, so longlong.h inlines mulx/adcx into every C file
+# that multiplies limbs (mpz/n_pow_ui.c, mpf/*, mpn/generic/*). +cvc.11 was fat
+# and still raised SIGILL in __gmpz_n_pow_ui on the Sandy Bridge Xeon: 76 plain-C
+# functions carried BMI2/ADX/LZCNT (seen 2026-10-14). configfsf.guess is the
+# plain GNU guess GMP ships beside its own (x86_64-pc-linux-gnu), which is the
+# triplet Debian and Fedora configure with.
 fat_flags=()
 case "$(uname -m)" in
-    x86_64|amd64|i?86|i86pc|x86) fat_flags+=(--enable-fat) ;;
+    x86_64|amd64|i?86|i86pc|x86) fat_flags+=(--enable-fat --build="$(./configfsf.guess)") ;;
 esac
+echo "gmp: configure ${fat_flags[*]+${fat_flags[*]}}"
 
 # --with-pic: PIC objects in libgmp.a too. GMP otherwise assembles its static
 # objects non-PIC (absolute references to tables such as __gmp_binvert_limb_table),
