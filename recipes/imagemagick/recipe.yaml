@@ -162,19 +162,23 @@ build:
 
 package:
   files:
+    # The Unix builds (autotools) install headers under include/ImageMagick-7/
+    # and no CMake package; the flat include/Magick*, lib/cmake/ImageMagick/ and
+    # share/imagemagick/ layout is the Windows/wasm builds', so those entries are
+    # scoped (strict globs failed linux on them, 2026-10-14).
     - lib/libMagick*
     - lib/ImageMagick*
     - lib/CORE_RL_*.lib
     - lib/Magick++.lib
     - lib/MagickCore.lib
     - lib/MagickWand.lib
-    - lib/cmake/ImageMagick/
+    - { glob: "lib/cmake/ImageMagick/", platforms: [windows, wasm, wasm-mt, wasi] }
     - lib/pkgconfig/Magick*
     - lib/pkgconfig/ImageMagick*
-    - include/Magick++/
-    - include/Magick++.h
-    - include/MagickCore/
-    - include/MagickWand/
+    - { glob: "include/Magick++/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/Magick++.h", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/MagickCore/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/MagickWand/", platforms: [windows, wasm, wasm-mt, wasi] }
     - include/ImageMagick*/
     - bin/magick*
     - bin/Magick*
@@ -183,7 +187,7 @@ package:
     - bin/IM_MOD_RL_*.dll
     - bin/FILTER_*.dll
     - share/ImageMagick*/
-    - share/imagemagick/
+    - { glob: "share/imagemagick/", platforms: [windows, wasm, wasm-mt, wasi] }
   cmake_packages:
     - { name: ImageMagick, targets: ["ImageMagick::Magick++"] }
 
