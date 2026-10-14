@@ -17,6 +17,13 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
 else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
+# macOS: no NLS.  libiconv's configure links an external libintl when it finds
+# one, and the x86_64 cvc.3 bin/iconv loaded Homebrew's
+# /usr/local/opt/gettext/lib/libintl.8.dylib.  (glibc carries gettext itself, so
+# Linux keeps its message catalogs.)
+if [[ "${CVC_PLATFORM:-}" == "macos" ]]; then
+    CONFIGURE_ARGS+=(--disable-nls)
+fi
 
 MAKE=make
 command -v gmake >/dev/null 2>&1 && MAKE=gmake

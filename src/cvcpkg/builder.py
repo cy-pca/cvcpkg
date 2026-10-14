@@ -21,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2729,6 +2729,7 @@ def stage_bundle(
         dep_prefixes=dep_prefixes,
         runtime_deps=runtime_deps,
     )
+    check_no_homebrew(staging_dir, manifest["bundle"], allow=linkage_allow)
 
     # Write the manifest under a subdirectory named for the bundle itself.
     # Every bundle installs into the same shared prefix, and extraction is a
@@ -2748,6 +2749,76 @@ def stage_bundle(
         for f in sorted(recipe_dir.iterdir()):
             if f.is_file() and f.suffix in exts:
                 shutil.copy2(f, dest_recipe / f.name)
+
+
+# Homebrew's prefixes.  Nothing cvcpkg ships may point into them: a consumer
+# machine has no Homebrew (and macOS CI moves it aside before building, #182).
+HOMEBREW_PREFIXES = (
+    "/opt/homebrew/",
+    "/usr/local/opt/",
+    "/usr/local/Cellar/",
+    "/usr/local/Homebrew/",
+    "/home/linuxbrew/",
+)
+
+
+def _exported_metadata(root: Path) -> Iterator[tuple[Path, str]]:
+    """The staged files that hand compile/link flags or paths to consumers.
+
+    pkg-config files, libtool archives, bin/*-config scripts, exported CMake
+    package configs and CPython's build configuration.  Deliberately not every
+    text file: CMake's own find modules and pkgconf's default search path
+    legitimately *name* /opt/homebrew as a place to look.
+    """
+    for f in sorted(root.rglob("*")):
+        if f.is_symlink() or not f.is_file():
+            continue
+        rel = f.relative_to(root).as_posix()
+        name = f.name
+        if (
+            name.endswith((".pc", ".la"))
+            or (rel.startswith("bin/") and name.endswith("-config"))
+            or (
+                rel.startswith("lib/")
+                and "/cmake/" in f"/{rel}"
+                and name.endswith(".cmake")
+                and re.search(r"(?i)(config|targets)", name)
+            )
+            or (name.startswith("_sysconfigdata") and name.endswith(".py"))
+            or (name == "Makefile" and "/config-" in rel)
+        ):
+            yield f, rel
+
+
+def check_no_homebrew(root: Path, bundle: Mapping[str, Any], *, allow: Sequence[str] = ()) -> None:
+    """Fail packing when exported build metadata points into Homebrew.
+
+    check_relocatable already refuses a Mach-O that LOADS from Homebrew; this
+    covers the text that propagates flags to consumers (a .pc's -I/-L, a
+    -config script, python's _sysconfigdata CFLAGS/LDFLAGS), which no loader
+    check sees.  A path under a *allow* prefix (``package.linkage_allow``) is
+    vouched for and skipped.
+    """
+    allowed = tuple(a for a in allow if a)
+    hits: list[str] = []
+    for f, rel in _exported_metadata(root):
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = re.search("(" + "|".join(re.escape(x) for x in HOMEBREW_PREFIXES) + r")\S*", line)
+            if m and not (allowed and m.group(0).startswith(allowed)):
+                hits.append(f"  {rel}: {line.strip()[:160]}")
+                break
+    if hits:
+        raise PackError(
+            f"{bundle.get('name', '?')} ({bundle.get('platform', '?')}/{bundle.get('arch', '?')}): "
+            f"{len(hits)} exported file(s) point into Homebrew, which no consumer has:\n"
+            + "\n".join(hits[:40])
+            + "\nBuild against cvcpkg dependencies only (macOS CI moves Homebrew aside); "
+            "a deliberate fixed location goes in package.linkage_allow."
+        )
 
 
 def check_relocatable(

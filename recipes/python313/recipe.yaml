@@ -22,7 +22,12 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  cvc_revision: 6
+  # cvc.7: rebuild with no Homebrew.  The published macOS x86_64 cvc.6 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.13, libpython3.13.dylib,
+  # _dbm, _gdbm and _decimal load gettext's libintl, gdbm and mpdecimal from
+  # /usr/local/opt, so it aborts on any Mac without Homebrew.  _common/build-python.sh
+  # now also turns those off on macOS explicitly.  Every platform rebuilds.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

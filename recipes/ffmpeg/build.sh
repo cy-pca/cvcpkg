@@ -117,6 +117,14 @@ if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath,@loader_path")
 fi
 
+# X11 is not a cvcpkg dependency.  FFmpeg's configure autodetects xlib and
+# libxcb through pkg-config, and the macOS arm64 cvc.1 bundle picked up
+# Homebrew's that way: every libav*/libsw* dylib loaded
+# /opt/homebrew/opt/libx11/lib/libX11.6.dylib.  Turn the autodetection off.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    CONFIGURE_ARGS+=(--disable-xlib --disable-libxcb)
+fi
+
 ./configure "${CONFIGURE_ARGS[@]}" || {
     echo "cvcpkg: FFmpeg configure failed — dumping ffbuild/config.log" >&2
     tail -n 80 ffbuild/config.log >&2 || true

@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: ffmpeg
   upstream_version: "7.1.2"
-  cvc_revision: 1
+  # cvc.2: rebuild with no Homebrew.  The published macOS arm64 cvc.1 bundle was built
+  # before macOS CI moved Homebrew aside (#182): every libav*/libsw* dylib loads
+  # Homebrew's libX11/libxcb from /opt/homebrew/opt, so it fails to load on any Mac
+  # without them.  build.sh now turns X11 autodetection off on macOS.  Every platform
+  # rebuilds.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
