@@ -37,11 +37,15 @@ esac
 # which is what every current toolchain produces by default. macOS ld rejects it
 # outright ("Illegal text-relocations", seen 2026-10-14 when test.sh linked
 # libgmp.a). The shared library was always PIC; this makes the static one usable.
+#
+# fat_flags is empty off x86, and macOS's bash 3.2 calls "${fat_flags[@]}" on an
+# empty array an unbound variable under `set -u` (seen 2026-10-14 on macos-latest,
+# arm64). The ${a[@]+"${a[@]}"} form expands to nothing there instead.
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-cxx \
     --with-pic \
-    "${fat_flags[@]}" \
+    ${fat_flags[@]+"${fat_flags[@]}"} \
     "${shared_flags[@]}"
 
 make -j "${CVC_JOBS}"
