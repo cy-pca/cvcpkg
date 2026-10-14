@@ -236,6 +236,7 @@ def install(
         license_gated_components,
         not_redistributable_deps,
         require_license_acceptance,
+        source_build_deps,
     )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
@@ -392,10 +393,23 @@ def install(
         _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
     )
     _local_memo: dict[str, list[str] | None] = {}
+    # With --fallback-to-source, a name with no bundle for this platform but a
+    # recipe that builds here is satisfied the same way: built locally, after
+    # its build and runtime deps join the search (resolved from the catalog, or
+    # source-built in turn). Without its build deps it was built against
+    # whatever else the request pulled in, and a build dep nothing else needed
+    # was simply missing (cython-cp312's setuptools under install-deps
+    # numpy-cp312).
+    _fallback_built: set[str] = set()
 
     def _local_only(name: str) -> list[str] | None:
         if name not in _local_memo:
-            _local_memo[name] = not_redistributable_deps(name, _local_rdirs, plat)
+            deps = not_redistributable_deps(name, _local_rdirs, plat)
+            if deps is None and fallback_to_source:
+                deps = source_build_deps(name, _local_rdirs, plat)
+                if deps is not None:
+                    _fallback_built.add(name)
+            _local_memo[name] = deps
         return _local_memo[name]
 
     local_built: list[str] = []
@@ -479,6 +493,12 @@ def install(
         source_only = requested_names
 
     for name in local_built:
+        if name in _fallback_built:
+            click.echo(
+                f"cvcpkg: {name} has no bundle for this platform; building it from "
+                f"its recipe after its build and runtime deps (--fallback-to-source)."
+            )
+            continue
         click.echo(
             f"cvcpkg: {name} is not redistributable, so it is never published; "
             f"building it from its recipe, which downloads it from the vendor "
