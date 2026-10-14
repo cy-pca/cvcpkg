@@ -58,3 +58,13 @@ case "${CVC_PLATFORM}" in
 esac
 
 cvc_cmake_build "${_opts[@]}"
+
+# allegro's exported targets list the SOURCE tree's include dir next to the
+# installed one (INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include;<src>/"),
+# a build-machine path no consumer has.  cvc_rewrite_install_paths only maps
+# the install and deps prefixes, so drop the source entry here.
+for _f in "${CVC_INSTALL_DIR}"/lib/cmake/allegro/*.cmake; do
+    [ -f "${_f}" ] || continue
+    sed -i.bak -e "s#;${CVC_SOURCE_DIR%/}/\"#\"#g" -e "s#;${CVC_SOURCE_DIR%/}\"#\"#g" "${_f}"
+    rm -f "${_f}.bak"
+done
