@@ -84,7 +84,7 @@ package:
     - lib/levmar*
     - lib/cmake/levmar/
     - include/levmar/
-    - include/levmar.h
+    # The header is include/levmar/levmar.h (covered above), not include/levmar.h.
   cmake_packages:
     - { name: levmar, targets: ["levmar::levmar"] }
 

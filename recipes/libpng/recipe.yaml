@@ -93,8 +93,7 @@ package:
     - include/png*.h
     - include/libpng16/
     - bin/libpng*-config
-    - bin/png-fix-itxt
-    - bin/pngfix
+    # bin/pngfix and bin/png-fix-itxt are not built (PNG_TOOLS is off).
   cmake_packages:
     - { name: PNG, targets: ["PNG::PNG"] }
   pkg_config:

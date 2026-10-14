@@ -93,7 +93,7 @@ package:
     - include/hdf5.h
     - include/hdf5_hl.h
     - include/H5*.h
-    - include/H5*.hpp
+    # The C++ API headers are H5*.h too (H5Cpp.h, H5File.h, ...); there are no .hpp.
     - bin/h5*
   cmake_packages:
     - { name: HDF5, targets: ["HDF5::HDF5"] }
