@@ -13,7 +13,9 @@ recipe:
   # Sandy Bridge Xeon, 2026-10-14). test.sh now fails any x86 build that
   # records -march/-mtune in gmp.h or lacks the fat CPUID dispatcher. windows
   # (--disable-assembly) and wasm/wasi/cosmo (generic --host) were already
-  # portable and are only rebuilt for revision coherence.
+  # portable and are only rebuilt for revision coherence. Also --with-pic: the
+  # static libgmp.a was non-PIC, so it could not link into PIE executables
+  # (macOS ld: "Illegal text-relocations").
   cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

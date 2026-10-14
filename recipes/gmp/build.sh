@@ -31,9 +31,16 @@ case "$(uname -m)" in
     x86_64|amd64|i?86|i86pc|x86) fat_flags+=(--enable-fat) ;;
 esac
 
+# --with-pic: PIC objects in libgmp.a too. GMP otherwise assembles its static
+# objects non-PIC (absolute references to tables such as __gmp_binvert_limb_table),
+# so the archive cannot be linked into a PIE executable or a shared library,
+# which is what every current toolchain produces by default. macOS ld rejects it
+# outright ("Illegal text-relocations", seen 2026-10-14 when test.sh linked
+# libgmp.a). The shared library was always PIC; this makes the static one usable.
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-cxx \
+    --with-pic \
     "${fat_flags[@]}" \
     "${shared_flags[@]}"
 
