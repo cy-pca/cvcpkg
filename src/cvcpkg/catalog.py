@@ -13,6 +13,7 @@ import yaml
 from cvcpkg.config import default_catalog_url
 from cvcpkg.errors import CatalogError, IntegrityError
 from cvcpkg.manifest import CatalogEntry, Dependency
+from cvcpkg.retry import with_retry
 from cvcpkg.revisions import revision_of
 
 GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml"
@@ -88,7 +89,10 @@ def fetch_catalog(
 
     for try_url in urls_to_try:
         try:
-            data = _fetch_url(try_url)
+            # Retry the whole body, not only connection setup: a catalog cut
+            # off mid-transfer (the server restarting under a deploy) raises a
+            # transient TruncatedBody from the https backend.
+            data = with_retry(lambda u=try_url: _fetch_url(u), what=f"fetch catalog {try_url}")
         except CatalogError as e:
             last_error = e
             if len(urls_to_try) > 1:

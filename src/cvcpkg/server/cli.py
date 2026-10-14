@@ -138,6 +138,16 @@ def server_cli() -> None:
     default="",
     help="Path to PID file.  [default: <state-dir>/cvcpkg-server.pid]",
 )
+@click.option(
+    "--graceful-timeout",
+    default=30,
+    type=click.IntRange(min=0),
+    envvar="CVCPKG_GRACEFUL_TIMEOUT",
+    show_default=True,
+    help="On SIGTERM, seconds to let in-flight requests (archive downloads) "
+    "finish before they are cut off.  0 waits indefinitely.  Keep it below "
+    "the supervisor's stop timeout (docker compose stop_grace_period).",
+)
 def run(
     state_dir: str,
     host: str,
@@ -155,6 +165,7 @@ def run(
     registration_mode: str,
     daemon: bool,
     pidfile: str,
+    graceful_timeout: int,
 ) -> None:
     """Start the cvcpkg package server."""
     import os
@@ -334,6 +345,14 @@ def run(
             workers=workers,
             log_level="info",
             log_config=log_config,
+            # On SIGTERM uvicorn stops accepting and waits for open responses
+            # to complete; this bounds that wait, after which the remaining
+            # ones are cancelled.  Without a bound, one slow client could hold
+            # a deploy until Docker's SIGKILL.  A download still cut off at the
+            # deadline is caught by the client's Content-Length check and
+            # fetched again; clients older than that check report it as a
+            # sha256 mismatch instead, which is why the drain matters.
+            timeout_graceful_shutdown=graceful_timeout or None,
         )
     finally:
         # Clean up PID file on exit

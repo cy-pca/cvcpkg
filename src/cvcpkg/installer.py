@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 import tarfile
+import time
 import zipfile
 from collections.abc import Callable, Collection, MutableMapping
 from pathlib import Path
@@ -16,9 +17,9 @@ from typing import TYPE_CHECKING
 
 from cvcpkg import cache as cache_mod
 from cvcpkg._archive import archive_format, open_tar
-from cvcpkg.errors import InstallError, IntegrityError
+from cvcpkg.errors import DownloadIntegrityError, InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
-from cvcpkg.retry import with_retry
+from cvcpkg.retry import backoff_delay, with_retry
 
 if TYPE_CHECKING:
     from cvcpkg.builder import LicenseAcceptance
@@ -82,7 +83,9 @@ def download_bundle(
     """Download *entry*'s archive (or return from cache).
 
     Tries ``archive_url`` first, then each URL in ``mirror_urls``
-    before giving up.  Returns the local path to the verified archive.
+    before giving up.  Each URL gets the transfer and integrity retries of
+    :func:`_download_verified`.  Returns the local path to the verified
+    archive; nothing unverified is ever cached or returned.
     """
     filename = _archive_filename(entry)
     sha = entry.sha256
@@ -101,15 +104,7 @@ def download_bundle(
     last_error: Exception | None = None
     for url in urls:
         try:
-            # Retry the entire transfer, not just connection setup: a stream
-            # that fails after a 200 (proxy reset, incomplete read) is only
-            # recoverable by starting the file again. IntegrityError is NOT
-            # retried -- a hash mismatch is a verdict on the bytes.
-            path = with_retry(
-                lambda u=url: _download_from_url(u, filename, sha, cache_dir, max_bytes),
-                what=f"download {filename}",
-            )
-            return path
+            return _download_verified(url, filename, sha, cache_dir, max_bytes)
         except (InstallError, IntegrityError) as exc:
             last_error = exc
             logging.getLogger("cvcpkg").debug(
@@ -122,6 +117,106 @@ def download_bundle(
     raise last_error  # type: ignore[misc]
 
 
+# ── Download retry policy ─────────────────────────────────────────
+#
+# Two budgets, for two different failures.
+#
+# The TRANSFER budget is with_retry's, for transport faults: 502/503/504,
+# resets, and a body cut off short of its Content-Length (which the https
+# backend raises as TruncatedBody).  with_retry's defaults -- four attempts
+# inside about four seconds -- are sized for a proxy blip.  The outage that
+# matters to a whole-archive download is a deploy replacing the server's
+# container: on 2026-10-12 cvcpkg.org was recreated at 16:35:38 and healthy at
+# 16:36:54, and a job that hit the gap failed with a bare HTTP error.  So this
+# window spans about two minutes; it is still bounded by attempts and by wall
+# clock, and a fully-down server already fails the catalog fetch before this.
+_TRANSFER_ATTEMPTS = 10
+_TRANSFER_BASE_DELAY_S = 2.0
+_TRANSFER_MAX_DELAY_S = 20.0
+_TRANSFER_BUDGET_S = 150.0
+
+# The INTEGRITY budget: how many times one URL is downloaded, each time from
+# scratch, when a complete body does not hash to the catalog's sha256.  A
+# mismatch usually means the server really serves other bytes, so this stays
+# small; but a body can also be mangled in transit, or served by a server in
+# the middle of being replaced, and one more fetch after a pause settles which.
+# Nothing is resumed: each attempt starts at byte 0 into a new temp file, and
+# the rejected file is deleted before the next one starts.
+INTEGRITY_ATTEMPTS = 3
+_INTEGRITY_BASE_DELAY_S = 5.0
+_INTEGRITY_MAX_DELAY_S = 20.0
+
+
+def _download_verified(
+    url: str,
+    filename: str,
+    sha: str,
+    cache_dir: Path,
+    max_bytes: int,
+) -> Path:
+    """Download *url* into the cache, retrying until its bytes verify.
+
+    Raises :class:`DownloadIntegrityError` (an ``IntegrityError``) after
+    ``INTEGRITY_ATTEMPTS`` complete bodies have all hashed wrong, and the last
+    ``InstallError`` if the transfer itself never succeeds.  Either error
+    names the number of downloads that were attempted.
+    """
+    log = logging.getLogger("cvcpkg")
+    tries = 0
+
+    def _attempt() -> Path:
+        nonlocal tries
+        tries += 1
+        return _download_from_url(url, filename, sha, cache_dir, max_bytes)
+
+    mismatches: list[DownloadIntegrityError] = []
+    for round_ in range(INTEGRITY_ATTEMPTS):
+        try:
+            # Retry the entire transfer, not just connection setup: a stream
+            # that fails after a 200 (proxy reset, incomplete read) is only
+            # recoverable by starting the file again.
+            return with_retry(
+                _attempt,
+                what=f"download {filename}",
+                attempts=_TRANSFER_ATTEMPTS,
+                budget_s=_TRANSFER_BUDGET_S,
+                base_delay_s=_TRANSFER_BASE_DELAY_S,
+                max_delay_s=_TRANSFER_MAX_DELAY_S,
+            )
+        except DownloadIntegrityError as exc:
+            mismatches.append(exc)
+            if round_ + 1 == INTEGRITY_ATTEMPTS:
+                break
+            wait = backoff_delay(round_, _INTEGRITY_BASE_DELAY_S, _INTEGRITY_MAX_DELAY_S)
+            # A warning, not debug: a mismatch that a second download cures is
+            # still evidence of a server or network problem worth seeing in CI.
+            log.warning(
+                "%s -- discarded; downloading again from scratch in %.1fs (attempt %d/%d)",
+                exc,
+                wait,
+                round_ + 2,
+                INTEGRITY_ATTEMPTS,
+            )
+            time.sleep(wait)
+        except InstallError as exc:
+            if tries > 1:
+                raise InstallError(f"{exc} (gave up after {tries} download attempts)") from exc
+            raise
+
+    last = mismatches[-1]
+    raise DownloadIntegrityError(
+        filename,
+        last.expected,
+        last.actual,
+        url=last.url,
+        status=last.status,
+        content_length=last.content_length,
+        received=last.received,
+        attempts=tries,
+        actuals=tuple(m.actual for m in mismatches),
+    )
+
+
 def _download_from_url(
     url: str,
     filename: str,
@@ -129,7 +224,12 @@ def _download_from_url(
     cache_dir: Path,
     max_bytes: int,
 ) -> Path:
-    """Download a single URL, verify SHA-256, store in cache."""
+    """Download a single URL, verify SHA-256, store in cache.
+
+    Only a body that verifies ever reaches the cache: the bytes are written to
+    a temp file beside it, which is deleted on every failure (cut connection,
+    size cap, hash mismatch) and moved into place only after the hash matches.
+    """
     import tempfile
 
     from cvcpkg.config import authorize_request
@@ -143,6 +243,10 @@ def _download_from_url(
     # token is never sent in cleartext.
     url, auth = authorize_request(url)
 
+    tmp_path: Path | None = None
+    status: int | None = None
+    content_length: int | None = None
+    total = 0
     try:
         backend = get_backend(url)
         # The size probe is an OPTIMISATION, not a gate: it lets an oversized
@@ -166,33 +270,61 @@ def _download_from_url(
         # Stream to a temp file instead of loading into memory
         cache_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=cache_dir, delete=False, suffix=".download") as tmp:
-            total = 0
+            tmp_path = Path(tmp.name)
             h = hashlib.sha256()
             with backend.open(url, headers=auth) if auth else backend.open(url) as stream:
+                # Diagnostics for a mismatch report; the http(s) body exposes
+                # both, any other backend's stream simply has neither.
+                status = getattr(stream, "status", None)
+                content_length = _header_int(getattr(stream, "headers", None), "Content-Length")
                 while True:
+                    # An http(s) body that ends short of its Content-Length
+                    # raises TruncatedBody here (a transient fault, retried by
+                    # the caller) rather than returning b"" as if complete.
                     chunk = stream.read(1 << 16)  # 64 KB
                     if not chunk:
                         break
                     total += len(chunk)
                     if total > max_bytes:
-                        os.unlink(tmp.name)
                         raise InstallError(f"archive for {filename} exceeds {max_bytes} byte limit")
                     h.update(chunk)
                     tmp.write(chunk)
-            tmp_path = Path(tmp.name)
-    except (InstallError, IntegrityError):
-        raise
-    except Exception as e:
+
+        actual = h.hexdigest()
+        if sha and actual != sha:
+            raise DownloadIntegrityError(
+                filename,
+                sha,
+                actual,
+                url=url,
+                status=status,
+                content_length=content_length,
+                received=total,
+            )
+
+        final_sha = sha or actual
+        return cache_mod.store_from_file(cache_dir, final_sha, filename, tmp_path)
+    except BaseException as e:
+        # Never leave a partial or rejected body behind: it is not in the
+        # cache's <sha>/ layout so nothing would install it, but it would
+        # accumulate in the cache directory forever.
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        if isinstance(e, (InstallError, IntegrityError)) or not isinstance(e, Exception):
+            raise
         raise InstallError(f"failed to download {url}: {e}") from e
 
-    actual = h.hexdigest()
-    if sha and actual != sha:
-        tmp_path.unlink(missing_ok=True)
-        raise IntegrityError(f"sha256 mismatch for {filename}: expected {sha}, got {actual}")
 
-    final_sha = sha or actual
-    path = cache_mod.store_from_file(cache_dir, final_sha, filename, tmp_path)
-    return path
+def _header_int(headers: object, name: str) -> int | None:
+    """Integer value of header *name*, or None when absent or malformed."""
+    get = getattr(headers, "get", None)
+    if get is None:
+        return None
+    try:
+        value = get(name)
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 # ── Archive extractors ───────────────────────────────────────────

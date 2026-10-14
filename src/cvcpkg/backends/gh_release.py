@@ -77,8 +77,13 @@ class GhReleaseBackend(StorageBackend):
     def open(self, uri: str) -> BinaryIO:
         owner, repo, tag, asset = _parse_gh_uri(uri)
         url, _ = _resolve_asset_url(owner, repo, tag, asset)
+        from cvcpkg.backends.https import _CheckedBody
+
         try:
-            return urllib.request.urlopen(url, timeout=120)  # type: ignore[return-value]  # noqa: S310
+            # Same Content-Length guard as the https backend: a cut connection
+            # must raise, not read as the end of the asset.
+            resp = urllib.request.urlopen(url, timeout=120)  # noqa: S310
+            return _CheckedBody(resp)  # type: ignore[return-value]
         except urllib.error.URLError as exc:
             raise OSError(f"Failed to download {url}: {exc}") from exc
 
