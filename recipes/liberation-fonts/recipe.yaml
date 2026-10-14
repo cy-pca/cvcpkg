@@ -1,0 +1,59 @@
+schema_version: 1
+recipe:
+  name: liberation-fonts
+  upstream_version: "2.1.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/liberationfonts/liberation-fonts
+  license: OFL-1.1
+  tags: [fonts, data]
+  description: >-
+    Liberation Sans, Serif and Mono 2.1.5 (TrueType): the metric-compatible
+    free alternatives to Arial/Helvetica, Times New Roman and Courier New,
+    installed into share/fonts/truetype/liberation where the cvcpkg
+    fontconfig (cvc.4+) finds them. Documents that name Arial, Helvetica,
+    Times or Courier render with the same line breaks on hosts that have
+    none of those fonts.
+
+# Upstream's own TrueType release tarball, attached to the 2.1.5 release
+# (https://github.com/liberationfonts/liberation-fonts/releases/tag/2.1.5).
+# The .ttf files ARE upstream's build output: the source tarball needs
+# FontForge to generate them, which cvcpkg does not package. Fonts are
+# platform-independent data, so nothing here is machine code.
+source:
+  type: tarball
+  url: https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz
+  sha256: "7191c669bf38899f73a2094ed00f7b800553364f90e2637010a69c0e268f25d0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: twelve .ttf files and the licence, identical on every platform.
+    # Built once, installed everywhere (the same shape as ca-bundle).
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/fonts/truetype/liberation/
+    - share/doc/liberation-fonts/
+
+notes:
+  - title: "Discovery"
+    description: >-
+      fontconfig cvc.4 and later lists <prefix>/share/fonts in its
+      fonts.conf, so pango, cairo, WeasyPrint and LibreOffice in the same
+      prefix pick these fonts up with no configuration; its metric aliases
+      map Arial/Helvetica, Times New Roman and Courier New onto them. With an
+      older fontconfig, add the directory to a fonts.conf or copy the files
+      to ~/.local/share/fonts.
