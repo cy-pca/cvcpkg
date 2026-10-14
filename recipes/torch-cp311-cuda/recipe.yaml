@@ -37,9 +37,9 @@ provides: ["torch-cp311"]
 # lands these are published from a GPU host by hand.
 # The Windows column imports without a GPU or driver (the CUDA runtime DLLs ship
 # in the wheel), so windows-build.yml builds it on a GitHub runner.
-# At install time `cuda` is what the resolver checks, and the host probe reports
-# it only where nvcc is installed. A GPU workstation with just the driver needs
-# CVCPKG_CAPABILITIES=cuda to be offered this build instead of the CPU one.
+# At install time `cuda` is satisfied by an NVIDIA GPU with a working driver
+# (host_capabilities("install"), cy-pca/cvcpkg#260), so a GPU workstation is
+# offered this build over the CPU one with no override; builders still need nvcc.
 requires_capabilities: ["cuda"]
 # The payload is PyPI's manylinux_2_28 torch wheel — build.sh only pip-installs
 # it, so nothing is compiled here and the builder's glibc never reaches the
