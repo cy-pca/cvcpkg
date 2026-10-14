@@ -51,16 +51,24 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # MSVC + Ninja, static LLVM/clang libs and a static CRT (/MT). Added at the
+    # same 18.1.8+cvc.1: no windows bundle existed at any revision, and the
+    # linux/macos bundles do not change.
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
-    - bin/clang-format
+    - glob: bin/clang-format
+      platforms: [linux, macos]
+    - glob: bin/clang-format.exe
+      platforms: [windows]
     - bin/git-clang-format
     - share/clang/clang-format-diff.py
 
 notes:
   - title: "Why a separate recipe"
-    platforms: [linux, macos]
+    platforms: [linux, macos, windows]
     description: >-
       `llvm` (22.x) and `llvm18` both ship bin/clang-format, but as part of a
       200+ MB toolchain bundle, and neither packages git-clang-format. This
@@ -79,9 +87,17 @@ notes:
       names it python3.11, not python3):
         <prefix>/bin/python3.11 <prefix>/bin/git-clang-format --diff <base>
   - title: "Version pinning"
-    platforms: [linux, macos]
+    platforms: [linux, macos, windows]
     description: >-
       upstream_version tracks the 18.1.x series, the last 18 release being
       18.1.8. Moving a project to a newer clang-format major is a deliberate
       reformatting decision; add a new recipe (or bump this one) when a
       consumer makes it, not as a routine update.
+  - title: "git clang-format on Windows"
+    platforms: [windows]
+    description: >-
+      bin/git-clang-format is the same Python 3 script; Windows does not run its
+      #!/usr/bin/env python3 line, so call it through an interpreter and point it
+      at this bundle's binary, e.g. with cvcpkg's python311 installed:
+        <prefix>\python.exe <prefix>\bin\git-clang-format --binary
+        <prefix>\bin\clang-format.exe --diff <base>
