@@ -229,7 +229,7 @@ def install(
         load_catalog_from_file,
         newer_revision_available,
     )
-    from cvcpkg.errors import InstallError, IntegrityError
+    from cvcpkg.errors import InstallError, IntegrityError, SchemaError
     from cvcpkg.installer import (
         build_from_source_fallback,
         install_entry,
@@ -705,6 +705,8 @@ def install(
     # The lockfile records exactly which bundles were installed, their
     # SHA-256 hashes, and archive URLs.  It enables 'cvcpkg verify'
     # (integrity check) and 'cvcpkg sync' (re-download missing bundles).
+    # It is the record of the whole prefix, so entries from earlier installs
+    # are kept; a bundle installed now replaces its old entry.
     lock = Lockfile(
         platform=plat,
         arch=arc,
@@ -714,8 +716,31 @@ def install(
         bundles=lock_entries,
     )
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    kept = 0
+    if lock_path.is_file():
+        try:
+            previous = Lockfile.read(lock_path)
+        except SchemaError as exc:
+            click.echo(
+                f"cvcpkg: warning — replacing an unreadable lockfile at {lock_path}: {exc}",
+                err=True,
+            )
+        else:
+            old_tuple = (previous.platform, previous.arch, previous.config, previous.link)
+            if old_tuple != (plat, arc, reqs.config, reqs.link):
+                click.echo(
+                    "cvcpkg: warning — this prefix's lockfile was written for "
+                    f"{'/'.join(old_tuple)}, not {plat}/{arc}/{reqs.config}/{reqs.link}; "
+                    "keeping its entries",
+                    err=True,
+                )
+            lock = lock.merge(previous)
+            kept = len(lock.bundles) - len(lock_entries)
     lock.write(lock_path)
-    click.echo(f"cvcpkg: lockfile written to {lock_path}")
+    detail = (
+        f" ({kept} entr{'y' if kept == 1 else 'ies'} kept from earlier installs)" if kept else ""
+    )
+    click.echo(f"cvcpkg: lockfile written to {lock_path}{detail}")
 
     # ── Write the CMake package config into the prefix ──
     #

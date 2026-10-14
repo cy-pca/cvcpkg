@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import yaml
@@ -61,6 +61,18 @@ class Lockfile:
                 for e in self.bundles
             ],
         }
+
+    def merge(self, previous: Lockfile) -> Lockfile:
+        """This lockfile plus every entry of *previous* it does not replace.
+
+        A prefix accumulates bundles across installs, and verify, uninstall,
+        upgrade and the conflict check all read the lockfile as the record of
+        everything in it.  An entry here replaces *previous*'s entry of the
+        same name; the header (tuple, catalog revision) is this lockfile's.
+        """
+        names = {e.name for e in self.bundles}
+        kept = [e for e in previous.bundles if e.name not in names]
+        return replace(self, bundles=sorted(kept + self.bundles, key=lambda e: e.name))
 
     def write(self, path: Path) -> None:
         """Write the lockfile to *path*."""

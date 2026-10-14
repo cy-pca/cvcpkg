@@ -504,6 +504,23 @@ class TestPlatformArchValidation:
         assert len(lock_data["bundles"]) == 1
         assert lock_data["bundles"][0]["name"] == "zlib"
 
+    def test_second_install_keeps_the_first_in_the_lockfile(self, tmp_path):
+        """Regression: each install replaced the prefix's lockfile with only its
+        own closure, so verify, uninstall, upgrade and the conflict check all
+        forgot what earlier installs had put in the same prefix."""
+        cat = _make_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        common = ["--catalog", str(cat), "--prefix", str(prefix), "--platform", "linux"]
+        common += ["--arch", "x86_64"]
+        with mock.patch("cvcpkg.installer.install_entry"):
+            assert main(["install", "zlib", *common]) in (0, None)
+            assert main(["install", "yaml", *common]) in (0, None)
+            # Reinstalling a name replaces its entry rather than duplicating it.
+            assert main(["install", "zlib", *common]) in (0, None)
+        lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
+        names = [b["name"] for b in yaml.safe_load(lock_path.read_text())["bundles"]]
+        assert names == ["yaml", "zlib"]
+
     def test_install_from_requirements_file(self, tmp_path, capsys):
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
