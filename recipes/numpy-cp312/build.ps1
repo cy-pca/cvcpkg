@@ -8,13 +8,24 @@
 #
 # The one structural difference from the POSIX script: there is no RUNPATH on
 # Windows, so there is no patchelf pass. numpy's extensions link openblas.dll by
-# name and resolve it at import out of <prefix>\bin, which the python31X recipe's
-# cvcpkg-dll-directories.pth adds via os.add_dll_directory at startup. That .pth
-# is what replaces $ORIGIN here — without it every extension linking a prefix
-# library fails with "DLL load failed".
+# name and resolve it at import out of <prefix>\bin. Downstream that directory is
+# registered by the python312 recipe's cvcpkg-dll-directories.pth (the Windows
+# counterpart of $ORIGIN, run via os.add_dll_directory at interpreter startup).
+# The in-build verify below does NOT assume that .pth is present — it registers
+# <prefix>\bin itself, exactly as the POSIX verify sets LD_LIBRARY_PATH — so the
+# build proves the gemm path regardless of the interpreter's startup hooks.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\_common\python-wheel.ps1"   # also scrubs MinGW from PATH
+
+# numpy ships its OWN vendored meson (vendored-meson/meson/meson.py) and pins it
+# in pyproject.toml ([tool.meson-python] meson = 'vendored-meson/meson/meson.py')
+# because meson_cpu's SIMD dispatch uses numpy's custom `features` meson module
+# that stock meson lacks — otherwise: meson_cpu/x86/meson.build ERROR: Module
+# "features" does not exist. python-wheel.ps1 sets $env:MESON (so meson-backed
+# wheels can find cvcpkg's meson), but that env var OVERRIDES numpy's pyproject
+# pin. Clear it here so meson-python honors numpy's vendored meson.
+Remove-Item Env:\MESON -ErrorAction SilentlyContinue
 
 $py = Get-CvcPythonExe
 $deps = if ($env:CVC_DEPS_PREFIX) { $env:CVC_DEPS_PREFIX } else { $env:CVC_INSTALL_DIR }
@@ -119,9 +130,22 @@ Write-Output "numpy-cp312: built $($wheel.Name)"
 if ($LASTEXITCODE -ne 0) { throw "numpy-cp312: pip install failed ($LASTEXITCODE)" }
 
 # ── Verify: gemm actually runs, and NOTHING was vendored ────────────────────
+# Register <prefix>\bin (where openblas.dll lives) on the DLL search path before
+# importing numpy — the Windows analog of the POSIX verify's LD_LIBRARY_PATH.
+# PATH is NOT consulted: since Python 3.8 the loader ignores it for an extension
+# module's dependent DLLs (see python312/build.ps1). Doing it here means the
+# build's own proof does not depend on the interpreter's startup .pth.
 $env:PYTHONPATH = "$(Join-Path $env:CVC_INSTALL_DIR 'Lib\site-packages');$env:PYTHONPATH"
+$binLits = ((@((Join-Path $deps 'bin'), (Join-Path $bld 'bin')) |
+    Where-Object { Test-Path $_ } | Select-Object -Unique) |
+    ForEach-Object { "r'" + $_ + "'" }) -join ', '
 & $py -c @"
-import os, numpy as np
+import os
+_dll_cookies = []
+for _d in [$binLits]:
+    if os.path.isdir(_d) and hasattr(os, 'add_dll_directory'):
+        _dll_cookies.append(os.add_dll_directory(_d))
+import numpy as np
 a = np.arange(12, dtype=np.float64).reshape(3, 4)
 assert a.sum() == 66.0, a.sum()
 assert (a @ a.T).shape == (3, 3)          # exercises the BLAS gemm path

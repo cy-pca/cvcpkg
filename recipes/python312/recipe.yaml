@@ -65,6 +65,11 @@ recipe:
   # _dbm and _gdbm load gettext's libintl and gdbm from /usr/local/opt, so it aborts on
   # any Mac without Homebrew.  _common/build-python.sh now also turns those off on macOS
   # explicitly.  Every platform rebuilds.
+  # windows (2026-10-14, same revision: no windows bundle existed at any): the
+  # libffi edge is scoped off windows as python311's is (CPython fetches its own
+  # via get_externals), and build.ps1 takes python311's lean-PATH + vcvars64 steps
+  # and --no-tkinter; PC/layout gets --preset-default (venv, ensurepip) as in
+  # python311. Other platforms are unchanged.
   cvc_revision: 14
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -101,7 +106,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -126,7 +131,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
