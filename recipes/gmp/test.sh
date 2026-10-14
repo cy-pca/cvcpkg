@@ -65,10 +65,19 @@ if ! command -v nm >/dev/null 2>&1; then
         echo "FAIL: nm not found"
         exit 1
     fi
-elif ! nm "${LIB}/libgmp.a" 2>/dev/null | grep -q 'gmpn_cpuvec_init'; then
-    echo "FAIL: libgmp.a has no __gmpn_cpuvec_init: not a fat build, so its mpn kernels are the builder's CPU's"
-    exit 1
 else
+    # Capture first, then grep: `nm | grep -q` under pipefail fails spuriously,
+    # because grep -q exits at the first match and nm then dies of SIGPIPE on a
+    # large archive (seen on macOS).
+    nm_out=$(nm "${LIB}/libgmp.a" 2>/dev/null || true)
+    if [[ -z "${nm_out}" ]]; then
+        echo "FAIL: nm could not read lib/libgmp.a"
+        exit 1
+    fi
+    if ! grep -q 'gmpn_cpuvec_init' <<<"${nm_out}"; then
+        echo "FAIL: libgmp.a has no __gmpn_cpuvec_init: not a fat build, so its mpn kernels are the builder's CPU's"
+        exit 1
+    fi
     echo "  OK: fat build (__gmpn_cpuvec_init present)"
 fi
 
