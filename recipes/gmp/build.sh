@@ -35,10 +35,11 @@ fi
 # and still raised SIGILL in __gmpz_n_pow_ui on the Sandy Bridge Xeon: 76 plain-C
 # functions carried BMI2/ADX/LZCNT (seen 2026-10-14). configfsf.guess is the
 # plain GNU guess GMP ships beside its own (x86_64-pc-linux-gnu), which is the
-# triplet Debian and Fedora configure with.
+# triplet Debian and Fedora configure with. It is run through sh: the extracted
+# source does not keep its execute bit (macOS: "Permission denied").
 fat_flags=()
 case "$(uname -m)" in
-    x86_64|amd64|i?86|i86pc|x86) fat_flags+=(--enable-fat --build="$(./configfsf.guess)") ;;
+    x86_64|amd64|i?86|i86pc|x86) fat_flags+=(--enable-fat --build="$(sh ./configfsf.guess)") ;;
 esac
 echo "gmp: configure ${fat_flags[*]+${fat_flags[*]}}"
 
