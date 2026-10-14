@@ -1061,6 +1061,12 @@ def _self_update_lock(
 _CATCH_UP_RERUN_RECV_TIMEOUT = 0.5
 _CATCH_UP_RERUN_SECS = 30.0
 
+# A job's complete/fail report is asked again when no answer arrives (see
+# _report_job): this many attempts in all, the pause doubling from this many
+# seconds (2 + 4 + 8 s of waiting).
+_REPORT_ATTEMPTS = 4
+_REPORT_RETRY_DELAY = 2.0
+
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
 _RECIPE_DIR_TTL_SECS = 24 * 60 * 60
@@ -2246,7 +2252,9 @@ def builder_run(
         from cvcpkg.orgs import served_set
 
         served = served_set(org_slug, serve_namespaces)
-        body = {
+        # Kept for the life of the process: _reregister() sends it again when
+        # the server no longer knows this builder.
+        register_body = {
             "name": name,
             "platform": platform,
             "arch": arch,
@@ -2259,13 +2267,13 @@ def builder_run(
         if advertised_disk is not None:
             # Omitted rather than sent as null when unknown, so an older
             # server that does not know the field is unaffected.
-            body["free_disk_gb"] = advertised_disk
+            register_body["free_disk_gb"] = advertised_disk
         if len(served) > 1:
             cross_msg += " [serves: {}]".format(
                 ", ".join(repr(ns) if ns == "" else ns for ns in served)
             )
         with httpx.Client(timeout=30) as client:
-            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=register_body)
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -2422,10 +2430,66 @@ def builder_run(
                     headers=headers,
                     json=payload,
                 )
-            if resp.status_code >= 400:
-                click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
+            if resp.status_code == 404:
+                # The server has no row for this id: an admin unregistered the
+                # builder, or the server's database was reset or restored.
+                # Every other call (next-job, the socket) 404s the same way
+                # forever, so without this the process sits "running" and
+                # unseen until someone restarts it.
+                _reregister("the server no longer knows this builder")
+            elif resp.status_code in (401, 403):
+                click.echo(
+                    f"  heartbeat rejected: {resp.status_code} {_detail_of(resp)} "
+                    "(token revoked, expired or not allowed to own this builder?)",
+                    err=True,
+                )
+            elif resp.status_code >= 400:
+                click.echo(f"  heartbeat failed: {resp.status_code} {_detail_of(resp)}", err=True)
         except Exception as exc:
             click.echo(f"  heartbeat error: {exc}", err=True)
+
+    def _detail_of(resp) -> str:
+        """The server's ``detail`` for an error response, trimmed for a log line."""
+        try:
+            detail = resp.json().get("detail", "")
+        except Exception:  # noqa: BLE001 - a proxy page, an empty body
+            detail = ""
+        return str(detail or getattr(resp, "text", "") or "")[:200]
+
+    def _reregister(why: str) -> bool:
+        """Register this builder again; True when the server took it.
+
+        Registration is an upsert keyed on (name, org), so a builder the server
+        still knows keeps its id, and one it forgot gets a new one.  Everything
+        that names the builder reads ``builder_id`` / ``job_identity`` at call
+        time, so adopting a new id here redirects the poll, the socket and the
+        job reports with it.
+        """
+        nonlocal builder_id
+        if builder_id is None:
+            return False
+        payload = dict(register_body)
+        _free = _measure_free_disk()
+        if _free is not None:
+            payload["free_disk_gb"] = _free
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(f"{base}/v1/builders/register", headers=headers, json=payload)
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  re-registration failed ({resp.status_code}): {_detail_of(resp)}",
+                    err=True,
+                )
+                return False
+            new_id = resp.json()["id"]
+        except Exception as exc:  # noqa: BLE001 - retried by the next heartbeat
+            click.echo(f"  re-registration error: {exc}", err=True)
+            return False
+        with jobs_lock:
+            builder_id = new_id
+            job_identity["builder_id"] = new_id
+        click.echo(f"Re-registered as builder #{new_id} ({why})")
+        return True
 
     def _sweep_stale_recipe_dirs() -> None:
         """Drop extraction dirs left by long-finished fetches.
@@ -3114,6 +3178,54 @@ def builder_run(
             click.echo(f"  [{job_id}] claim error: {exc}", err=True)
             return False
 
+    def _report_job(job_id: int, verb: str, fields: dict) -> str:
+        """Tell the server a job finished (*verb* ``complete``) or failed (``fail``).
+
+        Returns ``"ok"`` (the server took it), ``"refused"`` (it answered 4xx:
+        the job is no longer ours, was cancelled or timed out, or already has
+        its outcome) or ``"lost"`` (no answer after every attempt).  Never
+        raises, and says which in the log -- httpx does not raise on a 4xx, so
+        an unchecked post printed "Completed" for a job the server had refused.
+
+        An answer that never arrived (a timeout, a dropped connection, a proxy
+        502/503/504) is asked again: repeating a report is harmless on the
+        server (it answers 200 with the job as it stands).  Before this, a
+        timeout on /complete -- after the bundle was published -- fell into
+        the job's own failure handler and reported a good build as failed.
+        """
+        payload = {**fields, **job_identity}
+        why = ""
+        for attempt in range(_REPORT_ATTEMPTS):
+            if attempt:
+                time.sleep(_REPORT_RETRY_DELAY * 2 ** (attempt - 1))
+            try:
+                with httpx.Client(timeout=30) as client:
+                    resp = client.post(
+                        f"{base}/v1/builds/{job_id}/{verb}", headers=headers, json=payload
+                    )
+            except Exception as exc:  # noqa: BLE001 - any failure to get an answer
+                why = str(exc) or type(exc).__name__
+                click.echo(f"  [{job_id}] {verb} report error: {why}", err=True)
+                continue
+            if resp.status_code in (502, 503, 504):
+                why = f"answered {resp.status_code}"
+                click.echo(f"  [{job_id}] {verb} report {why}", err=True)
+                continue
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  [{job_id}] the server refused the {verb} report "
+                    f"({resp.status_code}): {_detail_of(resp)}",
+                    err=True,
+                )
+                return "refused"
+            return "ok"
+        click.echo(
+            f"  [{job_id}] could not deliver the {verb} report after "
+            f"{_REPORT_ATTEMPTS} attempts ({why}); the server will time the job out",
+            err=True,
+        )
+        return "lost"
+
     def _execute_job(job: dict) -> None:
         """Execute a single build job.  The slot is released by the calling
         _run_job_guarded wrapper, not here."""
@@ -3273,28 +3385,25 @@ def builder_run(
             # the server can refuse this report if the job has since moved to
             # another holder (paused and re-dispatched); an older server
             # ignores the extra fields.
-            with httpx.Client(timeout=30) as client:
-                client.post(
-                    f"{base}/v1/builds/{job_id}/complete",
-                    headers=headers,
-                    json={"result_archive_url": result_url, **job_identity},
+            # _report_job never raises, so a report that goes wrong cannot fall
+            # into the handler below and fail a job that built and published.
+            outcome = _report_job(job_id, "complete", {"result_archive_url": result_url})
+            if outcome == "ok":
+                click.echo(f"  [{job_id}] Completed: {recipe_name}")
+            else:
+                click.echo(
+                    f"  [{job_id}] Built and published {recipe_name}, but the server did "
+                    f"not record it as completed ({outcome})",
+                    err=True,
                 )
-            click.echo(f"  [{job_id}] Completed: {recipe_name}")
 
         except Exception as exc:
             # Report failure
             if not error_message:
                 error_message = f"{exc}\n{traceback.format_exc()}"
-            try:
-                with httpx.Client(timeout=30) as client:
-                    client.post(
-                        f"{base}/v1/builds/{job_id}/fail",
-                        headers=headers,
-                        json={"error_message": error_message[:4096], **job_identity},
-                    )
-            except Exception:
-                pass
-            click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}", err=True)
+            outcome = _report_job(job_id, "fail", {"error_message": error_message[:4096]})
+            suffix = "" if outcome == "ok" else f" (the server did not record it: {outcome})"
+            click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}{suffix}", err=True)
 
         finally:
             # Remove exactly this job's isolated tree (dep prefix, build work

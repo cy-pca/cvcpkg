@@ -118,19 +118,52 @@ def test_job_identity_is_bound_in_builder_run_itself():
     assert "builder_id" in src and "claimant" in src, src
 
 
+def _report_calls(fn: ast.FunctionDef, verb: str) -> list[ast.Call]:
+    """Every ``_report_job(<id>, "<verb>", ...)`` call under *fn*."""
+    return [
+        node
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_report_job"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Constant)
+        and node.args[1].value == verb
+    ]
+
+
 def test_every_complete_and_fail_report_spreads_job_identity():
+    """Reports go through ``_report_job``, which is where the identity is added.
+
+    The helper posts to ``.../{verb}`` with a body that spreads
+    ``job_identity``; no other code in builder_run posts a /complete or /fail
+    of its own (that one would bypass both the identity and the retry).
+    """
     run = _builder_run()
     for verb in ("complete", "fail"):
-        posts = _posts(run, verb)
-        assert posts, f"no /{verb} post found in builder_run"
-        for call in posts:
-            body = _json_kw(call)
-            assert isinstance(body, ast.Dict), f"{verb} must post a dict literal"
-            spread = [v for k, v in zip(body.keys, body.values, strict=True) if k is None]
-            assert any(isinstance(v, ast.Name) and v.id == "job_identity" for v in spread), (
-                f"the {verb} report does not carry **job_identity: the server cannot "
-                "tell a stale report from a previous holder and will let it finish the job"
-            )
+        assert _report_calls(run, verb), f"no {verb} report goes through _report_job"
+        assert not _posts(run, verb), f"a /{verb} post bypasses _report_job"
+
+    helper = next(
+        n for n in ast.walk(run) if isinstance(n, ast.FunctionDef) and n.name == "_report_job"
+    )
+    assert "job_identity" in ast.unparse(helper), (
+        "_report_job does not carry job_identity: the server cannot tell a stale "
+        "report from a previous holder and will let it finish the job"
+    )
+    posts = [
+        n
+        for n in ast.walk(helper)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "post"
+    ]
+    assert len(posts) == 1
+    assert ast.unparse(_json_kw(posts[0])) == "payload"
+    bound = [
+        n
+        for n in helper.body
+        if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "payload" for t in n.targets)
+    ]
+    assert bound and "**job_identity" in ast.unparse(bound[0].value)
 
 
 def test_the_claim_sends_the_same_identity():
