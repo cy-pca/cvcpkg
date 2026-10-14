@@ -1,0 +1,59 @@
+schema_version: 1
+recipe:
+  name: carlito-fonts
+  # No upstream releases or tags: the repository's fonts/ttf is the
+  # distribution, so the version tracks the pinned commit's date (the same
+  # convention as pocketfft). The source URL is what identifies the fonts.
+  #
+  #   $ gh api repos/googlefonts/carlito/commits/3a810cab78ebd6e2e4eed42af9e8453c4f9b850a
+  #   committer date: 2023-03-09T17:04:22Z
+  upstream_version: "2023.03.09"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/googlefonts/carlito
+  license: OFL-1.1
+  tags: [fonts, data]
+  description: >-
+    Carlito (TrueType): the free sans serif metric-compatible with Microsoft
+    Calibri, installed into share/fonts/truetype/carlito where the cvcpkg
+    fontconfig (cvc.4+) finds them. LibreOffice substitutes Carlito for
+    Calibri, so a .pptx or .docx set in Calibri renders with the same line
+    breaks on hosts without Calibri.
+
+source:
+  # A GitHub archive of the pinned commit (not type: git), as pocketfft does:
+  # the dev-cluster builders cannot fetch git sources yet, and the archive URL
+  # names the commit as exactly, with the sha256 pinning the bytes.
+  type: tarball
+  url: https://github.com/googlefonts/carlito/archive/3a810cab78ebd6e2e4eed42af9e8453c4f9b850a.tar.gz
+  sha256: "ff1fdae06e67136660c7d8135323631c7465c6b4d299d4281bb44eed2165091f"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: four .ttf files and the licence, identical on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/fonts/truetype/carlito/
+    - share/doc/carlito-fonts/
+
+notes:
+  - title: "Discovery"
+    description: >-
+      fontconfig cvc.4 and later lists <prefix>/share/fonts in its
+      fonts.conf, so LibreOffice, pango and cairo in the same prefix find
+      Carlito with no configuration. fontconfig's metric aliases map Calibri
+      onto it.
