@@ -737,7 +737,9 @@ def install(
             lock = lock.merge(previous)
             kept = len(lock.bundles) - len(lock_entries)
     lock.write(lock_path)
-    detail = f" ({kept} entr{'y' if kept == 1 else 'ies'} kept from earlier installs)" if kept else ""
+    detail = (
+        f" ({kept} entr{'y' if kept == 1 else 'ies'} kept from earlier installs)" if kept else ""
+    )
     click.echo(f"cvcpkg: lockfile written to {lock_path}{detail}")
 
     # ── Write the CMake package config into the prefix ──
