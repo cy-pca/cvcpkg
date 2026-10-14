@@ -2083,8 +2083,27 @@ def run_build(
 # ── Test execution ──────────────────────────────────────────────
 
 
+# Where the BSDs' and macOS's package systems put bash.  None of them ships
+# bash in the base system, and a builder started from cron (@reboot, the
+# documented BSD setup) runs with cron's minimal PATH, which leaves these out.
+# The env-*.sh scripts add them back for the build itself, but bash has to be
+# found before any of those scripts can be sourced.
+_BASH_FALLBACKS = (
+    "/usr/pkg/bin/bash",  # NetBSD (pkgsrc), also SmartOS/illumos pkgsrc
+    "/usr/local/bin/bash",  # FreeBSD and OpenBSD packages, Homebrew on Intel
+    "/opt/local/bin/bash",  # MacPorts
+    "/opt/homebrew/bin/bash",  # Homebrew on Apple silicon
+    "/bin/bash",
+    "/usr/bin/bash",
+)
+
+
 def _find_bash() -> str:
-    """Find a real bash executable, preferring Git Bash over WSL on Windows."""
+    """Find a real bash executable, preferring Git Bash over WSL on Windows.
+
+    On POSIX hosts PATH is tried first, then the package-system locations in
+    ``_BASH_FALLBACKS``, so a builder whose service manager gives it a minimal
+    PATH (cron on the BSDs) still finds pkgsrc's or ports' bash."""
     if sys.platform == "win32":
         # On Windows, shutil.which("bash") may return WSL bash which fails
         # if no distro is installed.  Prefer Git-for-Windows bash.
@@ -2096,7 +2115,14 @@ def _find_bash() -> str:
     found = shutil.which("bash")
     if found:
         return found
-    raise BuildError("bash not found on PATH")
+    if sys.platform != "win32":
+        for candidate in _BASH_FALLBACKS:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    raise BuildError(
+        "bash not found on PATH"
+        + ("" if sys.platform == "win32" else f" or in {', '.join(_BASH_FALLBACKS)}")
+    )
 
 
 def _find_pwsh(prefix: Path | None = None) -> str:
