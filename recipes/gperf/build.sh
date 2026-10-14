@@ -22,6 +22,11 @@ esac
 
 cd "${CVC_SOURCE_DIR}"
 
+# gperf 3.1 is C++98 that still uses the 'register' storage class.  Clang's
+# default dialect is C++17, where that is an error (-Wregister), so FreeBSD's
+# base clang failed in lib/getline.cc; GCC only warns.  Build it as C++14.
+export CXXFLAGS="-std=gnu++14${CXXFLAGS:+ ${CXXFLAGS}}"
+
 # gperf's configure uses the old one-argument AC_INIT, so PACKAGE_TARNAME is
 # empty and the default docdir is share/doc/ itself.  Name the package's own
 # directory, so the manual installs as share/doc/gperf/gperf.html.
