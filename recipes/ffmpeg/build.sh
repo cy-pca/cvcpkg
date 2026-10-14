@@ -82,6 +82,17 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     )
 fi
 
+# libmp3lame ships no pkg-config file, so configure's check_lib finds lame/lame.h
+# and -lmp3lame only on the compiler's own search paths.  cvc.1 resolved them
+# from whatever the build host had (a system lame on Linux, Homebrew's on macOS);
+# on today's builders configure stops with "libmp3lame >= 3.98.3 not found"
+# although the cvcpkg libmp3lame is installed.  Point the probes at the cvcpkg
+# dependency prefix.
+CONFIGURE_ARGS+=(
+    --extra-cflags="-I${CVC_DEPS_PREFIX}/include"
+    --extra-ldflags="-L${CVC_DEPS_PREFIX}/lib"
+)
+
 # fontconfig is Linux/BSD/macOS only (no Windows port in cvcpkg).
 if [[ "${CVC_PLATFORM}" != "windows" ]]; then
     CONFIGURE_ARGS+=(--enable-libfontconfig)

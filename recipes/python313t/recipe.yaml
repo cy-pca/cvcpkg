@@ -148,7 +148,7 @@ package:
     - bin/pip3.13t*
     - bin/python3t
     - lib/libpython3.13t*
-    - lib/python3.13/
+    - lib/python3.13t/
     - lib/pkgconfig/python-3.13t*.pc
     - include/python3.13t/
     # Windows PCbuild --experimental-instdir layout
@@ -169,16 +169,15 @@ notes:
       libpython3.13t.so (python313t.dll on Windows).  A python3t
       convenience symlink is also created on Unix.  PGO is enabled on
       Linux, macOS, and Windows.
-  - title: "Shared stdlib with python313"
+  - title: "Separate stdlib from python313"
     platforms: [linux, macos, freebsd, openbsd, netbsd]
     description: >-
-      The pure-Python standard library lives in lib/python3.13/ (without the
-      t suffix), the same directory used by the regular python313 recipe.
-      Extension modules use the t ABI tag (e.g. _ssl.cpython-313t-*.so) and
-      can coexist with regular python313 extension modules in the same
-      lib/python3.13/lib-dynload/ directory.  Installing python313 and
-      python313t into the same prefix is safe as long as both are built
-      from the same source release.
+      A free-threaded build installs its standard library, lib-dynload and
+      site-packages under lib/python3.13t/ (CPython's ABIFLAGS-suffixed
+      LIBDIR), not the regular python313's lib/python3.13/, and its extension
+      modules carry the t ABI tag (e.g. _ssl.cpython-313t-*.so).  So python313
+      and python313t install side by side in one prefix without sharing or
+      overwriting each other's files.
   - title: "Windows (PCbuild) build"
     platforms: [windows]
     description: >-
