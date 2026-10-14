@@ -59,7 +59,7 @@ package:
   files:
     - lib/libncurses*
     - lib/libncursesw*
-    - lib/libtinfo*
+    # No separate libtinfo: ncurses is configured without --with-termlib.
     - lib/libform*
     - lib/libmenu*
     - lib/libpanel*

@@ -5,6 +5,7 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cvc_cmake_build \
     -DHDF5_BUILD_CPP_LIB=ON \
+    -DHDF5_INSTALL_CMAKE_DIR=lib/cmake/hdf5 \
     -DHDF5_BUILD_TOOLS=ON \
     -DHDF5_BUILD_EXAMPLES=OFF \
     -DBUILD_TESTING=OFF \
