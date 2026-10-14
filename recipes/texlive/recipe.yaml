@@ -1,0 +1,143 @@
+schema_version: 1
+recipe:
+  name: texlive
+  upstream_version: "2025"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://tug.org/texlive/
+  # TeX Live is a distribution of many works under many free licences (LPPL,
+  # GPL, LGPL, OFL, public domain, ...); https://tug.org/texlive/copying.html.
+  license: "LicenseRef-TeX-Live"
+  tags: [tex, latex, typesetting, documentation, tools]
+  description: >-
+    TeX Live 2025 with pdfTeX, LuaTeX and LaTeX: pdflatex, lualatex,
+    kpsewhich, bibtex, makeindex and dvipdfmx, plus the basic, latex,
+    latexrecommended, latexextra, pictures (TikZ, PGFPlots),
+    fontsrecommended (Latin Modern) and langenglish collections, with
+    formats prebuilt. Repackaged from TeX Live's frozen 2025 repository with
+    TeX Live's own installer; nothing is compiled. Documentation and source
+    files are left out.
+
+# The payload is TeX Live's prebuilt binaries and runfiles; nothing is
+# compiled here. Building the engines from texlive-source is tracked as a
+# follow-up: cy-pca/cvcpkg#236.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build scripts, not by cvcpkg core, so
+# this block DOCUMENTS what build.sh / build.ps1 download. The enforced sha512
+# values are in build.sh (TLPDB_SHA512, INSTALLER_SHA512) and build.ps1
+# ($tlpdbSha512, $installerSha512) -- keep the three in sync.
+#
+# tlnet-final is TeX Live 2025's last network repository, frozen in TUG's
+# historic archive, so it does not change under a pin. The sha512 values are
+# the ones TeX Live publishes beside each file (texlive.tlpdb.sha512,
+# install-tl-unx.tar.gz.sha512, install-tl.zip.sha512), re-hashed after
+# download. The tlpdb in turn records a sha512 for every package container;
+# tl-mirror.pl refuses any container that does not match it.
+source:
+  type: prebuilt
+  base_url: https://ftp.math.utah.edu/pub/tex/historic/systems/texlive/2025/tlnet-final
+  artifacts:
+    any:
+      file: tlpkg/texlive.tlpdb
+      sha512: "2fb7adc54cff58fa55c5b7c1bd3034e1efd849d0b73535c8dcdf0d8a36f66998b7a578ae036ef24354641be5f3738b0ad1323b7318581d88a0e271d1ac12cb2b"
+    linux-x86_64:
+      file: install-tl-unx.tar.gz
+      sha512: "a307d7d11bcbd1f054ad0b0d476f7f12bc1a40d07445020edef8713b44453831d18a2f1722c3d2b0ea2e4fe6c06183a79d1c4049495113f412a9f5a570a8614d"
+    linux-arm64:
+      file: install-tl-unx.tar.gz
+      sha512: "a307d7d11bcbd1f054ad0b0d476f7f12bc1a40d07445020edef8713b44453831d18a2f1722c3d2b0ea2e4fe6c06183a79d1c4049495113f412a9f5a570a8614d"
+    macos-x86_64:
+      file: install-tl-unx.tar.gz
+      sha512: "a307d7d11bcbd1f054ad0b0d476f7f12bc1a40d07445020edef8713b44453831d18a2f1722c3d2b0ea2e4fe6c06183a79d1c4049495113f412a9f5a570a8614d"
+    macos-arm64:
+      file: install-tl-unx.tar.gz
+      sha512: "a307d7d11bcbd1f054ad0b0d476f7f12bc1a40d07445020edef8713b44453831d18a2f1722c3d2b0ea2e4fe6c06183a79d1c4049495113f412a9f5a570a8614d"
+    freebsd-x86_64:
+      file: install-tl-unx.tar.gz
+      sha512: "a307d7d11bcbd1f054ad0b0d476f7f12bc1a40d07445020edef8713b44453831d18a2f1722c3d2b0ea2e4fe6c06183a79d1c4049495113f412a9f5a570a8614d"
+    windows-x86_64:
+      file: install-tl.zip
+      sha512: "4571b00c2ca493b594097355735eb20a07c7ca52871515419ecef4951a59e4d4d24318edd92ccb917a6dc8883366d8930183c8d3173e23d3bd33fdf2a8ca8964"
+
+patches: []
+
+depends:
+  # perl runs tl-mirror.pl and TeX Live's installer, on every platform
+  # (Windows included: the cvcpkg Strawberry Perl, not install-tl.zip's
+  # bundled tlperl). Nothing in the bundle links it.
+  build:
+    - name: perl
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/texlive/
+    - glob: bin/pdflatex
+      platforms: [linux, macos, freebsd]
+    - glob: bin/lualatex
+      platforms: [linux, macos, freebsd]
+    - glob: bin/kpsewhich
+      platforms: [linux, macos, freebsd]
+    - glob: bin/pdflatex.cmd
+      platforms: [windows]
+    - glob: bin/lualatex.cmd
+      platforms: [windows]
+    - glob: bin/kpsewhich.cmd
+      platforms: [windows]
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt TeX Live binaries and runfiles, installed by TeX Live's own
+    install-tl from a sha512-verified local mirror of the frozen 2025
+    repository. The TeX Live tree is lib/texlive; bin/ links into
+    lib/texlive/bin/<platform>.
+
+notes:
+  - title: "What is in it"
+    description: >-
+      Collections basic, latex, latexrecommended, latexextra, pictures,
+      fontsrecommended and langenglish, for the host's TeX Live platform
+      (x86_64-linux, aarch64-linux, universal-darwin, amd64-freebsd or
+      windows): about 2,300 packages. Formats (pdflatex, latex, lualatex,
+      pdftex, ...) are built during the install and ship in
+      lib/texlive/texmf-var. Documentation and source containers are not
+      fetched. XeTeX, ConTeXt, BibLaTeX/biber and latexmk are not included;
+      `tlmgr install` adds packages from the same frozen repository.
+  - title: "Relocatable; per-user files stay per-user"
+    description: >-
+      kpathsea derives the tree from the resolved executable, and the
+      TEXMF* locations install-tl wrote into lib/texlive/texmf.cnf are
+      rewritten to $SELFAUTOPARENT, so the prefix can move. TEXMFHOME
+      (~/texmf), TEXMFVAR and TEXMFCONFIG (~/.texlive2025) keep TeX Live's
+      per-user defaults; TEXMFLOCAL is lib/texlive/texmf-local.
+  - title: "tlmgr points at the frozen 2025 repository"
+    description: >-
+      The installed tlpdb's repository is the historic tlnet-final URL, so
+      `tlmgr install <pkg>` adds 2025 packages and can never pull a newer
+      TeX Live into the prefix. tlmgr, fmtutil, updmap and mktexlsr are perl
+      scripts and need a perl on PATH (on Windows they use TeX Live's own
+      tlperl, which install-tl always installs). The TeX engines need no perl.
+  - title: "Prebuilt for now; from source is a follow-up"
+    description: >-
+      The engines are TeX Live's own release binaries, as go and nodejs22
+      ship upstream's. Building kpathsea, pdfTeX and LuaTeX from
+      texlive-source is tracked in cy-pca/cvcpkg#236.
