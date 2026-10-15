@@ -9,6 +9,12 @@ Bash before 4.4 also treats an EMPTY array as unbound under ``set -u``, so
 ``"${a[@]}"`` aborts the script when nothing was added to ``a``.  glib's
 build.sh died that way on macOS (``ICONV_ARGS[@]: unbound variable``).  An array
 a script creates empty (``a=()``) must be expanded as ``${a[@]+"${a[@]}"}``.
+
+And bash 3.2 cannot parse a quoted heredoc opened inside a command substitution,
+``"$(cat <<'TAG'``, when the heredoc body contains a single quote: maxminddb's
+build.sh failed with "unexpected EOF while looking for matching `''" because of
+an apostrophe in its check.  Read such a heredoc into a variable instead
+(``IFS= read -r -d '' var <<'TAG' || true``).
 """
 
 from __future__ import annotations
@@ -137,4 +143,51 @@ def test_empty_arrays_are_guarded_under_set_u():
         for n, name in _unguarded_empty_arrays(path.read_text(encoding="utf-8", errors="replace"))
     ]
     msg = "empty arrays expanded bare under set -u (fatal on macOS's bash 3.2):"
+    assert not found, "\n".join([msg, *found])
+
+
+_SUBST_HEREDOC = re.compile(r"\$\(\s*cat\s+<<-?\s*(['\"]?)(\w+)\1")
+
+
+def _quoted_heredocs_in_substitutions(text: str) -> list[int]:
+    """Lines opening a heredoc inside $( ) whose body contains a single quote."""
+    lines = text.splitlines()
+    hits = []
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            continue
+        m = _SUBST_HEREDOC.search(line)
+        if not m:
+            continue
+        body = []
+        for later in lines[i + 1 :]:
+            if later.strip() == m.group(2):
+                break
+            body.append(later)
+        if any("'" in b for b in body):
+            hits.append(i + 1)
+    return hits
+
+
+@pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        ("x \"$(cat <<'PY'\n# MaxMind's test data\nPY\n)\"\n", [1]),
+        ("x \"$(cat <<'PY'\nprint(1)\nPY\n)\"\n", []),
+        ("IFS= read -r -d '' v <<'PY' || true\n# it's fine here\nPY\n", []),
+    ],
+)
+def test_quoted_heredoc_in_substitution_detection(script, expected):
+    assert _quoted_heredocs_in_substitutions(script) == expected
+
+
+def test_no_apostrophes_in_heredocs_inside_substitutions():
+    found = [
+        f"{path.relative_to(RECIPES.parent)}:{n}"
+        for path in _scripts()
+        for n in _quoted_heredocs_in_substitutions(
+            path.read_text(encoding="utf-8", errors="replace")
+        )
+    ]
+    msg = "heredoc with a single quote inside $( ) (bash 3.2 cannot parse it):"
     assert not found, "\n".join([msg, *found])
