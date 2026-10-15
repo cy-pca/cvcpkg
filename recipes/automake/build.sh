@@ -91,6 +91,7 @@ _reloc='BEGIN {
   # cvcpkg relocation: find our Automake/* modules relative to this script.
   my $s = $0; $s = "./$s" if $s !~ m{/};
   (my $p = $s) =~ s{/[^/]+/[^/]+$}{};
+  $main::cvcpkg_prefix = $p;
   for my $d (glob("$p/share/automake-*"), glob("$p/share/aclocal-*")) {
     unshift @INC, $d if -d "$d/Automake" || -d $d;
   }
@@ -108,3 +109,43 @@ done
 rm -f "${_relf}"
 grep -q "cvcpkg relocation" "${CVC_INSTALL_DIR}/bin/automake" \
     || { echo "automake reloc: @INC injection missing from bin/automake" >&2; exit 1; }
+
+# Relocate the remaining build-time paths.  configure bakes three kinds into the
+# installed tools, and none of them exists once cvcpkg reaps the build:
+#   - the fallbacks for $AUTOM4TE / $AUTOCONF in bin/aclocal and bin/automake:
+#     the absolute autom4te/autoconf of THIS build's closure.  aclocal died with
+#     "autom4te: not found" (exit 127) under every later autoreconf -- swig's on
+#     the 2026-10-14 linux fleet populate.  Use the bare names: wherever this
+#     automake is installed, the cvcpkg autoconf is next to it on PATH.
+#   - aclocal's own macro dirs (share/aclocal-1.x, share/aclocal) and the @INC
+#     entry configure adds: derive them from the prefix the BEGIN block above
+#     computes from the script's location ($main::cvcpkg_prefix).
+#   - Automake::Config's $libdir (am/*.am fragments, install-sh, compile, ...):
+#     derive it from the module's own path.
+_fix="$(mktemp "${TMPDIR:-/tmp}/cvcpkg-automake-paths.XXXXXX")"
+cat > "${_fix}" <<'PERL'
+use strict;
+use warnings;
+my $inst = shift;
+my $q = quotemeta $inst;
+sub slurp { my ($f) = @_; local $/; open my $in, '<', $f or die "$f: $!"; my $s = <$in>; close $in; $s }
+sub spew { my ($f, $s) = @_; open my $out, '>', $f or die "$f: $!"; print $out $s; close $out }
+my @left;
+for my $f (grep { -f } glob("$inst/bin/aclocal*"), glob("$inst/bin/automake*")) {
+    my $s = slurp($f);
+    next unless $s =~ /\A#!.*perl/;
+    $s =~ s{\|\|\s*'[^']*/bin/(autom4te|autoconf)'}{|| '$1'}g;
+    $s =~ s{'$q(/[^']*)'}{"\$main::cvcpkg_prefix$1"}g;
+    spew($f, $s);
+    push @left, $f if index($s, $inst) >= 0;
+}
+for my $f (glob("$inst/share/automake-*/Automake/Config.pm")) {
+    my $s = slurp($f);
+    $s =~ s{'$q/share/automake-[^']*'}{q(do { (my $d = __FILE__) =~ s|/Automake/Config\.pm\z||; $d })}ge;
+    spew($f, $s);
+    push @left, $f if index($s, $inst) >= 0;
+}
+die "automake reloc: build-time install path still in: @left\n" if @left;
+PERL
+perl "${_fix}" "${CVC_INSTALL_DIR}"
+rm -f "${_fix}"

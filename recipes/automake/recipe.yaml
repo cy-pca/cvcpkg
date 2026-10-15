@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: automake
   upstream_version: "1.17"
-  cvc_revision: 11
+  # cvc.12: aclocal and automake are relocatable.  cvc.11 baked the build job's
+  # autom4te/autoconf path, aclocal's macro dirs and Automake::Config's $libdir, so
+  # aclocal died "autom4te: not found" (exit 127) under every later autoreconf (swig).
+  cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
