@@ -44,7 +44,12 @@ recipe:
   # _dbm and _gdbm load gettext's libintl and gdbm from /usr/local/opt, so it aborts on
   # any Mac without Homebrew.  _common/build-python.sh now also turns those off on macOS
   # explicitly.  Every platform rebuilds.
-  cvc_revision: 9
+  # cvc.10: ship pip only.  3.11's ensurepip also installs setuptools 65.5.0, and with
+  # setuptools-cp311 on top a prefix had two setuptools dist-infos; the old one's
+  # check_test_suite entry point broke every setup.py using test_suite= (gast-cp311,
+  # pyrsistent-cp311).  _common/build-python.sh and build.ps1 now remove ensurepip's
+  # setuptools on every platform.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -97,3 +97,14 @@ $pth = @'
 import os, sys; _b = os.path.join(sys.prefix, 'bin'); os.path.isdir(_b) and hasattr(os, 'add_dll_directory') and os.add_dll_directory(_b)
 '@
 Set-Content -Path (Join-Path $siteDir "cvcpkg-dll-directories.pth") -Value $pth -Encoding ASCII
+
+# pip only.  3.11's ensurepip (PC\layout --include-pip) also lays down
+# setuptools 65.5.0; next to the setuptools-cp311 package that left two
+# setuptools dist-infos in Lib\site-packages, and the old one's
+# check_test_suite entry point broke every setup.py using test_suite=.  Same
+# removal as _common/build-python.sh on the POSIX platforms.
+foreach ($name in @('setuptools', 'pkg_resources', '_distutils_hack', 'distutils-precedence.pth')) {
+    $path = Join-Path $siteDir $name
+    if (Test-Path $path) { Remove-Item -Recurse -Force $path }
+}
+Get-ChildItem -Path $siteDir -Directory -Filter 'setuptools-*.dist-info' | Remove-Item -Recurse -Force
