@@ -24,7 +24,16 @@ export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/shar
 # -L${prefix}/lib the hermetic builder's linker can't find them (they live in
 # the cvcpkg prefix, not a system dir). CMake folds $LDFLAGS into the linker
 # flags at configure time.
-export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,\$ORIGIN -Wl,-rpath,\$ORIGIN/../lib${LDFLAGS:+ ${LDFLAGS}}"
+# The RUNPATH anchor is $ORIGIN on ELF and @loader_path on Mach-O: ld64 takes
+# no $ORIGIN, and the shell CMake's link rule runs in expands it to nothing,
+# leaving `-rpath /../lib`, which ld64 rejects ("file cannot be open()ed"), so
+# even CMake's compiler check failed on macOS.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    _origin="@loader_path"
+else
+    _origin='$ORIGIN'
+fi
+export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${_origin} -Wl,-rpath,${_origin}/../lib${LDFLAGS:+ ${LDFLAGS}}"
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _shared=OFF

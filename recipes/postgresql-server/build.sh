@@ -18,10 +18,17 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# libintl.h and libintl live in the deps prefix wherever libc does not provide
+# gettext (macOS, the BSDs).  PostgreSQL's meson probes the header with only its
+# own include dirs plus extra_include_dirs, never CPPFLAGS or pkg-config, so
+# without these -Dnls=enabled fails ("C header 'libintl.h' not usable") once
+# msgfmt is found.  On glibc they change nothing: libintl is in libc.
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
+    -Dextra_include_dirs="${CVC_DEPS_PREFIX}/include" \
+    -Dextra_lib_dirs="${CVC_DEPS_PREFIX}/lib" \
     -Dssl=openssl \
     -Dzlib=enabled \
     -Dreadline=enabled \
