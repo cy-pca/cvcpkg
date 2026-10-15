@@ -62,6 +62,15 @@ depends:
     # frozen `cvcpkg validate` reports jsonschema missing.
     - name: attrs-cp312
     - name: pyrsistent-cp312
+    # Windows only: PyInstaller analyses PE files with pefile and reaches the
+    # Win32 resource API through pywin32-ctypes.  pyinstaller-cp312 declares
+    # both at runtime for windows; they are listed here as well so the build
+    # does not depend on that bundle's recorded required_deps being complete.
+    - { name: pefile-cp312, platforms: [windows] }
+    - { name: pywin32-ctypes-cp312, platforms: [windows] }
+    # click writes to the Windows console through colorama.  On macOS it is one
+    # more piece of the closure the next block declares outright.
+    - { name: colorama-cp312, platforms: [windows, macos] }
     # macOS only: the rest of the closure, declared outright.  The published
     # macOS bundles of python312, pyinstaller-cp312, cryptography-cp312 and
     # pyyaml-cp312 record no required_deps, so a catalog-resolved closure
@@ -86,7 +95,6 @@ depends:
     - { name: pycparser-cp312, platforms: [macos] }
     - { name: typing-extensions-cp312, platforms: [macos] }
     - { name: yaml, platforms: [macos] }
-    - { name: colorama-cp312, platforms: [macos] }
   host_tools:
     - python312
 
@@ -94,15 +102,21 @@ build:
   # A frozen executable has no debug/release or shared/static variants worth
   # distinguishing; build once.
   build_type_independent: true
-  # Only the platforms whose whole cp312 closure is published.  Windows and the
-  # BSDs need python312 (and, for windows, a build.ps1) first; until then their
-  # installers fall back to the GitHub release binary.
+  # Only the platforms whose whole cp312 closure is published.  The BSDs need
+  # python312 first; until then their installers fall back to the GitHub
+  # release binary.
   matrix:
     - platform: linux
       script: build.sh
     - platform: macos
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
-    - bin/cvcpkg
+    - glob: bin/cvcpkg
+      platforms: [linux, macos]
+    # The executable /install.ps1 looks for in a registry bundle.
+    - glob: bin/cvcpkg.exe
+      platforms: [windows]

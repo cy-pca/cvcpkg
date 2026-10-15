@@ -68,6 +68,10 @@ depends:
     - name: pyinstaller-hooks-contrib-cp312
     - name: setuptools-cp312
     - name: zlib
+    # PyInstaller's Windows-only requirements (its pyproject.toml marks them
+    # sys_platform == 'win32'): PE analysis and the Win32 resource API.
+    - { name: pefile-cp312, platforms: [windows] }
+    - { name: pywin32-ctypes-cp312, platforms: [windows] }
   host_tools:
     - python312
 
