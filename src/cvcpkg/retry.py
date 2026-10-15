@@ -102,6 +102,25 @@ def is_transient(exc: BaseException, _depth: int = 0) -> bool:
     return False
 
 
+def is_transient_fetch(exc: BaseException) -> bool:
+    """:func:`is_transient`, plus DNS failures: for fetching a recipe's pinned
+    upstream source.
+
+    A name-resolution failure is not retried on the install path, where an
+    unknown host is as likely a typo as an outage.  A recipe's source URL is
+    pinned and has resolved before, so there it is the runner's resolver
+    hiccuping: on the 2026-10-14 macOS populate one runner's DNS failed for
+    about 40 consecutive downloads ("nodename nor servname provided, or not
+    known") from files.pythonhosted.org, github.com and others, and every
+    recipe behind them was skipped.  The retry stays bounded by
+    :func:`with_retry`'s attempt count and wall-clock budget.
+    """
+    if is_transient(exc):
+        return True
+    reason = getattr(exc, "reason", None) if isinstance(exc, urllib.error.URLError) else exc
+    return isinstance(reason, socket.gaierror)
+
+
 def retry_after_seconds(exc: BaseException) -> float | None:
     """The server's own ``Retry-After``, clamped. Only the delta-seconds form
     is honoured; an HTTP-date is ignored rather than half-parsed."""
@@ -136,12 +155,14 @@ def with_retry(
     budget_s: float = DEFAULT_BUDGET_S,
     base_delay_s: float = DEFAULT_BASE_DELAY_S,
     max_delay_s: float = DEFAULT_MAX_DELAY_S,
+    transient: Callable[[BaseException], bool] = is_transient,
 ) -> T:
     """Call ``fn``, retrying transient failures. Re-raises the last error.
 
     ``what`` appears in the log line, so a flaky server is visible in CI output
     rather than silently smoothed over — the point is to survive the blip AND
-    leave evidence it happened.
+    leave evidence it happened.  ``transient`` decides what is worth asking
+    again (default :func:`is_transient`).
     """
     started = time.monotonic()
     last: BaseException | None = None
@@ -150,7 +171,7 @@ def with_retry(
         try:
             return fn()
         except BaseException as exc:  # noqa: BLE001 -- re-raised below
-            if not is_transient(exc):
+            if not transient(exc):
                 raise
             last = exc
             if attempt == attempts - 1:
