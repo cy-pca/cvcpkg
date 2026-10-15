@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: x265-cli
   upstream_version: "4.1"
-  cvc_revision: 1
+  # cvc.2: drop SVE2 on aarch64 when the compiler cannot target armv9-a+sve2,
+  # as the x265 recipe does (the linux/arm64 runners have GCC 11).
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -33,6 +33,12 @@ MESON_OPTS=(
 
 case "${CVC_PLATFORM}" in
     linux)
+        # EGL's headers (and libEGL, which epoxy dlopens) come from cvcpkg's
+        # libglvnd.  Nothing pointed meson there, so the build used the build
+        # host's /usr/include/EGL and failed on runners without it
+        # (linux/arm64: "EGL/eglplatform.h: No such file or directory").
+        export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+        export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
         MESON_OPTS+=( -Degl=yes -Dglx=no -Dx11=false )
         ;;
     macos)

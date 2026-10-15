@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: glew
   upstream_version: "2.2.0"
-  cvc_revision: 1
+  # cvc.2: linux builds against cvcpkg's libglvnd and libx11 instead of the
+  # build host's GL and X11 (linux/arm64 runners have neither).
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -26,7 +28,14 @@ depends:
   build:
     - cmake
     - ninja
-  runtime: []
+  runtime:
+    # Linux: GL/GLX headers and libOpenGL/libGLX from cvcpkg's libglvnd, and
+    # Xlib (GL/glxew.h includes <X11/Xlib.h>) from libx11.  The build used the
+    # build host's, and linux/arm64 runners have none ("Could NOT find OpenGL").
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
   host_tools: []
 
 build:
