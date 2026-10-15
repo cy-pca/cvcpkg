@@ -41,8 +41,7 @@ depends:
     # libiconv.so and glib-2.0.pc references -liconv.  Filing it under `build:`
     # would strip it from the deliverable and break consumers on OpenBSD (and
     # would hide it from build.sh's ${CVC_DEPS_PREFIX}/include/iconv.h probe).
-    # macOS links it too: gettext's libintl.h and libintl are built against it,
-    # and build.sh's probe then selects -Diconv=external there as well.
+    # macOS links it too: gettext's libintl.h and libintl are built against it.
     - name: iconv
       version: ">=1.17"
       platforms: [openbsd, macos]

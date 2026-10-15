@@ -43,9 +43,11 @@ fi
 cd "${CVC_SOURCE_DIR}"
 
 # OpenBSD ships no iconv in libc, so GLib must link cvcpkg's GNU libiconv
-# (staged by the iconv dep).  Force meson's external-iconv path and put our
-# libiconv on the compiler/linker search paths.  No-op where libc provides
-# iconv and iconv is not a dep of this recipe.
+# (staged by the iconv dep): put it on the compiler/linker search paths, where
+# meson's iconv dependency finds it.  No-op where libc provides iconv and iconv
+# is not a dep of this recipe.  (GLib 2.80 has no `iconv` option: the
+# -Diconv=external this script used to pass failed meson with "Unknown
+# options: iconv".)
 #
 # macOS has no gettext in libc either.  GLib always links a libintl, and when
 # it finds none it builds its proxy-libintl subproject: a libintl.8.dylib with
@@ -54,7 +56,6 @@ cd "${CVC_SOURCE_DIR}"
 # aborted ("Symbol not found: _g_libintl_bind_textdomain_codeset", which broke
 # qt6's rcc).  So macOS depends on cvcpkg's gettext, and meson must see it.
 # c_link_args is set below, and meson then ignores LDFLAGS, so the -L goes there.
-ICONV_ARGS=()
 _link_flags="${_rpath_flags}"
 if [ -n "${CVC_DEPS_PREFIX:-}" ] && { [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" ] ||
                                       [ -f "${CVC_DEPS_PREFIX}/include/libintl.h" ]; }; then
@@ -63,9 +64,6 @@ if [ -n "${CVC_DEPS_PREFIX:-}" ] && { [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" 
     export LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
     _link_flags="-L${CVC_DEPS_PREFIX}/lib ${_rpath_flags}"
 fi
-if [ -n "${CVC_DEPS_PREFIX:-}" ] && [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]; then
-    ICONV_ARGS=(-Diconv=external)
-fi
 
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -73,7 +71,6 @@ meson setup "${CVC_BUILD_DIR}" \
     --libdir=lib \
     --default-library="${_default_lib}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
-    ${ICONV_ARGS[@]+"${ICONV_ARGS[@]}"} \
     -Dc_link_args="${_link_flags}" \
     -Dcpp_link_args="${_link_flags}" \
     -Dtests=false \
