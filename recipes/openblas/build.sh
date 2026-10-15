@@ -56,4 +56,4 @@ cvc_cmake_build \
     -DDYNAMIC_ARCH=ON \
     -DTARGET=GENERIC \
     -DNUM_THREADS=64 \
-    "${OPENBLAS_EXTRA[@]}"
+    ${OPENBLAS_EXTRA[@]+"${OPENBLAS_EXTRA[@]}"}

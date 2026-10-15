@@ -153,7 +153,9 @@ else
     export LD_LIBRARY_PATH="${_LOADPATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
 export CVC_CHECK_SOURCE_DIR="${CVC_SOURCE_DIR}"
-cvc_python_check "$(cat <<'PYCHECK'
+# The check is read into a variable first: bash 3.2 (macOS's /bin/bash) cannot
+# parse a quoted heredoc inside $( ) whose body contains an apostrophe.
+IFS= read -r -d '' _pycheck <<'PYCHECK' || true
 import os, sys
 def _mapped(fragment):
     """Path of the mapped shared object whose basename contains *fragment* (Linux), else None."""
@@ -193,6 +195,6 @@ async def _echo():
 assert uvloop.run(main()) == 42
 print("uvloop event loop + TCP echo OK")
 PYCHECK
-)"
+cvc_python_check "${_pycheck}"
 
 echo "uvloop-cp311: build + verification complete"

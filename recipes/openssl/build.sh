@@ -85,7 +85,7 @@ fi
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir=lib \
     --openssldir=/etc/ssl \
-    "${OPENSSL_OPTS[@]}" \
+    ${OPENSSL_OPTS[@]+"${OPENSSL_OPTS[@]}"} \
     no-tests
 
 make -j "${CVC_JOBS}"

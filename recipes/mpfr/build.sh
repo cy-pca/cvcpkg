@@ -18,7 +18,7 @@ fi
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --with-gmp="${CVC_DEPS_PREFIX}" \
-    "${shared_flags[@]}"
+    ${shared_flags[@]+"${shared_flags[@]}"}
 
 make -j "${CVC_JOBS}"
 make install

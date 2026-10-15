@@ -60,7 +60,7 @@ for d in "${W}"/debs/*.deb; do
     DEBS+=("${d}")
 done
 echo "unpacking ${#DEBS[@]} packages"
-"${PYTHON}" "${SCRIPT_DIR}/extract-debs.py" "${W}/root" "${DEBS[@]}" >/dev/null
+"${PYTHON}" "${SCRIPT_DIR}/extract-debs.py" "${W}/root" ${DEBS[@]+"${DEBS[@]}"} >/dev/null
 
 SRC_TREE="${W}/root/opt/libreoffice${LO_SERIES}"
 [ -x "${SRC_TREE}/program/soffice.bin" ] || { echo "no program/soffice.bin under opt/libreoffice${LO_SERIES}" >&2; exit 1; }
