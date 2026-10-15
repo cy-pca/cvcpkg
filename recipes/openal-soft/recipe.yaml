@@ -82,10 +82,10 @@ build:
 package:
   files:
     # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
-    - lib/libopenal*
+    - { glob: "lib/libopenal*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     # Windows static/import lib + runtime DLL (MSVC).
-    - lib/OpenAL*
-    - bin/OpenAL*
+    - { glob: "lib/OpenAL*", platforms: [windows] }
+    - { glob: "bin/OpenAL*", platforms: [windows] }
     - lib/pkgconfig/openal.pc
     - lib/cmake/OpenAL/
     - include/AL/
