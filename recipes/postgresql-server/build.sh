@@ -23,12 +23,17 @@ cd "${CVC_SOURCE_DIR}"
 # own include dirs plus extra_include_dirs, never CPPFLAGS or pkg-config, so
 # without these -Dnls=enabled fails ("C header 'libintl.h' not usable") once
 # msgfmt is found.  On glibc they change nothing: libintl is in libc.
+# PL/Python is off: this recipe declares no Python, and auto-detection took
+# whatever python3.pc the shared populate prefix held (python313t's on
+# linux/arm64: "The limited API is not currently supported in the
+# free-threaded build").
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dextra_include_dirs="${CVC_DEPS_PREFIX}/include" \
     -Dextra_lib_dirs="${CVC_DEPS_PREFIX}/lib" \
+    -Dplpython=disabled \
     -Dssl=openssl \
     -Dzlib=enabled \
     -Dreadline=enabled \
