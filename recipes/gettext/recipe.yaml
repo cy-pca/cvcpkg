@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: gettext
   upstream_version: "1.0"
-  cvc_revision: 1
+  # cvc.2: macOS builds the full tree (msgfmt, xgettext, msgmerge, libtextstyle)
+  # against cvcpkg's GNU libiconv instead of gettext-runtime alone, so nothing
+  # needs Homebrew's msgfmt.
+  cvc_revision: 2
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -30,7 +33,7 @@ depends:
     # build.sh's ${CVC_DEPS_PREFIX}/include/iconv.h probe.
     - name: iconv
       version: ">=1.17"
-      platforms: [openbsd]
+      platforms: [openbsd, macos]
   host_tools: []
 
 build:
@@ -70,7 +73,11 @@ package:
     - include/gettext-po.h
     - include/textstyle.h
     - include/textstyle/
-    - share/locale/
+    # gettext's own message catalogs are compiled with a msgfmt found at configure
+    # time, before this build's msgfmt exists.  Linux and the BSDs find the build
+    # host's; macOS (no Homebrew) has none, so its bundle ships the tools but no
+    # catalogs.  Compiling them with the freshly built msgfmt is a follow-up.
+    - { glob: "share/locale/", platforms: [linux, freebsd, openbsd, netbsd, windows] }
     - bin/gettext
     - bin/ngettext
     - bin/envsubst

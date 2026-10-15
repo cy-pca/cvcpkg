@@ -8,17 +8,15 @@ set -euo pipefail
 
 cd "${CVC_SOURCE_DIR}"
 
-# On macOS, build only the gettext-runtime sub-package (libintl).  The full
-# gettext build also compiles libtextstyle, whose iconv-ostream module
-# references iconv_ostream_create but never gets compiled because gnulib's
-# "working iconv" test fails against macOS's (non-GNU) system iconv -> an
-# arm64 "undefined symbol _iconv_ostream_create" link error.  Downstream
-# consumers only need libintl, which gettext-runtime provides; the message
-# tools (msgfmt/xgettext) come from the host toolchain (Homebrew) at build
-# time.  linux/BSD build the full tree as before.
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    cd gettext-runtime
-fi
+# macOS builds the full tree too.  It used to build only gettext-runtime
+# (libintl): the full build's libtextstyle failed to link on arm64
+# ("undefined symbol _iconv_ostream_create") because gnulib's "working iconv"
+# test fails against macOS's non-GNU system iconv, so its iconv-ostream module
+# was never compiled.  The message tools (msgfmt, xgettext, msgmerge) were then
+# left to the build host -- Homebrew -- and with Homebrew gone libpq and
+# postgresql (-Dnls=enabled) failed on macOS: "Program 'msgfmt' not found".
+# macOS now builds against cvcpkg's GNU libiconv (the iconv dependency, as on
+# OpenBSD; picked up below), which passes that test.
 
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
@@ -37,10 +35,10 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
-# OpenBSD has no iconv in libc; use cvcpkg's GNU libiconv (staged into
-# CVC_DEPS_PREFIX by the openbsd-only iconv dep) so the bundled libxml finds
-# <iconv.h> and links libiconv.  A no-op where iconv isn't a dep (other
-# platforms use their libc iconv).
+# OpenBSD has no iconv in libc, and macOS has a non-GNU one: use cvcpkg's GNU
+# libiconv (staged into CVC_DEPS_PREFIX by the openbsd/macos iconv dep) so the
+# bundled libxml finds <iconv.h> and links libiconv, and gnulib's iconv test
+# passes.  A no-op where iconv isn't a dep (other platforms use libc's iconv).
 if [[ -n "${CVC_DEPS_PREFIX:-}" && -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
     export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
     export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
