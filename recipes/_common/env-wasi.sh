@@ -69,7 +69,7 @@ cvc_cmake_build() {
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DCMAKE_CXX_STANDARD=17 \
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-        "${_toolchain_args[@]}" \
+        ${_toolchain_args[@]+"${_toolchain_args[@]}"} \
         ${_find_root_path_args[@]+"${_find_root_path_args[@]}"} \
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"

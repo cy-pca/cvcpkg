@@ -29,7 +29,7 @@ meson setup "${CVC_BUILD_DIR}" \
     --default-library="${_default_lib}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig,${CVC_DEPS_PREFIX}/libdata/pkgconfig,${CVC_DEPS_PREFIX}/share/pkgconfig" \
     -Dc_link_args="-Wl,-rpath,\$ORIGIN" \
-    "${_extra[@]}"
+    ${_extra[@]+"${_extra[@]}"}
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
 

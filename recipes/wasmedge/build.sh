@@ -37,7 +37,7 @@ fi
 # static archives by path instead, so libwasmedge carries LLVM itself and
 # llvm18 is not needed at run time.
 llvm_root=""
-for _root in "${_cvc_roots[@]}"; do
+for _root in ${_cvc_roots[@]+"${_cvc_roots[@]}"}; do
     if [[ -f "${_root}/lib/cmake/llvm/LLVMConfig.cmake" && -f "${_root}/lib/cmake/lld/LLDConfig.cmake" ]]; then
         llvm_root="${_root}"
         break
@@ -158,7 +158,7 @@ fi
 # before ncurses).
 cvc_dep_file() {  # <relative path>...: the first one found in the dependency roots
     local _r _f
-    for _r in "${_cvc_roots[@]}"; do
+    for _r in ${_cvc_roots[@]+"${_cvc_roots[@]}"}; do
         for _f in "$@"; do
             [[ -e "${_r}/${_f}" ]] && { echo "${_r}/${_f}"; return 0; }
         done
@@ -301,7 +301,7 @@ else
     _ldvar=LD_LIBRARY_PATH
 fi
 _ldpath="${lib}"
-for _root in "${_cvc_roots[@]}"; do
+for _root in ${_cvc_roots[@]+"${_cvc_roots[@]}"}; do
     _ldpath="${_ldpath}:${_root}/lib"
 done
 cvc_run() {  # <command>...: run with the install and dependency lib dirs on the loader path
