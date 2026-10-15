@@ -10,6 +10,8 @@ install_name_tool/codesign mocked and real (minimal) Mach-O files."""
 import subprocess
 from unittest import mock
 
+import pytest
+
 from cvcpkg.builder import _patch_macos_install_names
 from tests.unit._binfixtures import macho
 
@@ -156,6 +158,57 @@ def test_homebrew_reference_is_not_papered_over(tmp_path):
     )
     edits, _ = _run(inst)
     assert edits == {}
+
+
+def _symlink_or_skip(link, target):
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symlinks on this host")
+
+
+def test_compat_symlink_id_is_kept(tmp_path):
+    # luajit names libluajit-5.1.2.1.<rel>.dylib @rpath/libluajit-5.1.2.dylib,
+    # a symlink to it, so consumers record the compatibility name; its test
+    # checks for exactly that.  The pass used to rewrite the id to the
+    # full-version leaf.
+    lib = tmp_path / "lib"
+    real = lib / "libluajit-5.1.2.1.1788856981.dylib"
+    macho(
+        real,
+        filetype="dylib",
+        install_id="@rpath/libluajit-5.1.2.dylib",
+        loads=[_SYS],
+        rpaths=["@loader_path"],
+    )
+    _symlink_or_skip(lib / "libluajit-5.1.2.dylib", real.name)
+    edits, signed = _run(tmp_path)
+    assert edits == {} and signed == []
+
+
+def test_rpath_id_naming_another_file_is_rewritten(tmp_path):
+    # An @rpath id whose name beside the dylib is a DIFFERENT file (or nothing)
+    # does not name this dylib, so it is still replaced.
+    lib = tmp_path / "lib"
+    for name in ("libfoo.1.dylib", "libfoo.2.dylib"):
+        macho(
+            lib / name,
+            filetype="dylib",
+            install_id="@rpath/libfoo.1.dylib",
+            loads=[_SYS],
+            rpaths=["@loader_path"],
+        )
+    macho(
+        lib / "libbar.3.dylib",
+        filetype="dylib",
+        install_id="@rpath/libbar.dylib",
+        loads=[_SYS],
+        rpaths=["@loader_path"],
+    )
+    edits, _ = _run(tmp_path)
+    assert _pairs(edits["libfoo.2.dylib"], "-id") == ["@rpath/libfoo.2.dylib"]
+    assert _pairs(edits["libbar.3.dylib"], "-id") == ["@rpath/libbar.3.dylib"]
+    assert "libfoo.1.dylib" not in edits
 
 
 def test_noop_without_tools(tmp_path):

@@ -1827,6 +1827,30 @@ def _complete_elf_rpaths(
             print(f"cvcpkg: WARNING: could not add {':'.join(added)} to {rel}'s RPATH")
 
 
+def _rpath_id_names(obj: Path, soname: str | None) -> bool:
+    """True when the install name *soname* already names *obj* through ``@rpath``.
+
+    That is ``@rpath/<obj's leaf>``, or ``@rpath/<alias>`` where ``<alias>``
+    beside *obj* is a symlink resolving to it.  The second is the Mach-O
+    analog of an ELF SONAME: luajit names libluajit-5.1.2.1.<rel>.dylib
+    ``@rpath/libluajit-5.1.2.dylib`` so consumers record the compatibility
+    name, and its test checks for exactly that.  Rewriting such an id to the
+    full-version leaf still loads, but breaks that contract.
+    """
+    if not soname or not soname.startswith("@rpath/"):
+        return False
+    leaf = soname[len("@rpath/") :]
+    if leaf == obj.name:
+        return True
+    if not leaf or "/" in leaf:
+        return False
+    alias = obj.parent / leaf
+    try:
+        return alias.is_symlink() and alias.resolve() == obj.resolve()
+    except OSError:
+        return False
+
+
 def _patch_macos_install_names(
     install_dir: Path,
     dep_prefixes: Sequence[Path | None] = (),
@@ -1849,7 +1873,10 @@ def _patch_macos_install_names(
     bin/ is where cmake, curl and openssl were left broken) it:
 
     * sets each ``lib/**/*.dylib``'s id to ``@rpath/<leaf>`` and gives it a
-      ``@loader_path`` RPATH so it finds its siblings (the ``$ORIGIN`` analog);
+      ``@loader_path`` RPATH so it finds its siblings (the ``$ORIGIN`` analog).
+      An id that is already ``@rpath/<name>``, where ``<name>`` beside the
+      dylib is the dylib itself (a compatibility symlink), is kept: see
+      :func:`_rpath_id_names`;
     * rewrites an absolute reference to a dylib that this bundle ships, or that
       a dependency installed in *dep_prefixes* ships, to ``@rpath/<leaf>`` --
       both end up in the same flat prefix;
@@ -1889,7 +1916,7 @@ def _patch_macos_install_names(
             continue
         args: list[str] = []
         in_lib = obj.suffix == ".dylib" and lib_dir in obj.parents
-        if in_lib and link.kind == "shared" and link.soname != f"@rpath/{obj.name}":
+        if in_lib and link.kind == "shared" and not _rpath_id_names(obj, link.soname):
             args += ["-id", f"@rpath/{obj.name}"]
 
         need_dirs: list[str] = []
