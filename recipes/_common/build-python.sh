@@ -398,4 +398,25 @@ if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
     if [ -f "pip${PYTHON_MINOR}" ]; then
         mv -f "pip${PYTHON_MINOR}" "pip${PYTHON_LDVERSION}"
     fi
+    # The rest of what `make install` files under the standard names has the same
+    # problem.  lib/pkgconfig/python-3.13.pc (and -embed, python3.pc) are links
+    # to python-3.13t.pc, so in a shared prefix they replaced python313's and a
+    # non-t build's pkg-config compiled against include/python3.13t: numpy-cp313
+    # got Py_GIL_DISABLED and its extension needed _Py_DecRefShared, which the
+    # standard python3.13 does not export.  libpython3.so (the stable-ABI shim,
+    # which the free-threaded build does not support) would replace python313's,
+    # and pydoc3.13/idle3.13 would run the t interpreter under python313's names.
+    # Keep only the t-suffixed names.
+    for _tool in pydoc idle; do
+        rm -f "${_tool}${MAJOR}"
+        if [ -f "${_tool}${PYTHON_MINOR}" ]; then
+            mv -f "${_tool}${PYTHON_MINOR}" "${_tool}${PYTHON_LDVERSION}"
+        fi
+    done
+    rm -f "${CVC_INSTALL_DIR}/lib/pkgconfig/python-${PYTHON_MINOR}.pc" \
+          "${CVC_INSTALL_DIR}/lib/pkgconfig/python-${PYTHON_MINOR}-embed.pc" \
+          "${CVC_INSTALL_DIR}/lib/pkgconfig/python${MAJOR}.pc" \
+          "${CVC_INSTALL_DIR}/lib/pkgconfig/python${MAJOR}-embed.pc" \
+          "${CVC_INSTALL_DIR}/lib/libpython${MAJOR}.so" \
+          "${CVC_INSTALL_DIR}/lib/libpython${MAJOR}.dylib"
 fi
