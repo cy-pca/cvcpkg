@@ -20,6 +20,16 @@ case "${CVC_PLATFORM}" in
     *)       _rpath="\$ORIGIN;\$ORIGIN/../lib" ;;
 esac
 
+# Match LLVM's RTTI setting.  LLVM builds without RTTI by default, and a
+# consumer compiled with it references typeinfo symbols libLLVM never defines:
+# the linux/x86_64 fleet build died linking tools/llvm-cbe with "undefined
+# reference to `typeinfo for llvm::cl::GenericOptionValue'".  llvm-cbe's
+# CMakeLists does not apply LLVM_ENABLE_RTTI itself, so ask llvm-config.
+_cxxflags="${CXXFLAGS:-}"
+if [ "$("${CVC_DEPS_PREFIX}/bin/llvm-config" --has-rtti 2>/dev/null)" != "YES" ]; then
+    _cxxflags="${_cxxflags} -fno-rtti"
+fi
+
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
@@ -27,6 +37,7 @@ cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_CXX_STANDARD=17 \
+    -DCMAKE_CXX_FLAGS="${_cxxflags}" \
     -DCMAKE_INSTALL_RPATH="${_rpath}" \
     -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
     -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
@@ -34,3 +45,14 @@ cmake -G Ninja \
 
 cmake --build "${CVC_BUILD_DIR}" --target llvm-cbe -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
+
+# Built against an installed LLVM, llvm-cbe's tool target has no install rule
+# (add_llvm_tool installs only inside an LLVM build tree), so `cmake --install`
+# leaves bin/ empty and strict package.files refused the pack.  Install the
+# binary the build produced.
+if [ ! -x "${CVC_INSTALL_DIR}/bin/llvm-cbe" ]; then
+    _cbe="$(find "${CVC_BUILD_DIR}" -type f -name llvm-cbe -perm -u+x | sed -n 1p)"
+    [ -n "${_cbe}" ] || { echo "llvm-cbe: no llvm-cbe binary under ${CVC_BUILD_DIR}" >&2; exit 1; }
+    mkdir -p "${CVC_INSTALL_DIR}/bin"
+    install -m 755 "${_cbe}" "${CVC_INSTALL_DIR}/bin/llvm-cbe"
+fi
