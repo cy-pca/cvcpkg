@@ -57,3 +57,35 @@ cvc_cmake_build \
     -DTARGET=GENERIC \
     -DNUM_THREADS=64 \
     ${OPENBLAS_EXTRA[@]+"${OPENBLAS_EXTRA[@]}"}
+
+# DIAGNOSTIC (not for merge): numpy-cp312's matmul dies with SIGBUS on Intel
+# macOS.  Exercise dgemm on the freshly installed library under each kernel.
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+    echo "== cpu: $(sysctl -n machdep.cpu.brand_string)"
+    sysctl -n machdep.cpu.features machdep.cpu.leaf7_features || true
+    D="$(mktemp -d)"
+    cat > "${D}/t.c" <<'CEOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <cblas.h>
+static int run(int n) {
+    double *a = malloc(sizeof(double) * n * n), *c = malloc(sizeof(double) * n * n);
+    for (int i = 0; i < n * n; i++) a[i] = (double)(i % 7);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, n, n, n, 1.0, a, n, a, n, 0.0, c, n);
+    double s = 0; for (int i = 0; i < n * n; i++) s += c[i];
+    printf("n=%d sum=%g core=%s\n", n, s, openblas_get_corename());
+    free(a); free(c); return 0;
+}
+int main(void) { run(3); run(64); run(300); return 0; }
+CEOF
+    "${CC:-cc}" -o "${D}/t" "${D}/t.c" -I"${CVC_INSTALL_DIR}/include" -I"${CVC_INSTALL_DIR}/include/openblas" \
+        -L"${CVC_INSTALL_DIR}/lib" -lopenblas -Wl,-rpath,"${CVC_INSTALL_DIR}/lib"
+    otool -L "${D}/t"
+    for _thr in "" 1; do
+        for _ct in "" Haswell SkylakeX Zen Sandybridge Nehalem Prescott; do
+            echo "== OPENBLAS_CORETYPE=${_ct:-auto} OPENBLAS_NUM_THREADS=${_thr:-default}"
+            OPENBLAS_VERBOSE=2 OPENBLAS_CORETYPE="${_ct}" OPENBLAS_NUM_THREADS="${_thr}" "${D}/t" || echo "== rc=$?"
+        done
+    done
+    exit 1
+fi
