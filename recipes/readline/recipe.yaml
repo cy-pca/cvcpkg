@@ -6,7 +6,10 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 4
+  # cvc.5: link the cvcpkg ncurses (libncursesw) instead of the build host's
+  # libtinfo, and require ncursesw in readline.pc; the old .pc required an
+  # ncurses.pc nothing ships, so pkg-config rejected readline everywhere.
+  cvc_revision: 5
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -26,7 +29,9 @@ patches: []
 depends:
   build:
     - pkg-config
-  runtime: []
+    - ncurses
+  runtime:
+    - ncurses
   host_tools: []
 
 build:
