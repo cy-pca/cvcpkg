@@ -1391,18 +1391,24 @@ def pack_all_cmd(
 
     # Report what the platform/arch filter drops, so "not applicable here"
     # reads as a decision rather than recipes silently vanishing.
-    from cvcpkg.builder import _artifacts_cover
+    from cvcpkg.builder import _not_applicable
 
-    _not_applicable = sorted(
-        r.name
-        for r in all_recipe_list
-        if any(m.platform in (plat, "any") for m in r.build_matrix)
-        and not _artifacts_cover(r, plat, arch)
+    _skip = _not_applicable(
+        [r for r in all_recipe_list if any(m.platform in (plat, "any") for m in r.build_matrix)],
+        plat,
+        arch,
     )
-    if _not_applicable:
+    _direct = sorted(n for n, why in _skip.items() if why.startswith("no "))
+    _dependents = sorted(n for n in _skip if n not in _direct)
+    if _direct:
         click.echo(
-            f"Skipping {len(_not_applicable)} recipe(s) with no {plat}-{arch} "
-            f"artifact: {', '.join(_not_applicable)}"
+            f"Skipping {len(_direct)} recipe(s) with no {plat}-{arch} "
+            f"artifact: {', '.join(_direct)}"
+        )
+    if _dependents:
+        click.echo(
+            f"Skipping {len(_dependents)} recipe(s) that depend on one: "
+            + ", ".join(f"{n} ({_skip[n]})" for n in _dependents)
         )
 
     push = server_cache_push and bool(server_cache) and not no_server_cache

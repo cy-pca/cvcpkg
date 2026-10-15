@@ -933,6 +933,36 @@ def _artifacts_cover(recipe: Recipe, platform: str, arch: str) -> bool:
     return False
 
 
+def _not_applicable(recipes: Sequence[Recipe], platform: str, arch: str) -> dict[str, str]:
+    """Recipes that cannot be built for *platform*/*arch*, with the reason.
+
+    A recipe with no artifact for it (:func:`_artifacts_cover`), and every
+    recipe that depends on one, build or runtime, directly or not.  Building a
+    dependent anyway only moved the failure into it: on linux/arm64,
+    pillow-cp311 (x86_64/Windows/macOS-arm64 wheels only) was skipped, and
+    weasyprint-cp311, which needs it, built and then failed its own import
+    check ("No module named 'PIL'").
+    """
+    tag = f"{platform}-{arch}"
+    root = {r.name: r.name for r in recipes if not _artifacts_cover(r, platform, arch)}
+    reasons = {name: f"no {tag} artifact" for name in root}
+    changed = True
+    while changed:
+        changed = False
+        for r in recipes:
+            if r.name in root:
+                continue
+            for dep in _dep_names(r, platform):
+                dep = dep.rsplit("/", 1)[-1]
+                if dep in root:
+                    root[r.name] = root[dep]
+                    via = "" if dep == root[dep] else f" (through {dep})"
+                    reasons[r.name] = f"depends on {root[dep]}, which has no {tag} artifact{via}"
+                    changed = True
+                    break
+    return reasons
+
+
 def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:
     """Resolve the ``artifacts`` entry for *platform*/*arch*.
 
@@ -4852,12 +4882,13 @@ def build_all(
 
     _haikuhost.ensure_delegatable(platform, host_platform)
 
-    recipes = [
+    candidates = [
         r
         for r in all_recipes
         if any(m.platform == platform or m.platform == "any" for m in r.build_matrix)
-        and _artifacts_cover(r, platform, arch)
     ]
+    skip = _not_applicable(candidates, platform, arch)
+    recipes = [r for r in candidates if r.name not in skip]
     ordered = resolve_build_order(recipes, platform)
 
     # Identify host-tool recipes needed for cross-compilation.

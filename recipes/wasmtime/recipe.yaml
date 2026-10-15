@@ -22,6 +22,10 @@ source:
   base_url: https://github.com/bytecodealliance/wasmtime/releases/download/v45.0.0
   artifacts:
     linux-x86_64: wasmtime-v45.0.0-x86_64-linux-c-api.tar.xz
+    # build.sh already picks the aarch64 tarballs on an arm64 host; without
+    # this entry pack-all skipped wasmtime there, and wasi-sdk (host tool
+    # wasmtime) with it.
+    linux-arm64: wasmtime-v45.0.0-aarch64-linux-c-api.tar.xz
     macos-arm64: wasmtime-v45.0.0-aarch64-macos-c-api.tar.xz
     macos-x86_64: wasmtime-v45.0.0-x86_64-macos-c-api.tar.xz
     windows-x86_64: wasmtime-v45.0.0-x86_64-windows-c-api.zip
