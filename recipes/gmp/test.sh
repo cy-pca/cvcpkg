@@ -13,9 +13,11 @@
 #      consumer that copies it, MPFR first);
 #   2. libgmp.a lacks __gmpn_cpuvec_init, the CPUID dispatcher a fat build
 #      has and a CPU-specific build does not;
-#   3. big-integer arithmetic through the dispatched kernels is wrong.
-# A builder newer than the target cannot reproduce the SIGILL itself, so 1 and
-# 2 are the structural guarantee; 3 proves the dispatch runs.
+#   3. any function outside the CPU-specific kernels uses BMI2/ADX/LZCNT
+#      (the +cvc.11 SIGILL: see check 3 below);
+#   4. big-integer arithmetic through the dispatched kernels is wrong.
+# A builder newer than the target cannot reproduce the SIGILL itself, so 1-3
+# are the structural guarantee; 4 proves the dispatch runs.
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
@@ -81,7 +83,47 @@ else
     echo "  OK: fat build (__gmpn_cpuvec_init present)"
 fi
 
-# 3. Arithmetic through the dispatched kernels.
+# 3. No BMI2/ADX/LZCNT outside the CPU-specific kernels. A fat build may hold
+# mulx/adcx/adox in kernels named for a CPU that has them (__gmpn_addmul_1_zen,
+# ..._coreihwl); the dispatcher picks those only on such a CPU. Anything else (the
+# C code, the _x86_64 baseline, the _fat dispatchers) runs on every CPU and must
+# not. +cvc.11 passed the other checks and still raised SIGILL on a Sandy Bridge Xeon:
+# configure took host_cpu from GMP's config.guess, so longlong.h inlined mulx
+# into 76 plain-C functions (__gmpz_n_pow_ui first). lzcnt is listed because an
+# older CPU decodes it as bsr and silently computes the wrong answer; tzcnt is
+# not, since compilers emit it as `rep bsf`, which every x86_64 runs.
+if ! command -v objdump >/dev/null 2>&1; then
+    if [[ "${CVC_PLATFORM}" == "haiku" ]]; then
+        echo "  WARN: no objdump on this host; skipping the instruction scan"
+    else
+        echo "FAIL: objdump not found"
+        exit 1
+    fi
+else
+    kernels='k8|k10|bd1|bd2|bd4|bt1|bt2|zen|zen2|zen3|zen4|core2|coreinhm|coreisbr|coreihwl|coreibwl|skylake|atom|silvermont|goldmont|nano|pentium4'
+    # GNU and LLVM objdump both print "<symbol>:" headers and the mnemonic after a
+    # tab; LLVM adds an AT&T size suffix (mulxq). Capture first, as above.
+    dis=$(objdump -d --no-show-raw-insn "${LIB}/libgmp.a" 2>/dev/null || true)
+    if [[ -z "${dis}" ]]; then
+        echo "FAIL: objdump could not disassemble lib/libgmp.a"
+        exit 1
+    fi
+    bad=$(awk -v kernels="${kernels}" '
+        /^[0-9a-fA-F]+ <[^>]+>:$/ { fn = $2; gsub(/[<>:]/, "", fn); next }
+        /[[:space:]](mulx|adcx|adox|shlx|shrx|sarx|rorx|andn|bzhi|pdep|pext|lzcnt)[bwlq]?[[:space:]]/ {
+            if (fn !~ ("_(" kernels ")$")) seen[fn] = 1
+        }
+        END { for (f in seen) print f }' <<<"${dis}" | sort)
+    if [[ -n "${bad}" ]]; then
+        echo "FAIL: BMI2/ADX/LZCNT instructions outside the CPU-specific kernels, in:"
+        head -20 <<<"${bad}" | sed 's/^/    /'
+        echo "  ($(wc -l <<<"${bad}" | tr -d ' ') functions; configure must use a generic --build triplet)"
+        exit 1
+    fi
+    echo "  OK: no BMI2/ADX/LZCNT outside the CPU-specific kernels"
+fi
+
+# 4. Arithmetic through the dispatched kernels.
 CC_BIN="${CC:-cc}"
 if ! command -v "${CC_BIN}" >/dev/null 2>&1; then
     if [[ "${CVC_PLATFORM}" == "haiku" ]]; then
