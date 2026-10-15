@@ -31,7 +31,10 @@ _boost_extra=()
 if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=process)
 fi
-if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+# GCC builds libquadmath (and <quadmath.h>) only for x86, so linux/arm64 is OFF
+# too: forcing it ON there failed ("quadmath.h: No such file or directory"),
+# and gcc-runtime ships lib/libquadmath* on x86_64 only.
+if [[ "${CVC_PLATFORM}" == "linux" ]] && [[ "$(uname -m)" == x86_64 ]]; then
     # -L first so -lquadmath binds the deps prefix's copy, not the compiler's.
     _boost_extra+=(
         -DBOOST_CHARCONV_QUADMATH_FOUND=ON

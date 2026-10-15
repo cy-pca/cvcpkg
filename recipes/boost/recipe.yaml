@@ -19,7 +19,10 @@ recipe:
   # Bumped 6 -> 7: quadmath back on linux, from cvcpkg's gcc-runtime (a linux
   # runtime dependency) instead of the build host: libboost_charconv NEEDs
   # libquadmath.so.0 again, and it is installed beside it.
-  cvc_revision: 7
+  #
+  # Bumped 7 -> 8: quadmath on linux x86_64 only.  GCC has no libquadmath for
+  # aarch64, and forcing it ON failed linux/arm64 (quadmath.h not found).
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

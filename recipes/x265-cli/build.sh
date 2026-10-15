@@ -13,6 +13,20 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
+# aarch64: the same SVE2 probe as recipes/x265/build.sh.  x265's SVE2 kernels
+# need -march=armv9-a+i8mm+sve2, which the linux/arm64 runners' GCC 11 rejects
+# ("unknown value 'armv9-a+i8mm+sve2' for '-march'"); drop only SVE2 there.
+_extra=()
+case "$(uname -m)" in
+    aarch64|arm64)
+        if ! echo 'int main(void){return 0;}' | "${CXX:-c++}" -march=armv9-a+i8mm+sve2 \
+                -x c++ -c -o /dev/null - >/dev/null 2>&1; then
+            echo "x265-cli: ${CXX:-c++} cannot target armv9-a+sve2; building without SVE2"
+            _extra+=(-DENABLE_SVE2=OFF)
+        fi
+        ;;
+esac
+
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}/source" \
     -B "${CVC_BUILD_DIR}" \
@@ -22,7 +36,8 @@ cmake -G Ninja \
     -DENABLE_CLI=ON \
     -DENABLE_SHARED=OFF \
     -DENABLE_STATIC=OFF \
-    -DENABLE_TESTS=OFF
+    -DENABLE_TESTS=OFF \
+    ${_extra[@]+"${_extra[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}" --target x265 -j "${CVC_JOBS}"
 
