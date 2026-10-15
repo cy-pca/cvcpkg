@@ -17,15 +17,15 @@ export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
 cd "${CVC_SOURCE_DIR}"
 
+# No --sysroot: "--sysroot=/" is the default on Linux and, on macOS, points
+# clang away from the SDK, so x264's compiler probe failed there with "No
+# working C compiler found".  --enable-cli is the default, and x264 has no
+# --disable-static/--disable-shared (configure ignored all three).
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
-    --enable-cli \
-    --disable-static \
-    --disable-shared \
     --disable-lavf \
     --disable-swscale \
     --disable-opencl \
-    --sysroot=/ \
     --extra-cflags="${CPPFLAGS:-}" \
     --extra-ldflags="${LDFLAGS:-}"
 
