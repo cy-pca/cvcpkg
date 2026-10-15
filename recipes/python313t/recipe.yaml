@@ -35,7 +35,11 @@ recipe:
   # _dbm, _gdbm and _decimal load gettext's libintl, gdbm and mpdecimal from
   # /usr/local/opt, so it aborts on any Mac without Homebrew.  _common/build-python.sh
   # now also turns those off on macOS explicitly.  Every platform rebuilds.
-  cvc_revision: 8
+  # cvc.9: stop shipping python-3.13.pc, python-3.13-embed.pc, python3.pc,
+  # python3-embed.pc, libpython3.so, pydoc3/pydoc3.13 and idle3/idle3.13.  In a
+  # shared prefix they replaced python313's, and numpy-cp313 compiled against
+  # the free-threaded headers (undefined _Py_DecRefShared).
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
