@@ -67,8 +67,9 @@ package:
   files:
     - lib/libGLEW*
     - lib/GLEW*
-    - lib/glew32*
-    - bin/glew32*
+    # The Windows names (glew32.dll / glew32.lib); other platforms have none.
+    - { glob: "lib/glew32*", platforms: [windows] }
+    - { glob: "bin/glew32*", platforms: [windows] }
     - lib/cmake/glew/
     - lib/pkgconfig/glew.pc
     - include/GL/glew.h
