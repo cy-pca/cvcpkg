@@ -4658,6 +4658,42 @@ def _accept_server_hit(
     return True
 
 
+def _record_manifest_in_prefix(
+    recipe: Recipe,
+    install_dir: Path,
+    prefix: Path,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> None:
+    """Give a recipe build_all merged into *prefix* the manifest a bundle would bring.
+
+    A bundle installed from the catalog leaves
+    ``share/libcvc-deps/<name>/manifest.yaml`` in the prefix; a recipe built and
+    merged by build_all left none.  :func:`_runtime_dep_libraries` then could
+    not tell a later recipe's runtime closure apart in a shared pack-all prefix
+    and counted every library in it: gfortran's ``lib64/libgcc_s.so.1`` failed
+    cmake and greenlet on linux/arm64 ("shipped in lib64/ but no RUNPATH entry
+    reaches it"), neither of which depends on gfortran.  Kept when *install_dir*
+    already has one (a server-cache bundle), skipped for a recipe that is never
+    packed (``redistributable: false``), which keeps the old whole-prefix
+    fallback for its dependents.
+    """
+    if not recipe.redistributable:
+        return
+    rel = Path("share") / "libcvc-deps" / recipe.name / "manifest.yaml"
+    if (install_dir / rel).is_file():
+        return
+    try:
+        manifest = generate_manifest(recipe, install_dir, platform, arch, config, link)
+        (prefix / rel).parent.mkdir(parents=True, exist_ok=True)
+        with open(prefix / rel, "w") as f:
+            yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+    except (CvcpkgError, OSError) as exc:
+        print(f"cvcpkg: WARNING: could not record {recipe.name}'s manifest in the prefix: {exc}")
+
+
 def build_all(
     recipes_dir: Path | list[Path],
     *,
@@ -5164,6 +5200,11 @@ def build_all(
                         _merge_tree(install_dir, _dest)
                         _rewrite_pc_prefixes(_dest)
                         _rewrite_script_prefixes(_dest)
+                        # A server-cache bundle brought its manifest; a local
+                        # cache entry is a raw install tree without one.
+                        _record_manifest_in_prefix(
+                            recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                        )
                 else:
                     cache.restore(cached_archive, _dest)
                     _rewrite_pc_prefixes(_dest)
@@ -5218,6 +5259,9 @@ def build_all(
                     _merge_tree(install_dir, _dest)
                     _rewrite_pc_prefixes(_dest)
                     _rewrite_script_prefixes(_dest)
+                    _record_manifest_in_prefix(
+                        recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                    )
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
                     cache.store(

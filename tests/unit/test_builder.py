@@ -2461,6 +2461,43 @@ class TestBuildAllKeepGoing:
 
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
+    def test_merged_builds_leave_their_manifest_in_the_prefix(
+        self, mock_fetch, mock_build, tmp_path
+    ):
+        # linux/arm64 pack-all: gfortran (built earlier in the shard) kept
+        # libgcc_s.so.1 in the shared prefix's lib64/, and with no manifests
+        # there the relocation gate counted it against cmake.  Each merged
+        # build now records its manifest, so a recipe's runtime closure is
+        # known and an unrelated recipe's libraries are not in it.
+        from cvcpkg.builder import _runtime_dep_libraries, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "gfortran")
+        self._make_recipe(recipes_dir, "zlib")
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
+
+        def _build(ctx, **kw):
+            name = ctx.recipe.name
+            sub = "lib64" if name == "gfortran" else "lib"
+            lib = "libgcc_s.so.1" if name == "gfortran" else "libz.so.1"
+            (ctx.install_dir / sub).mkdir(parents=True, exist_ok=True)
+            (ctx.install_dir / sub / lib).write_bytes(b"\x7fELF")
+
+        mock_build.side_effect = _build
+        prefix = tmp_path / "prefix"
+        build_all(recipes_dir, platform="linux", prefix=prefix, per_component=True, no_cache=True)
+
+        for name, rel in (("gfortran", "lib64/libgcc_s.so.1"), ("zlib", "lib/libz.so.1")):
+            manifest = yaml.safe_load(
+                (prefix / "share" / "libcvc-deps" / name / "manifest.yaml").read_text()
+            )
+            assert manifest["bundle"]["name"] == name
+            assert rel in manifest["contents"]["files"]
+        libs = _runtime_dep_libraries((prefix,), ["zlib"])
+        assert "libz.so.1" in libs and "libgcc_s.so.1" not in libs
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
     def test_on_built_failure_propagates_without_keep_going(self, mock_fetch, mock_build, tmp_path):
         from cvcpkg.builder import PackError, build_all
 
