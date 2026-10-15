@@ -4680,6 +4680,7 @@ def build_all(
     work_dir_root: Path | None = None,
     cleanup_work_dirs: bool = True,
     build_prefix: Path | None = None,
+    on_built: Callable[[BuildContext], None] | None = None,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -4747,6 +4748,15 @@ def build_all(
     no manifest, scripts still pointing at the build prefix -- and a catalog
     row made from it installs without its dependencies.  ``pack-all`` and
     ``build-all`` ``--server-cache-push`` pack each build and publish that.
+
+    *on_built*, when given, is called with each assigned recipe's context as
+    soon as that recipe is built, so a caller can pack and publish it while
+    later recipes build: a run cut off by a timeout keeps everything it
+    finished.  A :class:`BuildError`, :class:`PackError` or
+    :class:`RecipeError` it raises is recorded as that recipe's failure when
+    *keep_going* is set (the context is then left out of the result; its
+    files are already in the prefix, so dependents still build), and
+    propagates otherwise.
 
     *no_server_cache* disables server cache lookups.  *server_cache_org*
     scopes cache queries to a specific organization.
@@ -5235,7 +5245,18 @@ def build_all(
                 )
             # Only include assigned recipes in contexts (for packaging).
             if is_assigned:
-                contexts.append(ctx)
+                if on_built is None:
+                    contexts.append(ctx)
+                else:
+                    try:
+                        on_built(ctx)
+                    except (BuildError, PackError, RecipeError) as exc:
+                        if not keep_going:
+                            raise
+                        print(f"\ncvcpkg: FAILED {recipe.name} (after building): {exc}")
+                        failures.append(BuildFailure(recipe_name=recipe.name, error=exc))
+                    else:
+                        contexts.append(ctx)
         except (BuildError, RecipeError) as exc:
             if not keep_going:
                 raise

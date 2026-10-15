@@ -973,6 +973,98 @@ class TestPackAll:
         )
         assert ret != 0
 
+    def _two_contexts(self, tmp_path):
+        ctxs = []
+        for name in ("freetype", "zlib"):
+            work = tmp_path / f"work-{name}"
+            work.mkdir()
+            ctxs.append(
+                types.SimpleNamespace(
+                    platform="linux",
+                    install_dir=work / "install",
+                    recipe=fake_recipe(name, recipe_dir=tmp_path / name),
+                    work_dir=work,
+                    prefix=tmp_path / "pref",
+                    build_prefix=tmp_path / "bp",
+                )
+            )
+        return ctxs
+
+    def _pack_all(self, tmp_path, *extra):
+        return main(
+            [
+                "pack-all",
+                "--local",
+                "--platform",
+                "linux",
+                "--recipes-dir",
+                str(tmp_path),
+                "--no-default-recipes",
+                "--output-dir",
+                str(tmp_path / "dist"),
+                *extra,
+            ]
+        )
+
+    def test_a_pack_failure_does_not_stop_the_rest_under_keep_going(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Shard 2 of the 2026-10-15 macOS populate built 232 recipes, then
+        # freetype's strict package.files check aborted packing after 48.
+        from cvcpkg.builder import BuildError
+        from cvcpkg.cli import _build
+
+        monkeypatch.setattr("cvcpkg.builder.list_recipes", lambda d: [])
+        monkeypatch.setattr("cvcpkg.builder._artifacts_cover", lambda *a, **k: True)
+        monkeypatch.setattr("cvcpkg.platform.detect_arch", lambda: "x86_64")
+        ctxs = self._two_contexts(tmp_path)
+        monkeypatch.setattr("cvcpkg.builder.build_all", lambda *a, **k: _Contexts(ctxs))
+        packed: list[str] = []
+
+        def fake_pack(ctx, *a, **k):
+            if ctx.recipe.name == "freetype":
+                raise BuildError("freetype: package.files declares 1 entry that match nothing")
+            packed.append(ctx.recipe.name)
+            return tmp_path / f"{ctx.recipe.name}.tar.gz", "sha", 1
+
+        monkeypatch.setattr(_build, "_pack_built", fake_pack)
+
+        assert self._pack_all(tmp_path, "--keep-going") != 0
+        out = capsys.readouterr().out
+        assert packed == ["zlib"]
+        assert "FAILED freetype" in out and "zlib.tar.gz" in out
+        # Both work dirs are cleaned up, the failed one included.
+        assert not any(c.work_dir.exists() for c in ctxs)
+
+    def test_packs_each_recipe_as_it_is_built(self, tmp_path, monkeypatch):
+        # build_all hands each assigned build to on_built; pack-all packs it
+        # then (so a shard cut off by the job time limit keeps what it built)
+        # and does not pack it again afterwards.
+        from cvcpkg.cli import _build
+
+        monkeypatch.setattr("cvcpkg.builder.list_recipes", lambda d: [])
+        monkeypatch.setattr("cvcpkg.builder._artifacts_cover", lambda *a, **k: True)
+        monkeypatch.setattr("cvcpkg.platform.detect_arch", lambda: "x86_64")
+        ctxs = self._two_contexts(tmp_path)
+        packed: list[str] = []
+
+        def fake_build_all(*a, **k):
+            for ctx in ctxs:
+                k["on_built"](ctx)
+                assert packed[-1] == ctx.recipe.name  # packed before the next build
+            return _Contexts(ctxs)
+
+        monkeypatch.setattr("cvcpkg.builder.build_all", fake_build_all)
+        monkeypatch.setattr(
+            _build,
+            "_pack_built",
+            lambda ctx, *a, **k: (
+                packed.append(ctx.recipe.name) or (tmp_path / "x.tar.gz", "sha", 1)
+            ),
+        )
+        assert self._pack_all(tmp_path) == 0
+        assert packed == ["freetype", "zlib"]
+
     def test_bump_write_stamps_revision(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setattr("cvcpkg.builder.list_recipes", lambda d: [])
         monkeypatch.setattr("cvcpkg.builder._artifacts_cover", lambda *a, **k: True)

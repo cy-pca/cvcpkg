@@ -2418,6 +2418,75 @@ class TestBuildAllKeepGoing:
 
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
+    def test_on_built_runs_per_recipe_and_its_failure_is_recorded(
+        self, mock_fetch, mock_build, tmp_path
+    ):
+        # pack-all packs through on_built as each recipe finishes.  A recipe
+        # that builds but fails to pack is a failure; the rest are still
+        # packed, and its dependents still build (its files are in the prefix).
+        from cvcpkg.builder import PackError, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "beta", deps=["alpha"])
+        self._make_recipe(recipes_dir, "gamma")
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
+
+        seen: list[str] = []
+
+        def on_built(ctx):
+            seen.append(ctx.recipe.name)
+            if ctx.recipe.name == "alpha":
+                raise PackError("alpha: package.files declares 1 entry that match nothing")
+
+        contexts = build_all(
+            recipes_dir,
+            platform="linux",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            cleanup_work_dirs=False,
+            keep_going=True,
+            no_cache=True,
+            on_built=on_built,
+        )
+
+        assert sorted(seen) == ["alpha", "beta", "gamma"]
+        assert seen.index("alpha") < seen.index("beta")
+        assert sorted(c.recipe.name for c in contexts) == ["beta", "gamma"]
+        assert [f.recipe_name for f in contexts.failures] == ["alpha"]
+        assert not contexts.failures[0].skipped
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
+    def test_on_built_failure_propagates_without_keep_going(self, mock_fetch, mock_build, tmp_path):
+        from cvcpkg.builder import PackError, build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
+
+        def on_built(ctx):
+            raise PackError("does not pack")
+
+        with pytest.raises(PackError):
+            build_all(
+                recipes_dir,
+                platform="linux",
+                prefix=tmp_path / "prefix",
+                per_component=True,
+                cleanup_work_dirs=False,
+                no_cache=True,
+                on_built=on_built,
+            )
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
     def test_fail_fast_is_default(self, mock_fetch, mock_build, tmp_path):
         from cvcpkg.builder import BuildError, build_all
 
