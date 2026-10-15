@@ -24,7 +24,7 @@ export CMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX
 # it explicitly by ID. Idempotent; safe to re-run.
 _reg="${CVC_SOURCE_DIR}/code/Common/ImporterRegistry.cpp"
 if [[ -f "${_reg}" ]]; then
-    sed -i '/out\.push_back(new glTFImporter());/d' "${_reg}"
+    sed -i.orig '/out\.push_back(new glTFImporter());/d' "${_reg}" && rm -f "${_reg}".orig
 fi
 
 cvc_cmake_build \

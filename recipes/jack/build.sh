@@ -28,8 +28,8 @@ cd "${CVC_SOURCE_DIR}"
 # only when the running interpreter lacks the 'imp' module — imp.new_module(x)
 # is exactly types.ModuleType(x).  On Python < 3.12 the tree is left untouched.
 if ! python3 -c 'import imp' >/dev/null 2>&1; then
-    sed -i 's/^import os, re, imp, sys$/import os, re, sys/' waflib/Context.py
-    sed -i 's/imp\.new_module(WSCRIPT_FILE)/__import__("types").ModuleType(WSCRIPT_FILE)/' waflib/Context.py
+    sed -i.orig 's/^import os, re, imp, sys$/import os, re, sys/' waflib/Context.py && rm -f waflib/Context.py.orig
+    sed -i.orig 's/imp\.new_module(WSCRIPT_FILE)/__import__("types").ModuleType(WSCRIPT_FILE)/' waflib/Context.py && rm -f waflib/Context.py.orig
 fi
 
 # Driver backends.  ALSA is Linux-specific, so enable it explicitly on Linux

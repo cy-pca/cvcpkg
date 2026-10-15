@@ -79,7 +79,7 @@ tar xzf "${MUPDF_TGZ}" -C "${CVC_BUILD_DIR}"
 _swigpy="${MUPDF_SRC}/scripts/wrap/swig.py"
 [ -f "${_swigpy}" ] || { echo "pymupdf-cp312: ${_swigpy} not found — MuPDF layout changed?" >&2; exit 1; }
 if grep -q 'PyString_FromString' "${_swigpy}"; then
-    sed -i 's/PyString_FromString/PyUnicode_FromString/g' "${_swigpy}"
+    sed -i.orig 's/PyString_FromString/PyUnicode_FromString/g' "${_swigpy}" && rm -f "${_swigpy}".orig
     echo "pymupdf-cp312: patched PyString_FromString -> PyUnicode_FromString in swig.py"
 fi
 
