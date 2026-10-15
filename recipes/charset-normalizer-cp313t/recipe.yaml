@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: charset-normalizer-cp313t
   upstream_version: "3.4.9"
-  cvc_revision: 1
+  # cvc.2: republish.  The published noarch cvc.1 bundle's bin/normalizer is
+  # pip's /bin/sh polyglot wrapper, and its second line execs the fleet builder's
+  # job interpreter (/var/lib/cvcpkg-builder/.../bin/python3.13t), so it cannot
+  # run anywhere.  It was packed before the polyglot rewrite existed; packing
+  # today rewrites it to /usr/bin/env.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

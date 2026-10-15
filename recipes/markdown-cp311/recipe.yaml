@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: markdown-cp311
   upstream_version: "3.10.3"
-  cvc_revision: 2
+  # cvc.3: republish.  The published noarch cvc.2 bundle's console scripts
+  # (markdown_py) carry the build machine's interpreter as their shebang (the old
+  # libcvc-deps macOS CI prefix), so they cannot run anywhere; packing today
+  # rewrites it to /usr/bin/env.
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
