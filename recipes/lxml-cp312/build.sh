@@ -75,8 +75,11 @@ WHEELOUT="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"; mkdir -p "${WHEELOUT}
   --wheel-dir "${WHEELOUT}" \
   "${CVC_SOURCE_DIR}"
 
-readarray -t _wheel_matches < <(find "${WHEELOUT}" -maxdepth 1 -name 'lxml-*.whl')
-WHEEL="${_wheel_matches[0]:-}"
+# (No readarray: macOS runs this under /bin/bash 3.2.)
+WHEEL=""
+for _w in "${WHEELOUT}"/lxml-*.whl; do
+  if [ -f "${_w}" ]; then WHEEL="${_w}"; break; fi
+done
 [ -n "${WHEEL}" ] || { echo "lxml-cp312: no wheel produced" >&2; exit 1; }
 echo "lxml-cp312: built $(basename "${WHEEL}")"
 
@@ -84,8 +87,11 @@ echo "lxml-cp312: built $(basename "${WHEEL}")"
 "${PY}" -m pip install --no-deps --no-index --no-compile --ignore-installed \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
-readarray -t _lxml_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name lxml)
-LXML_DIR="${_lxml_dir_matches[0]:-}"
+LXML_DIR=""
+while IFS= read -r _d; do
+  LXML_DIR="${_d}"
+  break
+done < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name lxml)
 [ -n "${LXML_DIR}" ] || { echo "lxml-cp312: staged lxml/ not found" >&2; exit 1; }
 
 # ── Relocatable RUNPATH per-file (pillow's pattern) ─────────────────────────
