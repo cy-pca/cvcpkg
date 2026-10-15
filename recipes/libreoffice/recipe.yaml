@@ -50,6 +50,10 @@ depends:
   # extract-debs.py unpacks the .deb files (standard library only).
   build:
     - name: python3
+    # A font for build.sh's headless conversion smoke test: a builder with no
+    # system fonts gives LibreOffice nothing to lay text out with.  Users add
+    # their own (see the notes); this one is build-time only.
+    - name: liberation-fonts
   # Libraries TDF's build links but does not bundle, needed for headless
   # conversion: soffice.bin and libmergedlo need cairo; the oosplash launcher
   # and the generic VCL plugin need Xinerama, Xrender and Xrandr (headless
