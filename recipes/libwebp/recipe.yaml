@@ -80,7 +80,9 @@ package:
     - lib/libsharpyuv*
     - lib/webp*
     - lib/sharpyuv*
-    - lib/cmake/WebP/
+    # libwebp's CMake installs its package config under share/, on every
+    # platform (lib/cmake/WebP/ matched nothing and failed packing).
+    - share/WebP/cmake/
     - lib/pkgconfig/libwebp*.pc
     - lib/pkgconfig/libsharpyuv.pc
     - include/webp/

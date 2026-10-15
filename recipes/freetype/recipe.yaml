@@ -90,7 +90,8 @@ package:
     - lib/pkgconfig/freetype2.pc
     - lib/cmake/freetype/
     - include/freetype2/
-    - bin/freetype-config
+    # No bin/freetype-config: FreeType's CMake build never installs it (no
+    # published bundle has one), and strict package.files failed packing on it.
   cmake_packages:
     - { name: Freetype, targets: ["Freetype::Freetype"] }
   pkg_config:

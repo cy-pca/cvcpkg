@@ -51,7 +51,8 @@ package:
   files:
     - bin/perl
     - bin/perl5.40.2
-    - bin/perl.bin
+    # The real interpreter behind the OpenBSD relocation shim (build.sh).
+    - { glob: "bin/perl.bin", platforms: [openbsd] }
     - lib/5.40.2/
     - lib/site_perl/
 
