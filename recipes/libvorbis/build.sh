@@ -25,6 +25,12 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
+# libvorbis 1.3.7's configure puts -force_cpusubtype_ALL into its darwin CFLAGS,
+# and Apple's linker since Xcode 15 rejects it ("ld: unknown options:
+# -force_cpusubtype_ALL"), so every macOS build failed.  The flag only appears in
+# the darwin branch; drop it.
+sed -i.orig 's/-force_cpusubtype_ALL//g' configure && rm -f configure.orig
+
 ./configure "${CONFIGURE_ARGS[@]}"
 make -j "${CVC_JOBS}"
 make install
