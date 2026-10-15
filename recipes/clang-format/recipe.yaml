@@ -1,0 +1,103 @@
+schema_version: 1
+recipe:
+  name: clang-format
+  upstream_version: "18.1.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://clang.llvm.org/docs/ClangFormat.html
+  license: Apache-2.0 WITH LLVM-exception
+  tags: [tools, formatter, clang, llvm, development]
+  description: >-
+    clang-format 18 on its own: the clang-format executable plus its
+    git-clang-format and clang-format-diff.py helpers, built from the LLVM
+    18.1.8 monorepo with nothing else. A few MB, against the 200+ MB `llvm` /
+    `llvm18` bundles that also carry it, so a CI format check can install it
+    cheaply. Pinned to the 18.x series on purpose: clang-format's output
+    changes between majors, and a tree formatted with one major should be
+    checked with the same one (Ubuntu 24.04's apt clang-format is 18.1.x).
+
+source:
+  type: tarball
+  # The same monorepo tarball the llvm18 recipe builds from.
+  url: https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-project-18.1.8.src.tar.xz
+  sha256: "0b58557a6d32ceee97c8d533a59b9212d87e0fc4d2833924eb6c611247db2f2a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  # None: clang-format is linked against LLVM's static component libraries
+  # with zlib, zstd, terminfo and libxml2 off, so it needs only the C/C++
+  # runtime. The two helper scripts need a Python 3; like meson, the recipe
+  # does not impose one (see the "git clang-format" note).
+  runtime: []
+  host_tools: []
+
+build:
+  # Only one target, but clangBasic pulls a good part of LLVM in through
+  # FrontendOpenMP: ~1500 compile steps, ~5 CPU-hours (a local 8-core build
+  # took 94 min under load). The fleet's 2 h default reap is too close on a
+  # modest builder; the build tree peaks at ~2 GiB, so disk is not a concern.
+  timeout_seconds: 14400
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # MSVC + Ninja, static LLVM/clang libs and a static CRT (/MT). Added at the
+    # same 18.1.8+cvc.1: no windows bundle existed at any revision, and the
+    # linux/macos bundles do not change.
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - glob: bin/clang-format
+      platforms: [linux, macos]
+    - glob: bin/clang-format.exe
+      platforms: [windows]
+    - bin/git-clang-format
+    - share/clang/clang-format-diff.py
+
+notes:
+  - title: "Why a separate recipe"
+    platforms: [linux, macos, windows]
+    description: >-
+      `llvm` (22.x) and `llvm18` both ship bin/clang-format, but as part of a
+      200+ MB toolchain bundle, and neither packages git-clang-format. This
+      recipe builds only the clang-format target: clang's Basic, Lex, Format,
+      Rewrite and ToolingCore libraries and the LLVM libraries under them
+      (clangBasic reaches a good part of LLVM through FrontendOpenMP), all
+      static, so the bundle is one executable and two scripts.
+  - title: "git clang-format"
+    platforms: [linux, macos]
+    description: >-
+      With <prefix>/bin on PATH, `git clang-format` finds bin/git-clang-format
+      as a git subcommand, and it runs the clang-format next to it on PATH.
+      Both helpers are Python 3 scripts (#!/usr/bin/env python3). To run them
+      on cvcpkg's Python instead of whatever python3 is on PATH, install
+      python311 too and call the interpreter explicitly (the python311 bundle
+      names it python3.11, not python3):
+        <prefix>/bin/python3.11 <prefix>/bin/git-clang-format --diff <base>
+  - title: "Version pinning"
+    platforms: [linux, macos, windows]
+    description: >-
+      upstream_version tracks the 18.1.x series, the last 18 release being
+      18.1.8. Moving a project to a newer clang-format major is a deliberate
+      reformatting decision; add a new recipe (or bump this one) when a
+      consumer makes it, not as a routine update.
+  - title: "git clang-format on Windows"
+    platforms: [windows]
+    description: >-
+      bin/git-clang-format is the same Python 3 script; Windows does not run its
+      #!/usr/bin/env python3 line, so call it through an interpreter and point it
+      at this bundle's binary, e.g. with cvcpkg's python311 installed:
+        <prefix>\python.exe <prefix>\bin\git-clang-format --binary
+        <prefix>\bin\clang-format.exe --diff <base>

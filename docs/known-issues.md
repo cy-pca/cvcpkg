@@ -74,10 +74,11 @@ checksums:
 (plus `cvcpkg-linux-x86_64`, `cvcpkg-macos-arm64`, and
 `cvcpkg-windows-x86_64.exe` for the other platforms).
 
-The quick-install script detects FreeBSD/OpenBSD/NetBSD on x86_64,
-downloads the matching asset, verifies its sha256, and installs to
-`~/.local/bin` (override with `CVCPKG_INSTALL_DIR`; pin a tag with
-`CVCPKG_VERSION`):
+The quick-install script detects FreeBSD/OpenBSD/NetBSD on x86_64 and
+installs the registry's own `cvcpkg` package for that BSD when one is
+published, falling back to the matching release asset otherwise. Either way
+it verifies the sha256 and installs to `~/.local/bin` (override with
+`CVCPKG_INSTALL_DIR`; pin a version with `CVCPKG_VERSION`):
 
 ```sh
 curl -fsSL https://cvcpkg.org/install.sh | sh
@@ -211,8 +212,11 @@ A `cvcpkg-vX.Y.Z` GitHub Release built by
 [`cvcpkg-standalone.yml`](../.github/workflows/cvcpkg-standalone.yml) ships only
 the Linux, macOS and Windows single-file binaries. The FreeBSD, OpenBSD and
 NetBSD assets (`cvcpkg-freebsd-x86_64`, `cvcpkg-openbsd-x86_64`,
-`cvcpkg-netbsd-x86_64`) are missing, so `curl -fsSL https://cvcpkg.org/install.sh | sh`
-fails on the BSDs with *"no prebuilt binary for &lt;platform&gt;/x86_64 yet"*.
+`cvcpkg-netbsd-x86_64`) are missing, so when the registry has no `cvcpkg`
+package for a BSD, `curl -fsSL https://cvcpkg.org/install.sh | sh` falls back to
+the release and fails there with *"download failed: …/cvcpkg-&lt;platform&gt;-x86_64"*.
+Publishing `cvcpkg` for the BSDs to the registry sidesteps this: the installer
+prefers it over the release.
 
 ### Root cause
 

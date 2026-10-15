@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: kiwisolver-cp313
   upstream_version: "1.4.8"
-  cvc_revision: 2
+  # cvc.3 (macOS republish): the published cvc.2 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.2 is fine; this revision is for macOS.
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -57,7 +61,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/kiwisolver/
-    - lib/python3.13/site-packages/kiwisolver-*.dist-info/
-    - Lib/site-packages/kiwisolver/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/kiwisolver/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/kiwisolver-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/kiwisolver/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

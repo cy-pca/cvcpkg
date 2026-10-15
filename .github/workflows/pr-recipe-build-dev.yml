@@ -125,6 +125,15 @@ jobs:
           #    reap — that flag is for queues drained by ephemeral builders
           #    (e.g. macos-drain), not for a --wait CI check (pr-223, pr-226).
           #
+          # --online-only: for the same reason, skip combos whose builders are
+          #    registered but OFFLINE.  The dev cluster's Windows builders run on
+          #    a laptop (deploy-dev updates them best-effort, "skipped with a
+          #    warning when the laptop is off"); with it off, every recipe PR
+          #    staged Windows jobs nothing could claim and went red ("N job(s)
+          #    were never claimed").  The skip is printed, so the PR comment says
+          #    which platforms went unverified.  An ONLINE builder that never
+          #    claims a job still fails the check.
+          #
           # --skip-existing: a published variant is immutable, so never rebuild
           #    one.  This is what makes a prose-only recipe edit a no-op (version
           #    unchanged -> variant already published -> skipped) and stops stable
@@ -146,6 +155,7 @@ jobs:
             --recipes-dir recipes \
             --dag-id "$DAG_BASE" \
             --skip-existing \
+            --online-only \
             --wait --wait-timeout 1500 \
             $NAMES | tee build.log
           rc=$?

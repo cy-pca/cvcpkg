@@ -102,6 +102,29 @@ source ./deps/bin/activate
 pkg-config --cflags --libs zlib
 ```
 
+## CUDA
+
+`cvcpkg install cuda-toolkit --prefix ./deps` lays NVIDIA's CUDA toolkit out
+under `./deps/cuda` (it is downloaded from NVIDIA on your machine, never
+published by cvcpkg; see `recipes/cuda-toolkit/recipe.yaml`). On Linux the
+prefix alone is enough: a `deps/bin/nvcc` wrapper lets CMake find the
+compiler, and CMake reads the toolkit root from `nvcc -v`:
+
+```bash
+cmake -B build -DCMAKE_PREFIX_PATH="$PWD/deps"   # enable_language(CUDA), find_package(CUDAToolkit)
+```
+
+On Windows, or to be explicit anywhere, name the toolkit:
+
+```bash
+cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="$PWD/deps" \
+  -DCUDAToolkit_ROOT="$PWD/deps/cuda" \
+  -DCMAKE_CUDA_COMPILER="$PWD/deps/cuda/bin/nvcc"   # nvcc.exe on Windows
+```
+
+nvcc still needs a supported host compiler (GCC <= 13 / MSVC 2017-2022 for
+CUDA 12.5); the toolkit does not provide one.
+
 ## WebAssembly
 
 For Emscripten cross-builds (`wasm` / `wasm-mt` platforms) the deps prefix

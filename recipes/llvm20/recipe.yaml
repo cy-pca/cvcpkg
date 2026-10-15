@@ -13,7 +13,19 @@ recipe:
   # RPATH for relocatability, which OpenBSD's ld.so does not implement (see
   # _ELF_RPATH_PLATFORMS in builder.py) — the bundle would build but not
   # relocate.
-  cvc_revision: 3
+  # Bumped 3 -> 4: declared zstd. libLLVM links libzstd (LLVM_ENABLE_ZSTD
+  # finds it whenever the builder has one), but the recipe listed only zlib, so
+  # cvc.3's linux libLLVM.so.20.1 needed the host's libzstd.so.1 and the macOS
+  # libLLVM.dylib an unshipped @rpath/libzstd.1.5.7.dylib. zstd is now a build
+  # and runtime dependency on the Unix platforms and build.sh forces
+  # LLVM_ENABLE_ZSTD on; build.ps1 turns it off (the cvcpkg windows zstd bundle
+  # is static-only). The ncurses build edge is gone: LLVM 19 removed terminfo
+  # support, and cvc.3's libLLVM links no libtinfo. Consumers (llvm-cbe, mesa)
+  # get zstd through the runtime edge.
+  # Not bumped for the package.files platform scoping below: it changes only
+  # what the Windows pack checks, not what any platform builds, and no
+  # Windows bundle of this recipe has been published.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -48,17 +60,24 @@ depends:
   build:
     - name: zlib
       version: "^1.3"
-    - name: ncurses
-      version: "^6.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   runtime:
-    # libLLVM links zlib, so it must ship alongside; ncurses is only needed
-    # while compiling (LLVM_ENABLE_TERMINFO probes it) -- see the llvm recipe.
+    # libLLVM links zlib and (on Unix) zstd, so both must ship alongside.
     - name: zlib
       version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   host_tools: []
 
 build:
+  # Without a timeout the fleet reaps a job at the server's 2h default, which
+  # killed the NetBSD build twice (jobs 14783 and 19065, cvc.3 and cvc.4) and
+  # the FreeBSD cvc.4 build once (job 19062).  10h, as for llvm and llvm18.  A
+  # build-metadata change, not a cvc_revision bump: it changes no bundle.
+  timeout_seconds: 36000
   matrix:
     - platform: linux
       script: build.sh
@@ -75,14 +94,26 @@ build:
 
 package:
   files:
+    # Entries scoped to the Unix platforms are Unix spellings with no suffix
+    # (.so, .dll, .exe, ...) from which the strict-globs check can tell that
+    # Windows never produces them, so unscoped they would be required there too
+    # and fail the Windows pack (as they did for llvm18).  Their Windows
+    # spellings are declared below.
     - bin/llvm-*
-    - bin/opt
-    - bin/llc
-    - bin/lli
-    - lib/libLLVM*
+    - { glob: "bin/opt", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/llc", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/lli", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/libLLVM*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/cmake/llvm/
     - include/llvm/
     - include/llvm-c/
+    # Windows (the .exe/.lib suffix limits these to it).  MSVC cannot build the
+    # libLLVM DLL (LLVM_BUILD_LLVM_DYLIB is forced off there), so LLVM ships as
+    # its component libraries.
+    - bin/opt.exe
+    - bin/llc.exe
+    - bin/lli.exe
+    - lib/LLVM*.lib
   cmake_packages:
     - { name: LLVM, targets: ["LLVM"] }
 

@@ -17,6 +17,20 @@
 #   gh workflow run windows-recipe-check -f recipe=vtk -f platform=wasm
 # (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
 #  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
+#   gh workflow run windows-recipe-check -f recipe=openmp -f runner=windows-2022 -f deps=catalog
+#   gh workflow run windows-recipe-check --ref <branch> -f recipe=msvc -f accept_license=true
+#   gh workflow run windows-recipe-check --ref <branch> -f recipe=zlib -f msvc=cvcpkg -f accept_license=true
+# (msvc=cvcpkg skips the runner's Visual Studio: `cvcpkg install msvc` lays out
+#  Microsoft's compiler and SDK from Microsoft's packages and the recipe builds
+#  with that, through CVC_MSVC_ROOT. accept_license=true is the dispatcher's own
+#  acceptance of the vendor license of every recipe the run downloads under
+#  `license_acceptance:` -- for msvc, Microsoft's Build Tools and Windows SDK
+#  licenses. Leave it false unless you accept them; such recipes then refuse.)
+# (runner=windows-2022 + deps=catalog mirrors windows-build.yml, the job that
+#  publishes Windows bundles: VS 2022, and the dependency closure installed from
+#  the catalog. The default builds the closure from source, which cannot work
+#  on windows-latest for a recipe whose closure holds python311: CPython 3.11's
+#  PCbuild does not know VS 2026's toolset -- see windows-build.yml.)
 #
 # The pull_request trigger is deliberately narrow: it fires only when this
 # workflow file itself changes, so the PR that edits it proves it still works
@@ -57,6 +71,35 @@ on:
         options:
           - shared
           - static
+      runner:
+        description: "Runner image (windows-2022 = VS 2022, what windows-build.yml publishes from)"
+        required: true
+        default: "windows-latest"
+        type: choice
+        options:
+          - windows-latest
+          - windows-2022
+      deps:
+        description: "Dependency closure (windows only): build it from source, or install the published bundles"
+        required: true
+        default: "source"
+        type: choice
+        options:
+          - source
+          - catalog
+      msvc:
+        description: "Compiler: the runner image's Visual Studio, or cvcpkg's msvc recipe (needs accept_license)"
+        required: true
+        default: "runner"
+        type: choice
+        options:
+          - runner
+          - cvcpkg
+      accept_license:
+        description: "I accept the vendor license of every recipe this run downloads under license_acceptance (msvc: Microsoft's Build Tools and Windows SDK licenses)"
+        required: true
+        default: false
+        type: boolean
   pull_request:
     paths:
       - ".github/workflows/windows-recipe-check.yml"
@@ -77,7 +120,9 @@ on:
       - "recipes/libtool/**"
 
 concurrency:
-  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}
+  # Every input is in the key, so variants of one recipe (runner, deps, link,
+  # config) can run side by side instead of cancelling each other.
+  group: windows-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'gsl' }}-${{ inputs.platform || 'windows' }}-${{ inputs.runner || 'windows-latest' }}-${{ inputs.deps || 'source' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}-${{ inputs.msvc || 'runner' }}
   cancel-in-progress: true
 
 permissions:
@@ -86,8 +131,13 @@ permissions:
 jobs:
   build:
     name: Build ${{ inputs.recipe || 'gsl' }} on Windows
-    runs-on: windows-latest
+    runs-on: ${{ inputs.runner || 'windows-latest' }}
     timeout-minutes: 150
+    # The runner image ships vcpkg at C:\vcpkg and exports its location.
+    # Clear it so no recipe's build system discovers and uses it.
+    env:
+      VCPKG_INSTALLATION_ROOT: ""
+      VCPKG_ROOT: ""
 
     steps:
       - uses: actions/checkout@v5
@@ -100,19 +150,22 @@ jobs:
       # _common/env-windows.ps1 throws if it cannot find a Visual Studio
       # install, so MSVC must be active before the build step.
       - name: Set up MSVC developer environment
+        if: ${{ (inputs.msvc || 'runner') == 'runner' }}
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Install system build tools
-        shell: powershell
+      # The runner image puts C:\vcpkg on PATH, and the Visual Studio developer
+      # environment can add Visual Studio's own vcpkg and VCPKG_ROOT. Strip them
+      # for every later step; "Check build tools come from cvcpkg" fails if vcpkg
+      # is still reachable.
+      - name: Remove vcpkg from the environment
+        shell: pwsh
         run: |
-          choco install ninja --no-progress -y 2>&1 | Out-Null
-          choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y 2>&1 | Out-Null
-          choco install nasm --no-progress -y 2>&1 | Out-Null
-          foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
-            if ($dir) { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
-          }
+          $clean = ($env:PATH -split ';' | Where-Object { $_ -and $_ -notmatch '\\vcpkg(\\|$)' }) -join ';'
+          "PATH=$clean" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VCPKG_ROOT=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VCPKG_INSTALLATION_ROOT=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Ensure pwsh is on PATH
         shell: bash
@@ -134,6 +187,90 @@ jobs:
           python -m pip install --quiet '.[publish,validate]'
           PY_SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")
           echo "$PY_SCRIPTS" >> "$GITHUB_PATH"
+
+      # A recipe with `license_acceptance:` is built only after its vendor's
+      # terms are accepted.  Here the dispatcher accepts them by setting
+      # accept_license; this step records it for the recipes the run downloads
+      # (the target, and msvc when msvc=cvcpkg), never on its own.
+      - name: Accept vendor licenses (accept_license)
+        if: ${{ inputs.accept_license }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          names="${{ inputs.recipe || 'gsl' }}"
+          [ "${{ inputs.msvc || 'runner' }}" = cvcpkg ] && names="$names msvc"
+          for name in $names; do
+            python - "$name" >> "$GITHUB_ENV" <<'PY'
+          import sys, yaml
+          name = sys.argv[1]
+          gate = (yaml.safe_load(open(f"recipes/{name}/recipe.yaml")) or {}).get("license_acceptance")
+          if gate:
+              urls = " ".join(gate["urls"])
+              print(f"{name}: license accepted by the dispatcher (accept_license): {urls}", file=sys.stderr)
+              print(f"{gate['env']}=1")
+          PY
+          done
+
+      # msvc=cvcpkg: the compiler is cvcpkg's msvc recipe, installed the way a
+      # user would (`cvcpkg install` builds it from the recipe -- it is never
+      # published), and the build below takes it from CVC_MSVC_ROOT through
+      # _common/env-windows.ps1 instead of the runner's Visual Studio.
+      - name: Install cvcpkg's MSVC (msvc=cvcpkg)
+        if: ${{ inputs.msvc == 'cvcpkg' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.accept_license }}" != true ]; then
+            echo "::error::msvc=cvcpkg downloads Microsoft's compiler and SDK under Microsoft's licenses; re-run with accept_license=true if you accept them"
+            exit 1
+          fi
+          prefix="$(cygpath -m "$RUNNER_TEMP")/cvcpkg-msvc"
+          cvcpkg install msvc --platform windows --recipes-dir recipes --prefix "$prefix"
+          echo "CVC_MSVC_ROOT=$(cygpath -w "$prefix")\\msvc" >> "$GITHUB_ENV"
+          cat "$prefix/msvc/msvc.json"
+
+      # Build tools from cvcpkg: cmake (3.31.7, the version Boost 1.86's
+      # configs expect), ninja and nasm. Nothing comes from Chocolatey, vcpkg or
+      # the runner image's own copies, which these shadow on PATH. cmake is
+      # copied into a tree holding only the tools: CMake searches its own install
+      # prefix (the parent of share/cmake-X.Y) for packages, and the prefix
+      # cvcpkg installs it into also holds curl and openssl headers and libraries
+      # that a recipe build would otherwise find instead of its declared deps.
+      - name: Install build tools (cvcpkg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          prefix="$temp/cvcpkg-tools-prefix"
+          tree="$temp/cvcpkg-tools"
+          cvcpkg install cmake ninja nasm --prefix "$(cygpath -m "$prefix")" --config release --link shared
+          mkdir -p "$tree/bin" "$tree/share"
+          # All of these import only Windows system DLLs, so no DLLs travel with them.
+          for exe in cmake ctest cpack cmcldeps ninja nasm ndisasm; do
+            cp "$prefix/bin/$exe.exe" "$tree/bin/"
+          done
+          cp -R "$prefix"/share/cmake-* "$tree/share/"
+          cygpath -w "$tree/bin" >> "$GITHUB_PATH"
+
+      - name: Check build tools come from cvcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="$(cygpath -u "$RUNNER_TEMP")/cvcpkg-tools/bin"
+          for t in cmake ninja nasm; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$want"/*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($want)"; exit 1 ;;
+            esac
+          done
+          cmake --version | sed -n 1p
+          ninja --version
+          nasm -v
+          if command -v vcpkg >/dev/null 2>&1; then
+            echo "::error::vcpkg is on PATH ($(command -v vcpkg)); nothing may build with it"
+            exit 1
+          fi
 
       - name: Validate recipe
         shell: bash
@@ -166,7 +303,7 @@ jobs:
             # `cvcpkg install <recipe>` (not install-deps, not --with-deps) is the
             # right populate step here: it fetches the recipe's RUNTIME closure
             # only -- never the cmake/ninja build tools (recipes declare those
-            # under depends.build; they come from the choco step above) -- and it
+            # under depends.build; they come from the cvcpkg build-tools step above) -- and it
             # runs no tests. --with-deps rebuilds the whole closure and runs each
             # dep's wasm node-smoke test, which fails on a hosted Windows runner;
             # install-deps additionally tries to resolve cmake/ninja for wasm and
@@ -178,6 +315,18 @@ jobs:
             cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
               --prefix "$prefix" --platform "$platform" --link static \
               --no-deps --host-platform windows
+          elif [[ "${{ inputs.deps || 'source' }}" == catalog ]]; then
+            # The windows-build.yml path, minus the publish: install the recipe's
+            # PUBLISHED build + runtime closure into the prefix (cmake/ninja and
+            # any interpreter included -- install-deps keeps depends.build
+            # entries on a native build), then build only the recipe against it.
+            link="${{ inputs.link || 'shared' }}"
+            echo "cvcpkg install-deps recipes/$recipe --platform windows --link $link"
+            cvcpkg install-deps "recipes/$recipe" --platform windows --config "$config" \
+              --link "$link" --prefix "$prefix" --recipes-dir recipes
+            echo "cvcpkg build $recipe --no-deps --platform windows --link $link"
+            cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
+              --prefix "$prefix" --platform windows --link "$link" --no-deps
           else
             # --with-deps: build the recipe's whole closure from source first, in
             # topological order. The default gsl (and the other MSYS autotools

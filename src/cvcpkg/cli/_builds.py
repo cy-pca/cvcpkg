@@ -90,6 +90,15 @@ def builds_group() -> None:
     """Manage remote build jobs."""
 
 
+# Reads and writes that scale with a DAG's size.  Creating a DAG inserts one
+# row per job and resolves its edges, and listing one serializes every job, so
+# a populate-sized DAG (hundreds of jobs) on a loaded server takes well over a
+# minute.  At 30s the client gave up while the server went on to create the DAG:
+# populate-server.yml then failed without following it and skipped its later
+# platform legs, and the follow loop retried a request that could never finish.
+_DAG_HTTP_TIMEOUT = 300.0
+
+
 @builds_group.command("list")
 @click.option(
     "--server",
@@ -131,7 +140,7 @@ def builds_list(
     if recipe_name:
         params["recipe_name"] = recipe_name
     url = f"{server.rstrip('/')}/v1/builds"
-    with httpx.Client(timeout=30) as client:
+    with httpx.Client(timeout=_DAG_HTTP_TIMEOUT) as client:
         resp = client.get(url, headers={"Authorization": f"Bearer {token}"}, params=params)
     if resp.status_code >= 400:
         detail = resp.text
@@ -544,7 +553,7 @@ def builds_follow_dag(dag_id: str, server: str, token: str, wait_timeout: float 
             if deadline is not None and time.monotonic() >= deadline:
                 return "timeout"
             try:
-                with httpx.Client(timeout=30) as client:
+                with httpx.Client(timeout=_DAG_HTTP_TIMEOUT) as client:
                     resp = client.get(
                         f"{base}/v1/builds",
                         headers=headers,
@@ -1061,6 +1070,20 @@ def builds_submit(
     ),
 )
 @click.option(
+    "--online-only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Count only ONLINE builders when deciding which platform/arch combos "
+        "can be served: a combo whose capable builders are all offline is "
+        "skipped (and named) instead of submitted.  For CI checks that wait "
+        "on the result, where a best-effort builder being off (the dev "
+        "cluster's Windows laptop) would otherwise fail every run with jobs "
+        "nothing can claim.  Not for populate runs, whose jobs should queue "
+        "until the builder returns."
+    ),
+)
+@click.option(
     "--skip-existing/--no-skip-existing",
     default=True,
     help=(
@@ -1103,6 +1126,7 @@ def builds_submit_dag(
     recipes_dirs: tuple[str, ...],
     no_default_recipes: bool,
     allow_unschedulable: bool,
+    online_only: bool,
     skip_existing: bool,
     auto_deps: bool,
     recipe_names: tuple[str, ...],
@@ -1268,6 +1292,10 @@ def builds_submit_dag(
         d = recipe_data.get(name, {}).get("build", {}).get("min_disk_gb")
         return int(d) if d else None
 
+    def _not_redistributable(name: str) -> bool:
+        """``redistributable: false`` -- never built as a job (it would publish)."""
+        return recipe_data.get(name, {}).get("redistributable") is False
+
     # Valid platform→arch pairings.  wasm32 only pairs with wasm/wasi.
     _wasm_arches = {"wasm32"}
     _wasm_platforms = {"wasm", "wasm-mt", "wasi"}
@@ -1290,6 +1318,11 @@ def builds_submit_dag(
     # capability AND has the space — never pieced together from three hosts.
     # The free-disk element is None for a builder that advertises nothing.
     _builder_offers: list[tuple[set[tuple[str, str]], set[str], set[str], int | None]] = []
+    # --online-only: builders left out because they are offline, with what
+    # they would have served, so a skip can name them.
+    _offline_offers: list[tuple[str, set[tuple[str, str]], set[str]]] = []
+    if online_only and allow_unschedulable:
+        raise click.UsageError("--online-only and --allow-unschedulable are mutually exclusive.")
     _builder_check = not allow_unschedulable
     if _builder_check:
         _httpx = require_httpx("publish")
@@ -1318,6 +1351,9 @@ def builds_submit_dag(
                     if _k != "cross_platforms" and _v
                 }
                 _b_disk = _b.get("free_disk_gb")
+                if online_only and _b.get("status") != "online":
+                    _offline_offers.append((str(_b.get("name", "?")), _b_targets, _b_platforms))
+                    continue
                 _supported_targets |= _b_targets
                 _supported_platforms |= _b_platforms
                 _builder_offers.append((_b_targets, _b_platforms, _b_caps, _b_disk))
@@ -1470,6 +1506,17 @@ def builds_submit_dag(
     # (build.ps1) belongs in both — one noarch bundle for the POSIX targets and
     # one windows bundle — and that overlap is what keeps the `any` entry's
     # targets from being mispublished as one arch-pinned bundle per platform.
+    #
+    # A `redistributable: false` recipe never becomes a job at all: a fleet
+    # build exists to publish, and its bundle must not be published.
+    # `cvcpkg install` builds it where it is installed instead.
+    _local_only = sorted(n for n in recipe_names if _not_redistributable(n))
+    if _local_only:
+        click.echo(
+            f"  Skipping {len(_local_only)} non-redistributable recipe(s) (built only "
+            f"where installed, never by the fleet): {', '.join(_local_only)}"
+        )
+        recipe_names = tuple(n for n in recipe_names if n not in _local_only)
     any_names = [n for n in recipe_names if _has_any_entry(n)]
     concrete_names = [n for n in recipe_names if _has_explicit_entry(n)]
 
@@ -1510,9 +1557,17 @@ def builds_submit_dag(
                 continue
             if plat in _wasm_platforms and ar not in _wasm_arches:
                 continue
-            # Skip combos no registered builder can serve.
+            # Skip combos no registered (--online-only: online) builder can serve.
             if _builder_check and not _has_builder(plat, ar):
-                click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
+                _off = sorted(
+                    _n for _n, _t, _p in _offline_offers if (plat, ar) in _t or plat in _p
+                )
+                if _off:
+                    click.echo(
+                        f"  Skipping {plat}/{ar}: its builder(s) are offline ({', '.join(_off)})"
+                    )
+                else:
+                    click.echo(f"  Skipping {plat}/{ar}: no registered builder can serve it")
                 continue
             for cfg in configs:
                 for lnk in links:
@@ -1574,8 +1629,12 @@ def builds_submit_dag(
                         added: list[str] = []
                         cross_noarch: list[str] = []
                         unbuildable: list[str] = []
+                        local_only: list[str] = []
                         for dep in sorted(_closure(eligible, plat, ar, cfg, lnk)):
                             if dep in being_built:
+                                continue
+                            if _not_redistributable(dep):
+                                local_only.append(dep)
                                 continue
                             has_recipe = dep in recipe_data
                             # Already in the catalog → builder installs it.
@@ -1631,6 +1690,16 @@ def builds_submit_dag(
                                 f"  Auto-added {len(uniq)} unpublished noarch "
                                 f"dependency(ies), ordered ahead of this platform's "
                                 f"jobs: {', '.join(uniq)}"
+                            )
+                        if local_only:
+                            # Never a job and never in the catalog: the builder
+                            # agent builds each into the dependent job's own
+                            # prefix from its recipe (_install_deps).
+                            click.echo(
+                                f"  {plat}/{ar}: non-redistributable dependency(ies) "
+                                f"{', '.join(sorted(set(local_only)))} are not built as "
+                                f"jobs; the builder builds them into each dependent "
+                                f"job's prefix from their recipes."
                             )
                         if unbuildable:
                             uniq = sorted(set(unbuildable))
@@ -1849,6 +1918,7 @@ def builds_submit_dag(
             f"{server.rstrip('/')}/v1/builds/dag",
             token,
             json=body,
+            timeout=_DAG_HTTP_TIMEOUT,
         )
         dag_ids.append(data["dag_id"])
         _edges = sum(len(j["depends_on"]) for j in jobs)

@@ -1,0 +1,145 @@
+schema_version: 1
+recipe:
+  name: cuda-toolkit
+  # 12.9.1 (was 12.5.1): the release the fleet builds CUDA with -- sandipaws'
+  # Windows toolkit is 12.9 and libcvc's Linux CUDA image is nvidia/cuda:12.9.1
+  # -- and the first 12.x with which libcvc adds sm_100/sm_120. Same CUDA major,
+  # so cudart64_12.dll / libcudart.so.12 and the oldest architectures stay.
+  # The 12.9.1 manifest has the same five components as 12.5.1 (no separate
+  # cuda_crt), so only redist.lock changed.
+  # Bumping the release:
+  #   1. python scripts/cuda_redist_lock.py <release>   (rewrites redist.lock)
+  #   2. set upstream_version to <release>, cvc_revision back to 1
+  #   3. a new major moves cudart64_12.dll / libcudart.so.12: update the
+  #      required-file lists at the end of build.sh and build.ps1
+  #   4. check the release's host-compiler support (CUDA 12.5 takes GCC <= 13
+  #      and MSVC 2017-2022) against the toolchains the consumers use
+  # NVIDIA's archive layout has been stable across 12.x; build.sh/build.ps1
+  # fail loudly on a top-level entry they do not know where to put (a release
+  # that splits crt/ out of cuda_nvcc into a cuda_crt component only needs it
+  # added to COMPONENTS in the lock script).
+  upstream_version: "12.9.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://developer.nvidia.com/cuda-toolkit
+  license: "LicenseRef-NVIDIA-CUDA-EULA"
+  tags: [cuda, nvidia, gpu, compiler, tools]
+  description: >-
+    The NVIDIA CUDA toolkit 12.9.1 compiler and runtime: nvcc (with ptxas,
+    nvlink, fatbinary, cicc and libdevice), the CUDA runtime (headers,
+    libcudart_static, libcudadevrt, libcudart, the libcuda link stub) and the
+    CCCL headers (thrust, cub, libcu++), laid out as a standard toolkit under
+    <prefix>/cuda so enable_language(CUDA) and find_package(CUDAToolkit) work
+    from the prefix. NOT published as a bundle: NVIDIA's EULA does not allow
+    redistributing nvcc or the headers, so `cvcpkg install cuda-toolkit`
+    downloads NVIDIA's official redist archives from developer.download.nvidia.com,
+    verifies each against a pinned sha256, and lays them out locally. Compiling
+    needs no GPU or driver; running CUDA code does.
+
+# The NVIDIA CUDA EULA (shipped in every archive; installed as cuda/EULA.txt)
+# lists the redistributable files in its Attachment A: runtime libraries such
+# as libcudart.so/libcudart_static.a/libcudadevrt.a, and even those only "as
+# incorporated in object code format into a software application" with
+# "material additional functionality" (1.1.1, 1.1.2). nvcc, ptxas, cicc and
+# nearly all headers are not listed; developer tools not identified as
+# distributable are "for your internal use only" (1.1.2.4), and the SDK may
+# not be distributed "as a stand-alone product" (1.2.2). A public cvcpkg
+# bundle of this tree would be exactly that, so cvcpkg never makes one:
+# `cvcpkg pack`, pack-all, `builds submit[-dag]` and the server's /v1/publish
+# all refuse a `redistributable: false` recipe, and `cvcpkg install` builds it
+# on the installing machine instead, where the user downloads from NVIDIA under
+# the EULA themselves -- the same model as installing with NVIDIA's own network
+# installer or the Jimver/cuda-toolkit action.
+redistributable: false
+
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core, so
+# this map documents the platforms covered and the NVIDIA manifest they were
+# taken from. The archives and the sha256 values build.sh/build.ps1 actually
+# enforce are in redist.lock, generated from that manifest by
+# scripts/cuda_redist_lock.py; edit neither by hand.
+source:
+  type: prebuilt
+  base_url: https://developer.download.nvidia.com/compute/cuda/redist
+  artifacts:
+    linux-x86_64:
+      url: https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.9.1.json
+      sha256: "8335301010b0023ee1ff61eb11e2600ca62002d76780de4089011ad77e0c7630"
+    windows-x86_64:
+      url: https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.9.1.json
+      sha256: "8335301010b0023ee1ff61eb11e2600ca62002d76780de4089011ad77e0c7630"
+
+patches: []
+
+# Nothing to build against: the scripts download (curl / Invoke-WebRequest),
+# verify and copy. Deliberately NOT `requires_capabilities: [cuda]` -- that
+# capability means "this host has nvcc", which is what this recipe provides.
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - cuda/bin/
+    - cuda/include/
+    - cuda/nvvm/
+    - cuda/version.json
+    - cuda/EULA.txt
+    - { glob: cuda/lib64/, platforms: [linux] }
+    - { glob: bin/nvcc, platforms: [linux] }
+    - { glob: lib/pkgconfig/cuda-*.pc, platforms: [linux] }
+    - { glob: lib/pkgconfig/cudart-*.pc, platforms: [linux] }
+    - { glob: cuda/lib/, platforms: [windows] }
+    - { glob: cuda/extras/visual_studio_integration/, platforms: [windows] }
+  pkg_config:
+    - cuda-12.9
+    - cudart-12.9
+
+notes:
+  - title: "Using it from CMake"
+    platforms: [linux, windows]
+    description: >-
+      Linux: -DCMAKE_PREFIX_PATH=<prefix> alone is enough. CMake finds the
+      <prefix>/bin/nvcc wrapper, runs it, and reads the toolkit root
+      (<prefix>/cuda) from `nvcc -v`, so enable_language(CUDA) and
+      find_package(CUDAToolkit) (CUDA::cudart_static, CUDA::cudart,
+      CUDA::cuda_driver, ...) resolve inside the prefix, as does separable
+      compilation (cudadevrt). Setting CUDAToolkit_ROOT=<prefix>/cuda or
+      CMAKE_CUDA_COMPILER=<prefix>/cuda/bin/nvcc works too, and an activated
+      prefix puts nvcc on PATH (which also makes cvcpkg's `cuda` capability
+      probe succeed). Windows: pass -DCUDAToolkit_ROOT=<prefix>/cuda and
+      -DCMAKE_CUDA_COMPILER=<prefix>/cuda/bin/nvcc.exe with the Ninja
+      generator, or set CUDA_PATH=<prefix>\cuda. A Visual Studio generator
+      needs -T cuda=<prefix>\cuda, which makes CMake take the MSBuild
+      integration from cuda\extras\visual_studio_integration instead of
+      requiring it to be installed into Visual Studio.
+  - title: "Relocatable as shipped"
+    platforms: [linux, windows]
+    description: >-
+      No NVIDIA binary carries a RUNPATH; they need only libc, libstdc++ and
+      libgcc_s. nvcc.profile resolves headers, libraries and cicc from nvcc's
+      own directory, the bin/nvcc wrapper execs ../cuda/bin/nvcc relative to
+      itself, and the pkg-config files use ${pcfiledir}. cudart's own .pc
+      files (hardcoded /usr/local/cuda-12.9) are not installed. Moving the
+      prefix keeps everything working; the NVIDIA files stay byte-identical to
+      the archives.
+  - title: "Host compiler"
+    platforms: [linux, windows]
+    description: >-
+      nvcc drives a host C++ compiler: MSVC 2017-2022 on Windows (12.9 accepts
+      MSVC 14.44), and on Linux the GCC/Clang range in NVIDIA's CUDA 12.9
+      installation guide. It is not part of this recipe.
+  - title: "Not on macOS"
+    platforms: [macos]
+    description: >-
+      NVIDIA stopped shipping CUDA for macOS after 10.2.

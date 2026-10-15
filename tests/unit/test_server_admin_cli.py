@@ -157,6 +157,8 @@ class TestRun:
         monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
         monkeypatch.setattr("signal.signal", lambda *a, **k: None)
 
+        monkeypatch.delenv("CVCPKG_GRACEFUL_TIMEOUT", raising=False)
+
         res = _run(["run", *_sd(tmp_path), "--require-auth-reads", "--storage", "file:///srv/x"])
         assert res.exit_code == 0, res.output
         assert "backend: YAML files" in res.output
@@ -164,6 +166,8 @@ class TestRun:
         assert os.environ["CVCPKG_SERVER_STORAGE_URI"] == "file:///srv/x"
         # No --log-json => uvicorn gets log_config=None.
         assert fake_uvicorn.run.call_args.kwargs["log_config"] is None
+        # SIGTERM drains in-flight downloads, bounded by --graceful-timeout.
+        assert fake_uvicorn.run.call_args.kwargs["timeout_graceful_shutdown"] == 30
 
 
 # ══ bootstrap ════════════════════════════════════════════════════

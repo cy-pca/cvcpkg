@@ -61,7 +61,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/gymnasium/
-    - lib/python3.12/site-packages/gymnasium-*.dist-info/
-    - Lib/site-packages/gymnasium/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/gymnasium/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/gymnasium-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/gymnasium/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

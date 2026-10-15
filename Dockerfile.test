@@ -7,14 +7,23 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# From Debian: the system C/C++ compiler, and curl.
+#   gcc g++ libc6-dev  The compiler, the one build prerequisite cvcpkg does not
+#                      supply, with the C library's headers and startup files.
+#                      The suite compiles with it: the zlib recipe build in
+#                      test_e2e_lifecycle.py, the C consumer in
+#                      test_source_recipe_workflow.py.
+#   curl               Fetches the Poetry installer below.
+# The build tools come from cvcpkg, further down. No database client headers
+# either: the drivers are asyncpg (a binary wheel) and aiomysql (pure Python,
+# over PyMySQL), and every package in poetry.lock has a binary or pure-Python
+# wheel for CPython 3.12 on x86_64 and aarch64 Linux, so nothing below compiles
+# an sdist.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libpq-dev \
-        default-libmysqlclient-dev \
+        gcc \
+        g++ \
+        libc6-dev \
         curl \
-        cmake \
-        ninja-build \
-        pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 ENV POETRY_HOME=/opt/poetry \
@@ -29,6 +38,62 @@ RUN poetry install --no-interaction --no-ansi --with dev -E production -E db-all
 
 COPY . .
 RUN pip install --no-cache-dir -e ".[production,db-all]"
+
+# Build tools from cvcpkg, never Debian's: cmake (3.31.7) and ninja for the zlib
+# recipe build in test_e2e_lifecycle.py (cvc_cmake_build runs cmake -G Ninja),
+# make for CMake's default "Unix Makefiles" generator, which
+# test_requirements_and_cmake.py configures this repo's CMakeLists.txt with, and
+# pkg-config.
+#
+# They are copied into a tree holding only them: CMake searches its own install
+# prefix (the parent of share/cmake-X.Y) for packages, and the prefix cvcpkg
+# installs it into also holds the curl and openssl headers, libraries and
+# pkg-config files a recipe build would otherwise find instead of its declared
+# deps. bin/cmake loads libcurl, libssl and libcrypto through its RUNPATH
+# $ORIGIN/../lib, so those come along, under their versioned names only, which
+# find_library never matches. The build fails if a tool loads a library cvcpkg
+# installed from anywhere but the tree, or one that does not resolve at all.
+# The prefix and the download cache are removed, so the suite starts with
+# neither.
+RUN set -eu; \
+    prefix=/tmp/cvcpkg-tools-prefix; tree=/opt/cvcpkg-tools; \
+    CVCPKG_CACHE=/tmp/cvcpkg-tools-cache cvcpkg install cmake ninja make pkg-config \
+        --prefix "$prefix" --platform linux --config release --link shared; \
+    mkdir -p "$tree/bin" "$tree/lib" "$tree/share"; \
+    for exe in cmake ctest cpack ninja make pkgconf; do cp "$prefix/bin/$exe" "$tree/bin/"; done; \
+    ln -s pkgconf "$tree/bin/pkg-config"; \
+    cp -R "$prefix"/share/cmake-* "$tree/share/"; \
+    find "$prefix/lib" -maxdepth 1 -name 'lib*.so.*' \( -type f -o -type l \) -exec cp -P {} "$tree/lib/" \; ; \
+    for f in "$tree"/bin/*; do \
+      [ -L "$f" ] && continue; \
+      loaded=$(ldd "$f"); \
+      if echo "$loaded" | grep 'not found'; then echo "$f has unresolved libraries" >&2; exit 1; fi; \
+      for lib in "$prefix"/lib/lib*.so*; do \
+        hit=$(echo "$loaded" | awk -v n="$(basename "$lib")" '$1 == n { print $3 }'); \
+        case "$hit" in \
+          ""|"$tree"/*) ;; \
+          *) echo "$(basename "$f") loads $hit, not the tree's lib/$(basename "$lib")" >&2; exit 1 ;; \
+        esac; \
+      done; \
+    done; \
+    rm -rf "$prefix" /tmp/cvcpkg-tools-cache; \
+    ls -l "$tree/bin" "$tree/lib"
+ENV PATH=/opt/cvcpkg-tools/bin:$PATH
+
+# Check build tools come from cvcpkg: on the image's PATH, each one resolves into
+# the tree.
+RUN set -eu; tree=/opt/cvcpkg-tools; \
+    for t in cmake ctest cpack ninja make pkg-config; do \
+      got=$(command -v "$t" || true); \
+      case "$got" in \
+        "$tree/bin/"*) echo "$t -> $got" ;; \
+        *) echo "$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)" >&2; exit 1 ;; \
+      esac; \
+    done; \
+    cmake --version | head -n 1; \
+    echo "ninja $(ninja --version)"; \
+    make --version | head -n 1; \
+    echo "pkg-config $(pkg-config --version)"
 
 ENV PYTHONPATH=/app
 

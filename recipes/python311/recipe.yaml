@@ -39,7 +39,12 @@ recipe:
   # downstream `import numpy` / `import pycvc` could not find the cvcpkg DLLs in
   # <prefix>\bin. The .pth registers <prefix>\bin at interpreter startup — the
   # Windows $ORIGIN analog, matching python312. Additive; unix builds unaffected.
-  cvc_revision: 8
+  # cvc.9: rebuild with no Homebrew.  The published macOS x86_64 cvc.8 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.11, libpython3.11.dylib,
+  # _dbm and _gdbm load gettext's libintl and gdbm from /usr/local/opt, so it aborts on
+  # any Mac without Homebrew.  _common/build-python.sh now also turns those off on macOS
+  # explicitly.  Every platform rebuilds.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -154,26 +159,26 @@ package:
   files:
     # Unix layout (bin/lib/include). Globs that match nothing on a given platform
     # are skipped, so the Windows entries below coexist in this one list.
-    - bin/python3.11*
-    - bin/pip3.11*
-    - bin/idle3.11*
-    - bin/pydoc3.11*
-    - lib/libpython3.11*
-    - lib/python3.11/
-    - lib/pkgconfig/python-3.11*.pc
-    - include/python3.11/
+    - { glob: "bin/python3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/idle3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pydoc3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/libpython3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/python3.11/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/pkgconfig/python-3.11*.pc", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "include/python3.11/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     # Windows layout (python.org / PC\layout tree at the prefix root): python.exe,
     # python3XX.dll, the stdlib (Lib/), extension modules (DLLs/), embed headers +
     # import lib (include/, libs/python3XX.lib), and pip (Scripts/). This is exactly
     # what find_package(Python3 Development.Embed) locates via Python3_ROOT_DIR.
-    - python*.exe
-    - python3*.dll
-    - vcruntime*.dll
-    - Lib/
-    - DLLs/
-    - include/
-    - libs/
-    - Scripts/
+    - { glob: "python*.exe", platforms: [windows] }
+    - { glob: "python3*.dll", platforms: [windows] }
+    - { glob: "vcruntime*.dll", platforms: [windows] }
+    - { glob: "Lib/", platforms: [windows] }
+    - { glob: "DLLs/", platforms: [windows] }
+    - { glob: "include/", platforms: [windows] }
+    - { glob: "libs/", platforms: [windows] }
+    - { glob: "Scripts/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

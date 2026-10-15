@@ -40,3 +40,23 @@ Invoke-CvcMesonBuild @(
     '-Dcache-build=disabled',
     '-Dtools=enabled'
 )
+
+# Fonts installed into the same prefix (liberation-fonts, carlito-fonts) live
+# in share\fonts. The DLL already finds etc\fonts from its own location (see
+# DllMain in src/fccfg.c), so a <dir> relative to fonts.conf finds them
+# wherever the prefix is unpacked, as build.sh does on Unix.
+$fcConf = Join-Path $env:CVC_INSTALL_DIR 'etc\fonts\fonts.conf'
+if (Test-Path $fcConf) {
+    $lines = [System.IO.File]::ReadAllLines($fcConf)
+    $out = New-Object System.Collections.Generic.List[string]
+    $done = $false
+    foreach ($l in $lines) {
+        if (-not $done -and $l -match '^(\s*)<dir prefix="xdg">fonts</dir>') {
+            $out.Add($Matches[1] + '<dir prefix="relative">../../share/fonts</dir>')
+            $done = $true
+        }
+        $out.Add($l)
+    }
+    if (-not $done) { throw 'fonts.conf: no <dir prefix="xdg">fonts</dir> anchor' }
+    [System.IO.File]::WriteAllLines($fcConf, [string[]]$out)
+}

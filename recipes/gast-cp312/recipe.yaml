@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/gast/
-    - lib/python3.12/site-packages/gast-*.dist-info/
-    - Lib/site-packages/gast/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/gast/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/gast-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/gast/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

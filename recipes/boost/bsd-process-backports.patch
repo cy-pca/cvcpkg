@@ -1,0 +1,100 @@
+Boost.Process 1.86 does not compile on NetBSD or OpenBSD. Backported from
+upstream (boostorg/process, Boost 1.87 unless noted):
+- src/ext/cmd.cpp: the NetBSD and OpenBSD cmd() return `vec`, a
+  std::vector<std::string>, from a function returning `shell` ("no viable
+  conversion"), and OpenBSD's calls kvm_close() on the std::unique_ptr that
+  already closes it.
+- src/ext/exe.cpp: NetBSD has no <alloca.h>.
+- src/posix/close_handles.cpp: NetBSD/OpenBSD have no close_range(); use it on
+  FreeBSD only and let the others take the portable fallback.
+- include/boost/process/v2/posix/default_launcher.hpp: declare `environ` on
+  OpenBSD (and DragonFly) too; their <unistd.h> does not (upstream develop).
+Only those platforms' code changes; the rest compile identical sources.
+--- a/libs/process/src/ext/cmd.cpp
++++ b/libs/process/src/ext/cmd.cpp
+@@ -299,7 +299,6 @@
+ shell cmd(boost::process::v2::pid_type pid, boost::system::error_code & ec)
+ {
+ 
+-    std::vector<std::string> vec;
+     int cntp = 0;
+     kinfo_proc2 *proc_info = nullptr;
+     struct closer
+@@ -312,7 +311,7 @@
+ 
+     std::unique_ptr<kvm_t, closer> kd{kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr)};
+ 
+-    if (!kd) {BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec) return vec;}
++    if (!kd) {BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec) return {};}
+     if ((proc_info = kvm_getproc2(kd.get(), KERN_PROC_PID, pid, sizeof(struct kinfo_proc2), &cntp))) 
+     {
+         char **cmd = kvm_getargv2(kd.get(), proc_info, 0);
+@@ -323,14 +322,13 @@
+     }
+     else
+         BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec)
+-    return vec;
++    return {};
+ }
+     
+ #elif defined(__OpenBSD__)
+ 
+ shell cmd(boost::process::v2::pid_type pid, boost::system::error_code & ec)
+ {
+-    std::vector<std::string> vec;
+     int cntp = 0;
+     kinfo_proc *proc_info = nullptr;
+ 
+@@ -343,7 +341,7 @@
+     };
+ 
+     std::unique_ptr<kvm_t, closer> kd{kvm_openfiles(nullptr, nullptr, nullptr, KVM_NO_FILES, nullptr)};
+-    if (!kd) {BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec) return vec;}
++    if (!kd) {BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec) return {};}
+     if ((proc_info = kvm_getprocs(kd.get(), KERN_PROC_PID, pid, sizeof(struct kinfo_proc), &cntp))) 
+     {
+         char **cmd = kvm_getargv(kd.get(), proc_info, 0);
+@@ -354,7 +352,6 @@
+     }
+     else
+         BOOST_PROCESS_V2_ASSIGN_LAST_ERROR(ec)
+-    kvm_close(kd);
+     return {};
+ }
+     
+--- a/libs/process/src/ext/exe.cpp
++++ b/libs/process/src/ext/exe.cpp
+@@ -36,7 +36,7 @@
+ #if (defined(__FreeBSD__) || defined(__DragonFly__) || defined(__NetBSD__))
+ #include <sys/types.h>
+ #include <sys/sysctl.h>
+-#if !defined(__FreeBSD__)
++#if !defined(__FreeBSD__) && !defined(__NetBSD__)
+ #include <alloca.h>
+ #endif
+ #endif
+--- a/libs/process/src/posix/close_handles.cpp
++++ b/libs/process/src/posix/close_handles.cpp
+@@ -17,10 +17,9 @@
+ // linux has close_range since 5.19
+ 
+ 
+-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)
++#if defined(__FreeBSD__)
+ 
+ // https://www.freebsd.org/cgi/man.cgi?query=close_range&apropos=0&sektion=0&manpath=FreeBSD+13.1-RELEASE+and+Ports&arch=default&format=html
+-// https://man.netbsd.org/closefrom.3
+ // __FreeBSD__
+ // 
+ // gives us
+--- a/libs/process/include/boost/process/v2/posix/default_launcher.hpp
++++ b/libs/process/include/boost/process/v2/posix/default_launcher.hpp
+@@ -29,7 +29,7 @@
+ #include <unistd.h>
+ 
+ 
+-#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__APPLE__) || defined(__MACH__)
++#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__APPLE__) || defined(__MACH__)
+ extern "C" { extern char **environ; }
+ #endif
+ 

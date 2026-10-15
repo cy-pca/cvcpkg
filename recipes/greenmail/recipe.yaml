@@ -1,0 +1,112 @@
+schema_version: 1
+recipe:
+  name: greenmail
+  # Newer than the greenmail/standalone:2.1.8 image it replaces in test
+  # stacks; same 2.1 line, same standalone runner and system properties.
+  upstream_version: "2.1.14"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://greenmail-mail-test.github.io/greenmail/
+  # GreenMail is Apache-2.0. The standalone jar is a fat jar that also bundles
+  # its runtime dependencies: Jakarta Mail/Activation/REST APIs, Eclipse Angus
+  # Mail, Jersey and HK2 (EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0, some
+  # also OR BSD-3-Clause), Jackson and Log4j 2 (Apache-2.0), SLF4J (MIT) and
+  # Javassist (MPL-1.1 OR LGPL-2.1-or-later OR Apache-2.0). Each component's
+  # Maven coordinates are under META-INF/maven/ in the jar.
+  license: "Apache-2.0 AND (EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0) AND BSD-3-Clause AND MIT"
+  tags: [mail, testing, tools, java]
+  description: >-
+    GreenMail standalone -- an in-memory SMTP/SMTPS, POP3/POP3S and
+    IMAP/IMAPS test mail server with a REST API, run on the cvcpkg Temurin 21
+    JRE. bin/greenmail starts it with the same defaults as the
+    greenmail/standalone Docker image (test ports 3025/3110/3143/3465/3993/
+    3995, API on 8080, bound to 0.0.0.0, authentication disabled) and honours
+    the image's JAVA_OPTS / GREENMAIL_OPTS / GREENMAIL_ADDITIONAL_OPTS
+    variables, so a compose service can be swapped for a process.
+
+# The standalone jar from Maven Central, fetched and verified by build.sh (keep
+# the sha256 there in step with this map). The jar's detached signature was
+# checked when pinning:
+#   gpg --recv-keys A757211F4B4E5929E82F8E6B4329C07C82A3B64B   # Marcel May
+#   gpg --verify greenmail-standalone-2.1.14.jar.asc greenmail-standalone-2.1.14.jar
+#   -> Good signature from "Marcel May <marcel.may.de@gmail.com>"
+# and the sha256 below also matches Maven Central's published .sha256.
+#
+# The jar carries no Apache-2.0 license text, so build.sh also fetches
+# license.txt from the release-2.1.14 tag (commit cdde8bb9488f), pinned by
+# sha256 03cbe1314042730ac6eb76c992f7a32a1e126ba525fcf91cfe3047f255b8ada1, into
+# share/doc/greenmail/ together with the jar's own META-INF notices.
+source:
+  type: prebuilt
+  base_url: https://repo1.maven.org/maven2/com/icegreen/greenmail-standalone/2.1.14
+  artifacts:
+    any:
+      file: greenmail-standalone-2.1.14.jar
+      sha256: "0381392f3a44e4d8ae78051778440f58820d01acaf5757c3f43649deda8c1d23"
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    # The launcher prefers the JRE installed beside it. Named directly rather
+    # than through the `java-runtime` slot it provides, so the dependency
+    # resolves the same way in every resolver path.
+    - name: temurin-jre21
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # One jar and two launcher scripts (sh + cmd), identical everywhere.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/greenmail/greenmail-standalone.jar
+    - share/doc/greenmail/
+    - bin/greenmail
+    - bin/greenmail.cmd
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Docker parity: environment variables and defaults"
+    description: >-
+      bin/greenmail runs `java $JAVA_OPTS $GREENMAIL_OPTS
+      $GREENMAIL_ADDITIONAL_OPTS [args] -jar greenmail-standalone.jar`, exactly
+      like the image's run_greenmail.sh. Unset variables take the image's
+      defaults: JAVA_OPTS=-Djava.net.preferIPv4Stack=true and
+      GREENMAIL_OPTS=-Dgreenmail.setup.test.all -Dgreenmail.hostname=0.0.0.0
+      -Dgreenmail.auth.disabled. A compose service's `environment:` block
+      therefore carries over unchanged (e.g. GREENMAIL_OPTS with
+      -Dgreenmail.setup.test.smtp -Dgreenmail.setup.test.imap
+      -Dgreenmail.users=... -Dgreenmail.users.login=email). Extra arguments
+      go to the JVM before -jar, so `greenmail -Dgreenmail.verbose` works. The
+      image's -Dgreenmail.tls.keystore.* options are not needed: SMTPS/IMAPS/
+      POP3S fall back to the self-signed greenmail.p12 inside the jar.
+  - title: "0.0.0.0 and fixed ports on shared hosts"
+    description: >-
+      The Docker defaults bind every interface with authentication disabled,
+      which inside a container network is harmless but on a shared CI host
+      exposes an open mail server on fixed ports (3025, 3143, ...). On such
+      hosts set GREENMAIL_OPTS explicitly, e.g. -Dgreenmail.hostname=127.0.0.1
+      and per-protocol -Dgreenmail.<smtp|imap|...>.port=<free port> (what
+      test.sh does), so parallel jobs cannot collide or be reached from
+      outside.
+  - title: "Which Java"
+    description: >-
+      The launcher uses, in order: $GREENMAIL_JAVA, the cvcpkg Temurin JRE in
+      the same prefix (lib/jvm/temurin-jre21), $JAVA_HOME/bin/java, then
+      `java` on PATH. Stop it with SIGTERM (Ctrl-C); GreenMail keeps all mail
+      in memory, so nothing persists between runs.
+  - title: "Windows"
+    platforms: [windows]
+    description: >-
+      bin\greenmail.cmd is the cmd.exe counterpart of bin/greenmail with the
+      same variables and defaults. The noarch bundle is built and tested on
+      Linux; the .cmd launcher has not been run on a Windows host yet.

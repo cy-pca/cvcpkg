@@ -1,15 +1,16 @@
 schema_version: 1
 recipe:
   name: pillow-cp313
-  upstream_version: "11.1.0"
-  # Bumped 1 -> 2: HAND-CONVERTED from the generated shape.  The generated
-  # recipe declared NO native-library edges, so the sdist build found zlib /
-  # libjpeg only when a sibling build happened to leave them in the shared
-  # prefix (or fell through to the builder's system copies) — and its
+  upstream_version: "12.3.0"
+  # HAND-CONVERTED from the generated shape (since 11.1.0+cvc.2).  The
+  # generated recipe declared NO native-library edges, so the sdist build found
+  # zlib / libjpeg only when a sibling build happened to leave them in the
+  # shared prefix (or fell through to the builder's system copies) — and its
   # `Image.new()` check passes with ZERO codecs compiled in, so a silently
   # PNG-less Pillow would have shipped green.  The grl-snam scene tooling
   # reads navmask.png rasters through PIL; codec support is the entire point.
-  cvc_revision: 2
+  # 12.3.0 is a new upstream version, so the revision restarts at 1.
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -17,7 +18,7 @@ recipe:
   license: "MIT-CMU"
   tags: [python, source, imaging]
   description: >-
-    Pillow 11.1.0 for CPython 3.13 (cp313), BUILT FROM SOURCE against cvcpkg's
+    Pillow 12.3.0 for CPython 3.13 (cp313), BUILT FROM SOURCE against cvcpkg's
     own zlib, libjpeg-turbo, libtiff, freetype and libwebp — every codec the
     grl-snam imaging path needs, compiled with `-C <feature>=enable` so
     a missing library FAILS the build instead of silently dropping the codec.
@@ -32,8 +33,8 @@ recipe:
 # build.sh compiles the wheel with the prefix's own interpreter.
 source:
   type: tarball
-  url: https://files.pythonhosted.org/packages/f3/af/c097e544e7bd278333db77933e535098c259609c4eb3b85381109602fb5b/pillow-11.1.0.tar.gz
-  sha256: "368da70808b36d73b4b390a8ffac11069f8a5c85f29eff1f1b01bcf3ef5b2a20"
+  url: https://files.pythonhosted.org/packages/1c/3d/bb7fca845737cf9d7dbde16ed1843984665ff2e0a518f5db43e77ec540b9/pillow-12.3.0.tar.gz
+  sha256: "3b8182a766685eaa002637e28b4ec8d6b18819a0c71f579bf0dbaa5830297cce"
   strip_components: 1
 
 python:
@@ -45,9 +46,12 @@ patches: []
 depends:
   build:
     - name: python313
-    # PEP-517 build backend (--no-build-isolation: bridged onto sys.path by
-    # build.sh from CVC_BUILD_PREFIX).
+    # PEP-517 build backend + its [build-system] requires (--no-build-isolation:
+    # bridged onto sys.path by build.sh from CVC_BUILD_PREFIX).  pybind11 is
+    # new in Pillow 12: setup.py imports pybind11.setup_helpers.ParallelCompile
+    # to compile the extensions in parallel.
     - name: setuptools-cp313
+    - name: pybind11-cp313
     # Feature libraries, discovered hermetically (PKG_CONFIG_LIBDIR pinned to
     # the prefixes + per-feature *_ROOT env; platform guessing disabled).
     - name: zlib
@@ -101,8 +105,12 @@ build:
 package:
   # From-source build linking prefix libraries: the payload is PIL/ + its
   # dist-info only — build.sh asserts no vendored *.libs/ directory exists.
+  # Each install layout is scoped to the platforms that produce it (as the
+  # generated columns do): the pack-time declared-files check fails on an
+  # entry that matches nothing, so the unscoped Windows Lib/ globs broke
+  # `cvcpkg pack` on linux.
   files:
-    - lib/python3.13/site-packages/PIL/
-    - lib/python3.13/site-packages/pillow-*.dist-info/
-    - Lib/site-packages/PIL/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/PIL/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/pillow-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/PIL/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

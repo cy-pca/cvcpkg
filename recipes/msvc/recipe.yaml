@@ -1,0 +1,119 @@
+schema_version: 1
+recipe:
+  name: msvc
+  # The MSVC toolset directory version (VC\Tools\MSVC\14.44.35207, what
+  # vcvars reports as VCToolsVersion).  cl.exe itself reports 19.44.35229.
+  # Bumping the toolset or the Windows SDK:
+  #   1. python scripts/msvc_lock.py --toolset 14.44 --sdk 26100   (rewrites msvc.lock)
+  #   2. set upstream_version to the lock's `toolset` directory, cvc_revision back to 1
+  #   3. check the toolset against what the consumers need: CUDA's supported
+  #      host compilers (12.5 takes MSVC 192x/193x, i.e. VS 2022), and
+  #      CPython 3.11, whose PCbuild rejects the VS 2026 (14.5x) toolset
+  # The channel URL always serves the newest VS 2022 servicing release, so
+  # re-running step 1 later may move the lock to a newer 14.44 build; the
+  # payload URLs a given lock pins stay valid.
+  upstream_version: "14.44.35207"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://visualstudio.microsoft.com/visual-cpp-build-tools/
+  license: "LicenseRef-Microsoft-VS-BuildTools AND LicenseRef-Microsoft-Windows-SDK"
+  tags: [compiler, toolchain, msvc, windows, tools]
+  description: >-
+    The Microsoft C/C++ compiler toolset from Visual Studio 2022 17.14 (MSVC
+    14.44, cl 19.44.35229, x64 host and target) with the Windows 11 SDK
+    10.0.26100: cl, link, lib, the CRT/STL headers and libraries, the
+    redistributable CRT DLLs, and rc/mt plus the SDK's headers and import
+    libraries. Laid out under <prefix>\msvc in Visual Studio's own directory
+    structure, with setup_x64.ps1 / setup_x64.bat (and vcvars64.bat /
+    vcvarsall.bat stand-ins) that put it on PATH/INCLUDE/LIB. No admin rights,
+    no Visual Studio installer, nothing written outside the prefix. NOT
+    published as a bundle: Microsoft's licenses do not allow redistributing
+    the compiler or the SDK, so `cvcpkg install msvc` downloads Microsoft's own
+    packages from download.visualstudio.microsoft.com on your machine, checks
+    each against the sha256 pinned in msvc.lock, and only after you accept the
+    license terms.
+
+# The Visual Studio 2022 Build Tools license allows using the tools (an
+# organization needs a Visual Studio license, except to compile open-source
+# dependencies) but not sharing or publishing them; only the files Microsoft
+# lists as REDIST may be shipped.  The Windows SDK license likewise forbids
+# publishing the SDK for others to copy.  So this is the CUDA toolkit's model:
+# the recipe is public (URLs and checksums), the payload never is, and the user
+# fetches it from Microsoft under Microsoft's terms -- which cvcpkg asks them
+# to accept rather than accepting for them (license_acceptance below).
+redistributable: false
+
+license_acceptance:
+  title: "the Microsoft Visual Studio Build Tools and Windows SDK licenses"
+  urls:
+    - https://go.microsoft.com/fwlink/?LinkId=2179911
+    - https://aka.ms/WinSDKLicenseURL
+  env: CVCPKG_ACCEPT_MSVC_LICENSE
+
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core, so
+# this records the Visual Studio package manifest msvc.lock was generated
+# from. The payloads and the sha256 values build.ps1 enforces are in
+# msvc.lock, written by scripts/msvc_lock.py; edit neither by hand.
+source:
+  type: prebuilt
+  base_url: https://download.visualstudio.microsoft.com/download/pr
+  artifacts:
+    windows-x86_64:
+      url: https://download.visualstudio.microsoft.com/download/pr/bc92e2cb-33de-4a0c-995d-efa817f16b16/6e470016e4324c84c255ffd0beb3767d17ec89cc8561e9409ee3e1f6d29400f5/VisualStudio.vsman
+      sha256: "f0a50ea157222c29abd5ea6ff01bfc3c33b04e011c5e45ee2ca38ef0778e5643"
+
+patches: []
+
+# Nothing to build against: the script downloads (Invoke-WebRequest), verifies,
+# unpacks the VSIX zips and runs `msiexec /a` (an administrative image, which
+# extracts files without installing or registering anything) on the SDK
+# installers. It must NOT need a compiler -- providing one is its job -- so
+# build.ps1 does not dot-source _common/env-windows.ps1.
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - msvc/
+
+notes:
+  - title: "Using it"
+    platforms: [windows]
+    description: >-
+      `cvcpkg install msvc --prefix C:\tools` (it asks you to accept the
+      licenses; non-interactively pass --accept-license msvc or set
+      CVCPKG_ACCEPT_MSVC_LICENSE=1), then run C:\tools\msvc\setup_x64.ps1
+      in PowerShell or call C:\tools\msvc\setup_x64.bat in cmd. That sets PATH, INCLUDE, LIB,
+      LIBPATH and the VCToolsInstallDir / WindowsSdkDir / UCRTVersion family
+      vcvars sets, after which CMake's Ninja generator finds cl, link, rc and
+      mt. cvcpkg's own Windows recipe builds use it when CVC_MSVC_ROOT points
+      at <prefix>\msvc, or when msvc is installed in the build or deps prefix.
+  - title: "No MSBuild, no Visual Studio generators"
+    platforms: [windows]
+    description: >-
+      This is the compiler toolset, not a Visual Studio instance: it is not
+      registered with vswhere and has no MSBuild, so CMake's "Visual Studio 17
+      2022" generator and MSBuild-based builds (CPython's PCbuild, .vcxproj
+      files) cannot use it. Use Ninja (or NMake Makefiles). For nvcc, run
+      setup_x64 first and pass -ccbin <prefix>\msvc\VC\Tools\MSVC\<ver>\bin\Hostx64\x64;
+      the vcvars64.bat stand-in is there for nvcc's own vcvars lookup (not yet
+      exercised with nvcc).
+  - title: "Left out"
+    platforms: [windows]
+    description: >-
+      ATL/MFC, AddressSanitizer, the Spectre-mitigated libraries, x86/ARM64
+      targets and the debug CRT redistributables (the debug CRT libraries for
+      /MDd and /MTd are included). Add the package names to
+      scripts/msvc_lock.py and regenerate if one is needed. vctip.exe
+      (Visual Studio's compiler-usage telemetry helper) is removed after
+      unpacking.

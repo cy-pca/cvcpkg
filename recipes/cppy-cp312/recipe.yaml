@@ -55,7 +55,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/cppy/
-    - lib/python3.12/site-packages/cppy-*.dist-info/
-    - Lib/site-packages/cppy/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/cppy/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/cppy-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/cppy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

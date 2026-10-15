@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/packaging/
-    - lib/python3.13/site-packages/packaging-*.dist-info/
-    - Lib/site-packages/packaging/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/packaging/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/packaging-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/packaging/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

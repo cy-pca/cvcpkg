@@ -81,6 +81,21 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   A worker killed with SIGKILL leaves its copy behind, so give the unit a
   `TimeoutStopSec=` above the supervisor's 120 s drain (e.g. `150`) rather than
   the systemd default of 90 s.
+- `max_jobs` is **per worker**, not per machine: a host that serves two
+  servers with `max_jobs: 2` each can run four builds at once. Size it against
+  the host's RAM and cores, not against one server -- a 6 GiB guest serving
+  prod and dev at 2 + 2 ran out of memory and went silent on both. Give the
+  secondary server a smaller `max_jobs` (the example above leaves prod the
+  larger share only if you set it that way).
+- A worker reports every job outcome (`/complete`, `/fail`) and says so in
+  its log: a report that gets no answer (timeout, 502/503/504) is asked again
+  up to four times, and one the server refuses (409: the job was cancelled,
+  timed out or moved to another holder) is logged as refused rather than as
+  "Completed".
+- A worker the server has forgotten -- an admin unregistered it, or the
+  server's database was reset -- registers again on its next heartbeat and
+  carries on under the new id. A rejected token (401/403) is logged as such;
+  re-registering cannot cure it.
 - A worker that exits is restarted after `--restart-delay` (default 5 s). One
   that keeps dying within a minute of starting -- a revoked token, a stuck
   pidfile -- waits twice as long each time, up to 5 minutes, so a crash loop

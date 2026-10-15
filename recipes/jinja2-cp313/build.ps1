@@ -1,4 +1,4 @@
-# recipes/jinja2-cp313/build.ps1 — build jinja2 3.1.4 FROM SOURCE (generated).
+# recipes/jinja2-cp313/build.ps1 — build jinja2 3.1.6 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/alembic-cp311/build.sh — build alembic 1.18.4 FROM SOURCE (generated).
+# recipes/alembic-cp311/build.sh — build alembic 1.20.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

@@ -605,17 +605,23 @@ class TestMobileBadgeLayout:
 class TestPackageDetailDownloadGraph:
     """Tests for the download stats graph on package detail pages."""
 
+    # Both elements are in the server-rendered HTML, so wait for them, not for
+    # "networkidle": the page's first visit also fetches /v1/deps, whose cold
+    # cache parses every recipe, and on a loaded CI host that alone outran the
+    # 30 s networkidle wait (test_download_stats_section_exists failed twice on
+    # 2026-10-12 while the second visit, on a warm cache, passed).
+
     def test_download_stats_section_exists(self, page):
         """Package detail page should have a hidden download stats section."""
         page.goto(f"{SERVER_URL}/package/test-pkg")
-        page.wait_for_load_state("networkidle")
-        section = page.locator("#download-stats-section")
         # Section exists in DOM (may be hidden if no data)
-        assert section.count() == 1
+        page.wait_for_selector(
+            "#download-stats-section", state="attached", timeout=JS_WAIT_TIMEOUT_MS
+        )
+        assert page.locator("#download-stats-section").count() == 1
 
     def test_download_chart_canvas_exists(self, page):
         """Download chart canvas element should be present."""
         page.goto(f"{SERVER_URL}/package/test-pkg")
-        page.wait_for_load_state("networkidle")
-        canvas = page.locator("#download-chart")
-        assert canvas.count() == 1
+        page.wait_for_selector("#download-chart", state="attached", timeout=JS_WAIT_TIMEOUT_MS)
+        assert page.locator("#download-chart").count() == 1

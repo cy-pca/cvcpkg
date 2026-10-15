@@ -322,11 +322,12 @@ def default_tuple() -> dict[str, str]:
 # whose capability set contains ``cuda``.  New capabilities plug in by adding a
 # probe function to ``_CAPABILITY_PROBES`` below.
 
-# Cache only the (potentially expensive) host probe.  The CVCPKG_CAPABILITIES
-# override is cheap and authoritative, so it is re-read on every call rather
-# than cached — this keeps CI and tests, which inject via the environment,
-# free of cross-test state leakage.
-_probed_capabilities: set[str] | None = None
+# Cache only the (potentially expensive) host probes, per purpose ("build",
+# "install").  The CVCPKG_CAPABILITIES override is cheap and authoritative, so
+# it is re-read on every call rather than cached — this keeps CI and tests,
+# which inject via the environment, free of cross-test state leakage.  Setting
+# this back to None clears every purpose.
+_probed_capabilities: dict[str, set[str]] | None = None
 
 
 def _probe_cuda() -> bool:
@@ -346,10 +347,10 @@ def _probe_cuda() -> bool:
     (visible, diagnosable); a falsely advertised one burns a build and reports
     a confusing compiler error.
 
-    The runtime/driver signals are still worth having, but as a SEPARATE
-    capability (e.g. ``cuda-runtime``) for recipes that need to *execute* CUDA
-    during a build — add that probe when a recipe actually needs it rather than
-    conflating the two here.
+    The driver signals answer a different question -- can this host RUN CUDA
+    code -- and that is what installing a CUDA package needs.  They live in
+    :func:`_probe_cuda_gpu`, which only the install-side capability set
+    consults (see ``_INSTALL_PROBES``); a builder advertises this probe alone.
     """
     import shutil
     from pathlib import Path
@@ -377,6 +378,49 @@ def _probe_cuda() -> bool:
     # installed at the default prefix. A toolkit there but absent from both PATH
     # and CUDA_PATH/CUDA_HOME is a misconfigured host — set CUDA_HOME (or
     # CVCPKG_CAPABILITIES) rather than widening detection.
+    return False
+
+
+def _probe_cuda_gpu() -> bool:
+    """Detect an NVIDIA GPU with a working driver -- enough to RUN CUDA code.
+
+    Asks the driver's own ``nvidia-smi -L`` for its GPU list, so a driver left
+    behind with no GPU (or a hung one) does not count.  ``nvidia-smi`` is found
+    on PATH, or in ``%SystemRoot%\\System32`` where the Windows driver installs
+    it (a service account's PATH may lack it).  Never raises.
+
+    Install-side only: a CUDA package needs a GPU to run, not a compiler.  It
+    must never feed a builder's advertised capabilities -- see _probe_cuda for
+    why a GPU without a toolkit cannot build CUDA code.
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    exes: list[str] = []
+    try:
+        found = shutil.which("nvidia-smi")
+        if found:
+            exes.append(found)
+    except Exception:
+        pass
+    sysroot = os.environ.get("SystemRoot")
+    if sysroot:
+        candidate = Path(sysroot) / "System32" / "nvidia-smi.exe"
+        try:
+            if candidate.is_file() and str(candidate) not in exes:
+                exes.append(str(candidate))
+        except OSError:
+            pass
+    for exe in exes:
+        try:
+            out = subprocess.run([exe, "-L"], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+        if out.returncode == 0 and any(
+            line.startswith("GPU ") for line in (out.stdout or "").splitlines()
+        ):
+            return True
     return False
 
 
@@ -650,7 +694,8 @@ def _probe_lxc() -> bool:
     return _command_ok([ls, "-1"])
 
 
-# name -> zero-arg probe returning True when the capability is present.
+# name -> zero-arg probe returning True when the capability is present.  These
+# answer "can this host BUILD for it" and are what a builder advertises.
 _CAPABILITY_PROBES = {
     "cuda": _probe_cuda,
     "incus": _probe_incus,
@@ -658,35 +703,67 @@ _CAPABILITY_PROBES = {
     "lxc": _probe_lxc,
 }
 
+# Extra evidence accepted at install time only, where the question is "can
+# this host USE it".  A capability is present for installs when its build
+# probe OR its install probe says so: a GPU workstation without a toolkit can
+# install and run a CUDA package, and a toolkit host without a GPU can still
+# install one to build against.
+_INSTALL_PROBES = {
+    "cuda": _probe_cuda_gpu,
+}
 
-def host_capabilities() -> set[str]:
+_PURPOSES = ("install", "build")
+
+
+def _run_probes(probes: dict) -> set[str]:
+    found: set[str] = set()
+    for cap, probe in probes.items():
+        try:
+            if probe():
+                found.add(cap)
+        except Exception:
+            pass
+    return found
+
+
+def host_capabilities(purpose: str = "install") -> set[str]:
     """Return the set of capabilities available on the current host.
+
+    *purpose* is what the set gates:
+
+    - ``"install"`` (the default; the resolver): can this host use a bundle
+      that requires the capability.  The build probes plus ``_INSTALL_PROBES``
+      -- for ``cuda``, an NVIDIA GPU with a working driver also counts.
+    - ``"build"`` (what a builder advertises to the scheduler): can this host
+      build a recipe that requires it.  The build probes alone -- for
+      ``cuda``, only an installed nvcc.
 
     Resolution order:
 
     1. If ``CVCPKG_CAPABILITIES`` is set, its comma-separated value is returned
-       verbatim (authoritative — this is how CI and tests inject capabilities).
-       An empty string means "no capabilities".
-    2. Otherwise each registered probe in :data:`_CAPABILITY_PROBES` runs; the
-       result is cached in a module global so probing happens at most once.
+       verbatim for every purpose (authoritative — this is how CI and tests
+       inject capabilities).  An empty string means "no capabilities".
+    2. Otherwise the probes run; each purpose's result is cached in a module
+       global so probing happens at most once per process.
 
     A fresh copy is returned each call so callers cannot mutate the cache.
     """
+    if purpose not in _PURPOSES:
+        raise ValueError(f"unknown capability purpose {purpose!r}; expected one of {_PURPOSES}")
     env = os.environ.get("CVCPKG_CAPABILITIES")
     if env is not None:
         return {c.strip() for c in env.split(",") if c.strip()}
 
     global _probed_capabilities
     if _probed_capabilities is None:
-        found: set[str] = set()
-        for cap, probe in _CAPABILITY_PROBES.items():
-            try:
-                if probe():
-                    found.add(cap)
-            except Exception:
-                pass
-        _probed_capabilities = found
-    return set(_probed_capabilities)
+        _probed_capabilities = {}
+    if "build" not in _probed_capabilities:
+        _probed_capabilities["build"] = _run_probes(_CAPABILITY_PROBES)
+    if purpose == "install" and "install" not in _probed_capabilities:
+        build = _probed_capabilities["build"]
+        extra = {cap: probe for cap, probe in _INSTALL_PROBES.items() if cap not in build}
+        _probed_capabilities["install"] = build | _run_probes(extra)
+    return set(_probed_capabilities[purpose])
 
 
 # ── Free scratch disk ───────────────────────────────────────────

@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: setuptools-rust-cp313
   upstream_version: "1.13.0"
-  cvc_revision: 1
+  # cvc.2 (debug-twin republish): the cvc.1 release bundle is fine, but its
+  # same-version debug bundle installs to lib/python3.13t, and builders before #217
+  # could install that debug row for a release job (hatchling-cp313 failed on
+  # trove-classifiers-cp313 this way, 2026-10-13).  A newer release revision wins
+  # outright.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -84,8 +89,8 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.13/site-packages/setuptools_rust/
-    - lib/python3.13/site-packages/setuptools_rust-*.dist-info/
+    - { glob: "lib/python3.13/site-packages/setuptools_rust/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/setuptools_rust-*.dist-info/", platforms: [any] }
     # Windows (Lib\site-packages) scheme, for a prefix staged on that host.
-    - Lib/site-packages/setuptools_rust/
-    - Lib/site-packages/setuptools_rust-*.dist-info/
+    - { glob: "Lib/site-packages/setuptools_rust/", platforms: [windows] }
+    - { glob: "Lib/site-packages/setuptools_rust-*.dist-info/", platforms: [windows] }

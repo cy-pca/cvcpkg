@@ -41,7 +41,11 @@ concurrency:
 jobs:
   build:
     name: Build & verify distribution
-    if: github.event_name != 'pull_request' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
+    # ',name,' wrapping: match whole names, not substrings ("fix" is in
+    # "transfix").  Same form as cvcpkg-ci.yml.
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

@@ -2,7 +2,21 @@ schema_version: 1
 recipe:
   name: gmp
   upstream_version: "6.3.0"
-  cvc_revision: 9
+  # 10: the first windows bundle built from this recipe (MinGW-w64 gcc + MSYS2
+  # autotools, all from cvcpkg; C library only). It replaces 6.3.0+cvc.1 for
+  # windows, a repackaged vcpkg build. linux/macos/BSD builds are unchanged
+  # from +cvc.9.
+  # 11: portable x86_64. build.sh now configures --enable-fat on x86 hosts.
+  # Through +cvc.10 the linux/macos/BSD x86_64 bundles carried the BUILDER's
+  # CPU-specific mpn assembly (and, where CFLAGS was unset, -march=<cpu>), so
+  # they raised SIGILL on CPUs older than the builder's (BMI2/ADX mulx/adcx on a
+  # Sandy Bridge Xeon, 2026-10-14). test.sh now fails any x86 build that
+  # records -march/-mtune in gmp.h or lacks the fat CPUID dispatcher. windows
+  # (--disable-assembly) and wasm/wasi/cosmo (generic --host) were already
+  # portable and are only rebuilt for revision coherence. Also --with-pic: the
+  # static libgmp.a was non-PIC, so it could not link into PIE executables
+  # (macOS ld: "Illegal text-relocations").
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -95,12 +109,21 @@ build:
 
 package:
   files:
+    # windows: bin/libgmp-10.dll (shipped, as the whole install tree is),
+    # lib/libgmp.dll.a + lib/gmp.lib (the same import library), gmp.pc, gmp.h.
     - lib/libgmp*
     - lib/gmp*
     - lib/pkgconfig/gmp*
     - include/gmp.h
-    - include/gmpxx.h
+    # gmpxx (C++) everywhere except windows, where build.ps1 builds the C
+    # library only: a MinGW libgmpxx is libstdc++/Itanium-ABI C++ that MSVC
+    # consumers cannot link (see build.ps1).
+    - glob: include/gmpxx.h
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo]
   cmake_packages: []
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import click
@@ -80,7 +81,8 @@ from cvcpkg.optional import require_httpx
     "publish_all",
     is_flag=True,
     default=False,
-    help="Publish all archives in --output-dir matching the platform tuple.",
+    help="Publish all archives in --output-dir matching the platform tuple, "
+    "plus the any-noarch bundles beside them.",
 )
 def publish(
     packages: tuple[str, ...],
@@ -109,9 +111,10 @@ def publish(
     Passing archive file paths directly still works but is deprecated
     and will be removed in a future release.
 
-    **Server mode** (``--server``): reads the embedded manifest.yaml
-    from each archive to extract component metadata, then uploads to
-    the cvcpkg-server REST API.  Small archives (< 10 MB) upload in
+    **Server mode** (``--server``): reads the bundle's own manifest.yaml
+    (``share/libcvc-deps/<name>/``) from each archive to extract component
+    metadata, then uploads to the cvcpkg-server REST API.  An archive that
+    carries several packages' manifests is refused.  Small archives (< 10 MB) upload in
     a single request; larger archives use chunked upload with resume.
 
     **Storage-backend mode** (``--dest``): uploads archive files to a
@@ -144,10 +147,11 @@ def publish(
     if not packages and not publish_all:
         raise click.UsageError("provide recipe names, archive paths, or use --all.")
 
-    from cvcpkg.platform import detect_arch
+    from cvcpkg.builder import _detect_arch_for_platform
 
     plat = _auto_platform(platform)
-    arc = detect_arch()
+    # The arch pack tags bundles with (wasm32 for wasm), not the host's.
+    arc = _detect_arch_for_platform(plat)
 
     # Resolve each package argument to archive file path(s).
     if publish_all:
@@ -207,6 +211,8 @@ def _publish_to_server(
     headers = {"Authorization": f"Bearer {token}"}
     ok = 0
     failed: list[str] = []
+    # Variants already on the server whose catalog row lacks deps this bundle declares.
+    incomplete: list[str] = []
 
     for p in archive_paths:
         manifest = _extract_manifest(p)
@@ -221,17 +227,7 @@ def _publish_to_server(
         meta = manifest.get("meta", {})
         manifest_org = bundle.get("org", "")
 
-        # Extract runtime deps from manifest.
-        deps_block = manifest.get("dependencies", {})
-        if isinstance(deps_block, dict):
-            required_deps = deps_block.get("required", [])
-        else:
-            required_deps = []
-        # Fallback: legacy flat "depends" list.
-        if not required_deps:
-            legacy = manifest.get("depends", [])
-            if isinstance(legacy, list):
-                required_deps = legacy
+        required_deps = _manifest_required_deps(manifest, p.name)
 
         # Virtual slots (manifest top-level `provides`, written by the
         # builder from the recipe's provides: list).
@@ -246,8 +242,22 @@ def _publish_to_server(
         display_name = f"{org or manifest_org}/{name}" if (org or manifest_org) else name
         label = f"{display_name}=={version} ({plat}/{arch}/{build_type}/{link})"
 
-        if _variant_exists(base, headers, name, version, plat, arch, build_type, link, org):
+        row = _find_variant(base, headers, name, version, plat, arch, build_type, link, org)
+        if row is not None:
             click.echo(f"cvcpkg: skipping {label} (already on server)")
+            # A re-publish never rewrites a row, so a row created without its
+            # deps stays that way -- and this skip is what hid it before #152.
+            missing = _missing_deps(row, required_deps)
+            if missing:
+                click.echo(
+                    f"cvcpkg: WARNING: the catalog row for {label} lacks runtime deps this "
+                    f"bundle declares ({', '.join(missing)}), so installs of it leave them "
+                    "out. Publishing again cannot change the row; an admin can fill it with "
+                    f"POST /v1/admin/packages/{name}/{version}/backfill-deps "
+                    "(scripts/backfill_required_deps.py).",
+                    err=True,
+                )
+                incomplete.append(f"{label}: missing {', '.join(missing)}")
             continue
 
         click.echo(f"cvcpkg: publishing {label} [{file_size / 1024 / 1024:.1f} MB] -> {base}")
@@ -284,6 +294,14 @@ def _publish_to_server(
             failed.append(label)
 
     click.echo(f"cvcpkg: published {ok}/{len(archive_paths)} archive(s).")
+    if incomplete:
+        click.echo(
+            f"cvcpkg: WARNING: {len(incomplete)} variant(s) already on the server record "
+            "fewer runtime deps than their bundles declare:",
+            err=True,
+        )
+        for line in incomplete:
+            click.echo(f"  - {line}", err=True)
     if failed:
         click.echo(f"cvcpkg: {len(failed)} archive(s) failed:", err=True)
         for f in failed:
@@ -376,44 +394,113 @@ def _resolve_all_archives(
     config: str,
     link: str,
 ) -> list[Path]:
-    """Find all archives in *output_dir* matching the platform tuple."""
+    """Find all archives in *output_dir* matching the platform tuple.
+
+    Includes the ``any-noarch`` bundles built alongside them: ``cvcpkg pack``
+    and ``pack-all`` give a recipe served by its ``any`` matrix entry that
+    identity whatever the host, so a ``--platform macos`` glob alone left
+    them unpublished.
+    """
     dist = Path(output_dir).resolve()
     if not dist.is_dir():
         return []
-    pattern = f"*-{platform}-{arch}-{config}-{link}.*"
-    matches = sorted(dist.glob(pattern))
+    patterns = [f"*-{platform}-{arch}-{config}-{link}.*"]
+    if (platform, arch) != ("any", "noarch"):
+        patterns.append(f"*-any-noarch-{config}-{link}.*")
+    matches = sorted({m for pattern in patterns for m in dist.glob(pattern)})
     return [m for m in matches if m.is_file() and not m.name.endswith(".sig")]
 
 
+# Where a bundle keeps its own manifest: share/libcvc-deps/<name>/manifest.yaml
+# (stage_bundle), or the flat share/libcvc-deps/manifest.yaml of older bundles.
+_BUNDLE_MANIFEST_RE = re.compile(r"^(?:\./)?share/libcvc-deps/(?:[^/]+/)?manifest\.yaml$")
+
+
 def _extract_manifest(archive_path: Path) -> dict:
-    """Extract manifest.yaml from a cvcpkg archive."""
+    """Extract the bundle's own manifest.yaml from a cvcpkg archive.
+
+    That is the one under ``share/libcvc-deps/`` (:data:`_BUNDLE_MANIFEST_RE`); an
+    archive with none there falls back to the first ``manifest.yaml`` anywhere in
+    it.  An archive carrying the manifests of several packages is refused (see
+    :func:`_bundle_manifest`) instead of being published under whichever sorts
+    first.
+
+    The reader is chosen by magic bytes, not the suffix: an archive fetched
+    back from cvcpkg.org carries the server's ``.tar.zst`` storage name even
+    when it is a Windows zip.
+    """
     import tarfile
     import zipfile
 
-    manifest = None
+    from cvcpkg._archive import archive_format, open_tar
+    from cvcpkg.errors import InstallError
+
+    found: list[tuple[str, bytes]] = []  # share/libcvc-deps manifests, archive order
+    fallback: bytes | None = None  # the first other *manifest.yaml
     try:
-        if archive_path.name.endswith(".zip"):
+        fmt = archive_format(archive_path)
+        if fmt == "zip":
             with zipfile.ZipFile(archive_path) as zf:
                 for entry in zf.namelist():
-                    if entry.endswith("manifest.yaml"):
-                        manifest = yaml.safe_load(zf.read(entry))
-                        break
+                    if _BUNDLE_MANIFEST_RE.match(entry):
+                        found.append((entry, zf.read(entry)))
+                    elif fallback is None and entry.endswith("manifest.yaml"):
+                        fallback = zf.read(entry)
         else:
-            with tarfile.open(archive_path, mode="r:*") as tf:
+            with open_tar(archive_path, fmt=fmt) as tf:
                 for member in tf.getmembers():
-                    if member.name.endswith("manifest.yaml"):
-                        f = tf.extractfile(member)
-                        if f:
-                            manifest = yaml.safe_load(f.read())
-                        break
-    except (tarfile.TarError, zipfile.BadZipFile) as exc:
+                    own = _BUNDLE_MANIFEST_RE.match(member.name) is not None
+                    other = fallback is None and member.name.endswith("manifest.yaml")
+                    if not (own or other):
+                        continue
+                    f = tf.extractfile(member)
+                    data = f.read() if f else b""
+                    if own:
+                        found.append((member.name, data))
+                    else:
+                        fallback = data
+    except (tarfile.TarError, zipfile.BadZipFile, InstallError) as exc:
         raise click.ClickException(f"{archive_path.name}: cannot read archive: {exc}") from exc
+
+    if found:
+        manifest = _bundle_manifest(archive_path, found)
+    else:
+        manifest = yaml.safe_load(fallback) if fallback else None
 
     if not manifest:
         raise click.ClickException(
             f"{archive_path.name}: no manifest.yaml found -- is this a cvcpkg archive?"
         )
     return manifest
+
+
+def _bundle_manifest(archive_path: Path, found: list[tuple[str, bytes]]) -> dict | None:
+    """The single package manifest among *found* (``(member name, bytes)`` pairs).
+
+    A bundle carries one: its own.  Manifests of several packages mean the archive
+    is a prefix with other packages installed in it -- e.g. ``pack --from-prefix``
+    of a dependency closure -- holding their files as well, and taking the first
+    one published such a pycvc-gl bundle as ``assimp``.  So that is refused.  The
+    same package's per-name and older flat copies together are fine; the per-name
+    one wins.
+    """
+    by_pkg: dict[str, list[tuple[str, dict]]] = {}
+    for entry, raw in found:
+        manifest = yaml.safe_load(raw)
+        bundle = manifest.get("bundle") if isinstance(manifest, dict) else None
+        pkg = str(bundle.get("name", "")) if isinstance(bundle, dict) else ""
+        by_pkg.setdefault(pkg, []).append((entry, manifest))
+    if len(by_pkg) > 1:
+        names = sorted(p or "<unnamed>" for p in by_pkg)
+        shown = ", ".join(names[:10]) + (f", ... ({len(names)} in all)" if len(names) > 10 else "")
+        raise click.ClickException(
+            f"{archive_path.name}: carries the manifests of {len(names)} packages ({shown}); "
+            "a bundle carries only its own. It holds those packages' files too -- typically "
+            "`cvcpkg pack --from-prefix` of a prefix with dependencies installed in it. "
+            "Re-pack from this package's install tree alone."
+        )
+    (entries,) = by_pkg.values()
+    return max(entries, key=lambda e: e[0].count("/"))[1]
 
 
 def _variant_exists(
@@ -433,6 +520,28 @@ def _variant_exists(
     artifact, or an identical variant under a different org, must not
     suppress the upload.
     """
+    return (
+        _find_variant(base, headers, name, version, platform, arch, build_type, link, org)
+        is not None
+    )
+
+
+def _find_variant(
+    base: str,
+    headers: dict,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    org: str,
+) -> dict | None:
+    """The server's catalog row for this exact live variant, or None.
+
+    See :func:`_variant_exists`.  The row is returned so a skipped publish can
+    still check what the catalog recorded for it (:func:`_missing_deps`).
+    """
     httpx = require_httpx("publish")
 
     try:
@@ -443,7 +552,7 @@ def _variant_exists(
                 headers=headers,
             )
         if resp.status_code != 200:
-            return False
+            return None
         for pkg in resp.json().get("packages", []):
             # The server treats org="" as "no filter" and older servers may
             # return yanked bundles, so both must be re-checked client-side.
@@ -457,10 +566,72 @@ def _variant_exists(
                 and pkg.get("build_type") == build_type
                 and pkg.get("link") == link
             ):
-                return True
+                return pkg
     except Exception:
         pass
-    return False
+    return None
+
+
+def _manifest_required_deps(manifest: dict, archive_name: str) -> list[dict[str, str]]:
+    """The runtime deps a bundle manifest declares, as catalog ``required_deps`` entries.
+
+    ``dependencies.required`` (what ``generate_manifest`` writes, from
+    ``runtime_dependencies``), else the legacy flat ``depends`` list.  Each entry
+    is normalized to ``{name, org?, version?}``, the shape the catalog stores and
+    the client reads back with ``d["name"]``: a legacy ``"name"`` or ``"org/name"``
+    string becomes a dict, as ``runtime_dependencies`` reads recipe deps.  An entry
+    with no name is refused rather than recorded, since a row holding one breaks
+    every client that loads the catalog.
+    """
+    deps_block = manifest.get("dependencies")
+    required = deps_block.get("required") if isinstance(deps_block, dict) else None
+    if not required:
+        # Legacy manifests: a flat top-level ``depends`` list.
+        legacy = manifest.get("depends")
+        required = legacy if isinstance(legacy, list) else []
+    if not isinstance(required, list):
+        raise click.ClickException(
+            f"{archive_name}: manifest dependencies.required must be a list, got {required!r}"
+        )
+    deps: list[dict[str, str]] = []
+    for dep in required:
+        if isinstance(dep, str) and dep.strip():
+            dep = dep.strip()
+            if "/" in dep:
+                dep_org, dep_name = dep.split("/", 1)
+                entry = {"name": dep_name, "org": dep_org}
+            else:
+                entry = {"name": dep}
+        elif isinstance(dep, dict) and str(dep.get("name") or "").strip():
+            entry = {"name": str(dep["name"]).strip()}
+            for key in ("org", "version"):
+                if dep.get(key):
+                    entry[key] = str(dep[key])
+        else:
+            raise click.ClickException(
+                f"{archive_name}: manifest runtime dependency {dep!r} has no name; "
+                "entries are {name, org?, version?}"
+            )
+        deps.append(entry)
+    return deps
+
+
+def _dep_key(dep) -> str:
+    """``org/name`` (or ``name``) of a ``required_deps`` entry."""
+    if not isinstance(dep, dict):
+        return str(dep)
+    return "/".join(str(part) for part in (dep.get("org"), dep.get("name")) if part)
+
+
+def _missing_deps(row: dict, required_deps: list[dict[str, str]]) -> list[str]:
+    """Deps in *required_deps* that a catalog *row*'s ``required_deps`` lacks.
+
+    Compared by ``org/name``: a row that records more, or other versions, is
+    not flagged.  Rows ``pack-all --server-cache-push`` created before #152
+    recorded none at all, so the resolver installs those packages without them.
+    """
+    recorded = {_dep_key(d) for d in (row.get("required_deps") or [])}
+    return [_dep_key(d) for d in required_deps if _dep_key(d) not in recorded]
 
 
 def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:

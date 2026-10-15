@@ -4,7 +4,9 @@ recipe:
   upstream_version: "2.8.0"
   # Bumped 1 -> 2: noarch python deps renamed to their -cp311 columns
   # (the bare-name + fanout model is retired; see tools/gen_python_recipes.py).
-  cvc_revision: 3
+  # Bumped 3 -> 4: add the windows-x86_64 column (the cu128 wheel from
+  # download.pytorch.org; PyPI's Windows torch is CPU-only).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -13,14 +15,15 @@ recipe:
   tags: [python, wheel, ml, tensor, scientific, cuda, gpu]
   description: >-
     PyTorch 2.8.0 (CUDA 12.8 build) for CPython 3.11 (cp311) — the pinned
-    prebuilt manylinux CUDA wheel from PyPI, installed into python311's
+    prebuilt CUDA wheel (manylinux from PyPI on Linux; the cu128 win_amd64 wheel
+    from download.pytorch.org on Windows), installed into python311's
     site-packages. The GPU peer of torch-cp311 (CPU): it `provides: [torch-cp311]`
     so a dependency on the virtual name `torch-cp311` resolves to EITHER the CPU
-    or this CUDA build (mutually exclusive; a hardware-aware resolver — cvcpkg
-    Roadmap Phase 10 — tie-breaks CPU vs GPU; selection is not implemented yet).
-    Pulls the NVIDIA CUDA 12.8 runtime (nvidia-*-cu12) + triton wheels. torch is
-    NOT built from source. Linux/x86_64 only (macOS has no CUDA; Windows is a
-    follow-up). Needs an NVIDIA driver + GPU at runtime.
+    or this CUDA build (mutually exclusive); a host advertising the capability
+    below gets this one. On Linux it pulls the NVIDIA CUDA 12.8 runtime
+    (nvidia-*-cu12) + triton wheels; the Windows wheel bundles the CUDA runtime
+    DLLs itself and has no triton. torch is NOT built from source. Linux and
+    Windows x86_64 (macOS has no CUDA). Needs an NVIDIA driver + GPU at runtime.
 
 # Requires a CUDA-capable builder to verify (import loads the CUDA runtime), so
 # publishing runs on a [self-hosted, linux, cuda] runner — see torch-cp311 for
@@ -32,6 +35,11 @@ provides: ["torch-cp311"]
 # routing (a builder advertising `cuda`, the scheduler matching it) is on the
 # cvcpkg roadmap (CVCPKG-ROADMAP.md "GPU/CUDA build-time routing"); until it
 # lands these are published from a GPU host by hand.
+# The Windows column imports without a GPU or driver (the CUDA runtime DLLs ship
+# in the wheel), so windows-build.yml builds it on a GitHub runner.
+# At install time `cuda` is satisfied by an NVIDIA GPU with a working driver
+# (host_capabilities("install"), cy-pca/cvcpkg#260), so a GPU workstation is
+# offered this build over the CPU one with no override; builders still need nvcc.
 requires_capabilities: ["cuda"]
 # The payload is PyPI's manylinux_2_28 torch wheel — build.sh only pip-installs
 # it, so nothing is compiled here and the builder's glibc never reaches the
@@ -50,6 +58,11 @@ source:
     linux-x86_64:
       url: https://files.pythonhosted.org/packages/5a/63/4fdc45a0304536e75a5e1b1bbfb1b56dd0e2743c48ee83ca729f7ce44162/torch-2.8.0-cp311-cp311-manylinux_2_28_x86_64.whl
       sha256: "c12fa219f51a933d5f80eeb3a7a5d0cbe9168c0a14bbb4055f1979431660879b"
+    # 3.46 GB (CUDA runtime, cuDNN and cuBLAS DLLs bundled); the sha256 is the
+    # one download.pytorch.org/whl/cu128/torch/ publishes for this file.
+    windows-x86_64:
+      url: https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp311-cp311-win_amd64.whl
+      sha256: "34c55443aafd31046a7963b63d30bc3b628ee4a704f826796c865fdfd05bb596"
 
 python:
   interpreter: python311
@@ -72,23 +85,25 @@ depends:
     - name: jinja2-cp311
     - name: fsspec-cp311
     - name: filelock-cp311
-    # GPU kernel compiler (torch.compile / inductor).
-    - name: triton-cp311
+    # GPU kernel compiler (torch.compile / inductor). Linux only: the Windows
+    # wheel declares no triton.
+    - { name: triton-cp311, platforms: [linux] }
     # NVIDIA CUDA 12.8 runtime (bundled .so libraries torch loads at import).
-    - name: nvidia-cuda-nvrtc-cu12-cp311
-    - name: nvidia-cuda-runtime-cu12-cp311
-    - name: nvidia-cuda-cupti-cu12-cp311
-    - name: nvidia-cudnn-cu12-cp311
-    - name: nvidia-cublas-cu12-cp311
-    - name: nvidia-cufft-cu12-cp311
-    - name: nvidia-curand-cu12-cp311
-    - name: nvidia-cusolver-cu12-cp311
-    - name: nvidia-cusparse-cu12-cp311
-    - name: nvidia-cusparselt-cu12-cp311
-    - name: nvidia-nccl-cu12-cp311
-    - name: nvidia-nvtx-cu12-cp311
-    - name: nvidia-nvjitlink-cu12-cp311
-    - name: nvidia-cufile-cu12-cp311
+    # Linux only: the Windows wheel ships these DLLs in torch\lib itself.
+    - { name: nvidia-cuda-nvrtc-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cuda-runtime-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cuda-cupti-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cudnn-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cublas-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cufft-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-curand-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cusolver-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cusparse-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cusparselt-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-nccl-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-nvtx-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-nvjitlink-cu12-cp311, platforms: [linux] }
+    - { name: nvidia-cufile-cu12-cp311, platforms: [linux] }
   host_tools:
     - python311
 
@@ -97,13 +112,20 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
-    - lib/python3.11*/site-packages/torch/
-    - lib/python3.11*/site-packages/torchgen/
-    - lib/python3.11*/site-packages/functorch/
-    - lib/python3.11*/site-packages/torch-2.8.0*.dist-info/
+    - { glob: "lib/python3.11*/site-packages/torch/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/torchgen/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/functorch/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/torch-2.8.0*.dist-info/", platforms: [linux] }
+    # Windows install scheme. The dist-info dir is "torch-2.8.0+cu128.dist-info".
+    - { glob: "Lib/site-packages/torch/", platforms: [windows] }
+    - { glob: "Lib/site-packages/torchgen/", platforms: [windows] }
+    - { glob: "Lib/site-packages/functorch/", platforms: [windows] }
+    - { glob: "Lib/site-packages/torch-2.8.0*.dist-info/", platforms: [windows] }
 
 abi:
   cxx_std: 17

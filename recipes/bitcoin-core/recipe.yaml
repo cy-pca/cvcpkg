@@ -1,0 +1,149 @@
+schema_version: 1
+recipe:
+  name: bitcoin-core
+  upstream_version: "31.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://bitcoincore.org/
+  # Bitcoin Core is MIT.  The release binaries statically link in-tree
+  # libsecp256k1, minisketch and ctaes (MIT), LevelDB and crc32c
+  # (BSD-3-Clause), and from depends/: libevent (BSD-3-Clause), ZeroMQ
+  # (MPL-2.0), SQLite (public domain) and Boost headers (BSL-1.0).  The
+  # in-tree licence texts are installed under share/licenses/bitcoin-core/.
+  license: "MIT AND BSD-3-Clause AND MPL-2.0 AND BSL-1.0"
+  tags: [crypto, networking, server]
+  description: >-
+    Bitcoin Core — the reference Bitcoin full node: bitcoind, bitcoin-cli,
+    bitcoin-wallet, bitcoin-tx, bitcoin-util and the `bitcoin` front-end,
+    staged from the official reproducible (Guix) release builds, plus man
+    pages, a sample etc/bitcoin/bitcoin.conf and the rpcauth.py credential
+    helper.  No GUI.  Runs mainnet, testnet, signet or a local regtest chain.
+
+source:
+  type: prebuilt
+  base_url: https://bitcoincore.org/bin/bitcoin-core-31.1
+  # sha256 values copied from the release's SHA256SUMS (11 good guix-builder
+  # signatures on SHA256SUMS.asc when pinned; see notes).  build.sh and
+  # build.ps1 carry the same values and verify every download.
+  artifacts:
+    linux-x86_64:
+      file: bitcoin-31.1-x86_64-linux-gnu.tar.gz
+      sha256: "b80d9c3e04da78fb6f0569685673418cf686fadba9042d926d13fb87ff503f9e"
+    linux-aarch64:
+      file: bitcoin-31.1-aarch64-linux-gnu.tar.gz
+      sha256: "dcf1873f2208ba4f962f3398d47e154c39c0084be8f4553e05c940d0ace3d004"
+    macos-x86_64:
+      file: bitcoin-31.1-x86_64-apple-darwin.tar.gz
+      sha256: "bc506958d0f387c1ea770bdc7c7192a505fa645ff62cabcc7761fa7eb89e867e"
+    macos-arm64:
+      file: bitcoin-31.1-arm64-apple-darwin.tar.gz
+      sha256: "16a097c09fbd7eb78b240ce1dae123663ea2e5e377cfd6a951e71e227e23cf2f"
+    windows-x86_64:
+      file: bitcoin-31.1-win64.zip
+      sha256: "c99ef173471c58e6766d9eebd12e6c35349082eeed3939bc99eed58ef57db587"
+
+# The payload is the upstream Guix build (glibc >= 2.30 on Linux), not
+# something compiled on the builder.
+prebuilt_payload: true
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: bin/bitcoind, platforms: [linux, macos] }
+    - { glob: bin/bitcoin-cli, platforms: [linux, macos] }
+    - { glob: bin/bitcoin-wallet, platforms: [linux, macos] }
+    - { glob: bin/bitcoin-tx, platforms: [linux, macos] }
+    - { glob: bin/bitcoin-util, platforms: [linux, macos] }
+    - { glob: bin/bitcoin, platforms: [linux, macos] }
+    - { glob: bin/bitcoind.exe, platforms: [windows] }
+    - { glob: bin/bitcoin-cli.exe, platforms: [windows] }
+    - { glob: bin/bitcoin-wallet.exe, platforms: [windows] }
+    - { glob: bin/bitcoin-tx.exe, platforms: [windows] }
+    - { glob: bin/bitcoin-util.exe, platforms: [windows] }
+    - { glob: bin/bitcoin.exe, platforms: [windows] }
+    - share/man/man1/bitcoind.1
+    - share/man/man1/bitcoin-cli.1
+    - etc/bitcoin/bitcoin.conf.sample
+    - share/bitcoin-core/rpcauth/rpcauth.py
+    - share/licenses/bitcoin-core/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt binaries; no compiler is used.  build.sh needs curl, tar and a
+    sha256 tool; build.ps1 needs Windows 10+ (Invoke-WebRequest, tar.exe).
+
+notes:
+  - title: "Official release binaries, verified"
+    description: >-
+      The archives are the reproducible Guix builds from bitcoincore.org.
+      When pinning a version: download SHA256SUMS and SHA256SUMS.asc from
+      https://bitcoincore.org/bin/bitcoin-core-<ver>/, import the builder
+      keys from https://github.com/bitcoin-core/guix.sigs/tree/main/builder-keys
+      (`gpg --import builder-keys/*.gpg` into a throwaway GNUPGHOME), run
+      `gpg --verify SHA256SUMS.asc SHA256SUMS` and require several "Good
+      signature" lines from known builders, then copy the per-archive sha256
+      values into recipe.yaml, build.sh and build.ps1.  For 31.1 that gave 11
+      good signatures (Ava Chow, Ben Carman, Hennadii Stepanov, marcofleon,
+      Matthew Zipkin, Michael Ford, Oliver Gugger, sedited, Sjors Provoost,
+      Stephan Oeste, Will Clark; guix.sigs at 9b5d4451), and every archive
+      matched SHA256SUMS.  The source tarball bitcoin-31.1.tar.gz (same
+      SHA256SUMS) is fetched only for its licence files.
+  - title: "What is shipped"
+    description: >-
+      bin/: bitcoind, bitcoin-cli, bitcoin-wallet, bitcoin-tx, bitcoin-util
+      and the `bitcoin` front-end (`bitcoin node|rpc|wallet|tx|util ...`).
+      Not shipped: bitcoin-qt and libexec/bitcoin-gui (GUI),
+      libexec/bitcoin-node (the experimental multiprocess/IPC node, so
+      `bitcoin -m node` is unavailable) and libexec/test_bitcoin.
+      etc/bitcoin/bitcoin.conf.sample is upstream's annotated example; nothing
+      reads etc/bitcoin/ on its own — bitcoind uses -conf / -datadir
+      (default ~/.bitcoin).  Generate -rpcauth lines with
+      `python3 <prefix>/share/bitcoin-core/rpcauth/rpcauth.py <user>`.
+  - title: "Version choice and RPC compatibility"
+    description: >-
+      31.1 is the latest stable release (32.0 is still at rc3).  Since 30.0
+      legacy (BDB) wallets are gone: createwallet makes descriptor wallets,
+      and the legacy-only RPCs (dumpwallet, importwallet, dumpprivkey,
+      importprivkey, importaddress, ...) answer "Method not found".  They
+      already failed on descriptor wallets, the default since 23.0; a
+      deployment that still needs them must stay on 29.x.  The long-deprecated
+      getunconfirmedbalance is gone too (use getbalances, field
+      mine.untrusted_pending).  The common node and wallet RPCs
+      (getblockchaininfo, getblockcount, createwallet/loadwallet/unloadwallet,
+      listwallets, getwalletinfo, getnewaddress, validateaddress,
+      generatetoaddress, getbalance, sendtoaddress, sendmany, gettransaction,
+      listtransactions, listunspent, estimatesmartfee, backupwallet) are all
+      present.
+  - title: "Platforms and architectures"
+    description: >-
+      linux (x86_64, aarch64), macos (x86_64, arm64) and windows (x86_64),
+      exactly the source.artifacts keys.  Upstream also publishes
+      arm-linux-gnueabihf, powerpc64 and riscv64 Linux builds; add artifact
+      entries if a builder for those appears.  The Linux binaries are static
+      apart from glibc (>= 2.30).  The macOS binaries are code-signed by
+      upstream and reference only system libraries, so cvcpkg's relocation
+      pass has nothing to rewrite in them.  No BSD builds exist upstream.
+      On Windows test.sh only checks the versions; the regtest walk runs on
+      linux and macos.  cvcpkg has no service mechanism: run bitcoind in the
+      foreground (the default) under your own supervisor.

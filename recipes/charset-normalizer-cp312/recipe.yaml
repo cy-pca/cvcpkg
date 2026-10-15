@@ -56,8 +56,8 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/charset_normalizer/
-    - lib/python3.12/site-packages/*.dist-info/
-    - bin/normalizer
-    - Lib/site-packages/charset_normalizer/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/charset_normalizer/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "bin/normalizer", platforms: [any] }
+    - { glob: "Lib/site-packages/charset_normalizer/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

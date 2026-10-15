@@ -2,10 +2,11 @@ schema_version: 1
 
 recipe:
   name: pillow-cp311
-  upstream_version: "11.1.0"
-  # Bumped 2 -> 3: source.type tarball (hand-crafted from-source build linking
-  # cvcpkg's own zlib/libjpeg-turbo/tiff/freetype/libwebp) -> python_wheel
-  # (pinned prebuilt PyPI wheels). The from-source build cannot produce a
+  upstream_version: "12.3.0"
+  # 12.3.0 is a new upstream version, so the revision restarts at 1.
+  # Prebuilt since 11.1.0+cvc.3: source.type tarball (hand-crafted from-source
+  # build linking cvcpkg's own zlib/libjpeg-turbo/tiff/freetype/libwebp) ->
+  # python_wheel (pinned prebuilt PyPI wheels). The from-source build cannot produce a
   # Windows column (the codec libraries + their discovery are not wired for
   # windows-2022), so matplotlib-cp311's Windows closure was unbuildable. The
   # official PyPI manylinux/win_amd64 wheels are auditwheel-vendored: every
@@ -13,7 +14,7 @@ recipe:
   # support is guaranteed (the build.sh check asserts PNG + JPEG) without the
   # per-feature hermetic link. Trades the from-source model for prebuilt wheels
   # on this dep, like torch-cp311 + contourpy-cp311.
-  cvc_revision: 3
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -21,8 +22,9 @@ recipe:
   license: "MIT-CMU"
   tags: [python, wheel, imaging]
   description: >-
-    Pillow 11.1.0 for CPython 3.11 (cp311): the pinned prebuilt PyPI wheels
-    (manylinux_2_17 x86_64 + win_amd64), sha256-verified and installed into the
+    Pillow 12.3.0 for CPython 3.11 (cp311): the pinned prebuilt PyPI wheels
+    (manylinux_2_27/2_28 x86_64, win_amd64, macOS arm64), sha256-verified and
+    installed into the
     python311 interpreter's site-packages. The wheels are auditwheel-vendored,
     so every codec the grl-snam imaging path needs (zlib/jpeg/tiff/freetype/webp)
     ships in pillow.libs/; the build check asserts PNG + JPEG support. Switched
@@ -33,31 +35,41 @@ source:
   type: python_wheel
   artifacts:
     linux-x86_64:
-      url: https://files.pythonhosted.org/packages/e4/c2/e25199e7e4e71d64eeb869f5b72c7ddec70e0a87926398785ab944d92375/pillow-11.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-      sha256: "f189805c8be5ca5add39e6f899e6ce2ed824e65fb45f3c28cb2841911da19070"
+      url: https://files.pythonhosted.org/packages/3b/2d/ede717bc1144f63886c21fd349bb95860b0d1a21149ff16f2bb362b612b6/pillow-12.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+      sha256: "23d27a3e0307ec2244cc51e7287b919aa68d097504ebe19df4e76a98a3eea5bd"
     windows-x86_64:
-      url: https://files.pythonhosted.org/packages/3a/c6/fce9255272bcf0c39e15abd2f8fd8429a954cf344469eaceb9d0d1366913/pillow-11.1.0-cp311-cp311-win_amd64.whl
-      sha256: "fbd43429d0d7ed6533b25fc993861b8fd512c42d04514a0dd6337fb3ccf22761"
+      url: https://files.pythonhosted.org/packages/63/c6/4bad1b18d132a50b27e1365e1ab163616f7a5bb56d330f66f9d1d9d4f9d4/pillow-12.3.0-cp311-cp311-win_amd64.whl
+      sha256: "8e95e1385e4998ae9694eeaa4730ba5457ff61185b3a55e2e7bea0880aef452a"
     macos-arm64:
-      url: https://files.pythonhosted.org/packages/d9/45/3fe487010dd9ce0a06adf9b8ff4f273cc0a44536e234b0fad3532a42c15b/pillow-11.1.0-cp311-cp311-macosx_11_0_arm64.whl
-      sha256: "96f82000e12f23e4f29346e42702b6ed9a2f2fea34a740dd5ffffcc8c539eb35"
+      url: https://files.pythonhosted.org/packages/b2/5b/a02d30018abd97ced9f5a6c63d28597694a00d066516b9c1c6de45859fc9/pillow-12.3.0-cp311-cp311-macosx_11_0_arm64.whl
+      sha256: "37d6d0a00072fd2948eb22bce7e1475f34569d90c87c59f7a2ec59541b77f7a6"
 
 python:
   interpreter: python311
   abi: cp311
-  manylinux_min: manylinux_2_17
+  # Pillow 12's Linux wheels are manylinux_2_27/2_28 (glibc >= 2.27); the
+  # manylinux2014 (glibc 2.17) builds 11.1.0 shipped are gone upstream.
+  manylinux_min: manylinux_2_27
 
 patches: []
 
 depends:
   build:
     - name: python311
+    - name: zlib
   runtime:
-    # The prebuilt wheel vendors its codec libraries in pillow.libs/ (auditwheel),
-    # so no external zlib/libjpeg/tiff/freetype/webp edges are needed.
+    # The prebuilt wheel vendors jpeg/tiff/freetype/webp/png in pillow.libs/
+    # (auditwheel), but Pillow 12's manylinux_2_28 wheel no longer vendors
+    # zlib: PIL/_imaging*.so and the vendored freetype/png/tiff all NEED a
+    # plain libz.so.1.  cvcpkg's zlib provides it, and the pack-time relocation
+    # pass (patchelf, below) adds the $ORIGIN RUNPATH that reaches it — without
+    # both, `cvcpkg pack` refuses the bundle because the loader would fall
+    # through to the host's libz.
     - name: python311
+    - name: zlib
   host_tools:
     - python311
+    - patchelf
 
 build:
   build_type_independent: true
@@ -70,9 +82,13 @@ build:
       script: build.sh
 
 package:
+  # Each layout is scoped to the platforms that produce it: the pack-time
+  # declared-files check fails on an entry that matches nothing.  pillow.libs/
+  # is the auditwheel (manylinux) vendor dir; the macOS wheel vendors its
+  # dylibs inside PIL/.dylibs/ and the Windows wheel inside PIL/.
   files:
-    - lib/python3.11/site-packages/PIL/
-    - lib/python3.11/site-packages/pillow.libs/
-    - lib/python3.11/site-packages/pillow-*.dist-info/
-    - Lib/site-packages/PIL/
-    - Lib/site-packages/pillow-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/PIL/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/pillow.libs/", platforms: [linux] }
+    - { glob: "lib/python3.11/site-packages/pillow-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/PIL/", platforms: [windows] }
+    - { glob: "Lib/site-packages/pillow-*.dist-info/", platforms: [windows] }

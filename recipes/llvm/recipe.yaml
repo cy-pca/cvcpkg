@@ -13,7 +13,24 @@ recipe:
   # RPATH for relocatability, which OpenBSD's ld.so does not implement (see
   # _ELF_RPATH_PLATFORMS in builder.py) — the bundle would build but not
   # relocate.
-  cvc_revision: 3
+  # Bumped 3 -> 4: declared zstd. libLLVM, lld and libclang-cpp link libzstd
+  # (LLVM_ENABLE_ZSTD finds it whenever the builder has one), but the recipe
+  # listed only zlib, so cvc.3 needed the host's libzstd.so.1 on Linux and an
+  # unshipped @rpath/libzstd.1.5.7.dylib on macOS -- the macOS clang did not
+  # start from a clean prefix. zstd is now a build and runtime dependency on
+  # the Unix platforms and build.sh forces LLVM_ENABLE_ZSTD on, so the bundle
+  # links the declared one. Also: package.files lists lib/clang/ (clang's
+  # resource headers -- stddef.h, intrinsics, cuda_wrappers; clang cannot
+  # compile anything without them). Packing ships the whole install tree, so
+  # cvc.3 had them too; declaring them makes the pack fail if a build ever
+  # stops producing them, instead of publishing a clang that cannot compile.
+  # And the ncurses
+  # build edge is gone, because LLVM 19 removed its terminfo support
+  # (LLVM_ENABLE_TERMINFO no longer exists; cvc.3's libLLVM links no libtinfo).
+  # Not bumped for the package.files platform scoping below: it changes only
+  # what the Windows pack checks, not what any platform builds, and no
+  # Windows bundle of this recipe has been published.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -42,15 +59,27 @@ depends:
   build:
     - name: zlib
       version: "^1.3"
-    - name: ncurses
-      version: "^6.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   runtime:
     - name: zlib
       version: "^1.3"
+    # libLLVM / lld / libclang-cpp link libzstd.  Windows: build.ps1 does not
+    # enable zstd (the cvcpkg windows zstd bundle is static-only), so the
+    # Windows bundle links zlib alone.
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   host_tools: []
 
 build:
+  # The same LLVM+Clang+LLD build as llvm18, which needed both: it overruns the
+  # server's default 2h reap timeout on a modest fleet builder, and its Release
+  # Ninja tree runs ~20 GiB before install. See recipes/llvm18/recipe.yaml,
+  # including why 10h rather than 5h.
+  timeout_seconds: 36000
+  min_disk_gb: 25
   matrix:
     - platform: linux
       script: build.sh
@@ -67,25 +96,46 @@ build:
 
 package:
   files:
+    # Entries scoped to the Unix platforms are Unix spellings with no suffix
+    # (.so, .dll, .exe, ...) from which the strict-globs check can tell that
+    # Windows never produces them, so unscoped they would be required there too
+    # and fail the Windows pack (as they did for llvm18).  Their Windows
+    # spellings are declared below.
     - bin/clang*
     - bin/lld*
-    - bin/ld.lld
-    - bin/ld64.lld
+    - { glob: "bin/ld.lld", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/ld64.lld", platforms: [linux, macos, freebsd, netbsd] }
     - bin/llvm-*
-    - bin/opt
-    - bin/llc
-    - bin/lli
-    - lib/libLLVM*
+    - { glob: "bin/opt", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/llc", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/lli", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/libLLVM*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/libclang*
-    - lib/liblld*
+    - { glob: "lib/liblld*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/cmake/llvm/
     - lib/cmake/clang/
     - lib/cmake/lld/
+    # Clang builtin/resource headers (lib/clang/<ver>/include -- stddef.h,
+    # arm_acle.h, immintrin.h, cuda_wrappers, ...).  clang looks for them next
+    # to itself; without them it cannot compile even a hello world.  Installed
+    # at the same path on Windows.
+    - lib/clang/
     - include/llvm/
     - include/llvm-c/
     - include/clang/
     - include/clang-c/
     - include/lld/
+    # Windows (the .exe/.lib suffix limits these to it).  The tools are .exe
+    # files (ld.lld.exe and ld64.lld.exe are copies of lld.exe where Unix has
+    # symlinks).  MSVC cannot build the libLLVM DLL (LLVM_BUILD_LLVM_DYLIB is
+    # forced off there), so LLVM and lld ship as their component libraries.
+    - bin/ld.lld.exe
+    - bin/ld64.lld.exe
+    - bin/opt.exe
+    - bin/llc.exe
+    - bin/lli.exe
+    - lib/LLVM*.lib
+    - lib/lld*.lib
   cmake_packages:
     - { name: LLVM, targets: ["LLVM"] }
     - { name: Clang, targets: ["clang", "clangTooling"] }

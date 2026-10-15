@@ -1,0 +1,134 @@
+schema_version: 1
+recipe:
+  name: rclone
+  upstream_version: "1.75.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://rclone.org/
+  # rclone itself is MIT (COPYING), and that is the license this package
+  # declares. bin/rclone is a static Go binary that also links 242 Go
+  # modules: build.sh copies each module's license files to
+  # share/doc/rclone/third_party/ and FAILS the build if any of them is AGPL,
+  # SSPL, BUSL, RSAL or another source-available license, or an unreviewed
+  # GPL-family license. In v1.75.2 they are MIT (98), Apache-2.0 (81),
+  # BSD-3-Clause (45), BSD-2-Clause (11), MPL-2.0 (8), ISC (3), CC0-1.0 (1)
+  # and one LGPL-3.0 module, github.com/cloudsoda/sddl (see notes).
+  license: MIT
+  tags: [storage, s3, backup, sync, tools, go]
+  description: >-
+    rclone -- "rsync for cloud storage": sync, copy, check and mount files
+    between local disks and S3-compatible stores (AWS, SeaweedFS, MinIO,
+    Ceph, ...) and 70+ other backends, built from source with the cvcpkg Go
+    toolchain. Ships the single `rclone` binary and its man page. An
+    MIT-licensed replacement for MinIO's AGPL `mc` client in backup jobs;
+    remotes can be defined entirely through RCLONE_CONFIG_<NAME>_* environment
+    variables, so no config file with secrets is needed.
+
+# Release tag v1.75.2 (tag object b0dd53938615bb610c64f610eb2b17be16752f77).
+# The release's own source tarball (not GitHub's tag archive): its sha256 is
+# listed in the release's SHA256SUMS, which is PGP-signed by Nick Craig-Wood
+# (FBF737ECE9F8AB18604BD2AC93935E02FF3B54FA, listed on
+# rclone.org/release_signing); signature checked when this version was pinned.
+source:
+  type: tarball
+  url: https://github.com/rclone/rclone/releases/download/v1.75.2/rclone-v1.75.2.tar.gz
+  sha256: "fa64537e7276196310dbb0bcea6330f03b40e5790197b88f14cce6a19f40eb67"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # go.mod says `go 1.26.0`; GOTOOLCHAIN=local means an older go fails
+    # instead of downloading a newer one.
+    - name: go
+      version: ">=1.26.0"
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+
+package:
+  files:
+    - bin/rclone
+    - share/man/man1/rclone.1
+    - share/doc/rclone/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Go only (CGO_ENABLED=0, the same as upstream's Linux release binaries): no
+    C compiler, and bin/rclone is a static executable with no shared-library
+    dependencies at all.
+
+notes:
+  - title: "Network fetch of Go modules (pinned by go.sum)"
+    description: >-
+      Like the seaweedfs recipe, the build downloads the Go modules rclone
+      imports through GOPROXY (proxy.golang.org by default; export GOPROXY to
+      use a mirror). Integrity comes from the release's go.sum: the build runs
+      with -mod=readonly, so every module must match its go.sum hash and
+      go.mod / go.sum can never be rewritten mid-build. GOPATH, GOMODCACHE,
+      GOCACHE and GOTMPDIR live in the job's build dir and are deleted once
+      bin/rclone is linked; GOENV=off ignores the builder account's Go
+      settings. (Upstream also publishes rclone-v<ver>-vendor.tar.gz, which
+      would allow an offline -mod=vendor build; not used, to keep one Go
+      build path shared with seaweedfs.)
+  - title: "Build flags match upstream's release binaries"
+    description: >-
+      CGO_ENABLED=0, `go build` of the module root with -trimpath and
+      -ldflags "-s -X github.com/rclone/rclone/fs.Version=v1.75.2", no build
+      tags -- what upstream's bin/cross-compile.go does for its Linux
+      release. `rclone version` therefore reports v1.75.2 (not -DEV).
+  - title: "One LGPL-3.0 module in the static binary"
+    description: >-
+      github.com/cloudsoda/sddl (Windows security-descriptor parsing for the
+      SMB backend) ships the LGPL-3.0 text as its LICENSE, although its README
+      says "MIT License"; it is treated as LGPL-3.0-only. Linked statically
+      into an MIT program whose complete source (this pinned release and its
+      go.sum) is public, the LGPL's relinking requirement is met by that
+      source being available; the license text is in
+      share/doc/rclone/third_party/github.com/cloudsoda/sddl/. No AGPL, SSPL,
+      BUSL, RSAL or other source-available code is linked (build.sh enforces
+      this, and refuses any further GPL-family module until it is reviewed).
+  - title: "Configure remotes from the environment"
+    description: >-
+      Every option of a remote can come from RCLONE_CONFIG_<REMOTE>_<OPTION>
+      variables, e.g. RCLONE_CONFIG_BACKUP_TYPE=s3,
+      RCLONE_CONFIG_BACKUP_PROVIDER=Other (or AWS, SeaweedFS, Minio, ...),
+      RCLONE_CONFIG_BACKUP_ENDPOINT, RCLONE_CONFIG_BACKUP_ACCESS_KEY_ID and
+      RCLONE_CONFIG_BACKUP_SECRET_ACCESS_KEY; then `rclone copy file
+      backup:bucket/prefix/`. With RCLONE_CONFIG set to the empty string
+      rclone keeps its configuration in memory only, so no rclone.conf is
+      looked for, read or written. test.sh runs its S3 round trip this way
+      and asserts that no config file appears.
+  - title: "S3 round trip in test.sh needs SeaweedFS"
+    description: >-
+      test.sh always checks `rclone version` and a local -> local
+      `sync --checksum` + `rclone check` (including a same-size,
+      same-mtime content change that only a checksum catches). Its S3 round
+      trip (sync, check, delete propagation, copy back, purge) runs only when
+      a SeaweedFS `weed` binary is available -- RCLONE_TEST_WEED, the
+      build/deps prefixes, or PATH (the cvcpkg `seaweedfs` package) -- and is
+      skipped otherwise; RCLONE_TEST_REQUIRE_S3=1 turns the skip into a
+      failure.
+  - title: "Platforms"
+    description: >-
+      linux-x86_64 is built and tested here. macos and freebsd use the same
+      build.sh (upstream publishes release binaries for both) but have not
+      been built; on macOS upstream's own release enables cgo for `rclone
+      mount` (cmount), which this CGO_ENABLED=0 build does not have -- every
+      other command works. windows is not declared yet: rclone builds there
+      upstream, but it needs a build.ps1 and a Windows variant of test.sh.

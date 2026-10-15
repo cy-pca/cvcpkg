@@ -90,8 +90,8 @@ class TestBuildPrefix:
         # A build-closure tool may link its own shared libs, so the build
         # prefix's lib/ must be on the runtime loader path.
         #
-        # _build_env only sets a *nix loader var: DYLD_LIBRARY_PATH on macOS,
-        # LD_LIBRARY_PATH elsewhere -- and nothing on Windows, where DLLs
+        # _build_env only sets a *nix loader var: DYLD_FALLBACK_LIBRARY_PATH on
+        # macOS, LD_LIBRARY_PATH elsewhere -- and nothing on Windows, where DLLs
         # resolve via PATH (covered by test_build_prefix_bin_is_first_on_path).
         # Use sys.platform, not os.uname(): the latter does not exist on
         # Windows and made this test explode there rather than skip.
@@ -101,8 +101,32 @@ class TestBuildPrefix:
         env = _build_env(ctx, r.build_matrix[0])
         if sys.platform == "win32":
             pytest.skip("no loader env var on Windows; DLLs resolve via PATH")
-        key = "DYLD_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
+        key = "DYLD_FALLBACK_LIBRARY_PATH" if sys.platform == "darwin" else "LD_LIBRARY_PATH"
         assert str((bp / "lib").resolve()) in env.get(key, "")
+
+    def test_macos_prefix_libs_never_shadow_the_system(self, tmp_path, monkeypatch):
+        # DYLD_LIBRARY_PATH beats a library's own install path for every process
+        # in the build, so the llvm bundles' lib/libLTO.dylib replaced Xcode's in
+        # ranlib and ld (empty LTO archive TOCs; wasmedge failed to link on
+        # arm64).  The prefix goes on the FALLBACK path instead, ahead of dyld's
+        # default fallback, and a caller's own variables are kept.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setenv("DYLD_LIBRARY_PATH", "/caller/dyld")
+        monkeypatch.delenv("DYLD_FALLBACK_LIBRARY_PATH", raising=False)
+        r = _recipe(tmp_path)
+        bp = tmp_path / "bp"
+        env = _build_env(_ctx(tmp_path, r, build_prefix=bp), r.build_matrix[0])
+        # Compared as strings, not split on ":" -- the tmp paths carry a drive
+        # letter when this runs on Windows.
+        fallback = env["DYLD_FALLBACK_LIBRARY_PATH"]
+        assert fallback.startswith(str((bp / "lib").resolve()) + ":")
+        assert str((tmp_path / "prefix" / "lib").resolve()) + ":" in fallback
+        assert fallback.endswith(":/usr/local/lib:/usr/lib")
+        assert env["DYLD_LIBRARY_PATH"] == "/caller/dyld"
+
+        monkeypatch.setenv("DYLD_FALLBACK_LIBRARY_PATH", "/caller/fallback")
+        env = _build_env(_ctx(tmp_path, r, build_prefix=bp), r.build_matrix[0])
+        assert env["DYLD_FALLBACK_LIBRARY_PATH"].endswith(":/caller/fallback")
 
     def test_fallback_to_prefix_when_not_separated(self, tmp_path):
         # build_prefix=None -> legacy behaviour: everything under --prefix

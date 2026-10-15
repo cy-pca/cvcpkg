@@ -57,8 +57,8 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/jmespath/
-    - lib/python3.11/site-packages/*.dist-info/
-    - bin/jp.py
-    - Lib/site-packages/jmespath/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/jmespath/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "bin/jp.py", platforms: [any] }
+    - { glob: "Lib/site-packages/jmespath/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

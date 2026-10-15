@@ -85,8 +85,10 @@ build:
   build_type_independent: true
   # openblas now builds on every native platform including macOS, so every
   # column links the same BLAS. windows is a deliberate delta: meson + MSVC + DLL
-  # discovery differ enough to need its own build.ps1 (currently a loud stub —
-  # until the port lands, windows numpy is unavailable from this recipe).
+  # discovery differ enough to need its own build.ps1. It is numpy-cp311's port
+  # (2026-10-14, replacing a loud stub; same revision, as no windows bundle
+  # existed): numpy's vendored meson, MSVC, OpenBLAS via pkg-config, and
+  # <prefix>\bin registered for DLL discovery in the verify step.
   # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
   matrix:
     - platform: linux
@@ -109,10 +111,10 @@ package:
   # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
   # NO numpy.libs/: the OpenBLAS runtime is the cvcpkg openblas package.
   files:
-    - lib/python3.13/site-packages/numpy/
-    - lib/python3.13/site-packages/numpy-2.4.6.dist-info/
-    - Lib/site-packages/numpy/
-    - Lib/site-packages/numpy-2.4.6.dist-info/
+    - { glob: "lib/python3.13/site-packages/numpy/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13/site-packages/numpy-2.4.6.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "Lib/site-packages/numpy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/numpy-2.4.6.dist-info/", platforms: [windows] }
 
 abi:
   cxx_std: 17

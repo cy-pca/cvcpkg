@@ -139,29 +139,45 @@ The static VTK-Python launcher shape: link the static wrapper archives + `libvtk
 
 ## 4. Case B — WASM VolRover with an embedded interpreter (the flagship)
 
+> **Status (2026-10-09).** The make-or-break below (ranked step 1) is crossed headless; the rest of
+> this section is the 2026-07 analysis, annotated in place. Checked against libcvc, cvcpkg, and
+> volrover master and the cvcpkg.org catalog:
+> - **VTK Python wrapping on wasm works.** `vtk-python-cp312` now has `wasm` + `wasm-mt` columns
+>   (`host_platform: linux`): native host wrap tools, then a static `VTK_WRAP_PYTHON=ON` cross-build
+>   against the wasm `libpython3.12.a`, wrapping a curated module set that includes
+>   `RenderingOpenGL2`/`RenderingVolumeOpenGL2` (cvc.6 on `wasm`; `wasm-mt` is still at cvc.2).
+> - **The whole closure is published** for `wasm` + `wasm-mt`: `python312` (3.12.10, static),
+>   `numpy-cp312` (no-BLAS), `vtk-python-cp312`, and the rendering `vtk`.
+> - **libcvc builds to wasm**, via cvcpkg recipes rather than a preset: libcvc #414/#415 link
+>   `pycvc` + `pycvc_gl` + numpy into one static CPython host `.wasm` that runs under node; #418 adds
+>   the live VTK-Python bridge (`import pycvc_gl` and `vtkmodules` objects in one interpreter).
+> - **Still open:** that host in a *browser* page, rendering a volume driven from typed Python; GPU
+>   volume rendering from Python on wasm; binary size; and VolRover itself, still a Qt app with no
+>   wasm build. The UI target is now `cvc::ariadne`, not Qt or an HTML/JS shell (see §8).
+
 **Pipeline:** emscripten compiles the VolRover/libcvc C++ to wasm, statically links a wasm `libpython` (Pyodide-style) + static `vtk-python` wrappers + libcvc, bakes the entry script + assets via `--embed-file`/MEMFS, and emits one `.wasm` (+ small `.js`, optionally one `.html`). The embedded interpreter runs Python driving libcvc + `vtk-python`; VTK renders to a canvas. The single-artifact/asset mechanics are the *easy* part — that is just `bake` with a CPython payload. Everything below is where it breaks **[R3]**.
 
 **What cvcpkg already has [R3]:**
 - **Toolchain** — `recipes/emsdk/recipe.yaml` pins **emsdk 5.0.7**, pre-populates the ports cache for offline builds, registered as `cross_toolchain` for `[wasm]`.
-- **Libraries already ported** — `build-wasm.sh` exists for `zstd, ffmpeg, hdf5, openssl, libjpeg-turbo, clapack, levmar, fftw3, qtmultimedia, skia, python312, vtk` — a good chunk of libcvc's C closure.
-- **CPython on wasm** — `recipes/python312/build-wasm.sh` cross-compiles **3.12.10** `--host=wasm32-emscripten --disable-shared`. The recipe's own note — *"Cross-compilation targets build libpython as a static archive since extension modules (.so) are uncommon"* — **is the entire design tension**: to embed vtk-python, extensions are the whole point and must be static builtins.
-- **VTK on wasm — renders since #517, still un-wrapped.** `recipes/vtk/build-wasm.sh` builds VTK 9.5 to wasm and, as of #517, enables the WebGL2/GLES3 rendering backend (`RenderingOpenGL2=YES`, `RenderingUI=YES`, `RenderingVolume=YES`, `RenderingVolumeOpenGL2=YES`, plus annotation/FreeType, with an opt-in `-pthread` variant) and carries two wasm patches (a `<cstdlib>` include fix and an ESSL3 global-uniform-init fix). What it still turns off is exactly the Python half this project needs: `VTK_WRAP_PYTHON=OFF`, `VTK_ENABLE_WRAPPING=OFF`. So today's wasm VTK is a data-model/filters/IO/**rendering** build with **no Python** — the wall has narrowed from "no renderer, no Python" to "renderer works, Python wrapping doesn't."
-- **vtk-python does NOT target wasm** — `vtk-python-cp312` matrix is **linux + windows only**, and it uses the shared-library model (`libvtkWrappingPythonCore…so`, `vtkmodules/*.so`) — the opposite of wasm static linking.
-- **libcvc has no wasm build** — no wasm/emscripten preset in `CMakePresets.json`; C++20 + CUDA-default (CUDA must go off); uses `std::thread`/`std::filesystem` in ~127 spots plus an `xmlrpc` networking module (`XmlRpcSocket.cpp`).
-- **VolRover itself is a separate repo** (extracted `volrover3` viz-lab/gym), historically a **Qt desktop app**. The Qt-free VTK scene graph is `src/cvcGL` (→ `pycvc-gl`), whose `CMakeLists.txt` needs `RenderingCore RenderingVolume RenderingVolumeOpenGL2 RenderingOpenGL2 RenderingAnnotation RenderingFreeType InteractionStyle` — including **`RenderingVolumeOpenGL2`** (GPU volume ray-casting), the hardest thing to get right on wasm.
+- **Libraries already ported** — `build-wasm.sh` exists for `zstd, ffmpeg, hdf5, openssl, libjpeg-turbo, clapack, levmar, fftw3, qtmultimedia, skia, python312, vtk` — a good chunk of libcvc's C closure. *(2026-10: 63 recipes carry a `build-wasm.sh`, 36 also a Windows-host `build-wasm.ps1`, and 28 a threaded `wasm-mt` column.)*
+- **CPython on wasm** — `recipes/python312/build-wasm.sh` cross-compiles **3.12.10** `--host=wasm32-emscripten --disable-shared`. The recipe's own note — *"Cross-compilation targets build libpython as a static archive since extension modules (.so) are uncommon"* — **is the entire design tension**: to embed vtk-python, extensions are the whole point and must be static builtins. *(Resolved in practice: the static archive is what the wasm host links, with extensions registered via `PyImport_AppendInittab`; published for `wasm` + `wasm-mt`.)*
+- **VTK on wasm — renders since #517, still un-wrapped.** `recipes/vtk/build-wasm.sh` builds VTK 9.5 to wasm and, as of #517, enables the WebGL2/GLES3 rendering backend (`RenderingOpenGL2=YES`, `RenderingUI=YES`, `RenderingVolume=YES`, `RenderingVolumeOpenGL2=YES`, plus annotation/FreeType, with an opt-in `-pthread` variant) and carries two wasm patches (a `<cstdlib>` include fix and an ESSL3 global-uniform-init fix). What it still turns off is exactly the Python half this project needs: `VTK_WRAP_PYTHON=OFF`, `VTK_ENABLE_WRAPPING=OFF`. So today's wasm VTK is a data-model/filters/IO/**rendering** build with **no Python** — the wall has narrowed from "no renderer, no Python" to "renderer works, Python wrapping doesn't." *(The C++-only `vtk` package still builds `WRAP_PYTHON=OFF`; the Python half now ships as a separate `vtk-python-cp312` wasm build into the same prefix — see the next bullet.)*
+- ~~**vtk-python does NOT target wasm**~~ — *(superseded, cvcpkg #60/#96/#101)* `vtk-python-cp312` now has `wasm` + `wasm-mt` columns alongside linux + windows. The native columns keep the shared-library model; the wasm columns build static wrapper archives, and VTK's static build exports a single `PyInit__vtkmodules_static` builtin rather than per-module `.so`s.
+- ~~**libcvc has no wasm build**~~ — *(superseded)* still no wasm preset in `CMakePresets.json`, but libcvc builds to wasm through cvcpkg recipes (`cvcgl-examples` on `wasm-mt`; `pycvc-gl-cp312` on `wasm` + `wasm-mt`, recipes in the libcvc repo). The portability items below are handled as build switches: CUDA off, `xmlrpc` off by default (`CVC_USING_XMLRPC=OFF`; `cvc::net` has an emscripten fetch backend), single-threaded builds on Emscripten's pthread stubs or a `-pthread` flavor via `CVC_WASM_PTHREADS`.
+- **VolRover itself is a separate repo** (extracted `volrover3` viz-lab/gym), historically a **Qt desktop app** *(still Qt, with no wasm build, as of 2026-10-09; its port target is now `cvc::ariadne`, §8)*. The Qt-free VTK scene graph is `src/cvcGL` (→ `pycvc-gl`), whose `CMakeLists.txt` needs `RenderingCore RenderingVolume RenderingVolumeOpenGL2 RenderingOpenGL2 RenderingAnnotation RenderingFreeType InteractionStyle` — including **`RenderingVolumeOpenGL2`** (GPU volume ray-casting), the hardest thing to get right on wasm.
 
 **Where it breaks, ranked [R3]:**
-1. **VTK-wasm-Python-with-rendering does not exist yet.** You must create a *new* wasm VTK build with `VTK_WRAP_PYTHON=ON` + `BUILD_STATIC` + a render backend **on** — undoing every disable in `build-wasm.sh` and adding static Python wrapping that upstream does not test on wasm. VTK's current build guide documents rendering via **WebGPU** (`-DVTK_ENABLE_WEBGPU=ON`, tested with Emscripten 4.0.20) and no longer emphasizes the older **WebGL2/`RenderingOpenGL2`** path that cvcGL is written against. And **`VTK_WRAP_PYTHON` on wasm is undocumented; VTK is absent from Pyodide's package list.** This is the make-or-break go/no-go spike.
-2. **GPU volume rendering correctness.** `RenderingVolumeOpenGL2` → WebGL2 3D-textures or a WebGPU compute path; the ray-cast mapper is heavy and least-tested on wasm — most likely to render wrong or slow, and it is central to a *volume* viewer.
-3. **Binary size.** VTK+CPython+libcvc naively links to tens of MB+. Needs a curated minimal module subset, `-Oz`, `wasm-opt`, dead-code stripping, lazy/streamed assets. Gates shippability.
-4. **libcvc portability.** CUDA off; `xmlrpc` raw sockets unavailable under emscripten (websocket shim or removal); `std::thread` forces the threaded build (`VTK_WEBASSEMBLY_THREADS=ON` + WebWorkers → **SharedArrayBuffer** + **COOP/COEP** headers, ruling out some CDNs/`file://`) or a single-threaded refactor; HDF5 IO through MEMFS only.
-5. **The VolRover UI.** The Qt desktop app is a separate, un-ported repo. Qt-for-WebAssembly exists (helpers already vendored) but porting a real Qt app is its own multi-week effort — **better to rebuild the frontend as HTML/JS driving the canvas + calling into the embedded interpreter**, which is the more sensible viz-lab/gym design anyway.
+1. *(Crossed headless, 2026-09 — see the status note: the static wrapper build includes the rendering modules, and `vtkmodules` imports and runs a filter pipeline under node. Rendering a volume from Python in a browser is still unproven.)* **VTK-wasm-Python-with-rendering does not exist yet.** You must create a *new* wasm VTK build with `VTK_WRAP_PYTHON=ON` + `BUILD_STATIC` + a render backend **on** — undoing every disable in `build-wasm.sh` and adding static Python wrapping that upstream does not test on wasm. VTK's current build guide documents rendering via **WebGPU** (`-DVTK_ENABLE_WEBGPU=ON`, tested with Emscripten 4.0.20) and no longer emphasizes the older **WebGL2/`RenderingOpenGL2`** path that cvcGL is written against. And **`VTK_WRAP_PYTHON` on wasm is undocumented; VTK is absent from Pyodide's package list.** This is the make-or-break go/no-go spike.
+2. *(Partly retired: `src/cvcGL/examples/volren_bunny.cpp` renders a GPU volume in the browser from C++. Open from Python on wasm.)* **GPU volume rendering correctness.** `RenderingVolumeOpenGL2` → WebGL2 3D-textures or a WebGPU compute path; the ray-cast mapper is heavy and least-tested on wasm — most likely to render wrong or slow, and it is central to a *volume* viewer.
+3. *(Still open — no size budget for the combined pycvc + VTK-Python host is recorded yet.)* **Binary size.** VTK+CPython+libcvc naively links to tens of MB+. Needs a curated minimal module subset, `-Oz`, `wasm-opt`, dead-code stripping, lazy/streamed assets. Gates shippability.
+4. *(Largely handled as build switches — see the libcvc bullet above; threaded builds ship as the `wasm-mt` flavor with COOP/COEP hosting; the pycvc host builds with HDF5 off.)* **libcvc portability.** CUDA off; `xmlrpc` raw sockets unavailable under emscripten (websocket shim or removal); `std::thread` forces the threaded build (`VTK_WEBASSEMBLY_THREADS=ON` + WebWorkers → **SharedArrayBuffer** + **COOP/COEP** headers, ruling out some CDNs/`file://`) or a single-threaded refactor; HDF5 IO through MEMFS only.
+5. *(Decided 2026-09-28: neither Qt-for-WebAssembly nor HTML/JS — the UI is `cvc::ariadne` with an ImGui backend over cvcGL's VTK canvas; §8.)* **The VolRover UI.** The Qt desktop app is a separate, un-ported repo. Qt-for-WebAssembly exists (helpers already vendored) but porting a real Qt app is its own multi-week effort — **better to rebuild the frontend as HTML/JS driving the canvas + calling into the embedded interpreter**, which is the more sensible viz-lab/gym design anyway.
 
-**Version caveat cvcpkg must resolve [R3]:** CPython's Emscripten support was **dropped in 3.13** and **restored as PEP 11 Tier-3 only in 3.14** (PEP 776/783). cvcpkg pins **3.12** — plausible (that era worked) but *not* the blessed, actively-tested target. Building wasm vtk-python wrappers against 3.12 risks fighting bugs upstream already fixed. **Move to CPython 3.14+ (tier-3, 25+ emscripten libc fixes) or lean on Pyodide's patched CPython** (the most battle-tested wasm interpreter, current line ~0.29 tracking 3.13/3.14). Note this diverges from the cosmo case, which is cp313-locked — the two targets may not share a CPython version.
+**Version caveat cvcpkg must resolve [R3]:** CPython's Emscripten support was **dropped in 3.13** and **restored as PEP 11 Tier-3 only in 3.14** (PEP 776/783). cvcpkg pins **3.12** — plausible (that era worked) but *not* the blessed, actively-tested target. Building wasm vtk-python wrappers against 3.12 risks fighting bugs upstream already fixed. **Move to CPython 3.14+ (tier-3, 25+ emscripten libc fixes) or lean on Pyodide's patched CPython** (the most battle-tested wasm interpreter, current line ~0.29 tracking 3.13/3.14). Note this diverges from the cosmo case, which is cp313-locked — the two targets may not share a CPython version. *(Unchanged as of 2026-10-09: the whole wasm closure is pinned to 3.12.10, emsdk 5.0.7.)*
 
 **Static vs side modules [R3]:** static builtins (inittab, linked into the main module) are the right and necessary model for one artifact. Emscripten side modules (`-sSIDE_MODULE`) are how Pyodide normally ships packages, but they defeat the single-`.wasm` goal, add cross-module JS call overhead, and have known limits (SDL/GL window creation fails from a side module, emscripten #24106).
 
-**Rough effort:** on the order of **several months of focused work**, front-loaded on the VTK-wasm-Python-rendering spike (step 1), the go/no-go gate. **Fallback if the spike fails or volume rendering proves unusable:** the Kitware/trame model — VTK.wasm doing *rendering* in the browser while heavy compute stays server-side — which sidesteps the embedded-interpreter ambition entirely.
+**Rough effort:** on the order of **several months of focused work**, front-loaded on the VTK-wasm-Python-rendering spike (step 1), the go/no-go gate. **Fallback if the spike fails or volume rendering proves unusable:** the Kitware/trame model — VTK.wasm doing *rendering* in the browser while heavy compute stays server-side — which sidesteps the embedded-interpreter ambition entirely. *(As of 2026-10 the spike passed headless, so the fallback is not in play; the remaining work is the single browser host, §8.)*
 
 ---
 
@@ -211,15 +227,34 @@ The static-embed happy path, independent of platform **[R1]**:
 
 ---
 
-## 8. Case B — execution plan (2026-09-20)
+## 8. Case B — execution plan (2026-09-20; status refreshed 2026-10-09)
 
 This section turns Case B into a sequenced plan. Two decisions since the doc above was written
 resolve §7 Q8 (the VolRover UI question) and reorder the risk.
 
-**Decision 1 — the browser UI is Dear ImGui on a GL context, not Qt-for-WebAssembly.** Rationale:
-one UI codebase native + wasm; and **Qt-for-WebAssembly is GPLv3-or-commercial only (no LGPL)**, which
-would force open-sourcing or a commercial license for a proprietary build. Decisive enabler: the
-ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
+> **Status (2026-10-09).** Most of what this plan gated on has landed — checked against libcvc,
+> cvcpkg, and cvc-engagement-docs master and the cvcpkg.org catalog:
+> - **UI:** Qt is retired for VolRover (and TexMol) as of 2026-09-28 in favour of **`cvc::ariadne`**,
+>   libcvc/cvcGL's backend-agnostic UI DSL (libcvc #419 and follow-ons), whose ImGui backend
+>   (`cvc::gl::ImGuiBackend`) renders over cvcGL's VTK canvas — see cvc-engagement-docs
+>   `modernization/CVC-Modernization-Plan-2.0.md` (update of 2026-09-28, §1). Decision 1 below stands
+>   as the *why-not-Qt* argument; the UI layer is Ariadne, with ImGui as its rendering backend.
+> - **Keyboard seam:** landed — libcvc #383 feeds wasm key/char events into `ImGuiIO`.
+> - **Python on wasm:** `python312`, `numpy-cp312`, and `vtk-python-cp312` are published for both
+>   `wasm` and `wasm-mt` (static). `pycvc` + `pycvc_gl` with numpy link into a single-`.wasm` CPython
+>   host and run headless under node (libcvc #414/#415, `PYCVC_WASM_OK`); with the VTK-Python bridge
+>   on, `import pycvc_gl` and live `vtkmodules` objects (a `vtkSphereSource` pipeline,
+>   `vtkNetCDFReader`) coexist in one interpreter (libcvc #418, `PYCVC_VTK_BRIDGE_OK`, against
+>   vtk-python `cvc.6` — published for `wasm`; `wasm-mt` is still at `cvc.2`). So the §4 step-1
+>   wall — VTK Python wrapping on wasm — is crossed headless; in-browser rendering + REPL is next.
+> - **Execution host:** Windows-host wasm VTK builds now render too (cvcpkg #48, parity with
+>   `build-wasm.sh`); the Linux-only constraint below is historical.
+
+**Decision 1 — the browser UI is Dear ImGui on a GL context, not Qt-for-WebAssembly.** *(Superseded
+2026-09-28 by `cvc::ariadne` with an ImGui backend — see the status note; the Qt rationale holds.)*
+Rationale: one UI codebase native + wasm; and **Qt-for-WebAssembly is GPLv3-or-commercial only (no
+LGPL)**, which would force open-sourcing or a commercial license for a proprietary build. Decisive
+enabler: the ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
 
 - VTK owns the GL context on every platform via its object factory (`vtkRenderWindow::New()` →
   `vtkWebAssemblyOpenGLRenderWindow` under Emscripten); ImGui uses **`imgui_impl_opengl3` only, fed
@@ -227,14 +262,16 @@ ImGui + VTK + GL shell already exists in cvcGL and is Qt-free —
 - `src/cvcGL/examples/volren_bunny.cpp` **already renders + scripts a GPU volume through this in the
   browser**; `inc/cvc/gl/ImGuiBinding.h` (`cvc::gl::ui`) provides `cvc::state`-bound widgets, and
   `bindings/pycvc/pycvc_imgui.i` already wraps them for Python.
-- **Prerequisite:** wasm ImGui has **no keyboard input today** (mouse/touch only). Routing
-  `vtkWebAssemblyRenderWindowInteractor` key/char events into `ImGuiIO` in `ImGuiOverlay` is the
-  linchpin for an in-browser REPL/editor and is the main net-new UI-side engineering.
+- **Prerequisite (done, libcvc #383):** wasm ImGui had **no keyboard input** (mouse/touch only).
+  Routing `vtkWebAssemblyRenderWindowInteractor` key/char events into `ImGuiIO` in `ImGuiOverlay` was
+  the linchpin for an in-browser REPL/editor.
 
 **Decision 2 — sequence the cheap, decisive spike first.** The only thing forcing the hard
 VTK-wrap-Python-on-wasm problem (§4 step 1) is `pycvc_gl` linking `vtkWrappingPythonCore`. The
 user-facing goal — script the scene — needs only the **cvc/cvcGL** surface, which can be bound
-*without* VTK's Python wrappers.
+*without* VTK's Python wrappers. *(The headless premise of both spikes is now proven by the full
+`pycvc_gl` BRIDGE=ON build — libcvc #414/#415/#418 — so the slim module is a size/flavor option,
+not a prerequisite.)*
 
 - **Spike A (recommended first, ~1 wk):** a slim pybind11/SWIG module exposing only cvc types
   (`cvc::gl::SceneGraph`, camera, volume, transfer function, `cvc::state`) with **no `vtkObject` in the
@@ -244,19 +281,24 @@ user-facing goal — script the scene — needs only the **cvc/cvcGL** surface, 
 - **Spike B (optional, ~1–2 wk):** the §4 step-1 go/no-go — wasm VTK rebuilt `VTK_WRAP_PYTHON=ON` +
   `BUILD_STATIC` + `BUILD_SHARED_LIBS=OFF`, wrappers registered via the generated `<TARGET>_load()`
   (§2.3), gated on `import vtkmodules.vtkRenderingVolumeOpenGL2` succeeding headless. Only needed if
-  the full VTK/numpy Python API in-browser is required beyond Spike A. numpy-on-wasm (against emsdk
-  5.0.7) is a separable follow-on, not part of the gate.
+  the full VTK/numpy Python API in-browser is required beyond Spike A. *(Wrapping proven headless in
+  libcvc #418: VTK's static build exports a single `PyInit__vtkmodules_static` builtin rather than
+  per-module `_load()` functions, and numpy-cp312 for wasm shipped alongside. The bridge smoke
+  exercises a filter pipeline and IO, not the `vtkRenderingVolumeOpenGL2` import named here.)*
 
-**Execution host:** rendering-capable wasm VTK builds only from a **Linux host** (the Windows
-`build-wasm.ps1` is compute-only), so both spikes run on catx-03 as `github-runner`.
+**Execution host:** at plan time, rendering-capable wasm VTK built only from a **Linux host** (the
+Windows `build-wasm.ps1` was compute-only), so both spikes were slated for catx-03 as `github-runner`.
+cvcpkg #48 gave the Windows host rendering parity, so either host works now.
 
 **In-app IDE (native + browser identical):** vendor MIT-licensed components — **ImGuiColorTextEdit**
 (maintained fork) for the source editor, the **Dear ImGui console** scaffold for the REPL, and
 **jedi** run in-process by the embedded interpreter for completion/hover (identical on both targets);
 optionally **tree-sitter** for highlighting and **Zep** if modal editing is wanted. We roll only the
 integration (keyboard seam, console↔interpreter glue, editor↔MEMFS/zipos, traceback→diagnostics). Full
-rationale, license table, and build-vs-borrow analysis:
-[`../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md`](../../../cvc-engagement-docs/modernization/volrover3-wasm-embedded-python-and-imgui-ide.md).
+rationale, license table, and build-vs-borrow analysis — reconciled 2026-10-08 with the Ariadne
+decision — live in cvc-engagement-docs as
+[`modernization/volrover3-wasm-embedded-python-and-ide.md`](https://github.com/cy-pca/cvc-engagement-docs/blob/main/modernization/volrover3-wasm-embedded-python-and-ide.md)
+(cy-pca/cvc-engagement-docs #171).
 
 ---
 

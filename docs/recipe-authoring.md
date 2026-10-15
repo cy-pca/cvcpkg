@@ -192,6 +192,72 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   `CVCPKG_STRICT_GLOBS=0` downgrades the failure to a warning.
   Use `lib/*/…` variants to catch Debian multiarch paths (e.g.
   `lib/x86_64-linux-gnu/`).
+- **Relocatability** — a bundle is unpacked into an arbitrary prefix, so every
+  path the dynamic loader follows must be loader-relative or belong to the OS.
+  After the build, cvcpkg rewrites what it can: RPATHs into this build's own
+  deps/install prefixes become `$ORIGIN/…` (ELF) or `@loader_path/…` (macOS),
+  in `bin/` as well as `lib/`; absolute macOS references to a dylib the bundle
+  or a dependency ships become `@rpath/<leaf>`. `cvcpkg pack` then reads every
+  ELF/Mach-O object it is about to archive and FAILS if any RUNPATH/RPATH,
+  NEEDED, LC_RPATH or LC_*_DYLIB still points into a build machine (a job's
+  scratch prefix, `/tmp`, a CI workspace) or — on macOS — anywhere outside
+  `/usr/lib` and `/System` (Homebrew, MacPorts). On linux, a library the
+  bundle or one of its runtime deps ships must also be reachable through the
+  object's own `$ORIGIN` RUNPATH (the pass adds missing entries with patchelf);
+  otherwise the loader quietly takes the host's copy. Only the runtime closure
+  counts — `depends.runtime` and what those packages require in turn, read
+  from their installed manifests. Build dependencies share the job's prefix but
+  are not installed beside the bundle, so their libraries (the gfortran
+  toolchain's `lib64/libgcc_s.so.1`) are never reached for. The fix is almost
+  always in the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
+  `depends.runtime`, and do not let an optional feature pick up whatever the
+  build host has installed (see `recipes/boost/build.sh`). For a library at a
+  fixed system location the bundle cannot carry, list its prefix under
+  **`package.linkage_allow`**; that never excuses a build-machine path.
+- **`redistributable: false`** — for a vendor payload whose license forbids
+  publishing the built tree. The NVIDIA CUDA toolkit is the example
+  (`recipes/cuda-toolkit`): its EULA lets a developer ship a few runtime
+  libraries inside an application, never nvcc or the SDK as a stand-alone
+  product. Such a recipe is built only on the machine that installs it:
+  `cvcpkg install <name>` builds it from the recipe (no `--fallback-to-source`
+  needed), its build script downloads the payload from the vendor and checks
+  pinned sha256s, and nothing is ever published. Every path that would make a
+  bundle or a fleet job refuses it: `cvcpkg pack` (before building), `pack
+  --from-prefix`, `pack-all` (builds it, does not pack it), build-all's
+  `--server-cache-push`, `builds submit-dag` (skips it, and never auto-adds it
+  as a dependency), and the server's `/v1/publish`, `/v1/builds` and
+  `/v1/builds/dag`. The recipe itself (urls and checksums, no vendor bits) is
+  still pushed and browsable. A fleet-built recipe may depend on one: the
+  builder agent builds it into that job's dependency prefix from its recipe,
+  after the catalog dependencies are installed. It has no installed manifest
+  there, so the pack-time reach pass counts every library in the prefix as
+  shipped for that job (its documented fallback), and a bundle that links a
+  non-redistributable library dynamically relies on the consumer's prefix
+  holding it -- which `cvcpkg install` arranges.
+- **`license_acceptance:`** — for a vendor payload that may only be downloaded
+  once the user accepts the vendor's terms. `recipes/msvc` is the example: it
+  lays out Microsoft's compiler and Windows SDK from Microsoft's own packages,
+  under the Visual Studio Build Tools and Windows SDK licenses.
+
+  ```yaml
+  redistributable: false
+  license_acceptance:
+    title: "the Microsoft Visual Studio Build Tools and Windows SDK licenses"
+    urls:
+      - https://go.microsoft.com/fwlink/?LinkId=2179911
+      - https://aka.ms/WinSDKLicenseURL
+    env: CVCPKG_ACCEPT_MSVC_LICENSE
+  ```
+
+  Before `cvcpkg install` (or `install-deps`) builds such a recipe it shows the
+  URLs and asks on a terminal. Without a terminal it refuses unless the user
+  passed `--accept-license <name>` or set `<env>=1`; cvcpkg never accepts on
+  the user's behalf. On acceptance it exports `<env>=1` to the build script,
+  which should check it as well, so `cvcpkg build <name>` stays behind the same
+  gate. CI accepts explicitly: `windows-recipe-check.yml`'s `accept_license`
+  input is the dispatcher's own yes. A builder agent that builds such a recipe
+  as a job dependency (see above) gets no prompt: the build script refuses
+  unless the builder's own environment sets `<env>=1`.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of

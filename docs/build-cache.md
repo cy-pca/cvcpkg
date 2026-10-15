@@ -51,18 +51,19 @@ Both `build-all` and `pack-all` accept:
 | `--force-clean` | — | Skip cache lookups (rebuild from source) but still store results. Use for guaranteed-clean release builds. |
 | `--server-cache <url>` | `CVCPKG_SERVER_CACHE` | Server cache URL; enables server-side lookups. |
 | `--server-cache-token <t>` | `CVCPKG_SERVER_CACHE_TOKEN` | Bearer token for authenticated server cache access. |
-| `--server-cache-push` | `CVCPKG_SERVER_CACHE_PUSH` | Push successful builds to the server cache. |
+| `--server-cache-push` | `CVCPKG_SERVER_CACHE_PUSH` | Publish successful builds to the server cache, always as the packed bundle `cvcpkg pack` makes (manifest, runtime deps, relocated scripts), never the build cache's raw install tree. `pack-all` publishes each bundle as soon as it is archived; `build-all` builds each recipe into its own install dir when pushing, then packs and publishes each one. Host tools a cross build makes for itself are not published. |
 | `--no-server-cache` | — | Disable server cache entirely (both pull and push). |
 | `--server-cache-org <slug>` | `CVCPKG_SERVER_CACHE_ORG` | Scope server cache queries to an organization. |
 
 Lookup order per recipe: local cache first, then (if configured) the
 server cache, then build from source. Server hits are downloaded,
 SHA-256-verified, and stored into the local cache so the next run needs
-no network. The build summary reports the number of cache hits.
+no network; a download that will not extract counts as a miss and the
+recipe is built. The build summary reports the number of cache hits.
 
 ```sh
 # Typical CI: pull from and push to the shared cache
-cvcpkg build-all --platform linux --prefix ./prefix \
+cvcpkg pack-all --platform linux --prefix ./prefix --output-dir ./dist \
     --server-cache https://cvcpkg.org --server-cache-token "$TOKEN" \
     --server-cache-push
 
@@ -107,7 +108,9 @@ cvcpkg cache server-gc --server https://cvcpkg.org --token "$TOKEN" --max-size 5
 
 Server cache entries are ordinary packages published (via
 `POST /v1/publish`) with the chain hash as `recipe_version` and an
-empty release tag — so they never appear in releases and can be
+empty release tag. A recipe built through its `any` matrix entry is
+published and looked up as `any`/`noarch`, so one entry serves every
+platform that entry covers — so they never appear in releases and can be
 garbage-collected independently. Endpoints:
 
 | Endpoint | Auth | Purpose |

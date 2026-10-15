@@ -1,0 +1,119 @@
+schema_version: 1
+recipe:
+  name: seaweedfs
+  # Matches the chrislusf/seaweedfs:4.48 image it replaces in test stacks.
+  upstream_version: "4.48"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/seaweedfs/seaweedfs
+  # SeaweedFS itself is Apache-2.0. bin/weed is a static Go binary, so it also
+  # carries every Go module it links; build.sh copies each module's license
+  # files to share/doc/seaweedfs/third_party/ and FAILS the build if any of
+  # them is AGPL, SSPL, BUSL or RSAL. The linked set is Apache-2.0, BSD,
+  # MIT, ISC and MPL-2.0 code.
+  license: Apache-2.0
+  tags: [storage, s3, database, tools, go]
+  description: >-
+    SeaweedFS -- a distributed blob store and filer with an S3-compatible
+    gateway, built from source with the cvcpkg Go toolchain. Ships the single
+    `weed` binary (master, volume, filer, s3, shell, mini, ...). Replaces the
+    AGPL-licensed Garage as the S3 server in test stacks: `weed server -s3`
+    is a one-process S3 endpoint for CI.
+
+# Release tag 4.48 (commit 530be3e37337488ecc34d58441e0bc476e121c93).
+# GitHub's tag archive; the sha256 was stable across two downloads.
+source:
+  type: tarball
+  url: https://github.com/seaweedfs/seaweedfs/archive/refs/tags/4.48.tar.gz
+  sha256: "93199495e93a981451d1fefecb5aa71e12aa1692093eed2338bbfe7f08960bfb"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # go.mod says `go 1.26.6`; GOTOOLCHAIN=local means an older go fails
+    # instead of downloading a newer one.
+    - name: go
+      version: ">=1.26.6"
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+
+package:
+  files:
+    - bin/weed
+    - share/doc/seaweedfs/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Go only (CGO_ENABLED=0, the same as upstream's release binaries): no C
+    compiler, and bin/weed is a static executable with no shared-library
+    dependencies at all.
+
+notes:
+  - title: "Network fetch of Go modules (pinned by go.sum)"
+    description: >-
+      Like the rust recipes' cargo fetch, the build downloads the Go modules
+      weed imports (several hundred) through GOPROXY (proxy.golang.org by
+      default; export GOPROXY to use a mirror). Integrity comes from the
+      repository's go.sum: the build runs with -mod=readonly, so every module
+      must match its go.sum hash and go.mod / go.sum can never be rewritten
+      mid-build. There is deliberately no `go mod download` of the whole
+      graph (about 3 GB with test-only and optional modules), and upstream has
+      no vendor/ tree. GOPATH, GOMODCACHE, GOCACHE and GOTMPDIR live in the
+      job's build dir and are deleted once bin/weed is linked (the build
+      peaks at a few GB of scratch); GOENV=off ignores the builder account's
+      Go settings.
+  - title: "Build flags match upstream's release binaries"
+    description: >-
+      CGO_ENABLED=0, `go build` in weed/, -ldflags "-s -w -X
+      .../weed/util/version.COMMIT=<tag commit>", plus -trimpath and
+      -buildvcs=false (the tarball has no .git). This is upstream's default
+      variant: 30 GB maximum volume size. The `large_disk` variant (-tags
+      5BytesOffset) is not built; its on-disk format is incompatible, so it
+      would be a separate recipe.
+  - title: "S3 authentication is OFF unless identities are configured"
+    description: >-
+      With no -s3.config (and no IAM config), SeaweedFS's S3 gateway serves
+      every request anonymously. Always pass -s3.config with at least one
+      identity, e.g. {"identities":[{"name":"ci","credentials":[{"accessKey":
+      "...","secretKey":"..."}],"actions":["Admin","Read","Write","List",
+      "Tagging"]}]}. test.sh does this and asserts that an unsigned request
+      is refused (403) while SigV4-signed requests create a bucket, put and
+      get an object.
+  - title: "/tmp sockets and shared hosts"
+    description: >-
+      `weed server` and `weed mini` register gRPC unix sockets at fixed
+      /tmp/seaweedfs-<service>-grpc-<port>.sock paths (not configurable in
+      4.48); `weed filer -s3` takes -localSocket / -s3.localSocket. On a
+      shared CI host bind with -ip=127.0.0.1 -ip.bind=127.0.0.1 and pick free
+      ports whose port+10000 (the gRPC port) is free as well: in 4.48 the S3
+      gateway of `weed filer -s3` dials the filer at port+10000 even when
+      -port.grpc says otherwise, so keep the gRPC ports at their default.
+      test.sh runs master, volume and filer+s3 as separate processes so every
+      path it writes is inside its own temp dir. In 4.48 `weed filer -s3` did
+      not finish its SIGTERM shutdown within 20 s in testing; test.sh then
+      SIGKILLs it (the data is throwaway), and a CI teardown should do the
+      same.
+  - title: "Platforms"
+    description: >-
+      linux-x86_64 is built and tested here. macos and freebsd use the same
+      build.sh (SeaweedFS publishes release binaries for both) but have not
+      been built. windows is not declared yet: weed builds there upstream,
+      but it needs a build.ps1 and a Windows variant of test.sh's process
+      handling.

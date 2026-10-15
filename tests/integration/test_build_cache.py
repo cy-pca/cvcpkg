@@ -413,12 +413,45 @@ class TestServerCacheIntegration:
         client.__enter__()
         return client, pub_token
 
-    def test_build_and_push_to_server(self, tmp_path, monkeypatch):
-        """build_all with server_cache_push publishes to the server.
+    @staticmethod
+    def _route_to_server(monkeypatch, client):
+        """Send the builder's urllib calls and ``cvcpkg publish``'s httpx
+        calls to the in-process TestClient."""
+        import io
+        import urllib.error
+        import urllib.parse
+        import urllib.request
 
-        TestClient uses an in-process transport, so we patch
-        ``_server_cache_push`` to call the client directly instead of
-        via ``urllib``.
+        import httpx
+
+        def fake_urlopen(req, timeout=None):
+            url = urllib.parse.urlsplit(req.full_url)
+            resp = client.request(
+                req.get_method(),
+                f"{url.path}?{url.query}" if url.query else url.path,
+                content=req.data,
+                headers=dict(req.header_items()),
+            )
+            if resp.status_code >= 400:
+                raise urllib.error.HTTPError(req.full_url, resp.status_code, resp.text, None, None)
+            out = io.BytesIO(resp.content)
+            out.status = resp.status_code
+            return out
+
+        class PatchedClient(httpx.Client):
+            def __init__(self, **kw):
+                kw.setdefault("transport", client._transport)
+                super().__init__(**kw)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr("httpx.Client", PatchedClient)
+
+    def test_build_and_push_to_server(self, tmp_path, monkeypatch):
+        """A build cache archive posted to /v1/publish lands in the catalog.
+
+        Exercises the server's publish endpoint with an archive from a real
+        build; the CLI never pushes such an archive itself (pack-all and
+        build-all publish the packed bundle -- see test_push_records_runtime_deps).
         """
 
         from cvcpkg.builder import chain_hash as compute_chain_hash
@@ -481,6 +514,209 @@ class TestServerCacheIntegration:
         assert data["packages"][0]["name"] == "libfoo"
 
         client.__exit__(None, None, None)
+
+    def test_push_records_runtime_deps(self, tmp_path, monkeypatch):
+        """``build-all --server-cache-push`` publishes packed bundles that
+        record the recipe's runtime deps.
+
+        Regression: the push sent the build cache's raw install tree with no
+        ``required_deps`` (nor ``provides``); the server stored ``[]``, and the
+        CI's later ``cvcpkg publish --all`` skipped the packed bundle as
+        already published.  Over a thousand CI-built catalog rows
+        (jsonschema-cp312, anyio-cp312, httpx-cp312, ...) reached the catalog
+        with no dependency edges, so installing them left their deps out of
+        the prefix.  build-all now packs each build, as pack-all does, and
+        publishes that bundle -- manifest included.
+        """
+        import tarfile
+
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(tmp_path / "cache"))
+        # Ensure in-process server uses YAML backend (matching TokenStore)
+        # even when CVCPKG_DATABASE_URL is set by the Docker test env.
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
+
+        srv_dir = tmp_path / "server"
+        srv_dir.mkdir()
+        client, pub_token = self._start_server(srv_dir)
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libfoo")
+        app_dir = _create_vendored_recipe(recipes_dir, "libapp")
+        raw = yaml.safe_load((app_dir / "recipe.yaml").read_text())
+        raw["depends"] = {
+            "build": ["libfoo"],
+            # The windows-only dep must not be recorded on a linux bundle.
+            "runtime": ["libfoo", {"name": "libwin", "platforms": ["windows"]}],
+        }
+        raw["provides"] = ["app-slot"]
+        (app_dir / "recipe.yaml").write_text(yaml.dump(raw))
+
+        self._route_to_server(monkeypatch, client)
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "build-all",
+                "--local",
+                "--no-default-recipes",
+                "--recipes-dir",
+                str(recipes_dir),
+                "--platform",
+                "linux",
+                "--prefix",
+                str(tmp_path / "prefix"),
+                "--server-cache",
+                "http://testserver",
+                "--server-cache-token",
+                pub_token,
+                "--server-cache-push",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+
+        resp = client.get("/v1/catalog")
+        assert resp.status_code == 200
+        bundles = {b["name"]: b for b in resp.json()["bundles"]}
+        assert bundles["libapp"]["required_deps"] == [{"name": "libfoo"}]
+        assert bundles["libapp"]["provides"] == ["app-slot"]
+        assert bundles["libfoo"]["required_deps"] == []
+
+        # The packed bundle, not the build cache's raw install tree.
+        archive = tmp_path / "libapp.tar.gz"
+        archive.write_bytes(client.get(bundles["libapp"]["archive_url"]).content)
+        with tarfile.open(archive) as tar:
+            assert "share/libcvc-deps/libapp/manifest.yaml" in tar.getnames()
+
+        client.__exit__(None, None, None)
+
+    def test_pack_all_pushes_the_packed_bundle(self, tmp_path, monkeypatch):
+        """``pack-all --server-cache-push`` publishes the bundle it packs.
+
+        It used to publish the build cache's raw install tarball: no
+        manifest.yaml, shebangs pointing into the CI runner's prefix, the
+        package.files gate not yet run -- and that catalog row made the
+        workflow's later ``cvcpkg publish`` of the real bundle a no-op.  A
+        noarch recipe must also keep the any/noarch identity build_all probes
+        the server cache under, so the next run's cache hit finds it.
+        """
+        import tarfile
+
+        # Ensure in-process server uses YAML backend (matching TokenStore)
+        # even when CVCPKG_DATABASE_URL is set by the Docker test env.
+        monkeypatch.delenv("CVCPKG_DATABASE_URL", raising=False)
+        srv_dir = tmp_path / "server"
+        srv_dir.mkdir()
+        client, pub_token = self._start_server(srv_dir)
+        self._route_to_server(monkeypatch, client)
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libfoo")
+        tool_dir = _create_vendored_recipe(recipes_dir, "pytool")
+        raw = yaml.safe_load((tool_dir / "recipe.yaml").read_text())
+        raw["depends"] = {"build": ["libfoo"], "runtime": ["libfoo"]}
+        raw["build"]["matrix"] = [{"platform": "any", "script": "build.sh"}]
+        raw["package"]["files"] = ["bin/*"]
+        (tool_dir / "recipe.yaml").write_text(yaml.dump(raw))
+        # A console script whose shebang points into the build prefix, as pip
+        # writes them; packing rewrites it to the relocatable /usr/bin/env form.
+        (tool_dir / "build.sh").write_text(
+            textwrap.dedent(
+                """\
+                #!/bin/bash
+                set -e
+                mkdir -p "$CVC_INSTALL_DIR/bin"
+                printf '#!%s/bin/python3\\nprint(1)\\n' "$CVC_PREFIX" > "$CVC_INSTALL_DIR/bin/pytool"
+                chmod +x "$CVC_INSTALL_DIR/bin/pytool"
+                """
+            )
+        )
+
+        def pack_all(run: int) -> str:
+            monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(tmp_path / f"cache{run}"))
+            result = CliRunner().invoke(
+                cli,
+                [
+                    "pack-all",
+                    "--local",
+                    "--no-default-recipes",
+                    "--recipes-dir",
+                    str(recipes_dir),
+                    "--platform",
+                    "linux",
+                    "--prefix",
+                    str(tmp_path / f"prefix{run}"),
+                    "--output-dir",
+                    str(tmp_path / f"dist{run}"),
+                    "--server-cache",
+                    "http://testserver",
+                    "--server-cache-token",
+                    pub_token,
+                    "--server-cache-push",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            return result.output
+
+        pack_all(1)
+
+        bundles = {b["name"]: b for b in client.get("/v1/catalog").json()["bundles"]}
+        tool = bundles["pytool"]
+        assert (tool["platform"], tool["arch"]) == ("any", "noarch")
+        assert tool["required_deps"] == [{"name": "libfoo"}]
+        all_recipes = {r.name: r for r in list_recipes(recipes_dir)}
+        assert tool["recipe_version"] == chain_hash(all_recipes["pytool"], all_recipes, "any")
+
+        archive = tmp_path / "pytool.tar.gz"
+        archive.write_bytes(client.get(tool["archive_url"]).content)
+        with tarfile.open(archive) as tar:
+            assert "share/libcvc-deps/pytool/manifest.yaml" in tar.getnames()
+            shebang = tar.extractfile("bin/pytool").readline()
+        assert shebang == b"#!/usr/bin/env python3\n"
+
+        # A second run from empty local caches restores both packed bundles
+        # from the server instead of rebuilding them.
+        out = pack_all(2)
+        assert out.count("<- server cache hit") == 2, out
+
+        client.__exit__(None, None, None)
+
+    def test_pack_all_push_failure_is_not_fatal(self, tmp_path, monkeypatch):
+        """A push that can't reach the server warns; the packed bundles stay
+        in --output-dir for the workflow's ``cvcpkg publish`` to retry."""
+        monkeypatch.setenv("CVCPKG_BUILD_CACHE", str(tmp_path / "cache"))
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_vendored_recipe(recipes_dir, "libfoo")
+
+        result = CliRunner().invoke(
+            cli,
+            [
+                "pack-all",
+                "--local",
+                "--no-default-recipes",
+                "--recipes-dir",
+                str(recipes_dir),
+                "--platform",
+                "linux",
+                "--prefix",
+                str(tmp_path / "prefix"),
+                "--output-dir",
+                str(tmp_path / "dist"),
+                "--server-cache",
+                "http://127.0.0.1:1",  # nothing listens here
+                "--server-cache-token",
+                "tok",
+                "--server-cache-push",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "WARNING: server-cache push of libfoo-" in result.output
+        assert list((tmp_path / "dist").glob("libfoo-*.tar.gz"))
 
     def test_server_cache_pull(self, tmp_path, monkeypatch, capsys):
         """Publish manually, then verify cache/status returns a hit."""
@@ -577,7 +813,6 @@ class TestServerCacheIntegration:
             per_component=True,
             server_cache_url="http://127.0.0.1:1",  # would fail if used
             server_cache_token="fake",
-            server_cache_push=True,
             no_server_cache=True,
         )
 

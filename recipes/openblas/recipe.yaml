@@ -17,7 +17,16 @@ recipe:
   # macOS build, so the claim could never resolve — and Intel/Apple-Silicon Macs
   # got no OpenBLAS at all. macOS uses the same NOFORTRAN/C_LAPACK path as the
   # BSDs, plus USE_OPENMP=OFF: Apple clang ships no libomp, so -fopenmp fails.
-  cvc_revision: 7
+  # Bumped 7 -> 8: Fortran LAPACK back on linux. cvcpkg now builds gfortran
+  # (build dependency) and ships its runtime as gcc-runtime (runtime
+  # dependency), so libopenblas.so's libgfortran/libquadmath/libgomp are
+  # installed beside it instead of expected from the host. package.files drops
+  # the top-level include/*.h entries: OpenBLAS never installs headers there, so
+  # the strict-globs check failed every pack on every platform.
+  # Bumped 8 -> 9: NUM_THREADS=64 on every platform (build.sh, build.ps1).
+  # Unset, OpenBLAS sized its thread limit from the builder's cores: +cvc.8's
+  # linux bundle reported MAX_THREADS=4, so no machine got more than 4 threads.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -38,7 +47,18 @@ depends:
   build:
     - cmake
     - ninja
-  runtime: []
+    # The Fortran compiler for LAPACK (build.sh's linux branch).
+    - name: gfortran
+      version: "^11.4"
+      platforms: [linux]
+    # $ORIGIN run paths, so libopenblas.so loads gcc-runtime's libgfortran.
+    - name: patchelf
+      platforms: [linux]
+  runtime:
+    # libgfortran, libquadmath and libgomp, which libopenblas.so NEEDs on linux.
+    - name: gcc-runtime
+      version: "^11.4"
+      platforms: [linux]
   host_tools: []
 
 build:
@@ -78,11 +98,10 @@ package:
     - lib/openblas*
     - lib/cmake/OpenBLAS/
     - lib/pkgconfig/openblas*
+    # Every header: OpenBLAS installs them under include/openblas/ only (its
+    # src/CMakeLists.txt appends /openblas to CMAKE_INSTALL_INCLUDEDIR), which
+    # is the includedir openblas.pc and OpenBLASConfig.cmake hand consumers.
     - include/openblas/
-    - include/cblas.h
-    - include/lapack.h
-    - include/lapacke*.h
-    - include/f77blas.h
   cmake_packages:
     - { name: OpenBLAS, targets: ["OpenBLAS::OpenBLAS"] }
 

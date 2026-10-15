@@ -12,6 +12,12 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Keep the builder account's user site (%APPDATA%\Python\PythonXY\site-packages)
+# out of the build, so only the declared closure is importable.  See the same
+# setting in python-wheel.sh for why it is an environment variable and why it
+# lives here rather than in the builder's environment for every recipe.
+$env:PYTHONNOUSERSITE = '1'
+
 # Drop MinGW/MSYS2 from PATH for the duration of this build.
 #
 # Same hazard env-windows.ps1's Invoke-CvcCMakeBuild already guards for CMake,

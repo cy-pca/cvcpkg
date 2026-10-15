@@ -7,6 +7,11 @@
 # and .cmake files at ${CMAKE_CURRENT_LIST_DIR}; the ../ suffix is
 # computed per-file from its depth under $CVC_INSTALL_DIR.
 #
+# bin/*-config shell scripts (gsl-config, xml2-config, curl-config, ...) are
+# rewritten too: they get a line computing the prefix from their own location
+# ("$(dirname "$0")/..") and every absolute path becomes ${__cvc_prefix}
+# (or '"${__cvc_prefix}"' where the path sits inside single quotes).
+#
 # Idempotent — running twice is a no-op because the second pass finds
 # no absolute install-dir strings to rewrite.
 
@@ -73,6 +78,83 @@ cvc_rewrite_install_paths() {
 
     if [ "$count" -gt 0 ]; then
         echo "── cvc_rewrite_install_paths: normalized ${count} file(s) under ${root} ──"
+    fi
+
+    _cvc_rewrite_config_scripts "$root" "$deps"
+}
+
+# _cvc_rewrite_config_scripts <install-root> [deps-prefix]
+#
+# autoconf-style bin/*-config scripts (gsl-config, krb5-config, xml2-config,
+# libpng16-config, curl-config, pcre2-config, geos-config, MagickWand-config,
+# pspell-config, ...) echo compile/link flags built from absolute paths baked in
+# at configure time -- the temporary install dir, and sometimes the deps prefix.
+# Unpacked anywhere else they hand out dead -I/-L paths.  Each such script gets
+#   __cvc_prefix="$(cd "$(dirname "$0")/.." && pwd -P)"
+# after its shebang, and every occurrence of either prefix becomes
+# ${__cvc_prefix}; inside single quotes (prefix='...', echo '--prefix=...')
+# it becomes '"${__cvc_prefix}"' so the shell still expands it.  Only shell
+# scripts are touched (a #!.../sh or bash shebang); binaries are left alone.
+_cvc_rewrite_config_scripts() {
+    local root="$1" deps="${2:-}" f first n=0 tmp
+    [ -d "${root}/bin" ] || return 0
+    for f in "${root}"/bin/*-config; do
+        [ -f "$f" ] || continue
+        [ -L "$f" ] && continue
+        IFS= read -r first < "$f" || continue
+        case "$first" in
+            '#!'*sh*) ;;
+            *) continue ;;
+        esac
+        grep -q -F -- "$root" "$f" 2>/dev/null \
+            || { [ -n "$deps" ] && grep -q -F -- "$deps" "$f" 2>/dev/null; } \
+            || continue
+        tmp="${f}.cvc-tmp"
+        awk -v root="$root" -v deps="$deps" '
+            # Shell quote state at the end of s: 0 unquoted, 1 inside single
+            # quotes, 2 inside double quotes (single quotes are literal there).
+            function qstate(s,    st, k, c) {
+                st = 0
+                for (k = 1; k <= length(s); k++) {
+                    c = substr(s, k, 1)
+                    if (st == 0) {
+                        if (c == "\\") k++
+                        else if (c == "\047") st = 1
+                        else if (c == "\"") st = 2
+                    } else if (st == 1) {
+                        if (c == "\047") st = 0
+                    } else {
+                        if (c == "\\") k++
+                        else if (c == "\"") st = 0
+                    }
+                }
+                return st
+            }
+            function relocate(line, p,    out, i, before) {
+                out = ""
+                while ((i = index(line, p)) > 0) {
+                    before = out substr(line, 1, i - 1)
+                    out = before (qstate(before) == 1 ? "\047\"${__cvc_prefix}\"\047" : "${__cvc_prefix}")
+                    line = substr(line, i + length(p))
+                }
+                return out line
+            }
+            NR == 1 {
+                print
+                print "__cvc_prefix=\"$(cd \"$(dirname \"$0\")/..\" && pwd -P)\"  # cvc_rewrite_install_paths"
+                next
+            }
+            {
+                $0 = relocate($0, root)
+                if (deps != "") $0 = relocate($0, deps)
+                print
+            }
+        ' "$f" > "$tmp" && chmod u+w "$f" 2>/dev/null; cat "$tmp" > "$f"
+        rm -f "$tmp"
+        n=$((n + 1))
+    done
+    if [ "$n" -gt 0 ]; then
+        echo "── cvc_rewrite_install_paths: relocated ${n} bin/*-config script(s) under ${root} ──"
     fi
 }
 

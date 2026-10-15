@@ -26,7 +26,6 @@ Three consequences shape this module:
 from __future__ import annotations
 
 import re
-import tarfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,7 @@ from pathlib import Path
 import yaml
 
 from cvcpkg import cache as cache_mod
+from cvcpkg._archive import archive_format, open_tar
 from cvcpkg.errors import InstallError
 from cvcpkg.lockfile import LockEntry, Lockfile
 
@@ -113,9 +113,13 @@ def read_archive(archive: Path, pkg_name: str) -> tuple[list[str], dict | None]:
     layout.  Unlike reading a merged prefix, a single archive belongs to
     exactly one bundle, so there is no clobbering risk in accepting either
     path without cross-checking the manifest's own name.
+
+    The reader is chosen by the archive's magic bytes, never its name: the
+    server stores a Windows bundle's zip under a ``.tar.zst`` name, and the
+    download cache keeps that name.
     """
-    name = archive.name.lower()
-    if name.endswith(".7z"):
+    fmt = archive_format(archive)
+    if fmt == "7z":
         raise InstallError(
             f"cannot list files in {archive.name}: .7z archives are not supported for uninstall"
         )
@@ -123,7 +127,7 @@ def read_archive(archive: Path, pkg_name: str) -> tuple[list[str], dict | None]:
     files: list[str] = []
     manifest: dict | None = None
 
-    if name.endswith(".zip"):
+    if fmt == "zip":
         with zipfile.ZipFile(archive) as zf:
             for info in zf.infolist():
                 if info.is_dir():
@@ -136,7 +140,7 @@ def read_archive(archive: Path, pkg_name: str) -> tuple[list[str], dict | None]:
                     manifest = _safe_yaml(zf.read(info))
         return files, manifest
 
-    with tarfile.open(archive, mode="r|*") as tf:  # streaming: no seeking back
+    with open_tar(archive, stream=True, fmt=fmt) as tf:  # streaming: no seeking back
         for member in tf:
             if not (member.isreg() or member.issym() or member.islnk()):
                 continue

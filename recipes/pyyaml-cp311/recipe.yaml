@@ -121,10 +121,10 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.11/site-packages/yaml/
-    - lib/python3.11/site-packages/_yaml/
-    - lib/python3.11/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/yaml/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.11/site-packages/_yaml/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
     # Windows (build.ps1) site-packages scheme.
-    - Lib/site-packages/yaml/
-    - Lib/site-packages/_yaml/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "Lib/site-packages/yaml/", platforms: [windows] }
+    - { glob: "Lib/site-packages/_yaml/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

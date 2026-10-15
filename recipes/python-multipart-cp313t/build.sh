@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/python-multipart-cp313t/build.sh — build python-multipart 0.0.29 FROM SOURCE (generated).
+# recipes/python-multipart-cp313t/build.sh — build python-multipart 0.0.32 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

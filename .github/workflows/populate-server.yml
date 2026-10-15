@@ -172,10 +172,14 @@ jobs:
             ${SKIP_EXISTING[@]+"${SKIP_EXISTING[@]}"} \
             "${RECIPES[@]}" | tee /tmp/submit.log
 
-          # "Staged N job(s) for <tuple>", summed over every tuple. awk, not
-          # `paste -sd+`, so this is a number rather than the string "9+29".
-          STAGED=$(grep -oE '^[[:space:]]*Staged [0-9]+ job' /tmp/submit.log \
-                   | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+          # Sum "Staged N job(s) for <tuple>" and "Staged N noarch job(s) for
+          # <config>/<link>" over the whole submission.  One awk does the match
+          # and the sum: it exits 0 when nothing matches, where a grep pipeline
+          # exits 1 and, under pipefail, kills the step -- which is what failed
+          # run 38101135589 (a noarch-only submission) and would fail a no-op
+          # populate that staged nothing.
+          STAGED=$(awk '/^[ \t]*Staged [0-9]+ (noarch )?job/ {s += $2} END {print s+0}' \
+                   /tmp/submit.log)
           echo "staged=${STAGED:-0}" >> "$GITHUB_OUTPUT"
           echo "submit-dag staged ${STAGED:-0} job(s)"
 
@@ -243,6 +247,9 @@ jobs:
       link: ${{ inputs.link }}
       server: ${{ inputs.server }}
       shards: "4"
+      # Forward the requested recipes; without this macos-build.yml builds the
+      # whole catalog (the linux/arm64 leg below already forwards them).
+      recipes: ${{ inputs.recipes }}
     secrets: inherit
 
   # macOS x86_64. macos-latest is Apple Silicon, so the job above only ever
@@ -263,6 +270,7 @@ jobs:
       server: ${{ inputs.server }}
       shards: "4"
       runner: "macos-15-intel"
+      recipes: ${{ inputs.recipes }}
     secrets: inherit
 
   # linux/arm64 has the same shape of problem as macOS: the builder fleet is

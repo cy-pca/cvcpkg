@@ -103,19 +103,28 @@ the import path via `PYTHONPATH`. The result is still a real wheel installed by
 pip (proper `dist-info`/`RECORD`/`METADATA`), so a consumer's later
 `pip install <other>` coexists and pip's resolver sees the package as satisfied.
 
+The declared closure is the *only* thing importable: `python-wheel.sh` and
+`python-wheel.ps1` export `PYTHONNOUSERSITE=1`, because the prefix interpreter
+would otherwise search the builder account's user site (`~/.local/lib/pythonX.Y/
+site-packages`) ahead of its own. A backend or dependency missing from
+`depends` then fails the build with `No module named …` on every builder,
+instead of passing on whichever builder happens to have a `pip install --user`
+copy.
+
 Two kinds of from-source column exist:
 
 - **Generated** (the bulk): emitted by `tools/gen_python_recipes.py`, which
   reads each sdist's `[build-system] requires` and wires the backend edges.
 - **Hand-written**: `numpy`, `h5py`, `cffi`, `pyyaml`, `markupsafe`,
-  `greenlet`, `pillow`. These carry native-library edges the generator cannot
-  infer — numpy links cvcpkg's `libopenblas.so.0` by soname, h5py links
-  `libhdf5.so.310` — plus `$ORIGIN`-relative RUNPATH passes and per-platform
-  gates. No auditwheel-vendored `*.libs/` directory ships; the native runtime
-  is the corresponding cvcpkg package, resolved out of the same activated
-  prefix. The generator never emits or prunes these families; it declares
-  `numpy` in `HANDWRITTEN_DEP_BASES` so generated packages (matplotlib,
-  gymnasium, …) can depend on its columns, which are read from disk.
+  `greenlet`, `pillow`, `lupa`. These carry native-library edges the generator
+  cannot infer — numpy links cvcpkg's `libopenblas.so.0` by soname, h5py links
+  `libhdf5.so.310`, lupa links `liblua.so.5.4` and `libluajit-5.1.so.2` — plus
+  `$ORIGIN`-relative RUNPATH passes and per-platform gates. No
+  auditwheel-vendored `*.libs/` directory ships; the native runtime is the
+  corresponding cvcpkg package, resolved out of the same activated prefix. The
+  generator never emits or prunes these families; it declares `numpy` in
+  `HANDWRITTEN_DEP_BASES` so generated packages (matplotlib, gymnasium, …) can
+  depend on its columns, which are read from disk.
 
 For **new** packages, from-source is the generator default — pure `py3-none-any`
 packages included, because even a pure wheel is a third-party binary artifact.
@@ -127,6 +136,8 @@ A column falls back to `python_wheel` only for a documented reason
 2. PyPI publishes no sdist for the pinned version;
 3. a required PEP-517 backend has no cvcpkg recipe yet;
 4. the operator asked for it (`--source-mode wheel` / `--pure-policy wheel`).
+5. the published sdist cannot build as shipped (`_UNBUILDABLE_SDIST`: ccxt's
+   `setup.py` reads a `README.md` its sdist does not include).
 
 ## The `python:` block
 

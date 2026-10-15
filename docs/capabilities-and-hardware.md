@@ -44,17 +44,27 @@ cannot satisfy requirements:
 
 ## How the host's capabilities are determined
 
-`cvcpkg.platform.host_capabilities()` probes once per process and caches the
-result. Every probe answers "can this user drive it right now", not "is a
-binary installed", and each subprocess probe is capped at 5 seconds so a wedged
-daemon degrades to "capability absent" instead of hanging the CLI.
+`cvcpkg.platform.host_capabilities(purpose)` probes once per process and caches
+the result. Every probe answers "can this user drive it right now", not "is a
+binary installed", and each subprocess probe is capped (5 seconds; 10 for
+`nvidia-smi`) so a wedged daemon or driver degrades to "capability absent"
+instead of hanging the CLI.
 
-| capability | probe |
-|---|---|
-| `cuda` | `nvcc` on `PATH`, or `$CUDA_PATH`/`$CUDA_HOME/bin/nvcc(.exe)`. Deliberately **not** `nvidia-smi` or a loadable libcuda — those ship with the driver, and the question is "can this host *compile* CUDA", not "does it have a GPU". |
-| `incus` | `incus info` exits 0 — proves the client exists, incusd is running, and this user may open its socket. |
-| `lxd` | `lxc info` exits 0 **and** the dump reports `server: lxd` (rejects an `lxc` compatibility shim fronting Incus); unrecognised output falls back to whether LXD's own daemon binary is installed. |
-| `lxc` | classic LXC: `lxc-create`, `lxc-start` and `lxc-ls` all present, `lxc-ls -1` exits 0, and a non-root user holds subuid/subgid delegation. |
+The *purpose* is what the set gates, and for `cuda` the two differ:
+
+- **`install`** (the default; the resolver): can this host *use* a bundle that
+  requires it. A CUDA package needs a GPU to run, not a compiler, so a GPU
+  workstation with just the NVIDIA driver is offered `torch-cp311-cuda` with
+  no override.
+- **`build`** (what a builder advertises): can this host *build* a recipe that
+  requires it. For `cuda` only `nvcc` answers that.
+
+| capability | build probe | install adds |
+|---|---|---|
+| `cuda` | `nvcc` on `PATH`, or `$CUDA_PATH`/`$CUDA_HOME/bin/nvcc(.exe)`. Deliberately **not** `nvidia-smi` or a loadable libcuda — those ship with the driver, and a GPU without a toolkit cannot compile CUDA. A prefix with the `cuda-toolkit` recipe installed satisfies it once activated (Linux puts a `bin/nvcc` wrapper on `PATH`), or with `CUDA_PATH=<prefix>/cuda`. | an NVIDIA GPU with a working driver: `nvidia-smi -L` (on `PATH`, or `%SystemRoot%\System32` on Windows) lists at least one GPU. A toolkit host without a GPU still counts, so it can install CUDA packages to build against. |
+| `incus` | `incus info` exits 0 — proves the client exists, incusd is running, and this user may open its socket. | — |
+| `lxd` | `lxc info` exits 0 **and** the dump reports `server: lxd` (rejects an `lxc` compatibility shim fronting Incus); unrecognised output falls back to whether LXD's own daemon binary is installed. | — |
+| `lxc` | classic LXC: `lxc-create`, `lxc-start` and `lxc-ls` all present, `lxc-ls -1` exits 0, and a non-root user holds subuid/subgid delegation. | — |
 
 `incus`, `lxd` and `lxc` are three distinct capabilities on purpose: the REST
 CLIs and the classic `lxc-*` tools share no command surface, so a job's harness
@@ -81,7 +91,9 @@ scheduler then dispatches a job only to a builder advertising **all** of the
 job's required capabilities. Advertising a capability never *reserves* a
 builder for capability jobs — it only adds eligibility.
 
-A builder's advertised set is the same host probe, plus explicit flags:
+A builder's advertised set is the host's **build** probes
+(`host_capabilities("build")` — a GPU alone never advertises `cuda`), plus
+explicit flags:
 
 ```sh
 cvcpkg builder run --capability cuda            # merged with auto-detection

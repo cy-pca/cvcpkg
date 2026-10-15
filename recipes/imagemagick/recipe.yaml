@@ -52,7 +52,11 @@ recipe:
   # which declares getentropy() in <unistd.h> instead (already pulled in
   # earlier via MagickCore/studio.h's own MAGICKCORE_HAVE_UNISTD_H-gated
   # include). Patched to skip the <sys/random.h> include on OpenBSD only.
-  cvc_revision: 23
+  # cvc.24: relocatable .pc/.cmake/bin/*-config.  The published cvc.23
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 24
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -158,19 +162,23 @@ build:
 
 package:
   files:
+    # The Unix builds (autotools) install headers under include/ImageMagick-7/
+    # and no CMake package; the flat include/Magick*, lib/cmake/ImageMagick/ and
+    # share/imagemagick/ layout is the Windows/wasm builds', so those entries are
+    # scoped (strict globs failed linux on them, 2026-10-14).
     - lib/libMagick*
     - lib/ImageMagick*
     - lib/CORE_RL_*.lib
     - lib/Magick++.lib
     - lib/MagickCore.lib
     - lib/MagickWand.lib
-    - lib/cmake/ImageMagick/
+    - { glob: "lib/cmake/ImageMagick/", platforms: [windows, wasm, wasm-mt, wasi] }
     - lib/pkgconfig/Magick*
     - lib/pkgconfig/ImageMagick*
-    - include/Magick++/
-    - include/Magick++.h
-    - include/MagickCore/
-    - include/MagickWand/
+    - { glob: "include/Magick++/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/Magick++.h", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/MagickCore/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/MagickWand/", platforms: [windows, wasm, wasm-mt, wasi] }
     - include/ImageMagick*/
     - bin/magick*
     - bin/Magick*
@@ -179,7 +187,7 @@ package:
     - bin/IM_MOD_RL_*.dll
     - bin/FILTER_*.dll
     - share/ImageMagick*/
-    - share/imagemagick/
+    - { glob: "share/imagemagick/", platforms: [windows, wasm, wasm-mt, wasi] }
   cmake_packages:
     - { name: ImageMagick, targets: ["ImageMagick::Magick++"] }
 

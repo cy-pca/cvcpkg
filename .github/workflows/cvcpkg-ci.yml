@@ -279,22 +279,31 @@ jobs:
   # Only runs on the self-hosted prod runner where Docker is
   # available.
   integration:
-    # Serialise this job across the WHOLE repo, not per-ref.
+    # One at a time across the WHOLE repo, and queued, never cancelled.
     #
-    # The workflow-level group is cvcpkg-ci-${{ github.ref }}, so every open
-    # PR runs its own copy of this job at the same time -- and they all land
-    # on ONE self-hosted docker daemon that is already shared with seven other
-    # runner services. Three of them overlapping is what exhausted the retry
-    # added in #505: contention on all 3 attempts, the last after 8 minutes of
-    # building, because `--no-cache` rebuilds every layer and each layer is a
-    # fresh chance to collide on the content store.
+    # Overlapping copies of this job (every open PR runs one) collide on the
+    # ONE self-hosted docker daemon -- shared with seven other runner services
+    # -- and on this job's fixed names: the `cvcpkg-test` compose project, its
+    # container_names, host port 8421 and the `cvcpkg-ci` buildx builder.
+    # Three overlapping exhausted the retry added in #505.
     #
-    # Retrying harder does not fix a build that is structurally maximally
-    # exposed. Not racing ourselves does. cancel-in-progress is false: these
-    # runs should queue, never cancel each other.
-    concurrency:
-      group: cvcpkg-docker-integration
-      cancel-in-progress: false
+    # The serialisation comes from the runner, not a concurrency group:
+    # exactly one runner (catx-03-cvcpkg-docker, registered to this repo)
+    # carries the `docker-integration` label, and GitHub holds every queued
+    # job for it until it is free (up to 24h).  A job-level `concurrency:`
+    # group cannot queue: it keeps one running and ONE pending job and cancels
+    # any older pending one whatever cancel-in-progress says, so with a dozen
+    # PRs in CI this job was cancelled before it ever ran.  Before giving a
+    # second runner the `docker-integration` label, make the job safe to run
+    # in parallel (per-run compose project, container names, ports and buildx
+    # builder).
+    #
+    # Its own label, not `docker`: catx-03-cy-pca carries `docker` AND
+    # `cvcpkg-prod`, so while this job ran there every prod deploy
+    # (deploy-prod.yml) queued behind each open PR's copy of it.  On the
+    # dedicated runner a deploy and this job share only the Docker daemon, and
+    # neither uses the other's names (compose project, port 8421, buildx
+    # builder).
     name: Integration tests (Docker)
     # Self-hosted runner safety.  For `pull_request`, GitHub evaluates the
     # workflow definition from the PR's own merge ref, so a fork PR can edit
@@ -308,9 +317,10 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
        contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.actor)))
     needs: [test, validate, lint]
-    # cy-pca org runner (catx-03-cy-pca) provides Docker.  The same-repo +
-    # actor-allowlist gate above keeps fork PRs off this self-hosted host.
-    runs-on: [self-hosted, Linux, X64, docker]
+    # catx-03-cvcpkg-docker provides Docker, and is the only runner with this
+    # label (see the note at the top of this job).  The same-repo +
+    # actor-allowlist gate above keeps fork PRs off this host.
+    runs-on: [self-hosted, Linux, X64, docker-integration]
     # The isolated `docker-container` builder below trades a little speed for not
     # sharing a content store with the rest of the host: a cold buildkit plus the
     # `--no-cache` rebuild of three images runs slower than the shared warm one,

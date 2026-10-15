@@ -6,7 +6,11 @@ recipe:
   # autotools build has never produced on any platform (the strict-globs pack
   # check failed on it). The bundled recipe.yaml changes, so the revision moves;
   # platforms already at +cvc.5 keep it until their next publish.
-  cvc_revision: 6
+  # cvc.7: relocatable .pc/.cmake/bin/*-config.  The published cvc.6
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

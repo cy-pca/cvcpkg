@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/altgraph/
-    - lib/python3.11/site-packages/altgraph-*.dist-info/
-    - Lib/site-packages/altgraph/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/altgraph/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/altgraph-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/altgraph/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

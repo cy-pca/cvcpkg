@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: pcre2
   upstream_version: "10.44"
-  cvc_revision: 5
+  # cvc.6: relocatable .pc/.cmake/bin/*-config.  The published cvc.5
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -76,8 +80,9 @@ package:
   files:
     - lib/libpcre2-8*
     - lib/libpcre2-16*
-    - lib/libpcre2-32*
-    - lib/libpcre2posix*
+    # libpcre2-32 is not built (PCRE2_BUILD_PCRE2_32=OFF); the POSIX wrapper is
+    # libpcre2-posix (with a hyphen).
+    - lib/libpcre2-posix*
     - lib/cmake/pcre2/
     - lib/pkgconfig/libpcre2*
     - include/pcre2.h

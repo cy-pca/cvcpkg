@@ -1,0 +1,26 @@
+coincurve: accept cffi's LICENSE under <dist-info>/licenses/ (PEP 639).
+
+coincurve's hatch build hook copies the build interpreter's _cffi_backend into
+the wheel together with cffi's LICENSE, and requires exactly one LICENSE file
+directly inside cffi's .dist-info. Wheels built by setuptools >= 77 (PEP 639),
+including cvcpkg's cffi-cpNNN columns, keep license files in
+.dist-info/licenses/, so the hook found none and aborted the build.
+
+--- a/hatch_build.py
++++ b/hatch_build.py
+@@ -28,7 +28,14 @@
+         build_data["force_include"][cffi_shared_lib] = relative_path
+ 
+         dist = distribution("cffi")
+-        license_files = [f for f in dist.files if f.name == "LICENSE" and f.parent.name.endswith(".dist-info")]
++        # cvcpkg: a PEP 639 wheel (setuptools >= 77, as cvcpkg builds cffi) keeps its
++        # license files in <name>.dist-info/licenses/, one level below dist-info.
++        license_files = [
++            f
++            for f in dist.files
++            if f.name == "LICENSE"
++            and any(p.name.endswith(".dist-info") for p in (f.parent, f.parent.parent))
++        ]
+         if len(license_files) != 1:
+             message = f"Expected exactly one LICENSE file in cffi distribution, got {len(license_files)}"
+             raise RuntimeError(message)

@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/pyphen/
-    - lib/python3.12/site-packages/pyphen-*.dist-info/
-    - Lib/site-packages/pyphen/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/pyphen/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/pyphen-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pyphen/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -70,3 +70,13 @@ SDK row.
 | Wasmer | `recipes/wasmer/` (7.1.0) | Stages prebuilt release artifacts |
 | WasmEdge | `recipes/wasmedge/` (0.17.0) | Built from source with CMake |
 | WAMR | `recipes/wamr/` (2.4.4) | Built from source with CMake |
+
+## Later additions
+
+Requested after the original proposals, by issue.
+
+| Request | Recipe | Note |
+|---|---|---|
+| Node.js 22 LTS for CI (#167) | `recipes/nodejs22/` (22.23.3) | Official nodejs.org binaries, SHA-256 from the signed `SHASUMS256.txt`; `provides: nodejs` (a future `nodejs24` shares the slot); no corepack. linux-x86_64 built; linux-arm64, macOS and windows-x64 declared |
+| Playwright Test on cvcpkg Node | `recipes/playwright/` (1.64.0) | `@playwright/test` + `playwright` + `playwright-core` from the npm registry (sha256-pinned), run on `nodejs22` by `bin/playwright`; noarch |
+| Playwright's headless Chromium | `recipes/playwright-chromium-headless-shell/` (1.64.0) | chromium-headless-shell revision 1248 (Chromium 156.0.8078.4) in `share/ms-playwright`; linux-x86_64 only; needs the host's NSS/ATK/GBM/X11 libraries (`install-deps chromium`). Playwright's full `chromium` (Google Chrome for Testing, with the non-redistributable Widevine CDM) is deliberately not packaged |

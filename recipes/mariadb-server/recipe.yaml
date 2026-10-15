@@ -1,0 +1,175 @@
+schema_version: 1
+recipe:
+  name: mariadb-server
+  upstream_version: "11.4.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://mariadb.org/
+  # Server, engines, plugins, client programs and the bundled readline 5.1
+  # are GPL-2.0; the statically linked Connector/C (libmariadb/) and the
+  # client auth plugins in lib/mysql/plugin are LGPL-2.1-or-later; {fmt}
+  # (header-only) is MIT; InnoDB carries BSD-style Google/Percona notices.
+  # Nothing AGPL/SSPL/BUSL is built (the AGPL-3.0 range-lock library inside
+  # storage/rocksdb is deleted with the engine).  build.sh installs the
+  # texts under share/licenses/mariadb-server/.
+  license: "GPL-2.0-only AND LGPL-2.1-or-later AND MIT"
+  tags: [database]
+  description: >-
+    MariaDB Server 11.4 LTS, the MySQL-compatible database server:
+    mariadbd with InnoDB and Aria, mariadb-install-db, the mariadb client
+    and admin tools (mariadb-admin, mariadb-dump, mariadb-backup, ...),
+    with the upstream mysql* compatibility symlinks, plus the share/mariadb
+    data files and a sample etc/mariadb/my.cnf.  The client library
+    (libmariadb) is not shipped; link mariadb-connector-c for that.
+
+source:
+  type: tarball
+  url: https://archive.mariadb.org/mariadb-11.4.13/source/mariadb-11.4.13.tar.gz
+  sha256: "1bb254b106d0a7ca871cfa18fa6e18d4b80a7430f9ec9d1571ec4271a13def96"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    - bison
+    - m4
+    - pkg-config
+  runtime:
+    - name: openssl
+      version: "^3.0"
+    - name: zlib
+      version: "^1.3"
+    - name: pcre2
+      version: "^10.40"
+    - name: zstd
+      version: "^1.5"
+    - name: ncurses
+      version: "^6.0"
+  host_tools: []
+
+build:
+  # A full server build: ~1.5k translation units.
+  timeout_seconds: 10800
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - bin/mariadbd
+    - bin/mysqld
+    - bin/mariadb-install-db
+    - bin/mysql_install_db
+    - bin/mariadb
+    - bin/mysql
+    - bin/mariadb-admin
+    - bin/mysqladmin
+    - bin/mariadb-dump
+    - bin/mysqldump
+    - bin/mariadb-check
+    - bin/mariadb-import
+    - bin/mariadb-show
+    - bin/mariadb-binlog
+    - bin/mariadb-upgrade
+    - bin/mariadb-backup
+    - bin/mariadb-secure-installation
+    - bin/mariadb-tzinfo-to-sql
+    - bin/mariadbd-safe
+    - bin/my_print_defaults
+    - bin/resolveip
+    - lib/mysql/plugin/
+    - share/mariadb/
+    - share/man/man1/mariadb*.1
+    - etc/mariadb/my.cnf.sample
+    - share/licenses/mariadb-server/
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
+
+toolchain:
+  cc:
+    min_version: "any"
+    description: "C11/C++17 compiler (GCC >= 9 or Clang >= 10)"
+
+notes:
+  - title: "Running from a relocated prefix"
+    description: >-
+      cvcpkg unpacks into an arbitrary prefix, so always pass the prefix as
+      --basedir: the server then finds its plugin directory
+      (lib/mysql/plugin), error messages and character sets (share/mariadb)
+      relative to it.  Initialise a data directory with
+      `<prefix>/bin/mariadb-install-db --basedir=<prefix> --datadir=<dir>`
+      and start with `<prefix>/bin/mariadbd --defaults-file=<my.cnf>` (copy
+      etc/mariadb/my.cnf.sample and set basedir, datadir and socket) or with
+      `--no-defaults --basedir=<prefix> --datadir=<dir> ...`.  Use
+      --no-defaults or --defaults-file in scripts; otherwise the server and
+      the clients also read /etc/my.cnf, /etc/mysql/my.cnf and ~/.my.cnf.
+      The compiled-in default socket is /tmp/mysql.sock.  The client
+      programs look for client auth plugins (caching_sha2_password,
+      client_ed25519, ...) in the build-time plugin path; only for those
+      methods pass --plugin-dir=<prefix>/lib/mysql/plugin or set
+      MARIADB_PLUGIN_DIR (native passwords, unix_socket and TLS need no
+      plugin).  cvcpkg has no service mechanism; run mariadbd in the
+      foreground under your own supervisor (systemd unit, runit, a container
+      entrypoint, ...).
+  - title: "What is built"
+    description: >-
+      Engines: InnoDB, Aria, MyISAM, MRG_MyISAM, CSV, MEMORY, SEQUENCE and
+      PERFORMANCE_SCHEMA built in; Archive, Blackhole, FederatedX (and the old
+      FEDERATED) as loadable plugins.  Switched off, with their source
+      deleted before configuring: ColumnStore, RocksDB, Mroonga, Spider,
+      CONNECT, OQGraph, Sphinx, DuckDB.  Also off: S3, Galera/wsrep, the
+      embedded server, the bzip2/lz4/lzma/lzo/snappy InnoDB compression
+      providers (zlib page compression stays), auth_pam, GSSAPI, cracklib,
+      the AWS/Hashicorp key-management plugins and the unit tests.  The
+      example and test-suite plugins upstream installs for mysql-test are
+      deleted.  TLS is the cvcpkg OpenSSL 3 (WITH_SSL=system; 11.4 generates
+      a self-signed server certificate at startup, so TCP clients get
+      TLSv1.3 by default), REGEXP is the cvcpkg PCRE2, and the mariadb client
+      uses the bundled GPL-2.0 readline 5.1 (the cvcpkg readline is GPL-3.0,
+      which GPL-2.0-only code cannot link).  No libaio/liburing: InnoDB uses
+      its thread-pool simulated AIO, fine for test and small production
+      servers.  bin/ also has upstream's mysql* compatibility symlinks
+      (mysql, mysqld, mysqladmin, mysqldump, mysql_install_db, ...).
+  - title: "Client library comes from mariadb-connector-c"
+    description: >-
+      The server tree's bundled Connector/C is used only to link the client
+      programs statically.  The shared libmariadb, its headers, pkg-config
+      file and mariadb_config are deleted from the bundle, so this package and
+      mariadb-connector-c share a prefix without clobbering each other.  The
+      client auth plugins the server installs live in the server plugin
+      directory lib/mysql/plugin, separate from connector-c's
+      lib/mariadb/plugin.
+  - title: "{fmt} fetched separately"
+    description: >-
+      MariaDB needs the header-only {fmt} library (MIT).  Its own cmake would
+      download fmt-12.2.0.zip mid-build with only an MD5 pin; build.sh
+      fetches that same zip itself and checks its sha256 before configuring.
+  - title: "Version choice"
+    description: >-
+      11.4 is the MariaDB community LTS with the longest support of the 11.x
+      LTS lines (EOL 2029-05-29, against 2028-06-04 for 11.8).  The newer
+      12.3 LTS (EOL 2029-06-12) is a later option once it has matured.
+  - title: "macOS and the BSDs not yet built"
+    description: >-
+      MariaDB supports macOS and FreeBSD upstream and build.sh is written to
+      be portable, but only linux-x86_64 has been built and tested so far, so
+      only linux is declared.  Add the matrix entries once a builder has run
+      the recipe and its test.sh there.
+  - title: "Why not native Windows"
+    description: >-
+      The Windows server build is an MSVC + WiX + Perl/bison toolchain of its
+      own (win/ in the source tree) with a different install layout and
+      service registration; it would need a separate build.ps1.  MariaDB
+      publishes official winx64 MSI/zip packages in the meantime.

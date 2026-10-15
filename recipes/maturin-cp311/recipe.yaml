@@ -100,14 +100,14 @@ package:
   # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
   # build.sh keeps it pure by pip-installing --prefix into an empty dir.
   files:
-    - lib/python3.11/site-packages/maturin/
-    - lib/python3.11/site-packages/maturin-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/maturin/", platforms: [freebsd, linux, macos, netbsd] }
+    - { glob: "lib/python3.11/site-packages/maturin-*.dist-info/", platforms: [freebsd, linux, macos, netbsd] }
     # The compiled executable, installed from the wheel's .data/scripts/.
-    - bin/maturin*
+    - { glob: "bin/maturin*", platforms: [freebsd, linux, macos, netbsd] }
     # Windows install scheme: Lib\site-packages plus Scripts\ for the exe.
-    - Lib/site-packages/maturin/
-    - Lib/site-packages/maturin-*.dist-info/
-    - Scripts/maturin*
+    - { glob: "Lib/site-packages/maturin/", platforms: [windows] }
+    - { glob: "Lib/site-packages/maturin-*.dist-info/", platforms: [windows] }
+    - { glob: "Scripts/maturin*", platforms: [windows] }
 
 notes:
   - title: "cargo fetches crates from the network during this build"

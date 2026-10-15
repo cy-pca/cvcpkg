@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform as _platform_module
+import posixpath
 import re
 import shutil
 import stat
@@ -20,7 +21,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from typing import Any
 
 import yaml
 
+from cvcpkg import linkage as _linkage
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
 from cvcpkg.platform import (
@@ -52,6 +54,10 @@ class BuildError(CvcpkgError):
 
 class PackError(CvcpkgError):
     """Packaging stage failed (staging, manifest, or archiving)."""
+
+
+class NotRedistributableError(PackError):
+    """The recipe declares ``redistributable: false``; it is never packed."""
 
 
 @dataclass
@@ -230,6 +236,25 @@ class MatrixEntry:
 
 
 @dataclass
+class LicenseAcceptance:
+    """Parsed ``license_acceptance:`` block: a vendor license the user must
+    accept before cvcpkg builds the recipe on their machine (see
+    cvcpkg.installer.require_license_acceptance)."""
+
+    urls: list[str]
+    env: str
+    title: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> LicenseAcceptance:
+        return cls(
+            urls=[str(u) for u in d.get("urls", []) or []],
+            env=str(d.get("env", "")),
+            title=str(d.get("title", "")),
+        )
+
+
+@dataclass
 class Recipe:
     """Parsed recipe.yaml."""
 
@@ -248,6 +273,9 @@ class Recipe:
     # NOTE: "image" is not just a hint -- pack_recipe enforces the
     # share/<name>/ layout and a schema-valid image.yaml for it.
     archive_format: str | None = None  # tar.gz|tar.xz|tar.bz2|zip; None = per-platform default
+    # package.linkage_allow: absolute path prefixes the relocatability gate
+    # accepts in this bundle's binaries (see check_relocatable).
+    linkage_allow: list[str] = field(default_factory=list)
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
@@ -268,10 +296,27 @@ class Recipe:
     # own capability gate, which controls only whether the test runs.
     vm_test: dict[str, Any] | None = None
     python: PythonSpec | None = None
+    # False for a payload whose license forbids publishing the built tree (the
+    # NVIDIA CUDA toolkit).  Built only where it is installed; never packed.
+    # See ensure_redistributable.
+    redistributable: bool = True
+    # A vendor license cvcpkg must get the user's explicit yes to before it
+    # builds this recipe (Microsoft's for `msvc`).  None = no gate.
+    license_acceptance: LicenseAcceptance | None = None
 
     @property
     def full_version(self) -> str:
         return f"{self.upstream_version}+cvc.{self.cvc_revision}"
+
+    @property
+    def not_redistributable_reason(self) -> str:
+        """Why this recipe is never packed, for refusals and skip messages."""
+        return (
+            f"{self.name} is not redistributable (redistributable: false in its "
+            f"recipe.yaml): its license does not allow publishing the built tree, "
+            f"so cvcpkg never packs or publishes it. `cvcpkg install {self.name}` "
+            f"builds it from the recipe on the installing machine instead."
+        )
 
     @classmethod
     def load(cls, recipe_dir: Path) -> Recipe:
@@ -307,12 +352,19 @@ class Recipe:
             tags=recipe_block.get("tags", []) or [],
             kind=recipe_block.get("kind", ""),
             archive_format=package_block.get("archive_format") or None,
+            linkage_allow=package_block.get("linkage_allow", []) or [],
             cross_toolchain_targets=ct_block.get("target_platforms", []) or [],
             cross_toolchain_env=ct_block.get("env", {}) or {},
             conflicts=raw.get("conflicts", []) or [],
             provides=raw.get("provides", []) or [],
             requires_capabilities=raw.get("requires_capabilities", []) or [],
             python=PythonSpec.from_dict(python_block) if python_block else None,
+            redistributable=raw.get("redistributable", True) is not False,
+            license_acceptance=(
+                LicenseAcceptance.from_dict(raw["license_acceptance"])
+                if raw.get("license_acceptance")
+                else None
+            ),
         )
 
 
@@ -1115,6 +1167,25 @@ class BuildContext:
 _LDCONFIG_HINTS_PLATFORMS = frozenset({"openbsd", "freebsd"})
 
 
+def _macos_fallback_lib_path(env: dict[str, str], lib_dirs: list[str]) -> None:
+    """Put *lib_dirs* on macOS's dyld search path without shadowing the system.
+
+    ``DYLD_LIBRARY_PATH`` is searched by leaf name BEFORE a library's own
+    install path, for every process in the build -- Apple's toolchain
+    included.  The llvm, llvm18 and llvm20 bundles ship ``lib/libLTO.dylib``,
+    so with one of them in the prefix Xcode's ranlib and ld loaded LLVM's
+    libLTO instead of Xcode's.  That libLTO cannot read Apple clang's bitcode,
+    so every -flto archive got an empty table of contents and the link failed
+    (wasmedge on macOS arm64: undefined fmt symbols from libfmt.a).
+    ``DYLD_FALLBACK_LIBRARY_PATH`` is only searched when a library is not found
+    at its install path (or through the binary's rpaths), which is all a prefix
+    tool needs.  Setting it replaces dyld's default fallback, so that default
+    stays at the end.  A caller's own ``DYLD_LIBRARY_PATH`` is left alone.
+    """
+    existing = env.get("DYLD_FALLBACK_LIBRARY_PATH", "") or "/usr/local/lib:/usr/lib"
+    env["DYLD_FALLBACK_LIBRARY_PATH"] = ":".join([*lib_dirs, existing])
+
+
 def _install_ldconfig_shim(ctx: BuildContext) -> Path | None:
     """Stage a no-op ``ldconfig`` for the build to find ahead of the real one.
 
@@ -1295,8 +1366,7 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     if _bp_lib not in lib_dirs:
         lib_dirs.insert(0, _bp_lib)
     if sys.platform == "darwin":
-        existing = env.get("DYLD_LIBRARY_PATH", "")
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        _macos_fallback_lib_path(env, lib_dirs)
     elif ctx.platform not in ("wasm", "wasm-mt"):
         # Not always LD_LIBRARY_PATH: Haiku's runtime_loader reads LIBRARY_PATH
         # and ignores LD_LIBRARY_PATH outright, so the wrong name here would
@@ -1470,66 +1540,384 @@ def _patch_elf_rpath_absolute(
     return patched
 
 
-def _patch_macos_install_names(install_dir: Path) -> None:
-    """Rewrite absolute build-tree install names to ``@rpath`` on macOS dylibs.
+def _relocated_entries(
+    obj: Path,
+    root: Path,
+    entries: Sequence[str],
+    temp_prefixes: Sequence[Path | str | None],
+    origin: str | None,
+) -> list[str]:
+    """*entries* (RPATH / LC_RPATH) with every path into the build machine fixed.
 
-    The macOS analog of :func:`_patch_elf_rpath`.  autotools/libtool builds
-    (e.g. ImageMagick) bake the absolute build-temp install prefix into a
-    dylib's own install name (``LC_ID_DYLIB``) and into its references to
-    sibling dylibs (``LC_LOAD_DYLIB``).  Once the bundle is unpacked elsewhere
-    that path no longer exists, so anything linking the dylib records the dead
-    path and fails under dyld ("Library not loaded:
-    .../cvcpkg-<recipe>-XXXX/install/lib/...").  CMake builds already default to
-    ``@rpath`` install names (``MACOSX_RPATH``), so this only rescues the
-    autotools/hand-rolled ones.
+    An entry inside one of *temp_prefixes* (the deps / build-tool / install
+    prefixes of this build) names a directory the installed prefix also has --
+    a bundle and its dependencies are merged flat into one prefix -- so it
+    becomes *origin* plus the path from *obj*'s directory to that directory
+    under *root*: ``<deps-prefix>/lib`` seen from ``bin/cmake`` is
+    ``$ORIGIN/../lib``.  With *origin* None (OpenBSD: no ``$ORIGIN``; the
+    installer bakes an absolute RPATH) such an entry is dropped instead.  Any
+    other builder path (another job's scratch dir, a CI workspace, /tmp) exists
+    on no machine the bundle is installed on and is dropped too.  Loader-
+    relative entries and system directories are kept, in their original order.
+    """
+    prefixes = [p for p in temp_prefixes if p]
+    out: list[str] = []
+    for e in entries:
+        if not e:
+            continue
+        if _linkage.is_relative_entry(e) or not e.startswith("/"):
+            out.append(e)
+            continue
+        rel = _linkage.relative_to_prefixes(e, prefixes)
+        if rel is not None:
+            if origin is not None:
+                r = os.path.relpath(root / rel, obj.parent).replace(os.sep, "/")
+                out.append(origin if r == "." else f"{origin}/{r}")
+            continue
+        if _linkage.builder_path_reason(e) is None:
+            out.append(e)
+    return list(dict.fromkeys(out))
 
-    For every dylib in *install_dir*/lib it: sets the id to ``@rpath/<leaf>``;
-    adds a ``@loader_path`` RPATH so the dylib finds its siblings next to itself
-    (the ``$ORIGIN`` analog); and rewrites any absolute reference that points at
-    another dylib IN THIS BUNDLE to ``@rpath/<leaf>``.  System references
-    (/usr/lib, /System/...) are left untouched.  Only runs when
-    ``install_name_tool``/``otool`` are available (any macOS host); silently
-    skips otherwise.
+
+def _writable(path: Path) -> int | None:
+    """Make *path* user-writable for an in-place edit; return the mode to restore.
+
+    Installed binaries and libraries are often 0555/0444 (openssl, perl), and
+    both patchelf and install_name_tool rewrite the file in place.
+    """
+    mode = path.stat().st_mode
+    if mode & stat.S_IWUSR:
+        return None
+    path.chmod(mode | stat.S_IWUSR)
+    return mode
+
+
+def _scrub_elf_rpaths(
+    install_dir: Path,
+    temp_prefixes: Sequence[Path | str | None],
+    patchelf: str | None,
+    *,
+    platform: str,
+    skip: Callable[[Path], bool] = lambda _p: False,
+) -> None:
+    """Rewrite builder paths out of the RPATH of every ELF object in *install_dir*.
+
+    :func:`_patch_elf_rpath` only ever covered ``lib/**/*.so*`` of shared
+    builds, so executables kept whatever their link line baked in: cmake's
+    bin/{cmake,ctest,cpack} shipped RUNPATH
+    ``/tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib`` for six revisions, and
+    bin/curl its job's ``install/lib``.  Those programs then only started where
+    ``LD_LIBRARY_PATH`` happened to name the prefix.  This covers every other
+    ELF object (*skip* names the ones :func:`_patch_elf_rpath` already owns),
+    for static builds as well: see :func:`_relocated_entries` for the mapping.
+
+    Objects are only touched when their RPATH actually changes.  The new value
+    is written over the old string in place (:func:`cvcpkg.linkage.
+    rewrite_elf_rpath`) -- it is nearly always shorter, a long scratch path
+    becoming ``$ORIGIN/../lib`` -- so no tool is needed and no segment is
+    added; an emptied RPATH stays as an empty search path.  Only a value that
+    would GROW falls back to *patchelf*, and never on NetBSD, whose ld.elf_so
+    refuses the third PT_LOAD that growing ``.dynstr`` produces (see
+    recipes/curl).  Whatever is left is reported by the pack-time gate
+    (:func:`check_relocatable`), so a refused edit fails the pack instead of
+    shipping.
+    """
+    origin = None if platform == "openbsd" else "$ORIGIN"
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf" or not link.rpaths or skip(obj):
+            continue
+        new = _relocated_entries(obj, install_dir, link.rpaths, temp_prefixes, origin)
+        if new == list(link.rpaths):
+            continue
+        old_s, new_s = ":".join(link.rpaths), ":".join(new)
+        rel = obj.relative_to(install_dir).as_posix()
+        restore = _writable(obj)
+        try:
+            done = _linkage.rewrite_elf_rpath(obj, new_s)
+            if not done and patchelf and platform != "netbsd":
+                cmd = [patchelf, "--set-rpath", new_s]
+                if link.dt_rpath:
+                    cmd.append("--force-rpath")  # keep DT_RPATH semantics
+                done = subprocess.run([*cmd, str(obj)], capture_output=True).returncode == 0
+        finally:
+            if restore is not None:
+                obj.chmod(restore)
+        if done:
+            print(f"cvcpkg: relocated {rel}: RPATH {old_s} -> {new_s or '<none>'}")
+        else:
+            print(f"cvcpkg: WARNING: could not rewrite {rel} RPATH {old_s} -> {new_s}")
+
+
+def _dep_manifest(prefixes: Sequence[Path], name: str) -> dict[str, Any] | None:
+    """The manifest dependency *name* installed into one of *prefixes*.
+
+    Looked up at ``share/libcvc-deps/<name>/manifest.yaml``, then among the
+    other installed manifests for one whose bundle provides *name*.  ``None``
+    when there is none -- the flat ``share/libcvc-deps/manifest.yaml`` of
+    older bundles is clobbered by whichever extracted last, so it names
+    nothing reliably.
+    """
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+    def load(path: Path) -> dict[str, Any] | None:
+        try:
+            with open(path) as f:
+                data = yaml.load(f, Loader=loader)
+        except (OSError, yaml.YAMLError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    for prefix in prefixes:
+        data = load(prefix / "share" / "libcvc-deps" / name / "manifest.yaml")
+        if data is not None:
+            return data
+    for prefix in prefixes:
+        for path in sorted((prefix / "share" / "libcvc-deps").glob("*/manifest.yaml")):
+            data = load(path)
+            if data is None:
+                continue
+            provides = data.get("provides") or (data.get("contents") or {}).get("provides") or []
+            if name in provides:
+                return data
+    return None
+
+
+def _required_names(entries: Iterable[Any]) -> list[str]:
+    """Package names in a ``dependencies.required`` list: ``{name: ...}``
+    entries, or the ``[org/]name`` strings of older manifests."""
+    names: list[str] = []
+    for d in entries:
+        name = d.get("name") if isinstance(d, dict) else str(d).rsplit("/", 1)[-1]
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _runtime_dep_libraries(
+    dep_prefixes: Sequence[Path | None], required: Sequence[str] | None
+) -> dict[str, set[str]]:
+    """The shared libraries a bundle's runtime dependencies install, by name.
+
+    What the reach pass (:func:`_complete_elf_rpaths`) and the pack-time gate
+    (:func:`check_relocatable`) count as shipped beside the bundle.  A builder
+    job, like ``pack --prefix``, installs a recipe's build AND runtime
+    dependencies into one deps prefix, but only the runtime closure is
+    installed next to the bundle: indexing the whole prefix gave gcc-runtime's
+    libgfortran a ``$ORIGIN/../lib64`` entry, because its gfortran build
+    dependency keeps libgcc_s.so.1 there -- a directory no consumer has, for a
+    library the host provides.
+
+    The closure starts at *required* (the names in the bundle's
+    ``dependencies.required``) and follows each dependency's installed
+    manifest: its ``dependencies.required``, and its ``contents.files`` for
+    what it installed.  When the closure cannot be told apart -- *required* is
+    ``None``, or a dependency in it has no manifest in *dep_prefixes* (a bundle
+    from before per-bundle manifests, or one ``build-all`` merged in without
+    one) -- every library in *dep_prefixes* counts, as it did before.
+    """
+    prefixes = [Path(p) for p in dep_prefixes if p]
+    if not prefixes:
+        return {}
+    if required is None:
+        return _linkage.library_index(prefixes)
+    files: list[str] = []
+    seen: set[str] = set()
+    queue = list(required)
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        manifest = _dep_manifest(prefixes, name)
+        if manifest is None:
+            print(
+                f"cvcpkg: runtime dependency {name} has no installed manifest; every "
+                "library in the deps prefix counts as shipped"
+            )
+            return _linkage.library_index(prefixes)
+        files.extend(str(f) for f in (manifest.get("contents") or {}).get("files") or [])
+        queue.extend(_required_names((manifest.get("dependencies") or {}).get("required") or []))
+    return _linkage.index_files(files)
+
+
+def _complete_elf_rpaths(
+    install_dir: Path,
+    dep_libs: Mapping[str, Iterable[str]],
+    patchelf: str | None,
+) -> None:
+    """Give every ELF object the ``$ORIGIN`` entries its shipped libraries need.
+
+    A NEEDED library that this bundle, or one of its runtime dependencies
+    (*dep_libs*, see :func:`_runtime_dep_libraries`), ships is only loaded
+    from the installed prefix if the object's RUNPATH reaches the directory it
+    lands in; otherwise the loader takes whatever copy the host has (openssl
+    +cvc.6's bin/openssl, built with no RPATH, loaded the distro's
+    libssl.so.3) or fails.  For each such library this appends
+    ``$ORIGIN/<path from the object to it>`` -- ``$ORIGIN/../lib`` from bin/,
+    ``$ORIGIN/..`` from lib/engines-3/.
+
+    Appending grows the RPATH string, so this needs *patchelf* and runs only
+    where ``cvcpkg.linkage.REACH_PLATFORMS`` says growing is safe (linux).  The
+    pack-time gate reports whatever is still unreachable.
+    """
+    index = _linkage.library_index([install_dir], dep_libs)
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf":
+            continue
+        rel_dir = obj.parent.relative_to(install_dir).as_posix()
+        added: list[str] = []
+        for _name, homes in _linkage.unreachable_libs(rel_dir, link, index):
+            r = posixpath.relpath(homes[0], rel_dir)
+            entry = "$ORIGIN" if r == "." else f"$ORIGIN/{r}"
+            if entry not in added:
+                added.append(entry)
+        if not added:
+            continue
+        old_s = ":".join(link.rpaths)
+        new_s = ":".join([*link.rpaths, *added])
+        rel = obj.relative_to(install_dir).as_posix()
+        done = False
+        if patchelf:
+            cmd = [patchelf, "--set-rpath", new_s]
+            if link.dt_rpath:
+                cmd.append("--force-rpath")  # keep DT_RPATH semantics
+            restore = _writable(obj)
+            try:
+                done = subprocess.run([*cmd, str(obj)], capture_output=True).returncode == 0
+            finally:
+                if restore is not None:
+                    obj.chmod(restore)
+        if done:
+            print(f"cvcpkg: relocated {rel}: RPATH {old_s or '<none>'} -> {new_s}")
+        else:
+            print(f"cvcpkg: WARNING: could not add {':'.join(added)} to {rel}'s RPATH")
+
+
+def _patch_macos_install_names(
+    install_dir: Path,
+    dep_prefixes: Sequence[Path | None] = (),
+    temp_prefixes: Sequence[Path | str | None] = (),
+) -> None:
+    """Make every Mach-O object in *install_dir* load its libraries via ``@rpath``.
+
+    The macOS analog of :func:`_patch_elf_rpath` + :func:`_scrub_elf_rpaths`.
+    autotools/libtool builds (e.g. ImageMagick) bake the absolute build-temp
+    install prefix into a dylib's own install name (``LC_ID_DYLIB``) and into
+    its references to sibling dylibs (``LC_LOAD_DYLIB``); a program linked
+    against a DEPENDENCY whose id was such a path records it too (cmake +cvc.1
+    loaded ``/private/var/folders/.../cvcpkg-curl-.../install/lib/libcurl.4.dylib``,
+    grpc its libssl/libcrypto); and CMake's link-path RPATH adds the job's deps
+    prefix as an absolute ``LC_RPATH`` (cmake +cvc.5:
+    ``/Users/runner/work/.../prefix/lib``).  Once the bundle is unpacked
+    elsewhere none of those paths exist and dyld aborts ("Library not loaded").
+
+    For every executable, dylib and bundle under *install_dir* (not just lib/ --
+    bin/ is where cmake, curl and openssl were left broken) it:
+
+    * sets each ``lib/**/*.dylib``'s id to ``@rpath/<leaf>`` and gives it a
+      ``@loader_path`` RPATH so it finds its siblings (the ``$ORIGIN`` analog);
+    * rewrites an absolute reference to a dylib that this bundle ships, or that
+      a dependency installed in *dep_prefixes* ships, to ``@rpath/<leaf>`` --
+      both end up in the same flat prefix;
+    * maps an ``LC_RPATH`` inside *temp_prefixes* to the ``@loader_path``-
+      relative equivalent and deletes any other builder-path ``LC_RPATH``
+      (see :func:`_relocated_entries`);
+    * adds the ``@loader_path``-relative RPATH each ``@rpath`` reference needs
+      to resolve in the installed prefix (``@loader_path/../lib`` from bin/).
+
+    System references (/usr/lib, /System) are left alone.  A modified file is
+    re-signed ad hoc: arm64 refuses to run a binary whose signature the edit
+    invalidated.  Only runs where ``install_name_tool`` exists (any macOS host).
     """
     install_name_tool = shutil.which("install_name_tool")
-    otool = shutil.which("otool")
-    if not install_name_tool or not otool:
+    if not install_name_tool:
         return
+    codesign = shutil.which("codesign")
     lib_dir = install_dir / "lib"
-    if not lib_dir.is_dir():
-        return
-    # Leaf names of every dylib the bundle ships (incl. version symlinks), so we
-    # only rewrite references that resolve to one of OUR libraries.
-    bundle_leaves = {p.name for p in lib_dir.rglob("*.dylib")}
-    for dylib in lib_dir.rglob("*.dylib"):
-        if not dylib.is_file() or dylib.is_symlink():
+
+    # Where each dylib leaf lives, relative to the prefix root: in a dependency
+    # first, then this bundle, so the bundle's own copy wins.
+    homes: dict[str, str] = {}
+    for root in [*(p for p in dep_prefixes if p), install_dir]:
+        root_lib = Path(root) / "lib"
+        if root_lib.is_dir():
+            for d in root_lib.rglob("*.dylib"):
+                homes[d.name] = d.parent.relative_to(root).as_posix()
+
+    def resolves_to(entry: str, obj: Path, executable: bool) -> Path | None:
+        for token in ("@loader_path", "@executable_path" if executable else None):
+            if token and (entry == token or entry.startswith(token + "/")):
+                return Path(os.path.normpath(obj.parent / entry[len(token) :].lstrip("/")))
+        return None
+
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "macho":
             continue
-        subprocess.run(
-            [install_name_tool, "-id", f"@rpath/{dylib.name}", str(dylib)],
-            capture_output=True,
+        args: list[str] = []
+        in_lib = obj.suffix == ".dylib" and lib_dir in obj.parents
+        if in_lib and link.kind == "shared" and link.soname != f"@rpath/{obj.name}":
+            args += ["-id", f"@rpath/{obj.name}"]
+
+        need_dirs: list[str] = []
+        for ref in link.needed:
+            leaf = ref.rsplit("/", 1)[-1]
+            if leaf not in homes:
+                continue
+            if ref.startswith("/") and not ref.startswith(_linkage.MACOS_SYSTEM_ROOTS):
+                args += ["-change", ref, f"@rpath/{leaf}"]
+            elif not ref.startswith("@rpath/"):
+                continue
+            need_dirs.append(homes[leaf])
+
+        final = _relocated_entries(obj, install_dir, link.rpaths, temp_prefixes, "@loader_path")
+        executable = link.kind == "executable"
+        reached = {resolves_to(e, obj, executable) for e in final}
+        wanted = ["."] if in_lib else []
+        for d in [*wanted, *dict.fromkeys(need_dirs)]:
+            target = obj.parent if d == "." else Path(os.path.normpath(install_dir / d))
+            if target in reached:
+                continue
+            r = os.path.relpath(target, obj.parent).replace(os.sep, "/")
+            final.append("@loader_path" if r == "." else f"@loader_path/{r}")
+            reached.add(target)
+        for e in link.rpaths:
+            if e not in final:
+                args += ["-delete_rpath", e]
+        for e in final:
+            if e not in link.rpaths:
+                args += ["-add_rpath", e]
+        if not args:
+            continue
+
+        rel = obj.relative_to(install_dir).as_posix()
+        restore = _writable(obj)
+        result = subprocess.run(
+            [install_name_tool, *args, str(obj)], capture_output=True, text=True
         )
-        # Idempotent: -add_rpath errors (harmlessly) if @loader_path is present.
-        subprocess.run(
-            [install_name_tool, "-add_rpath", "@loader_path", str(dylib)],
-            capture_output=True,
-        )
-        listing = subprocess.run(
-            [otool, "-L", str(dylib)],
-            capture_output=True,
-            text=True,
-        ).stdout
-        # First line is the file path itself; the rest are dependent libraries.
-        for line in listing.splitlines()[1:]:
-            ref = line.strip().split(" ", 1)[0]
-            if ref.startswith("/") and Path(ref).name in bundle_leaves:
-                subprocess.run(
-                    [install_name_tool, "-change", ref, f"@rpath/{Path(ref).name}", str(dylib)],
-                    capture_output=True,
-                )
+        if result.returncode != 0:
+            print(
+                f"cvcpkg: WARNING: install_name_tool could not rewrite {rel}: {result.stderr.strip()}"
+            )
+        elif codesign:
+            subprocess.run(
+                [
+                    codesign,
+                    "--force",
+                    "--sign",
+                    "-",
+                    "--preserve-metadata=entitlements,requirements,flags,runtime",
+                    str(obj),
+                ],
+                capture_output=True,
+            )
+        if restore is not None:
+            obj.chmod(restore)
+        if result.returncode == 0:
+            print(f"cvcpkg: relocated {rel}: {' '.join(args)}")
 
 
 def _make_relocatable(ctx: BuildContext) -> None:
-    """Rewrite the installed tree so the shared bundle is relocatable.
+    """Rewrite the installed tree so the bundle runs from any install prefix.
 
     Consumers must load the libraries without LD_LIBRARY_PATH/DYLD_* —
     ``$ORIGIN`` RPATH on ELF (Linux + the ``$ORIGIN``-honouring BSDs + Haiku),
@@ -1539,16 +1927,37 @@ def _make_relocatable(ctx: BuildContext) -> None:
     install, so packaging is self-hosting — see _find_patchelf and
     _bootstrap_host_tools.
 
+    The shared-library rewrites (``lib/`` ids and ``$ORIGIN``) are for shared
+    builds; removing builder paths from executables applies to static builds
+    too — cmake's static +cvc.1 shipped the same job-prefix RUNPATH as its
+    shared one.  Whatever this pass cannot fix fails the pack-time gate in
+    :func:`stage_bundle`.
+
     Split out of :func:`run_build` because it has to run for DELEGATED builds
     too, and those return early.
     """
-    if ctx.link != "shared":
-        return
+    temp_prefixes = (ctx.prefix, ctx.build_prefix, ctx.install_dir)
+    shared = ctx.link == "shared"
     if ctx.platform == "macos":
-        _patch_macos_install_names(ctx.install_dir)
-    elif ctx.platform in _ELF_RPATH_PLATFORMS:
+        _patch_macos_install_names(ctx.install_dir, (ctx.prefix,), temp_prefixes)
+    elif ctx.platform in _ELF_RPATH_PLATFORMS or ctx.platform == "openbsd":
         patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-        _patch_elf_rpath(ctx.install_dir, patchelf)
+        lib_pass = shared and ctx.platform in _ELF_RPATH_PLATFORMS
+        if lib_pass:
+            _patch_elf_rpath(ctx.install_dir, patchelf)
+        lib_dir = ctx.install_dir / "lib"
+        _scrub_elf_rpaths(
+            ctx.install_dir,
+            temp_prefixes,
+            patchelf,
+            platform=ctx.platform,
+            # _patch_elf_rpath already owns lib/**/*.so* (its own $ORIGIN rule).
+            skip=lambda p: lib_pass and ".so" in p.name and lib_dir in p.parents,
+        )
+        if ctx.platform in _linkage.REACH_PLATFORMS:
+            required = _required_names(runtime_dependencies(ctx.recipe, ctx.platform))
+            dep_libs = _runtime_dep_libraries((ctx.prefix,), required)
+            _complete_elf_rpaths(ctx.install_dir, dep_libs, patchelf)
 
 
 def run_build(
@@ -1674,8 +2083,27 @@ def run_build(
 # ── Test execution ──────────────────────────────────────────────
 
 
+# Where the BSDs' and macOS's package systems put bash.  None of them ships
+# bash in the base system, and a builder started from cron (@reboot, the
+# documented BSD setup) runs with cron's minimal PATH, which leaves these out.
+# The env-*.sh scripts add them back for the build itself, but bash has to be
+# found before any of those scripts can be sourced.
+_BASH_FALLBACKS = (
+    "/usr/pkg/bin/bash",  # NetBSD (pkgsrc), also SmartOS/illumos pkgsrc
+    "/usr/local/bin/bash",  # FreeBSD and OpenBSD packages, Homebrew on Intel
+    "/opt/local/bin/bash",  # MacPorts
+    "/opt/homebrew/bin/bash",  # Homebrew on Apple silicon
+    "/bin/bash",
+    "/usr/bin/bash",
+)
+
+
 def _find_bash() -> str:
-    """Find a real bash executable, preferring Git Bash over WSL on Windows."""
+    """Find a real bash executable, preferring Git Bash over WSL on Windows.
+
+    On POSIX hosts PATH is tried first, then the package-system locations in
+    ``_BASH_FALLBACKS``, so a builder whose service manager gives it a minimal
+    PATH (cron on the BSDs) still finds pkgsrc's or ports' bash."""
     if sys.platform == "win32":
         # On Windows, shutil.which("bash") may return WSL bash which fails
         # if no distro is installed.  Prefer Git-for-Windows bash.
@@ -1687,7 +2115,14 @@ def _find_bash() -> str:
     found = shutil.which("bash")
     if found:
         return found
-    raise BuildError("bash not found on PATH")
+    if sys.platform != "win32":
+        for candidate in _BASH_FALLBACKS:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    raise BuildError(
+        "bash not found on PATH"
+        + ("" if sys.platform == "win32" else f" or in {', '.join(_BASH_FALLBACKS)}")
+    )
 
 
 def _find_pwsh(prefix: Path | None = None) -> str:
@@ -1801,8 +2236,7 @@ def run_test(
         (ctx.prefix / "lib").as_posix(),
     ]
     if sys.platform == "darwin":
-        existing = env.get("DYLD_LIBRARY_PATH", "")
-        env["DYLD_LIBRARY_PATH"] = ":".join(lib_dirs + ([existing] if existing else []))
+        _macos_fallback_lib_path(env, lib_dirs)
     else:
         # Haiku reads LIBRARY_PATH, not LD_LIBRARY_PATH — see lib_path_var.
         lib_var = lib_path_var(ctx.platform)
@@ -1949,6 +2383,65 @@ def _total_size(root: Path) -> int:
     return sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
 
 
+def runtime_dependencies(recipe: Recipe, platform: str) -> list[dict[str, str]]:
+    """The consumer-facing deps a *platform* bundle of *recipe* records.
+
+    This is the bundle's ``dependencies.required`` and its catalog row's
+    ``required_deps`` -- the edges the client resolver walks on install.
+    Every publish path must derive them here, so a bundle cannot reach the
+    catalog with fewer deps than its own manifest declares.
+
+    Uses ``depends.runtime``, falling back to ``depends.build`` for recipes
+    that haven't adopted the runtime/build split yet.  A dep whose
+    ``platforms:`` list excludes *platform* is dropped.
+    """
+    return runtime_dependencies_from_raw(recipe.raw, platform)
+
+
+def runtime_dependencies_from_raw(raw: dict[str, Any], platform: str) -> list[dict[str, str]]:
+    """:func:`runtime_dependencies` from a parsed recipe.yaml dict.
+
+    For callers that hold a recipe as data rather than a directory --
+    scripts/backfill_required_deps.py reads each published version's recipe
+    out of git history.
+    """
+    depends_block = raw.get("depends", {}) or {}
+    depends = depends_block.get("runtime", depends_block.get("build", []))
+
+    dep_list = []
+    for d in depends:
+        if isinstance(d, str):
+            # Support "org/name" shorthand in string deps
+            if "/" in d:
+                dep_org, dep_name = d.split("/", 1)
+                dep_list.append({"name": dep_name, "org": dep_org})
+            else:
+                dep_list.append({"name": d})
+        else:
+            plats = d.get("platforms")
+            if plats and platform not in plats:
+                continue
+            # Don't write platforms into the manifest -- it's platform-specific
+            entry: dict[str, str] = {"name": d["name"]}
+            if d.get("org"):
+                entry["org"] = d["org"]
+            if d.get("version"):
+                entry["version"] = d["version"]
+            dep_list.append(entry)
+    return dep_list
+
+
+def ensure_redistributable(recipe: Recipe) -> None:
+    """Refuse to turn a ``redistributable: false`` recipe into a bundle.
+
+    Called up front by every packing entry point, so the refusal comes before
+    the build, and again from :func:`generate_manifest`, which every staging
+    site goes through, so a new packing path cannot forget it.
+    """
+    if not recipe.redistributable:
+        raise NotRedistributableError(recipe.not_redistributable_reason)
+
+
 def generate_manifest(
     recipe: Recipe,
     install_dir: Path,
@@ -1973,38 +2466,13 @@ def generate_manifest(
     declares ``cross_toolchain.target_platforms`` is a host tool); pass an
     explicit bool to override.
     """
+    # A manifest exists only to go into a bundle.
+    ensure_redistributable(recipe)
     files = _file_list(install_dir)
     cmake_packages = recipe.raw.get("package", {}).get("cmake_packages", [])
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
     abi = recipe.raw.get("abi", {})
-
-    # Use ``depends.runtime`` for the manifest (consumer-facing deps).
-    # Falls back to ``depends.build`` for recipes that haven't adopted
-    # the runtime/build split yet.
-    depends_block = recipe.raw.get("depends", {})
-    depends = depends_block.get("runtime", depends_block.get("build", []))
-
-    # Normalize dep entries to dicts, filtering by target platform
-    dep_list = []
-    for d in depends:
-        if isinstance(d, str):
-            # Support "org/name" shorthand in string deps
-            if "/" in d:
-                dep_org, dep_name = d.split("/", 1)
-                dep_list.append({"name": dep_name, "org": dep_org})
-            else:
-                dep_list.append({"name": d})
-        else:
-            plats = d.get("platforms")
-            if plats and platform not in plats:
-                continue
-            # Don't write platforms into the manifest -- it's platform-specific
-            entry: dict[str, str] = {"name": d["name"]}
-            if d.get("org"):
-                entry["org"] = d["org"]
-            if d.get("version"):
-                entry["version"] = d["version"]
-            dep_list.append(entry)
+    dep_list = runtime_dependencies(recipe, platform)
 
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")
@@ -2249,6 +2717,8 @@ def stage_bundle(
     staging_dir: Path,
     recipe_dir: Path | None = None,
     temp_prefixes: Sequence[Path | str] = (),
+    linkage_allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
 ) -> None:
     """Copy the installed tree, manifest, and recipe into a staging directory.
 
@@ -2260,6 +2730,13 @@ def stage_bundle(
     launchers (:func:`_rewrite_exe_launchers`).  The rewrites run on the
     STAGED copy only: ``pack --from-prefix`` packages a tree the caller
     owns, which must come out of packing byte-identical.
+
+    Raises :class:`PackError` when a staged ELF/Mach-O object still loads
+    from, or searches, a path into the build machine — see
+    :func:`check_relocatable`.  *linkage_allow* is the recipe's
+    ``package.linkage_allow``; *dep_prefixes* hold the dependencies the bundle
+    was built against, and the libraries of those the manifest's
+    ``dependencies.required`` installs beside it must be reachable too.
     """
     # Copy entire install tree (preserve symlinks for toolchains like cosmocc)
     if install_dir.is_dir():
@@ -2267,6 +2744,18 @@ def stage_bundle(
 
     _rewrite_shebangs(staging_dir, temp_prefixes)
     _rewrite_exe_launchers(staging_dir, temp_prefixes)
+    runtime_deps: list[str] | None = None
+    if "dependencies" in manifest:
+        runtime_deps = _required_names((manifest["dependencies"] or {}).get("required") or [])
+    check_relocatable(
+        staging_dir,
+        manifest["bundle"],
+        temp_prefixes=(*temp_prefixes, install_dir),
+        allow=linkage_allow,
+        dep_prefixes=dep_prefixes,
+        runtime_deps=runtime_deps,
+    )
+    check_no_homebrew(staging_dir, manifest["bundle"], allow=linkage_allow)
 
     # Write the manifest under a subdirectory named for the bundle itself.
     # Every bundle installs into the same shared prefix, and extraction is a
@@ -2286,6 +2775,129 @@ def stage_bundle(
         for f in sorted(recipe_dir.iterdir()):
             if f.is_file() and f.suffix in exts:
                 shutil.copy2(f, dest_recipe / f.name)
+
+
+# Homebrew's prefixes.  Nothing cvcpkg ships may point into them: a consumer
+# machine has no Homebrew (and macOS CI moves it aside before building, #182).
+HOMEBREW_PREFIXES = (
+    "/opt/homebrew/",
+    "/usr/local/opt/",
+    "/usr/local/Cellar/",
+    "/usr/local/Homebrew/",
+    "/home/linuxbrew/",
+)
+
+
+def _exported_metadata(root: Path) -> Iterator[tuple[Path, str]]:
+    """The staged files that hand compile/link flags or paths to consumers.
+
+    pkg-config files, libtool archives, bin/*-config scripts, exported CMake
+    package configs and CPython's build configuration.  Deliberately not every
+    text file: CMake's own find modules and pkgconf's default search path
+    legitimately *name* /opt/homebrew as a place to look.
+    """
+    for f in sorted(root.rglob("*")):
+        if f.is_symlink() or not f.is_file():
+            continue
+        rel = f.relative_to(root).as_posix()
+        name = f.name
+        if (
+            name.endswith((".pc", ".la"))
+            or (rel.startswith("bin/") and name.endswith("-config"))
+            or (
+                rel.startswith("lib/")
+                and "/cmake/" in f"/{rel}"
+                and name.endswith(".cmake")
+                and re.search(r"(?i)(config|targets)", name)
+            )
+            or (name.startswith("_sysconfigdata") and name.endswith(".py"))
+            or (name == "Makefile" and "/config-" in rel)
+        ):
+            yield f, rel
+
+
+def check_no_homebrew(root: Path, bundle: Mapping[str, Any], *, allow: Sequence[str] = ()) -> None:
+    """Fail packing when exported build metadata points into Homebrew.
+
+    check_relocatable already refuses a Mach-O that LOADS from Homebrew; this
+    covers the text that propagates flags to consumers (a .pc's -I/-L, a
+    -config script, python's _sysconfigdata CFLAGS/LDFLAGS), which no loader
+    check sees.  A path under a *allow* prefix (``package.linkage_allow``) is
+    vouched for and skipped.
+    """
+    allowed = tuple(a for a in allow if a)
+    hits: list[str] = []
+    for f, rel in _exported_metadata(root):
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = re.search("(" + "|".join(re.escape(x) for x in HOMEBREW_PREFIXES) + r")\S*", line)
+            if m and not (allowed and m.group(0).startswith(allowed)):
+                hits.append(f"  {rel}: {line.strip()[:160]}")
+                break
+    if hits:
+        raise PackError(
+            f"{bundle.get('name', '?')} ({bundle.get('platform', '?')}/{bundle.get('arch', '?')}): "
+            f"{len(hits)} exported file(s) point into Homebrew, which no consumer has:\n"
+            + "\n".join(hits[:40])
+            + "\nBuild against cvcpkg dependencies only (macOS CI moves Homebrew aside); "
+            "a deliberate fixed location goes in package.linkage_allow."
+        )
+
+
+def check_relocatable(
+    root: Path,
+    bundle: Mapping[str, Any],
+    *,
+    temp_prefixes: Sequence[Path | str] = (),
+    allow: Sequence[str] = (),
+    dep_prefixes: Sequence[Path | None] = (),
+    runtime_deps: Sequence[str] | None = None,
+) -> None:
+    """Fail packing when a binary in *root* points into the build machine.
+
+    The pack-time gate for relocatability, the check that was missing while
+    cmake shipped ``RUNPATH /tmp/cvcpkg-builder/cvcpkg-job-cmake-.../lib``
+    (linux, +cvc.1 to +cvc.6) and ``LC_RPATH /Users/runner/work/.../prefix/lib``
+    (macos +cvc.5): those programs start on the builder and nowhere else.
+    Every ELF/Mach-O object's RUNPATH/RPATH, NEEDED, LC_RPATH, LC_*_DYLIB and
+    LC_ID_DYLIB is read (:func:`cvcpkg.linkage.audit_tree`); a path into
+    *temp_prefixes*, a cvcpkg build directory, /tmp or a CI workspace fails
+    the pack, as does — on macOS — any absolute path outside the OS
+    (Homebrew, MacPorts).  On linux, a NEEDED library the bundle or one of its
+    runtime dependencies ships must also be reachable through the object's own
+    ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.  Those
+    dependencies are *runtime_deps* and everything they require, as installed
+    in *dep_prefixes* (:func:`_runtime_dep_libraries`); ``None`` counts every
+    library in *dep_prefixes*.  Runs on the staged tree, after the relocation
+    pass (:func:`_make_relocatable`) has rewritten everything it can.
+    """
+    platform = str(bundle.get("platform", ""))
+    dep_libs = (
+        _runtime_dep_libraries(dep_prefixes, runtime_deps)
+        if platform in _linkage.REACH_PLATFORMS
+        else None
+    )
+    result = _linkage.audit_tree(root, platform, temp_prefixes, allow, dep_libs=dep_libs)
+    if result.ok:
+        if result.objects:
+            print(f"cvcpkg: relocatable OK — {result.objects} binary object(s) checked")
+        return
+    raise PackError(
+        f"{bundle.get('name', '?')} ({platform}/{bundle.get('arch', '?')}): "
+        f"{len(result.findings)} loader path(s) will not exist where the bundle is "
+        "installed:\n"
+        + _linkage.format_findings(result.findings)
+        + "\nLink against the dependency through its installed prefix with a "
+        "loader-relative RPATH ($ORIGIN/../lib, @loader_path/../lib) and declare it in "
+        "depends.runtime; the relocation pass rewrites paths into this build's own "
+        "prefixes and adds the $ORIGIN entries shipped libraries need, so anything "
+        "left is either another build's directory or a library the build host "
+        "provides (patchelf / install_name_tool missing also leaves them). See "
+        "src/cvcpkg/linkage.py."
+    )
 
 
 def _build_deterministic_tar(staging_dir: Path) -> bytes:
@@ -3143,17 +3755,22 @@ def pack_recipe(
     what lets ``builds submit-dag`` schedule such a recipe once and publish it
     once, rather than fanning out an arch-pinned bundle per host.
     """
-    from cvcpkg.platform import detect_arch, detect_platform
+    from cvcpkg.platform import detect_platform
 
     recipe = Recipe.load(recipe_dir)
+    # Before the build: no point downloading a toolkit only to refuse it.
+    ensure_redistributable(recipe)
 
-    if not arch:
-        arch = detect_arch()
     # The platform this bundle is being built FOR; empty means "this host".
     target_platform = platform or detect_platform()
     # The host we actually build on. "any" is not a real host, so fall back to
     # the detected platform for the compile/install step.
     build_platform = detect_platform() if target_platform == "any" else target_platform
+    if not arch:
+        # From the platform being built, not the host: a wasm bundle packed on an
+        # x86_64 host is wasm32, as pack_from_prefix and install already have it.
+        # detect_arch() here tagged it x86_64, so it never resolved for consumers.
+        arch = _detect_arch_for_platform(build_platform)
     # The package identity follows the matrix entry that drives THIS build: a
     # target served by the `any` fallback publishes one noarch bundle shared by
     # every such target, a target with its own entry publishes under that name.
@@ -3253,6 +3870,8 @@ def pack_recipe(
         staging,
         recipe_dir=ctx.recipe.recipe_dir,
         temp_prefixes=(ctx.prefix, ctx.build_prefix, ctx.install_dir),
+        linkage_allow=ctx.recipe.linkage_allow,
+        dep_prefixes=(ctx.prefix,),
     )
 
     archive_path, sha256, size = create_archive(
@@ -3275,6 +3894,29 @@ def pack_recipe(
         shutil.rmtree(ctx.work_dir, ignore_errors=True)
 
     return archive_path, sha256, size
+
+
+def _other_bundle_manifests(prefix: Path, name: str) -> list[str]:
+    """Packages other than *name* with a cvcpkg manifest installed in *prefix*.
+
+    Looks where installed bundles keep theirs: ``share/libcvc-deps/<pkg>/manifest.yaml``,
+    and the flat ``share/libcvc-deps/manifest.yaml`` of older bundles (named by its
+    ``bundle.name``).  *name*'s own manifest, e.g. from re-packing an installed
+    copy, is not counted.
+    """
+    meta = prefix / "share" / "libcvc-deps"
+    if not meta.is_dir():
+        return []
+    others = [m.parent.name for m in sorted(meta.glob("*/manifest.yaml")) if m.parent.name != name]
+    flat = meta / "manifest.yaml"
+    if flat.is_file():
+        try:
+            owner = (yaml.safe_load(flat.read_text(encoding="utf-8")) or {})["bundle"]["name"]
+        except (OSError, yaml.YAMLError, KeyError, TypeError):
+            owner = ""
+        if owner != name:
+            others.append(owner or "share/libcvc-deps/manifest.yaml")
+    return others
 
 
 def pack_from_prefix(
@@ -3327,12 +3969,24 @@ def pack_from_prefix(
         ``(archive_path, sha256, size_bytes)`` — same shape as
         :func:`pack_recipe`.
     """
-    from cvcpkg.platform import detect_arch
-
     if not prefix.is_dir():
         raise RecipeError(f"prefix directory does not exist: {prefix}")
 
     recipe = Recipe.load(recipe_dir)
+    ensure_redistributable(recipe)
+
+    # The whole prefix is staged, so another package's manifest in it would ship
+    # in this bundle: installing it overwrites that package's record, and publish
+    # cannot tell which manifest is the bundle's (it refuses such archives).
+    others = _other_bundle_manifests(prefix, recipe.name)
+    if others:
+        raise PackError(
+            f"{recipe.name}: --from-prefix {prefix} also holds the cvcpkg manifests of "
+            f"{', '.join(others)}, so the bundle would carry those packages too. This is "
+            "a prefix with dependencies installed in it, not this package's install "
+            "tree: pack from a directory holding only what its build installed (or run "
+            "`cvcpkg pack` without --from-prefix, which isolates the install itself)."
+        )
 
     if version_override:
         # Preserve the recipe's ``+cvc.<rev>`` cvc_revision suffix so the
@@ -3391,6 +4045,7 @@ def pack_from_prefix(
             staging,
             recipe_dir=recipe.recipe_dir,
             temp_prefixes=(prefix,),
+            linkage_allow=recipe.linkage_allow,
         )
         archive_path, sha256, size = create_archive(
             staging,
@@ -3926,63 +4581,36 @@ def _server_cache_download(
     return dest
 
 
-def _server_cache_push(
-    base_url: str,
-    token: str,
-    archive_path: Path,
+def _accept_server_hit(
+    cache: Any,
+    archive: Path,
     name: str,
     version: str,
+    chain_hash_val: str,
     platform: str,
     arch: str,
-    build_type: str,
+    config: str,
     link: str,
-    recipe_version: str,
-    org: str,
 ) -> bool:
-    """Publish an archive to the server cache via ``POST /v1/publish``.
+    """Store a server-cache download in the local *cache*; ``False`` if unusable.
 
-    Returns ``True`` on success, ``False`` on failure.
+    A download only counts as a hit once it restores.  The server holds
+    whatever was published under that chain hash -- a packed bundle from
+    ``pack-all``, a Windows ``.zip`` -- and one this host cannot extract must
+    fall back to building the recipe, not abort the run.  Deletes *archive*
+    when it is rejected.
     """
-    import urllib.error
-    import urllib.parse
-    import urllib.request
-
-    params = urllib.parse.urlencode(
-        {
-            "name": name,
-            "version": version,
-            "platform": platform,
-            "arch": arch,
-            "build_type": build_type,
-            "link": link,
-            "recipe_version": recipe_version,
-            "org": org,
-        }
-    )
-    url = f"{base_url.rstrip('/')}/v1/publish?{params}"
-
-    # Build multipart form data manually (avoid extra dependencies).
-    boundary = "----cvcpkg-upload-boundary"
-    filename = archive_path.name
-    body_prefix = (
-        f"--{boundary}\r\n"
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: application/octet-stream\r\n\r\n"
-    ).encode()
-    body_suffix = f"\r\n--{boundary}--\r\n".encode()
-
-    file_data = archive_path.read_bytes()
-    body = body_prefix + file_data + body_suffix
-
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    if token:
-        req.add_header("Authorization", f"Bearer {token}")
+    srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
     try:
-        with urllib.request.urlopen(req, timeout=600) as resp:  # noqa: S310
-            return resp.status == 200
-    except (urllib.error.URLError, OSError):
+        cache.restore(archive, srv_restore)
+        cache.store(srv_restore, name, version, chain_hash_val, platform, arch, config, link)
+    except Exception as exc:  # noqa: BLE001 -- any failure here means "build it"
+        print(f"  server cache archive unusable ({exc}); building instead")
+        archive.unlink(missing_ok=True)
         return False
+    finally:
+        shutil.rmtree(srv_restore, ignore_errors=True)
+    return True
 
 
 def build_all(
@@ -4002,7 +4630,6 @@ def build_all(
     force_clean: bool = False,
     server_cache_url: str = "",
     server_cache_token: str = "",
-    server_cache_push: bool = False,
     no_server_cache: bool = False,
     server_cache_org: str = "",
     work_dir_root: Path | None = None,
@@ -4071,12 +4698,13 @@ def build_all(
     local cache is populated.  *server_cache_token* provides the
     bearer token for authenticated servers.
 
-    When *server_cache_push* is ``True``, successful builds are
-    published to the server cache via ``POST /v1/publish``.
+    build_all never publishes: the build cache holds a raw install tree --
+    no manifest, scripts still pointing at the build prefix -- and a catalog
+    row made from it installs without its dependencies.  ``pack-all`` and
+    ``build-all`` ``--server-cache-push`` pack each build and publish that.
 
-    *no_server_cache* disables server cache entirely (both pull and
-    push).  *server_cache_org* scopes cache queries to a specific
-    organization.
+    *no_server_cache* disables server cache lookups.  *server_cache_org*
+    scopes cache queries to a specific organization.
 
     *work_dir_root*, when given, is the parent directory in which
     per-recipe temporary work directories are created.  Otherwise
@@ -4262,7 +4890,17 @@ def build_all(
                             tmp_archive,
                             expected_sha256=probe.get("sha256", ""),
                         )
-                        if result is not None:
+                        if result is not None and _accept_server_hit(
+                            cache,
+                            result,
+                            ht_recipe.name,
+                            ht_recipe.full_version,
+                            ht_chain_hash,
+                            ht_platform,
+                            ht_arch,
+                            config,
+                            link,
+                        ):
                             ht_cached = result
                             ht_server_hit = True
 
@@ -4275,23 +4913,6 @@ def build_all(
                 cache.restore(ht_cached, _bp)
                 _rewrite_pc_prefixes(_bp)
                 _rewrite_script_prefixes(_bp)
-                # Populate local cache from server download.
-                if ht_server_hit and cache is not None:
-                    srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
-                    try:
-                        cache.restore(ht_cached, srv_restore)
-                        cache.store(
-                            srv_restore,
-                            ht_recipe.name,
-                            ht_recipe.full_version,
-                            ht_chain_hash,
-                            ht_platform,
-                            ht_arch,
-                            config,
-                            link,
-                        )
-                    finally:
-                        shutil.rmtree(srv_restore, ignore_errors=True)
                 if ht_server_hit and ht_cached.is_file():
                     ht_cached.unlink(missing_ok=True)
             else:
@@ -4332,30 +4953,6 @@ def build_all(
                             config,
                             link,
                         )
-                    # Push to server cache.
-                    if (
-                        server_cache_push
-                        and server_cache_url
-                        and not no_server_cache
-                        and cache is not None
-                    ):
-                        arc = cache.lookup(ht_chain_hash, ht_platform, ht_arch, config, link)
-                        if arc is not None:
-                            ok = _server_cache_push(
-                                server_cache_url,
-                                server_cache_token,
-                                arc,
-                                ht_recipe.name,
-                                ht_recipe.full_version,
-                                ht_platform,
-                                ht_arch,
-                                config,
-                                link,
-                                ht_chain_hash,
-                                server_cache_org,
-                            )
-                            if ok:
-                                print(f"  -> pushed to server cache ({ht_chain_hash[:12]}...)")
                 except (BuildError, RecipeError):
                     if not keep_going:
                         raise
@@ -4461,29 +5058,20 @@ def build_all(
                         tmp_archive,
                         expected_sha256=probe.get("sha256", ""),
                     )
-                    if result is not None:
+                    if result is not None and _accept_server_hit(
+                        cache,
+                        result,
+                        recipe.name,
+                        recipe.full_version,
+                        recipe_chain_hash,
+                        eff_platform,
+                        eff_arch,
+                        config,
+                        link,
+                    ):
                         cached_archive = result
                         server_hit = True
                         print(f"  <- server cache hit ({recipe_chain_hash[:12]}...)")
-                        # Populate local cache for future runs.
-                        if cache is not None:
-                            import shutil as _shutil_srv
-
-                            srv_restore = Path(tempfile.mkdtemp(prefix="cvcpkg-srv-restore-"))
-                            try:
-                                cache.restore(tmp_archive, srv_restore)
-                                cache.store(
-                                    srv_restore,
-                                    recipe.name,
-                                    recipe.full_version,
-                                    recipe_chain_hash,
-                                    eff_platform,
-                                    eff_arch,
-                                    config,
-                                    link,
-                                )
-                            finally:
-                                _shutil_srv.rmtree(srv_restore, ignore_errors=True)
 
         # Build-closure recipes stage into the build prefix; everything else
         # into the deliverable prefix.
@@ -4587,30 +5175,6 @@ def build_all(
                         config,
                         link,
                     )
-                    # Push to server cache.
-                    if (
-                        server_cache_push
-                        and server_cache_url
-                        and not no_server_cache
-                        and not server_hit
-                    ):
-                        arc = cache.lookup(recipe_chain_hash, eff_platform, eff_arch, config, link)
-                        if arc is not None:
-                            ok = _server_cache_push(
-                                server_cache_url,
-                                server_cache_token,
-                                arc,
-                                recipe.name,
-                                recipe.full_version,
-                                eff_platform,
-                                eff_arch,
-                                config,
-                                link,
-                                recipe_chain_hash,
-                                server_cache_org,
-                            )
-                            if ok:
-                                print(f"  -> pushed to server cache ({recipe_chain_hash[:12]}...)")
             else:
                 ctx = build_recipe(
                     recipe.recipe_dir,

@@ -59,7 +59,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/hatch_fancy_pypi_readme/
-    - lib/python3.12/site-packages/hatch_fancy_pypi_readme-*.dist-info/
-    - Lib/site-packages/hatch_fancy_pypi_readme/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/hatch_fancy_pypi_readme/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/hatch_fancy_pypi_readme-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/hatch_fancy_pypi_readme/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

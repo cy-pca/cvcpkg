@@ -2,7 +2,32 @@ schema_version: 1
 recipe:
   name: wasmedge
   upstream_version: "0.17.0"
-  cvc_revision: 6
+  # Bumped 6 -> 7: Windows builds against the cvcpkg llvm18 (a windows build
+  # dependency) instead of a Chocolatey LLVM, and so get LLVM AOT for the first
+  # time -- the Chocolatey install has no LLVM CMake configs, so build.ps1 had
+  # always fallen back to WASMEDGE_USE_LLVM=OFF.  The shared Windows build now
+  # links one monolithic wasmedge.dll (BUILD_SHARED_LIBS=OFF) instead of the
+  # per-component DLLs that failed with LNK2019.
+  # Bumped 7 -> 8: Linux and macOS build against the cvcpkg llvm18 too, instead
+  # of apt's /usr/lib/llvm-*, a Homebrew keg or llvm-config on PATH.  LLVM is
+  # linked statically into one monolithic libwasmedge (BUILD_SHARED_LIBS=OFF):
+  # the cvc.6 Linux libwasmedge.so needed per-component .so files (and libfmt,
+  # libspdlog) that the bundle never shipped.  zlib, zstd and ncurses (what
+  # llvm18's LLVMSupport links) are runtime dependencies on Linux and macOS.
+  # Bumped 8 -> 9 (cvc.8 was never published): build.sh follows the staged
+  # llvm18's LLVM_ENABLE_TERMINFO.  cvc.8 always rewrote Helper.cmake's tinfo/
+  # ncurses to Terminfo::terminfo, but llvm18 18.1.8+cvc.4 (#178) is built
+  # with terminfo off, so its LLVMConfig.cmake defines no such target and the
+  # linux/x86_64 configure failed ("links to: Terminfo::terminfo but the target
+  # was not found").  With terminfo off, tinfo/ncurses are now dropped from the
+  # link; with it on (the linux/arm64 llvm18 is still cvc.1) the target is kept
+  # and pinned to the cvcpkg ncurses as before.  ncurses is a runtime
+  # dependency on Linux only now: every macOS llvm18 is cvc.4 or later.
+  # Bumped 9 -> 10: macOS builds pass WASMEDGE_FORCE_DISABLE_LTO=ON.  With
+  # ThinLTO, Xcode's ranlib/ld read the archives' Apple bitcode through the
+  # prefix's LLVM 18 libLTO, which cannot parse it; Xcode 26 then fails the
+  # libwasmedge link (arm64).  Linux and Windows builds are unchanged.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -23,7 +48,31 @@ depends:
   build:
     - cmake
     - ninja
-  runtime: []
+    # LLVM + LLD for WasmEdge's AOT compiler (-DWASMEDGE_USE_LLVM=ON), on every
+    # platform; nothing on the host is used.  LLVM's static component libraries
+    # are linked into libwasmedge / wasmedge.dll, so llvm18 is not needed at
+    # run time.
+    - name: llvm18
+      version: "^18.1"
+  runtime:
+    # llvm18 is built with LLVM_ENABLE_ZLIB=FORCE_ON, so the LLVMSupport linked
+    # into libwasmedge / wasmedge.dll loads zlib (zlib1.dll on Windows).
+    - name: zlib
+      version: "^1.3"
+    # On Linux/macOS llvm18's LLVMSupport also links zstd (LLVM_ENABLE_ZSTD).
+    # build.sh pins zlib and zstd to the cvcpkg copies; the Windows llvm18
+    # links no zstd.
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos]
+    # Terminfo, which cvcpkg's ncurses provides, is linked only when the staged
+    # llvm18 was built with LLVM_ENABLE_TERMINFO on: bundles before
+    # 18.1.8+cvc.4, which today means the linux/arm64 llvm18 (cvc.1).  Against
+    # cvc.4 or later libwasmedge links no ncurses (build.sh fails if it loads
+    # it), so there this edge goes unused.  No macOS llvm18 has terminfo on.
+    - name: ncurses
+      version: "^6.0"
+      platforms: [linux]
   host_tools: []
 
 toolchain:
@@ -35,17 +84,14 @@ toolchain:
       LLVM (with LLD) is required for ahead-of-time (AOT) compilation
       support (-DWASMEDGE_USE_LLVM=ON).  Without it WasmEdge still
       builds but can only interpret or JIT-compile Wasm modules.
-      The build scripts auto-detect LLVM on each platform:
-        Linux  — /usr/lib/llvm-{ver} (apt versioned installs)
-        macOS  — $(brew --prefix llvm@{ver}) (Homebrew keg)
-        Windows — C:\Program Files\LLVM (Chocolatey install)
-      Versions 14-21 are scanned in priority order (18 preferred).
-      If no versioned install is found, llvm-config on PATH is used
-      as a final fallback.
-    install:
-      apt: "llvm-18-dev lld-18 liblld-18-dev"
-      brew: "llvm@18"
-      choco: "llvm"
+      On every platform it is the cvcpkg llvm18 recipe (18.1.8), a build
+      dependency, found in the dependency prefix (lib/cmake/llvm and
+      lib/cmake/lld); nothing on the host is used (no apt, Homebrew,
+      Chocolatey or llvm-config on PATH), and the build fails if the
+      configs are missing.  Linux/macOS link LLVM statically into
+      libwasmedge (WASMEDGE_LINK_LLVM_STATIC=ON); Windows links llvm18's
+      static .lib libraries into wasmedge.dll for shared builds, and
+      static Windows builds are built without LLVM (see notes).
   gcc:
     min_version: "11"
   clang:
@@ -68,7 +114,10 @@ package:
   files:
     - lib/libwasmedge*
     - lib/wasmedge*
-    - lib/cmake/wasmedge/
+    # WasmEdge installs no CMake package config (lib/cmake/wasmedge/ was
+    # declared but never produced).  The Windows shared build's bin/wasmedge.dll
+    # is not declared here because a static Windows build has none (package.files
+    # cannot scope by link); build.ps1 asserts it instead.
     - include/wasmedge/
   cmake_packages:
     - { name: wasmedge, targets: ["wasmedge::wasmedge"] }
@@ -78,22 +127,48 @@ abi:
 
 notes:
   - title: "-Werror breaks GCC 13+ builds"
-    platforms: [linux]
+    platforms: [linux, macos, windows]
     description: >
       WasmEdge 0.17.0 hardcodes -Werror in cmake/Helper.cmake.
       GCC 13 emits -Warray-bounds and -Wmaybe-uninitialized warnings
       on valid code in coredump.cpp and other files, causing build
-      failures.  The patch 0001-disable-Werror-for-gcc13-compat.patch
-      replaces -Werror with -Wno-error.
-  - title: "CLI tools fail to link (shared lib build)"
-    platforms: [linux]
+      failures.  build.sh and build.ps1 replace -Werror with -Wno-error
+      in place before configuring.
+  - title: "Linux/macOS: one monolithic libwasmedge"
+    platforms: [linux, macos]
     description: >
-      The wasmedge and wasmedgec CLI tool targets fail to link when
-      building with -DWASMEDGE_BUILD_SHARED_LIB=ON due to unresolved
-      symbols across the internal shared library split.  This is an
-      upstream issue in 0.17.0.  We build with -DWASMEDGE_BUILD_TOOLS=OFF
-      since the C API shared library (libwasmedge.so) is what downstream
-      projects consume.
+      build.sh passes -DBUILD_SHARED_LIBS=OFF, overriding the ON that
+      cvc_cmake_build passes for a shared build, so the WasmEdge
+      components and the fmt/spdlog it fetches are static PIC libraries
+      linked into the one libwasmedge (upstream's own configuration).
+      With ON, each component became its own .so: the cvc.6 Linux
+      libwasmedge.so needed libwasmedgeCommon/System/Plugin.so,
+      libfmt.so.11 and libspdlog.so.1.13, none of which the bundle
+      shipped, and the wasmedge/wasmedgec CLI tools did not link.  The
+      tools are built again (the AOT smoke test needs them) but not
+      packaged.
+  - title: "Linux/macOS: LLVM AOT from the cvcpkg llvm18"
+    platforms: [linux, macos]
+    description: >
+      LLVM and LLD come from the cvcpkg llvm18 (18.1.8).  Its Unix bundle
+      is built with LLVM_LINK_LLVM_DYLIB=ON, so WasmEdge's default LLVM
+      linkage (and llvm18's exported lld targets) would make libwasmedge
+      load llvm18's libLLVM.so.  build.sh sets WASMEDGE_LINK_LLVM_STATIC=ON
+      instead, linking LLVM's static archives into libwasmedge, and fails
+      if libwasmedge or the tools load any libLLVM.  For that static link
+      cmake/Helper.cmake names zlib, terminfo and zstd by bare name
+      (-lz -ltinfo, or -lncurses -lz -lxar on macOS) and as libzstd.a;
+      build.sh rewrites those to the targets LLVMConfig.cmake defines and
+      pins them to the cvcpkg zlib and zstd (runtime dependencies), so no
+      host library is linked.  Terminfo follows the llvm18 it builds
+      against, as LLVMConfig.cmake records it (LLVM_ENABLE_TERMINFO).
+      llvm18 18.1.8+cvc.4 and later are built without terminfo, so
+      tinfo/ncurses are dropped from the link and libwasmedge loads no
+      ncurses (the build fails if it does).  Against an older llvm18
+      with terminfo on (still the only linux/arm64 one, cvc.1) they
+      become Terminfo::terminfo, pinned to the cvcpkg ncurses.  The build
+      ends with an AOT smoke test: wasmedgec compiles a small module to a
+      native .so/.dylib, which wasmedge then runs in AOT mode.
   - title: "Static library bundling broken"
     platforms: [linux]
     description: >
@@ -104,9 +179,25 @@ notes:
     platforms: [windows]
     description: >
       In 0.17.0 the per-target component DLLs (wasmedgeLoaderFileMgr,
-      etc.) reference internal helpers (WasmEdge::MMap,
-      WasmEdge::Allocator) that are only defined in system-specific
-      translation units and never marked dllexport, producing LNK2019
-      at link time.  The Windows build matrix entry therefore pins
-      `link: static` and ships the static archive only — downstream
-      consumers should use `link: static` for wasmedge on Windows.
+      etc.) that BUILD_SHARED_LIBS=ON produces reference internal helpers
+      (WasmEdge::MMap, WasmEdge::Allocator) that are only defined in
+      system-specific translation units and never marked dllexport,
+      producing LNK2019 at link time.  The shared Windows build therefore
+      passes -DBUILD_SHARED_LIBS=OFF: the components are static
+      libraries, linked into one wasmedge.dll (upstream's own Windows
+      configuration).
+  - title: "Windows: LLVM AOT from the cvcpkg llvm18"
+    platforms: [windows]
+    description: >
+      The shared Windows build enables AOT against the cvcpkg llvm18
+      (18.1.8) and smoke-tests it: wasmedgec compiles a small module to a
+      native .dll, which wasmedge then runs in AOT mode.  Static Windows
+      builds are built without LLVM (interpreter only): WasmEdge's
+      static-archive bundling of LLVM (cmake/Helper.cmake) hardcodes Unix
+      archive names, and a static cvcpkg build uses the static CRT (/MT)
+      while llvm18 is built against the DLL CRT (/MD).  llvm18 from
+      18.1.8+cvc.4 on is built with LLVM_ENABLE_DIA_SDK=OFF (#174), so its
+      exported CMake package names no Visual Studio path and this builds on
+      any MSVC install.  Older llvm18 bundles linked diaguids.lib by the
+      windows-2022 runner's absolute Visual Studio 2022 Enterprise path, so
+      against those the build needs a windows-2022 host.

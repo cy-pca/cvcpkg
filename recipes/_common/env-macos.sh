@@ -14,9 +14,28 @@ source "${_COMMON_DIR}/rewrite-install-paths.sh"
 : "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
 : "${MACOSX_DEPLOYMENT_TARGET:=13.0}"
 
-export CC="${CC:-clang}"
-export CXX="${CXX:-clang++}"
+# The system (Apple) compiler, by absolute path -- never a bare `clang`.  The
+# builder puts the build prefix's and deps prefix's bin/ ahead of /usr/bin on
+# PATH, and cvcpkg's llvm, llvm18 and llvm20 bundles ship a `clang`.  With one
+# of them in the prefix -- a recipe that depends on it, or any recipe a pack-all
+# shard builds after it -- a bare name compiles with cvcpkg's clang instead, and
+# links with ld64.lld (llvm and llvm18 build clang with lld as its default
+# linker).  xcrun follows DEVELOPER_DIR / xcode-select; /usr/bin/clang is its
+# shim.  An explicit CC / CXX still wins.
+_cvc_apple_tool() { xcrun -f "$1" 2>/dev/null || echo "/usr/bin/$1"; }
+export CC="${CC:-$(_cvc_apple_tool clang)}"
+export CXX="${CXX:-$(_cvc_apple_tool clang++)}"
 export MACOSX_DEPLOYMENT_TARGET
+
+# `xcrun -f clang` is the toolchain's clang by absolute path, which -- unlike the
+# /usr/bin/clang shim -- does not locate the macOS SDK by itself on every Xcode:
+# on Xcode 26.6 (GitHub macos-latest) every C extension failed with
+# "Python.h: fatal error: 'assert.h' file not found" (cython-cp313, 2026-10-14).
+# Export SDKROOT, which clang honours; an explicit SDKROOT still wins.
+if [ -z "${SDKROOT:-}" ]; then
+    SDKROOT="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+    [ -n "${SDKROOT}" ] && export SDKROOT
+fi
 
 # clang 16+ promotes several legacy-C diagnostics to hard errors by default
 # (-Werror=implicit-function-declaration, -Werror=implicit-int,
@@ -66,5 +85,5 @@ cvc_cmake_build() {
 
 echo "── env-macos.sh loaded ──"
 echo "  CC=${CC}  CXX=${CXX}"
-echo "  DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}"
+echo "  DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}  SDKROOT=${SDKROOT:-}"
 echo "  BUILD_TYPE=${CMAKE_BUILD_TYPE}  LINK=${CVC_LINK}  JOBS=${CVC_JOBS}"

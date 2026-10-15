@@ -19,7 +19,11 @@ recipe:
   #
   # openbsd is still absent, and not by oversight: Rust publishes no OpenBSD
   # toolchain, so there is no cargo to build this with anywhere in the graph.
-  cvc_revision: 3
+  # cvc.4 (macOS republish): the published cvc.3 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.3 is fine; this revision is for macOS.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -125,11 +129,11 @@ package:
   # the staged tree pure by pip-installing --prefix into an initially empty
   # per-recipe CVC_INSTALL_DIR, so the entries below are exactly what ships.
   files:
-    - lib/python3.13/site-packages/bcrypt/
-    - lib/python3.13/site-packages/bcrypt-*.dist-info/
+    - { glob: "lib/python3.13/site-packages/bcrypt/", platforms: [freebsd, linux, macos, netbsd] }
+    - { glob: "lib/python3.13/site-packages/bcrypt-*.dist-info/", platforms: [freebsd, linux, macos, netbsd] }
     # Windows (build.ps1) site-packages scheme.
-    - Lib/site-packages/bcrypt/
-    - Lib/site-packages/bcrypt-*.dist-info/
+    - { glob: "Lib/site-packages/bcrypt/", platforms: [windows] }
+    - { glob: "Lib/site-packages/bcrypt-*.dist-info/", platforms: [windows] }
 
 notes:
   - title: "cargo fetches crates from the network during this build"

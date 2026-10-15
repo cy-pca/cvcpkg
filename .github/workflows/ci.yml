@@ -15,6 +15,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ────────────────────── PR actor gate ────────────────────────────
+  #
+  # The repo is public, so a PR only gets its code run by CI when the
+  # run was started by an actor in the CI_ALLOWED_ACTORS repo variable
+  # (comma-separated, no spaces).  Both jobs below are REQUIRED checks
+  # on master, so the gate must fail closed.  It used to be a job-level
+  # `if:`, and a job skipped that way reports "skipped", which branch
+  # rules count as passing: any PR from an unlisted actor merged with
+  # no tests run.
+  #
+  # So each job always runs, and its first step -- before checkout, so
+  # no PR code runs -- fails when the actor is not listed.  It checks
+  # triggering_actor, not actor: once a maintainer has reviewed the PR,
+  # "Re-run jobs" passes the gate and the tests run.  Don't hoist the
+  # gate into a job the others `needs:` -- when it fails they are
+  # skipped, which passes again.  The ',name,' wrapping makes contains()
+  # match whole names rather than substrings ("fix" is in "transfix").
+
   # ────────────────────── cvcpkg test suite ────────────────────────
   #
   # Runs the cvcpkg unit + integration tests and schema validation
@@ -22,9 +40,19 @@ jobs:
   # regressions before the heavy dep-bundle build starts.
   cvcpkg-test:
     name: cvcpkg tests
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
     runs-on: ubuntu-latest
     steps:
+      # See "PR actor gate" above.
+      - name: Require an allow-listed actor
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.triggering_actor))
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          echo "::error::$ACTOR is not in CI_ALLOWED_ACTORS, so this PR's code was not run. A maintainer can review it and re-run this job."
+          exit 1
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5
@@ -59,9 +87,19 @@ jobs:
   # any actual builds.
   recipe-validate:
     name: Validate recipe graph
-    if: github.event_name == 'push' || contains(vars.CI_ALLOWED_ACTORS, github.actor)
     runs-on: ubuntu-latest
     steps:
+      # See "PR actor gate" above.
+      - name: Require an allow-listed actor
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(format(',{0},', vars.CI_ALLOWED_ACTORS), format(',{0},', github.triggering_actor))
+        env:
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          echo "::error::$ACTOR is not in CI_ALLOWED_ACTORS, so this PR's code was not run. A maintainer can review it and re-run this job."
+          exit 1
+
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5

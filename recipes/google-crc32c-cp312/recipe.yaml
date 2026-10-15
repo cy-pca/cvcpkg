@@ -56,7 +56,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/google_crc32c/
-    - lib/python3.12/site-packages/*.dist-info/
-    - Lib/site-packages/google_crc32c/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/google_crc32c/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/google_crc32c/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

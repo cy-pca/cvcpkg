@@ -56,7 +56,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/google/resumable_media/
-    - lib/python3.12/site-packages/*.dist-info/
-    - Lib/site-packages/google/resumable_media/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/google/resumable_media/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/google/resumable_media/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

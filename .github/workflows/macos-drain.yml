@@ -55,8 +55,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Cheap pre-check: skip the (expensive, ~10 min) toolchain install and
-  # the macOS runner-minutes entirely when the queue has no macOS work.
+  # Cheap pre-check: skip the toolchain install and the macOS runner-minutes
+  # entirely when the queue has no macOS work.
   check:
     name: Any pending macOS jobs?
     runs-on: ubuntu-latest
@@ -92,18 +92,179 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install system build tools
+      # Everything the builds use comes from cvcpkg, never Homebrew: the same
+      # three steps as macos-build.yml, which explains each of them. Take the
+      # image's Homebrew off PATH and move it aside...
+      - name: Remove Homebrew from the environment
         run: |
-          brew install ninja autoconf automake libtool pkg-config libomp meson flex bison
-          brew install llvm@18 2>/dev/null || true
-          # Pin cmake to 3.x — Boost 1.86 cmake files are incompatible with 4.x.
-          pip3 install --break-system-packages "cmake>=3.31,<4"
+          set -euo pipefail
+          brew_dir() {
+            case "$1" in
+              /opt/homebrew|/opt/homebrew/*) return 0 ;;
+              /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
+              /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
+              # Intel: Homebrew owns all of /usr/local (bin, sbin, lib/ruby/gems/*/bin, ...).
+              /usr/local|/usr/local/*) [ -d /usr/local/Homebrew ] ;;
+              *) return 1 ;;
+            esac
+          }
+          clean=""
+          set -f; IFS=:
+          for d in $PATH; do
+            [ -n "$d" ] || continue
+            if brew_dir "$d"; then echo "dropping from PATH: $d"; continue; fi
+            clean="${clean:+$clean:}$d"
+          done
+          unset IFS; set +f
+          echo "PATH=$clean" >> "$GITHUB_ENV"
+          # Off PATH is not enough on Intel: Homebrew links its formulae into
+          # /usr/local/include and /usr/local/lib, where Apple clang and ld look
+          # by default (bison's configure linked Homebrew's libtextstyle from
+          # there). Move the formulae aside, so every Homebrew file and every
+          # link to one is unreachable, whatever looks for it.
+          # Moving Homebrew aside is only safe on an ephemeral GitHub-hosted
+          # runner; on a persistent self-hosted Mac it would break the host.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move Homebrew aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then
+              sudo mv "$d" "$d.hidden-from-builds"
+              echo "moved aside: $d"
+            fi
+          done
 
       - name: Install cvcpkg
         run: |
           pip3 install --break-system-packages '.[builder,progress,validate]'
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$(python3 -m site --user-base)/bin" >> "$GITHUB_PATH"
+
+      # ...put cmake (3.31.7), ninja, pkg-config, meson, m4, flex and bison from
+      # cvcpkg on PATH, copied into a tree that holds nothing CMake or a recipe
+      # could mistake for a dependency...
+      - name: Install build tools (cvcpkg)
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/cvcpkg-tools-prefix"
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          # A tool whose recipe this job builds is left out: building it never
+          # needs its own bundle, and leaving it out is how a bundle that cannot
+          # run here gets replaced.
+          building=" $(echo "${BUILDING:-}" | tr ',' ' ') "
+          recipes=""
+          for r in cmake ninja pkg-config meson m4 flex bison; do
+            case "$building" in
+              *" $r "*) echo "leaving out $r: this job builds it" ;;
+              *) recipes="$recipes $r" ;;
+            esac
+          done
+          cvcpkg install $recipes --prefix "$prefix" --platform macos --config release --link shared
+          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
+          cmds=""
+          for r in $recipes; do
+            case "$r" in
+              cmake) exes="cmake ctest cpack"; cp -R "$prefix"/share/cmake-* "$tree/share/" ;;
+              pkg-config) exes="pkgconf"; ln -s pkgconf "$tree/bin/pkg-config" ;;
+              meson) exes="meson"; cp -R "$prefix/lib/meson" "$tree/lib/" ;;
+              m4) exes="m4"; echo "M4=$tree/bin/m4" >> "$GITHUB_ENV" ;;
+              flex) exes="flex"; ln -s flex "$tree/bin/flex++" ;;
+              bison)
+                exes="bison"
+                cp -R "$prefix/share/bison" "$tree/share/"
+                echo "BISON_PKGDATADIR=$tree/share/bison" >> "$GITHUB_ENV" ;;
+              *) exes="$r" ;;
+            esac
+            for exe in $exes; do cp "$prefix/bin/$exe" "$tree/bin/"; done
+            if [ "$r" = pkg-config ]; then cmds="$cmds pkg-config"; else cmds="$cmds $exes"; fi
+          done
+          echo $cmds > "$tree/commands"
+          # The @rpath dylibs the executables load, and the ones those load.
+          todo=""
+          for f in "$tree"/bin/*; do
+            [ -L "$f" ] && continue
+            case "$(file -b "$f")" in *Mach-O*) todo="$todo $f" ;; esac
+          done
+          while [ -n "$todo" ]; do
+            next=""
+            for f in $todo; do
+              for lib in $(otool -L "$f" | sed -n 's|^[[:space:]]*@rpath/\([^ ]*\) .*|\1|p'); do
+                if [ ! -e "$tree/lib/$lib" ]; then
+                  cp "$prefix/lib/$lib" "$tree/lib/$lib"
+                  next="$next $tree/lib/$lib"
+                fi
+              done
+            done
+            todo="$next"
+          done
+          echo "$tree/bin" >> "$GITHUB_PATH"
+          echo "tools: $cmds"
+          echo "dylibs: $(ls "$tree/lib" | tr '\n' ' ')"
+
+      # ...and prove it.
+      - name: Check build tools come from cvcpkg
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          rc=0
+          for t in $(cat "$tree/commands"); do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$tree/bin/"*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
+            esac
+          done
+          # A tool from the tree may load only what macOS itself provides or the
+          # tree carries; anything else means its bundle cannot run on a clean Mac.
+          for f in "$tree"/bin/* "$tree"/lib/*; do
+            [ -f "$f" ] && [ ! -L "$f" ] || continue
+            case "$(file -b "$f")" in *Mach-O*) ;; *) continue ;; esac
+            for dep in $(otool -L "$f" | tail -n +2 | awk '!/:$/ {print $1}'); do
+              case "$dep" in
+                /usr/lib/*|/System/*|@rpath/*|@loader_path/*|@executable_path/*) ;;
+                *)
+                  name=$(basename "$f")
+                  case "$name" in
+                    ctest|cpack) recipe=cmake ;;
+                    pkgconf) recipe=pkg-config ;;
+                    libcurl*) recipe=curl ;;
+                    libssl*|libcrypto*) recipe=openssl ;;
+                    *) recipe=$name ;;
+                  esac
+                  echo "::error::$name loads $dep, which macOS does not provide: the cvcpkg $recipe bundle for macos-$(uname -m) needs republishing"
+                  rc=1 ;;
+              esac
+            done
+          done
+          set -f; IFS=:
+          for d in $PATH; do
+            case "$d" in
+              /opt/homebrew*|/usr/local/Homebrew*|/usr/local/Cellar*|/usr/local/opt*|/usr/local/Caskroom*)
+                echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
+              /usr/local|/usr/local/*)
+                if [ -d /usr/local/Homebrew ]; then echo "::error::Homebrew directory on PATH: $d"; rc=1; fi ;;
+            esac
+          done
+          unset IFS; set +f
+          if command -v brew >/dev/null 2>&1; then
+            echo "::error::brew is on PATH ($(command -v brew)); nothing may build with Homebrew"
+            rc=1
+          fi
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then echo "::error::$d is still in place; nothing may build with Homebrew"; rc=1; fi
+          done
+          [ "$rc" = 0 ] || exit 1
+          has() { case " $(cat "$tree/commands") " in *" $1 "*) return 0 ;; esac; return 1; }
+          if has cmake; then cmake --version | sed -n 1p; fi
+          if has ninja; then echo "ninja $(ninja --version)"; fi
+          if has pkg-config; then echo "pkg-config $(pkg-config --version)"; fi
+          if has meson; then echo "meson $(meson --version)"; fi
+          if has m4; then m4 --version | sed -n 1p; fi
+          if has flex; then flex --version; fi
+          if has bison; then bison --version | sed -n 1p; fi
+          # Still not from cvcpkg: what these resolve to.
+          for t in bash perl make python3; do echo "$t -> $(command -v "$t" || echo none)"; done
 
       - name: Drain the macOS build queue
         env:

@@ -247,6 +247,27 @@ class TestBuildCacheStore:
         assert meta is not None
         assert meta.org == "myorg"
 
+    def test_archive_stores_each_path_once(self, tmp_path):
+        """Each file appears once, not once per directory above it.
+
+        The archive is what a server-cache push publishes, so duplicate
+        members bloated every such bundle on the catalog.
+        """
+        import tarfile
+
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        (install / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        (install / "lib" / "python3.12" / "site-packages" / "mod.py").write_text("x = 1")
+        ch = _fake_chain_hash()
+        archive = bc.store(install, "pkg", "1.0", ch, "linux", "x86_64", "release", "shared")
+
+        with tarfile.open(archive, "r:gz") as tar:
+            names = tar.getnames()
+        assert len(names) == len(set(names))
+        assert "lib/python3.12/site-packages/mod.py" in names
+
 
 # ── BuildCache.restore ──────────────────────────────────────────
 
@@ -264,6 +285,53 @@ class TestBuildCacheRestore:
         assert (target / "lib" / "libfoo.so").is_file()
         assert (target / "include" / "foo.h").is_file()
         assert (target / "lib" / "libfoo.so").read_text() == "fake lib"
+
+    def test_restore_zip_bundle(self, tmp_path):
+        """A server-cache hit can be a published Windows bundle, i.e. a zip,
+        downloaded under a ``.tar.gz`` temp name."""
+        import zipfile
+
+        archive = tmp_path / "cvcpkg-srv-pkg.tar.gz"
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("bin/pkg.exe", "exe")
+            zf.writestr("share/libcvc-deps/pkg/manifest.yaml", "bundle: {}")
+
+        target = tmp_path / "restored"
+        BuildCache(tmp_path / "cache").restore(archive, target)
+        assert (target / "bin" / "pkg.exe").read_text() == "exe"
+
+
+class TestAcceptServerHit:
+    def test_usable_download_is_stored(self, tmp_path):
+        from cvcpkg.builder import _accept_server_hit
+
+        bc = BuildCache(tmp_path / "cache")
+        install = tmp_path / "install"
+        _populate_install_dir(install)
+        download = bc.store(
+            install, "pkg", "1.0", _fake_chain_hash("a"), "linux", "x86_64", "release", "shared"
+        )
+
+        ch = _fake_chain_hash("b")
+        assert _accept_server_hit(
+            bc, download, "pkg", "1.0", ch, "linux", "x86_64", "release", "shared"
+        )
+        assert bc.lookup(ch, "linux", "x86_64", "release", "shared") is not None
+
+    def test_unusable_download_is_a_miss(self, tmp_path):
+        """An archive this host cannot extract falls back to a build."""
+        from cvcpkg.builder import _accept_server_hit
+
+        bc = BuildCache(tmp_path / "cache")
+        download = tmp_path / "cvcpkg-srv-pkg.tar.gz"
+        download.write_bytes(b"\x28\xb5\x2f\xfd not a tarball this host can read")
+
+        ch = _fake_chain_hash()
+        assert not _accept_server_hit(
+            bc, download, "pkg", "1.0", ch, "linux", "x86_64", "release", "shared"
+        )
+        assert not download.exists()
+        assert bc.lookup(ch, "linux", "x86_64", "release", "shared") is None
 
 
 # ── BuildCache.evict ────────────────────────────────────────────

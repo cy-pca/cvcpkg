@@ -37,24 +37,41 @@ Both scripts are served by the registry itself (the sources live in
 read exactly what will run before piping). They:
 
 1. detect your OS and architecture,
-2. download the latest stable (non-rc) `cvcpkg-v*` standalone binary
-   from GitHub Releases,
-3. verify its **sha256 checksum** against the `.sha256` file published
-   next to the asset — a mismatch aborts before anything runs,
-4. install it: POSIX to `$HOME/.local/bin/cvcpkg` (with a PATH hint if
+2. ask the registry that served them for the newest stable `cvcpkg`
+   package it has published for that platform
+   (`GET /v1/packages/cvcpkg/latest`), and download it,
+3. verify its **sha256 checksum** against the one the registry recorded
+   for it — a mismatch aborts before anything runs,
+4. only if that registry has **no** `cvcpkg` for your platform (or for
+   the pinned version), fall back to the latest stable (non-rc)
+   `cvcpkg-v*` [standalone binary](#standalone-binaries) from GitHub
+   Releases, verified against the `.sha256` published next to it. Any
+   other registry failure (unreachable, 5xx, auth) stops the install
+   rather than quietly installing a different build,
+5. install it: POSIX to `$HOME/.local/bin/cvcpkg` (with a PATH hint if
    needed); Windows to `%LOCALAPPDATA%\cvcpkg\cvcpkg.exe`, added to your
    user PATH — no admin rights required.
+
+A deployment serves the scripts with its own URL and GitHub repo baked in
+(see [Installer](deployment-guide.md#installer-installsh-installps1) in the
+deployment guide), so a fork's `/install.sh` installs the fork's builds.
 
 Both accept environment overrides:
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
-| `CVCPKG_VERSION` | Pin a release tag, e.g. `cvcpkg-v2.0.2`. | latest stable release |
+| `CVCPKG_VERSION` | Pin a version, e.g. `2.4.0` (the release tag `cvcpkg-v2.4.0` works too). | newest stable |
 | `CVCPKG_INSTALL_DIR` | Install location. | `$HOME/.local/bin` / `%LOCALAPPDATA%\cvcpkg` |
+| `CVCPKG_SERVER_URL` | Registry to install from. | the registry that served the script |
+| `CVCPKG_TOKEN` | Bearer token, for a registry that requires auth for reads. Sent to that registry only. | — |
+| `CVCPKG_REPO` | GitHub `owner/repo` to fall back to. | the deployment's (`cy-pca/cvcpkg` on cvcpkg.org) |
+
+The first three are also flags: `--version`, `--install-dir`, `--server`
+for `install.sh`; `-Version`, `-InstallDir`, `-Server` for `install.ps1`.
 
 ```bash
-# Pin a specific release
-CVCPKG_VERSION=cvcpkg-v2.0.2 curl -fsSL https://cvcpkg.org/install.sh | sh
+# Pin a specific version
+CVCPKG_VERSION=2.4.0 curl -fsSL https://cvcpkg.org/install.sh | sh
 ```
 
 ## Standalone binaries
@@ -75,7 +92,9 @@ and `cvcpkg build` work on a machine with no Python and no checkout.
 | OpenBSD x86_64 | `cvcpkg-openbsd-x86_64` |
 | NetBSD x86_64 | `cvcpkg-netbsd-x86_64` |
 
-Other platform/arch combinations (e.g. Linux arm64) currently need a
+Other platform/arch combinations (e.g. Linux arm64) have no release
+asset. The quick installer still covers them when the registry publishes
+a `cvcpkg` package for them; otherwise use a
 [source checkout](#installing-from-a-source-checkout).
 
 Each asset has a sibling `<asset>.sha256`. To download and verify

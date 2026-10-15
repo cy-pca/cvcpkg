@@ -57,7 +57,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/mesonpy/
-    - lib/python3.12/site-packages/meson_python-*.dist-info/
-    - Lib/site-packages/meson_python/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/mesonpy/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/meson_python-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/meson_python/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

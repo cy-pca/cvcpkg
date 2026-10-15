@@ -150,6 +150,7 @@ gh workflow run "Populate cvcpkg.org" \
 | `linux-arm-build.yml` | Manual, or called by populate-server when `arch` includes `arm64` | Sharded build + publish of linux/arm64 packages on GitHub-hosted arm64 runners |
 | `macos-drain.yml` | Every 2 hours (`17 */2 * * *`) + manual | Drain pending macOS build jobs on cvcpkg.org without registering a builder; a cheap pre-check skips the macOS runner when the queue is empty |
 | `windows-recipe-check.yml` | Manual (`-f recipe=<name>`); PR touching the workflow file itself | Build ONE recipe on `windows-latest` and throw the result away — proves a `build.ps1` actually runs on Windows; never publishes |
+| `linux-arm-recipe-check.yml` | Manual (`-f recipe=<name>`); PR touching it or `linux-arm-build.yml` | Build recipes on `ubuntu-22.04-arm` with `linux-arm-build.yml`'s tool setup and throw the result away; never publishes |
 | `cvcpkg-publish.yml` | Push of a `cvcpkg-v*` tag, or manual | Test, build the wheel, live-smoke it across OSes, and publish cvcpkg to PyPI (OIDC trusted publishing) |
 | `cvcpkg-standalone.yml` | Push of a `cvcpkg-v*` tag, or manual | Build self-contained single-file cvcpkg binaries (PyInstaller) for Linux, macOS, Windows, and the BSDs; attach them to the GitHub Release |
 | `build-cli-binary.yml` | Manual, or on a published release | Build the `client` and `combined` (cvcpkg + cvcpkg-server in one binary, argv[0] dispatch) PyInstaller variants per OS |

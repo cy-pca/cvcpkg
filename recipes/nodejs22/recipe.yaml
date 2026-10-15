@@ -1,0 +1,179 @@
+schema_version: 1
+recipe:
+  name: nodejs22
+  # Latest 22.x ("Jod", maintenance LTS until 2027-04) when this recipe was
+  # written. Issue #167 proposed 22.23.1 as the starting point; 22.23.3 is the
+  # same line two patch releases later.
+  upstream_version: "22.23.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://nodejs.org/
+  # Node.js itself is MIT; the bundled npm CLI is Artistic-2.0. The node binary
+  # statically links third-party code under permissive licenses (V8 and ICU:
+  # BSD-3-Clause / Unicode-3.0, OpenSSL: Apache-2.0, libuv: MIT, ...) -- the
+  # full list is upstream's LICENSE, shipped as share/doc/node/LICENSE.
+  license: "MIT AND Artistic-2.0"
+  tags: [language, runtime, javascript, tools]
+  description: >-
+    Node.js 22 LTS -- the node runtime plus npm and npx, repackaged from the
+    official nodejs.org release binaries. A hermetic Node for CI and builds
+    that need one (static-site generators, JS tooling, wasm front ends,
+    Playwright), so they stop taking Node from the OS, actions/setup-node or a
+    container. One recipe per Node major (nodejs24 when a consumer needs it);
+    majors are mutually exclusive through the `nodejs` slot.
+
+# Every Node major installs bin/node, bin/npm and lib/node_modules/npm, so two
+# majors in one prefix would clobber each other: one slot for the whole family.
+provides: [nodejs]
+
+# The payload is upstream's prebuilt binary (built on RHEL 8, glibc >= 2.28);
+# nothing is compiled here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build script, not by cvcpkg core, so
+# this map DOCUMENTS what build.sh / build.ps1 download. The sha256 values
+# that are enforced live in build.sh's sha_for() and build.ps1's $expected --
+# keep the three in sync when bumping.
+#
+# Every value is copied from the release's SHASUMS256.txt, whose detached
+# signature (SHASUMS256.txt.sig) was verified against the Node.js release
+# keyring before pinning:
+#
+#   git clone https://github.com/nodejs/release-keys     # @ 481637f8 (2026-09-01)
+#   curl -fsSLO https://nodejs.org/dist/v22.23.3/SHASUMS256.txt{,.sig}
+#   gpgv --keyring release-keys/gpg-only-active-keys/pubring.kbx \
+#        SHASUMS256.txt.sig SHASUMS256.txt
+#   -> Good signature, EDDSA key 5BE8A3F6C8A5C01D106C0AD820B1A390B168D356
+#      (Antoine du Hamel; listed in release-keys/keys.list and in the
+#      nodejs/node README's release-keys table)
+#
+# Repeat that on every bump. The linux-x64 tarball was also re-hashed after
+# download (sha256sum -c against the signed file).
+source:
+  type: prebuilt
+  base_url: https://nodejs.org/dist/v22.23.3
+  artifacts:
+    linux-x86_64:
+      file: node-v22.23.3-linux-x64.tar.gz
+      sha256: "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
+    linux-arm64:
+      file: node-v22.23.3-linux-arm64.tar.gz
+      sha256: "5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2"
+    macos-x86_64:
+      file: node-v22.23.3-darwin-x64.tar.gz
+      sha256: "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
+    macos-arm64:
+      file: node-v22.23.3-darwin-arm64.tar.gz
+      sha256: "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53"
+    windows-x86_64:
+      file: node-v22.23.3-win-x64.zip
+      sha256: "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71"
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - glob: bin/node
+      platforms: [linux, macos]
+    - glob: bin/npm
+      platforms: [linux, macos]
+    - glob: bin/npx
+      platforms: [linux, macos]
+    - glob: lib/node_modules/npm/
+      platforms: [linux, macos]
+    - glob: include/node/
+      platforms: [linux, macos]
+    - glob: share/man/man1/node.1
+      platforms: [linux, macos]
+    - share/doc/node/
+    # Windows keeps upstream's flat layout inside bin\: npm.cmd / npx.cmd find
+    # node.exe and node_modules\npm relative to their own directory (%~dp0).
+    - glob: bin/node.exe
+      platforms: [windows]
+    - glob: bin/npm.cmd
+      platforms: [windows]
+    - glob: bin/npx.cmd
+      platforms: [windows]
+    - glob: bin/node_modules/npm/
+      platforms: [windows]
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. build.sh verifies the
+    pinned sha256, copies upstream's bin/ include/ lib/ share/ into the prefix
+    and replaces the npm/npx symlinks with launchers (see notes).
+
+notes:
+  - title: "Relocatable; npm and npx are launchers, not symlinks"
+    platforms: [linux, macos]
+    description: >-
+      The official binaries carry no absolute paths, so the prefix can be
+      moved (test.sh copies the staged tree elsewhere and runs node, npm and a
+      full `npm ci` from the copy). Upstream's bin/npm and bin/npx are
+      relative symlinks into lib/node_modules/npm/bin/*-cli.js, which only
+      work while they stay symlinks: a copied npm-cli.js requires
+      ../lib/cli.js relative to bin/ and dies. cvcpkg bundles do not promise
+      to preserve symlinks, so build.sh replaces both with small sh launchers
+      that exec the node next to them on the matching npm entry point -- which
+      also means `<prefix>/bin/npm` uses the cvcpkg node even when it is not
+      first on PATH (upstream's `#!/usr/bin/env node` takes whatever node PATH
+      finds).
+  - title: "Hermetic npm in CI: cache, userconfig, globalconfig"
+    description: >-
+      npm reads ~/.npmrc and writes its cache to ~/.npm, so a CI job that
+      only sets PATH still depends on the runner's home directory. Pin both
+      per job: npm_config_cache=<workdir>/npm-cache and
+      npm_config_userconfig=<workdir>/npmrc (an empty file is fine). The
+      global config is <prefix>/etc/npmrc; this package ships none, and
+      npm_config_globalconfig overrides it. For a fully offline install,
+      populate the cache once (`npm ci` or `npm cache add`) and then run
+      `npm ci --offline` from the lockfile: lockfile entries with
+      resolved + integrity are read from the cache by digest, no registry
+      round trip (test.sh does exactly this against a throwaway local
+      registry). Useful extras: npm_config_update_notifier=false,
+      npm_config_fund=false, npm_config_audit=false. Global installs
+      (`npm i -g`) write into <prefix>/lib/node_modules unless
+      npm_config_prefix points elsewhere -- in CI, point it at a work dir.
+  - title: "corepack is not shipped"
+    description: >-
+      Node 22's tarball includes corepack, which on first use downloads
+      yarn/pnpm from the network and, once enabled, writes shims into the
+      prefix. That is the opposite of a pinned toolchain, so build.sh drops
+      bin/corepack and lib/node_modules/corepack (Node 25+ no longer bundles
+      corepack either). A project that needs yarn or pnpm should get it as its
+      own pinned package (or `npm i` it from its lockfile).
+  - title: "Native addons need a compiler from cvcpkg"
+    description: >-
+      node-gyp (bundled with npm) builds native addons with python3, make and
+      a C++ compiler from PATH. None of those are runtime dependencies of this
+      package; a build that compiles addons should add python312, make and a
+      compiler as its own build dependencies. Headers for addon builds are in
+      include/node/ (so node-gyp does not need to download them; point
+      npm_config_nodedir at the prefix).
+  - title: "Host requirements"
+    platforms: [linux]
+    description: >-
+      glibc >= 2.28 and the system libstdc++ / libgcc_s (upstream's floor),
+      well under the fleet's 2.35. Only linux-x86_64 has been built and tested
+      for this recipe so far; linux-arm64, macos and windows use upstream's
+      binaries for those platforms through the same scripts.

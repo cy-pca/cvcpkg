@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: maturin-cp313
   upstream_version: "1.14.1"
-  cvc_revision: 1
+  # cvc.2 (macOS republish): the published cvc.1 macOS bundle(s) install to
+  # lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 on the macOS runner -- so python3.13 cannot import them.  The
+  # linux/x86_64 bundle of cvc.1 is fine; this revision is for macOS.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -100,14 +104,14 @@ package:
   # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
   # build.sh keeps it pure by pip-installing --prefix into an empty dir.
   files:
-    - lib/python3.13/site-packages/maturin/
-    - lib/python3.13/site-packages/maturin-*.dist-info/
+    - { glob: "lib/python3.13/site-packages/maturin/", platforms: [freebsd, linux, macos, netbsd] }
+    - { glob: "lib/python3.13/site-packages/maturin-*.dist-info/", platforms: [freebsd, linux, macos, netbsd] }
     # The compiled executable, installed from the wheel's .data/scripts/.
-    - bin/maturin*
+    - { glob: "bin/maturin*", platforms: [freebsd, linux, macos, netbsd] }
     # Windows install scheme: Lib\site-packages plus Scripts\ for the exe.
-    - Lib/site-packages/maturin/
-    - Lib/site-packages/maturin-*.dist-info/
-    - Scripts/maturin*
+    - { glob: "Lib/site-packages/maturin/", platforms: [windows] }
+    - { glob: "Lib/site-packages/maturin-*.dist-info/", platforms: [windows] }
+    - { glob: "Scripts/maturin*", platforms: [windows] }
 
 notes:
   - title: "cargo fetches crates from the network during this build"

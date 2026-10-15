@@ -25,7 +25,17 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  cvc_revision: 6
+  # cvc.7 (freethreaded bin-leak fix): a free-threaded make install also ships the
+  # NON-suffixed bin/python3.X (the free-threaded interp under the standard name), which
+  # SHADOWS the non-t python column in a shared build prefix and made non-t cpX packages
+  # mis-install to lib/python3.Xt/site-packages. _common/build-python.sh now strips the
+  # standard names from a free-threaded column; rebuild republishes without the leak.
+  # cvc.8: rebuild with no Homebrew.  The published macOS x86_64 cvc.6 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.13t, libpython3.13t.dylib,
+  # _dbm, _gdbm and _decimal load gettext's libintl, gdbm and mpdecimal from
+  # /usr/local/opt, so it aborts on any Mac without Homebrew.  _common/build-python.sh
+  # now also turns those off on macOS explicitly.  Every platform rebuilds.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -138,7 +148,7 @@ package:
     - bin/pip3.13t*
     - bin/python3t
     - lib/libpython3.13t*
-    - lib/python3.13/
+    - lib/python3.13t/
     - lib/pkgconfig/python-3.13t*.pc
     - include/python3.13t/
     # Windows PCbuild --experimental-instdir layout
@@ -159,16 +169,15 @@ notes:
       libpython3.13t.so (python313t.dll on Windows).  A python3t
       convenience symlink is also created on Unix.  PGO is enabled on
       Linux, macOS, and Windows.
-  - title: "Shared stdlib with python313"
+  - title: "Separate stdlib from python313"
     platforms: [linux, macos, freebsd, openbsd, netbsd]
     description: >-
-      The pure-Python standard library lives in lib/python3.13/ (without the
-      t suffix), the same directory used by the regular python313 recipe.
-      Extension modules use the t ABI tag (e.g. _ssl.cpython-313t-*.so) and
-      can coexist with regular python313 extension modules in the same
-      lib/python3.13/lib-dynload/ directory.  Installing python313 and
-      python313t into the same prefix is safe as long as both are built
-      from the same source release.
+      A free-threaded build installs its standard library, lib-dynload and
+      site-packages under lib/python3.13t/ (CPython's ABIFLAGS-suffixed
+      LIBDIR), not the regular python313's lib/python3.13/, and its extension
+      modules carry the t ABI tag (e.g. _ssl.cpython-313t-*.so).  So python313
+      and python313t install side by side in one prefix without sharing or
+      overwriting each other's files.
   - title: "Windows (PCbuild) build"
     platforms: [windows]
     description: >-

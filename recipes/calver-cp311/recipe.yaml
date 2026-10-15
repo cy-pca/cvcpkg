@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/calver/
-    - lib/python3.11/site-packages/calver-*.dist-info/
-    - Lib/site-packages/calver/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/calver/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/calver-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/calver/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # recipes/shiboken6/build.sh — build the sources/shiboken6 CMake project from the
 # pinned Qt-for-Python pyside-setup 6.8.2 tarball, against the cvcpkg python311
-# interpreter + cvcpkg qt6 6.8.2 and the SYSTEM libclang-18 (NOT the cvcpkg
+# interpreter + cvcpkg qt6 6.8.2 and the cvcpkg llvm18 libclang (NOT the cvcpkg
 # `llvm` recipe, which is LLVM 22 — too new for shiboken 6.8.2).
 #
 # Produces: bin/shiboken6 (generator, links QtCore), lib/libshiboken6*.so,
@@ -33,32 +33,39 @@ fi
 PY_ROOT="$(cd "$(dirname "${PY_EXE}")/.." && pwd)"
 echo "shiboken6: building against ${PY_EXE}"
 
-# ── Hermetic libclang 18 (cvcpkg llvm18) for ApiExtractor ────────────────────
-# shiboken's setup_clang() reads LLVM_INSTALL_DIR to find ClangConfig.cmake +
-# libclang and, at generation time, the Clang builtin/resource headers under
-# ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include. Prefer the cvcpkg llvm18 in the
-# dependency prefix (a hermetic dep of this recipe); fall back to a system
-# /usr/lib/llvm-18 only if a caller hasn't set LLVM_INSTALL_DIR and llvm18 is
-# somehow absent.
+# ── libclang 18 from the cvcpkg llvm18 dependency, and from nowhere else ─────
+# shiboken's setup_clang() reads LLVM_INSTALL_DIR to find ClangConfig.cmake and
+# libclang. The generator reads it again at run time to find Clang's builtin
+# (resource) headers under ${LLVM_INSTALL_DIR}/lib/clang/<ver>/include, and it
+# runs during this build: shibokenmodule's wrappers are generated with it.
+# llvm18 is a declared dependency, so it is in the runtime closure
+# (CVC_DEPS_PREFIX) or the build closure (CVC_BUILD_PREFIX). Look there only:
+# no /usr/lib/llvm-*, no Homebrew keg, no llvm-config on PATH, and no
+# LLVM_INSTALL_DIR / CLANG_INSTALL_DIR inherited from the caller.
+unset LLVM_INSTALL_DIR CLANG_INSTALL_DIR
+for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
+    if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
+        LLVM_INSTALL_DIR="${_llvm}"; break
+    fi
+done
 if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
-    for _llvm in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}" "${CVC_INSTALL_DIR}"; do
-        if [[ -n "${_llvm}" && -f "${_llvm}/lib/cmake/clang/ClangConfig.cmake" ]]; then
-            LLVM_INSTALL_DIR="${_llvm}"; break
-        fi
-    done
-    : "${LLVM_INSTALL_DIR:=/usr/lib/llvm-18}"
+    echo "shiboken6: llvm18 not found: no lib/cmake/clang/ClangConfig.cmake under" \
+         "CVC_DEPS_PREFIX='${CVC_DEPS_PREFIX:-}' or CVC_BUILD_PREFIX='${CVC_BUILD_PREFIX:-}'." \
+         "Install this recipe's dependency closure (cvcpkg install-deps)." >&2
+    exit 1
 fi
+# The generator links libclang.so.18.1, and libclang cannot parse the Qt or
+# libstdc++ headers without the resource headers (stddef.h, the intrinsics).
+for _need in lib/libclang.so.18.1 lib/clang/18/include/stddef.h; do
+    if [[ ! -e "${LLVM_INSTALL_DIR}/${_need}" ]]; then
+        echo "shiboken6: ${LLVM_INSTALL_DIR}/${_need} is missing; the llvm18 bundle is incomplete" >&2
+        exit 1
+    fi
+done
 export LLVM_INSTALL_DIR
-echo "shiboken6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR}"
-if [[ ! -f "${LLVM_INSTALL_DIR}/lib/cmake/clang/ClangConfig.cmake" ]]; then
-    echo "shiboken6: WARNING ClangConfig.cmake not under ${LLVM_INSTALL_DIR} — is llvm18 in the closure?" >&2
-fi
-if [[ -z "$(find "${LLVM_INSTALL_DIR}/lib/clang" -maxdepth 2 -name stddef.h 2>/dev/null | head -1)" ]]; then
-    echo "shiboken6: WARNING Clang builtin headers (…/lib/clang/*/include) missing under ${LLVM_INSTALL_DIR}" >&2
-fi
-# Ensure the freshly-built generator can resolve libclang/libQt6Core/libshiboken
-# if it is invoked during this build (and to keep the env consistent with the
-# pyside6 build where the generator actually runs).
+echo "shiboken6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR} (cvcpkg llvm18)"
+# The freshly built generator resolves libclang, libQt6Core and libshiboken
+# from these dirs when it runs during this build.
 export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
 
 # Install the importable package into THIS prefix's site-packages (not the
@@ -76,6 +83,8 @@ cmake -G Ninja \
     -DPython_ROOT_DIR="${PY_ROOT}" \
     -DPython_FIND_STRATEGY=LOCATION \
     -DPYTHON_SITE_PACKAGES="${SITE_PACKAGES}" \
+    -DClang_DIR="${LLVM_INSTALL_DIR}/lib/cmake/clang" \
+    -DLLVM_DIR="${LLVM_INSTALL_DIR}/lib/cmake/llvm" \
     -DSHIBOKEN_BUILD_TOOLS=ON \
     -DSHIBOKEN_BUILD_LIBS=ON \
     -DFORCE_LIMITED_API=yes \

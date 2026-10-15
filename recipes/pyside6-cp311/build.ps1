@@ -26,18 +26,35 @@ foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX, $env:CVC_INSTAL
 if (-not $pyExe) { throw "pyside6: could not find python (3.11) in the dependency closure" }
 Write-Host "pyside6: building against $pyExe"
 
-# ── Hermetic libclang 18 (cvcpkg llvm18) — the shiboken6 generator runs during
-# THIS build to parse Qt headers and links libclang. Pulled in transitively via
-# shiboken6; find its prefix by ClangConfig.cmake.
-if (-not $env:LLVM_INSTALL_DIR) {
-    foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX, $env:CVC_INSTALL_DIR)) {
-        if ($root -and (Test-Path "$root\lib\cmake\clang\ClangConfig.cmake")) {
-            $env:LLVM_INSTALL_DIR = $root; break
-        }
+# ── libclang 18 from the cvcpkg llvm18 dependency, and from nowhere else ─────
+# The shiboken6 generator runs during THIS build to parse the Qt headers. It
+# loads libclang.dll and reads LLVM_INSTALL_DIR at run time to find Clang's
+# builtin (resource) headers under $LLVM_INSTALL_DIR\lib\clang\<ver>\include.
+# llvm18 is a declared build dependency (and a runtime one of shiboken6), so
+# it is in the runtime closure (CVC_DEPS_PREFIX) or the build closure
+# (CVC_BUILD_PREFIX). Look there only: an LLVM_INSTALL_DIR / CLANG_INSTALL_DIR
+# inherited from the runner is discarded, so a preinstalled
+# C:\Program Files\LLVM is never picked up.
+$env:LLVM_INSTALL_DIR = $null
+$env:CLANG_INSTALL_DIR = $null
+foreach ($root in @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX)) {
+    if ($root -and (Test-Path "$root\lib\cmake\clang\ClangConfig.cmake")) {
+        $env:LLVM_INSTALL_DIR = $root; break
     }
 }
-if (-not $env:LLVM_INSTALL_DIR) { throw "pyside6: llvm18 (ClangConfig.cmake) not found in the closure" }
-Write-Host "pyside6: LLVM_INSTALL_DIR=$($env:LLVM_INSTALL_DIR)"
+if (-not $env:LLVM_INSTALL_DIR) {
+    throw ("pyside6: llvm18 not found: no lib\cmake\clang\ClangConfig.cmake under " +
+        "CVC_DEPS_PREFIX='$($env:CVC_DEPS_PREFIX)' or CVC_BUILD_PREFIX='$($env:CVC_BUILD_PREFIX)'. " +
+        "Install this recipe's dependency closure (cvcpkg install-deps).")
+}
+# The generator loads libclang.dll (linked through libclang.lib), and libclang
+# cannot parse the Qt or MSVC STL headers without the resource headers.
+foreach ($need in @('bin\libclang.dll', 'lib\libclang.lib', 'lib\clang\18\include\stddef.h')) {
+    if (-not (Test-Path "$($env:LLVM_INSTALL_DIR)\$need")) {
+        throw "pyside6: $($env:LLVM_INSTALL_DIR)\$need is missing; the llvm18 bundle is incomplete"
+    }
+}
+Write-Host "pyside6: LLVM_INSTALL_DIR=$($env:LLVM_INSTALL_DIR) (cvcpkg llvm18)"
 
 # The generator (bin/shiboken6.exe, from the shiboken6 package) must resolve, at
 # RUN time during this build: libclang (llvm18), Qt6Core (qt6), and shiboken6 —

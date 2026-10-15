@@ -54,9 +54,9 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/pefile.py
-    - lib/python3.11/site-packages/peutils.py
-    - lib/python3.11/site-packages/ordlookup/
-    - lib/python3.11/site-packages/pefile-*.dist-info/
-    - Lib/site-packages/pefile/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/pefile.py", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/peutils.py", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/ordlookup/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/pefile-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pefile/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

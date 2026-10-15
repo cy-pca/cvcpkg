@@ -27,65 +27,94 @@ the Windows SDK are on PATH.
 
 ---
 
-## Linux (Ubuntu 24.04 / Debian 12+)
+## Linux (glibc ≥ 2.35: Ubuntu 22.04+, Debian 12+)
 
-### Compiler toolchain
+### Compiler toolchain (from the system)
 
-| Tool | Version | Package | Notes |
-|------|---------|---------|-------|
-| GCC (C/C++) | ≥ 13 | `build-essential` | Provides `gcc`, `g++`, `make` |
-| GFortran | ≥ 13 | `gfortran` | Required by OpenBLAS |
+The system C/C++ compiler is the one thing a build takes from the
+distribution rather than cvcpkg, together with the development files of
+the host's own C library:
 
-### Build systems
+| What | Debian/Ubuntu package | Why it comes from the system |
+|------|-----------------------|------------------------------|
+| GCC (C/C++) | `gcc g++` | The compiler. Pulls in binutils (`as`, `ld`), which cvcpkg's `gfortran` drives too. The build fleet compiles with GCC 11.4, Ubuntu 22.04's |
+| C library headers and startup files | `libc6-dev` | glibc's headers, `crt*.o` and `libc.so` link script have to be the host's own, since every bundle links against the glibc it is built on. Pulls in the kernel headers (`linux-libc-dev`) |
 
-| Tool | Version | Package | Notes |
-|------|---------|---------|-------|
-| CMake | ≥ 3.16 | `cmake` | 3.28 ships with Ubuntu 24.04 |
-| Ninja | ≥ 1.10 | `ninja-build` | Used by all CMake recipes |
-| GNU Make | ≥ 4.0 | `build-essential` | Used by OpenSSL, NFFT3 |
-| Autotools | — | `autoconf automake libtool` | Used by NFFT3 |
+```sh
+sudo apt-get install -y --no-install-recommends gcc g++ libc6-dev
+```
+
+(`gcc gcc-c++ glibc-devel` on Fedora/RHEL.)
+
+Linux bundles are checked against a glibc floor of 2.35, Ubuntu 22.04's
+and the oldest on the build fleet: `cvcpkg pack` fails a bundle that needs
+newer glibc symbols. To build only for your own machine on a newer glibc,
+set `CVCPKG_GLIBC_FLOOR` to its version (`ldd --version`).
+
+### Build tools (from cvcpkg)
+
+Everything else comes from cvcpkg: no apt build tools, no pip-installed
+cmake, no system copies.
+
+| Tool | cvcpkg component | Notes |
+|------|------------------|-------|
+| CMake | `cmake` (3.31.7) | Pinned < 4.x for Boost compat |
+| Ninja | `ninja` | CMake generator |
+| GNU Make | `make` | OpenSSL and autotools-based recipes; CMake's default generator |
+| pkg-config | `pkg-config` (pkgconf) | Find modules, configure scripts |
+| patchelf | `patchelf` | Rewrites shared bundles' RPATHs to `$ORIGIN` when they are packed. `cvcpkg build-all` builds it from its recipe; otherwise cvcpkg looks in the prefix, then on PATH |
+| Meson | `meson` | Runs under the `python3` on PATH (numpy, scipy, postgresql-*) |
+| m4, flex, bison | `m4`, `flex`, `bison` | Parser generators (postgresql-*, libpq); m4 also serves bison and libtool |
+| GFortran | `gfortran` (11.4.0) | Not on PATH: `openblas` declares it in `depends.build`, so `cvcpkg install-deps` puts it in the prefix. Built to match the fleet's GCC 11.4, so its objects and runtime libraries mix with the C compiler's |
+| Autotools | `autoconf`, `automake`, `libtool` | Not on PATH: the recipes that need them (`nfft3`) declare them in `depends.build` |
+
+Install them into a tools prefix, then put **only the tools** on PATH,
+the way `source-fallback-ci.yml` and `Dockerfile.test` do. CMake
+searches its own install prefix for packages, and that prefix also holds
+the curl/openssl headers and libraries cvcpkg installed with cmake, which
+a recipe build would otherwise pick up instead of its declared deps.
+`bin/cmake` loads libcurl, libssl and libcrypto through its RUNPATH
+`$ORIGIN/../lib`, so those three libraries come along under their
+versioned names (which `find_library` never matches). bison has the
+absolute paths of its build-time data directory and m4 compiled in, and
+flex runs `/usr/bin/m4` unless told otherwise, so `M4` and
+`BISON_PKGDATADIR` point them at the tree:
+
+```sh
+cvcpkg install cmake ninja make pkg-config patchelf meson m4 flex bison \
+  --prefix ~/cvcpkg-tools-prefix --config release --link shared
+p=~/cvcpkg-tools-prefix t=~/cvcpkg-tools
+mkdir -p "$t/bin" "$t/lib" "$t/share"
+for exe in cmake ctest cpack ninja make pkgconf patchelf meson m4 flex bison; do
+  cp "$p/bin/$exe" "$t/bin/"
+done
+ln -s pkgconf "$t/bin/pkg-config"
+ln -s flex "$t/bin/flex++"
+cp -R "$p"/share/cmake-* "$p/share/bison" "$t/share/"
+cp -R "$p/lib/meson" "$t/lib/"
+cp -P "$p"/lib/libcurl.so.4* "$p/lib/libssl.so.3" "$p/lib/libcrypto.so.3" "$t/lib/"
+export PATH="$t/bin:$PATH" M4="$t/bin/m4" BISON_PKGDATADIR="$t/share/bison"
+```
+
+If the distribution's cmake, ninja, make or pkg-config are installed,
+they are only shadowed; `command -v cmake` should name the tree.
 
 ### Interpreters
 
-| Tool | Version | Package | Notes |
-|------|---------|---------|-------|
-| Python 3 | ≥ 3.10 | `python3 python3-pip python3-venv` | Runs cvcpkg |
-| Perl | ≥ 5.30 | `perl` | OpenSSL Configure, Qt6 build |
+| Tool | Notes |
+|------|-------|
+| Python 3 | The system's `python3` (≥ 3.10) runs cvcpkg itself (`pip install` of this repo) and meson |
+| Perl | Not on PATH: `openssl`, `qt6`, `autoconf` and `automake` declare cvcpkg's `perl` in `depends.build` |
 
-### Utilities
+### System libraries (from cvcpkg)
 
-| Tool | Package | Notes |
-|------|---------|-------|
-| pkg-config | `pkg-config` | Used by several CMake find modules |
-| patchelf | `patchelf` | Post-build RPATH patching (shared builds) |
-
-### System development libraries
-
-These headers/libraries must be installed so Qt6, VTK, and
-ImageMagick can build with OpenGL and X11 support:
-
-```
-libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev
-libxrender-dev libxcursor-dev libxinerama-dev libxi-dev
-libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev
-libx11-dev libx11-xcb-dev libfontconfig1-dev
-libfreetype-dev libharfbuzz-dev
-```
-
-### One-liner install
-
-```sh
-sudo apt-get update
-sudo apt-get install -y --no-install-recommends \
-  build-essential cmake ninja-build patchelf pkg-config \
-  autoconf automake libtool gfortran perl \
-  python3 python3-pip python3-venv \
-  libgl1-mesa-dev libxt-dev mesa-common-dev libglew-dev \
-  libxrender-dev libxcursor-dev libxinerama-dev libxi-dev \
-  libxext-dev libxfixes-dev libxrandr-dev libxcb1-dev \
-  libx11-dev libx11-xcb-dev libfontconfig1-dev \
-  libfreetype-dev libharfbuzz-dev
-```
+No X11, OpenGL or font `-dev` packages either. libx11, the xcb
+family, libxext, libxi, libxrender, libxt, libglvnd, mesa, glu, glew,
+fontconfig, freetype, harfbuzz and the rest are cvcpkg recipes, and the
+recipes that build against them declare them (`qt6`: libx11, libxcb and
+the xcb-util family, libxi, libxext, libxfixes, libxrender, libglvnd,
+xkbcommon; `vtk`: libx11, libxext, libxt, libglvnd, glu), so
+`cvcpkg install-deps` and `cvcpkg build-all` put them in the prefix.
 
 ---
 
@@ -100,36 +129,55 @@ headers, and the Accelerate framework for BLAS/LAPACK):
 xcode-select --install
 ```
 
-### Build systems & utilities
+### Build systems and utilities (from cvcpkg)
 
-Install via Homebrew:
+Everything comes from cvcpkg: no Homebrew, no pip-installed cmake, no
+system copies.
 
-```sh
-brew install ninja autoconf automake libtool pkg-config libomp
-```
-
-| Tool | Homebrew formula | Notes |
-|------|-----------------|-------|
+| Tool | cvcpkg component | Notes |
+|------|------------------|-------|
+| CMake | `cmake` (3.31.7) | Pinned < 4.x for Boost compat |
 | Ninja | `ninja` | CMake generator |
-| Autotools | `autoconf automake libtool` | NFFT3 |
-| pkg-config | `pkg-config` | Find modules |
-| libomp | `libomp` | OpenMP runtime for FFTW3 threads |
+| pkg-config | `pkg-config` (pkgconf) | Find modules, configure scripts |
+| Meson | `meson` | Runs under the `python3` on PATH |
+| m4, flex, bison | `m4`, `flex`, `bison` | Parser generators (postgresql-*, libpq, gstreamer) |
+| Autotools | `autoconf`, `automake`, `libtool` | Not on PATH: the recipes that need them (`nfft3`, `swig`) declare them in `depends.build`, so `cvcpkg install-deps` puts them in the prefix |
 
-### CMake
-
-Boost 1.86's CMake files are incompatible with CMake 4.x, so pin
-to 3.x:
+Install them into a tools prefix, then put **only the tools** on PATH,
+the way `macos-build.yml` and `macos-recipe-check.yml` do. CMake
+searches its own install prefix for packages, and that prefix also holds
+the curl/openssl headers and libraries cvcpkg installed with cmake, which
+a recipe build would otherwise pick up instead of its declared deps.
+`bin/cmake` loads libcurl, libssl and libcrypto from `../lib`, so those
+three dylibs come along under their versioned names (which
+`find_library` never matches), and bison is told where its data and m4
+are:
 
 ```sh
-pip3 install --break-system-packages "cmake>=3.31,<4"
+cvcpkg install cmake ninja pkg-config meson m4 flex bison \
+  --prefix ~/cvcpkg-tools-prefix --config release --link shared
+p=~/cvcpkg-tools-prefix t=~/cvcpkg-tools
+mkdir -p "$t/bin" "$t/lib" "$t/share"
+for exe in cmake ctest cpack ninja pkgconf meson m4 flex bison; do
+  cp "$p/bin/$exe" "$t/bin/"
+done
+ln -s pkgconf "$t/bin/pkg-config"
+cp -R "$p"/share/cmake-* "$p/share/bison" "$t/share/"
+cp -R "$p/lib/meson" "$t/lib/"
+cp "$p/lib/libcurl.4.dylib" "$p/lib/libssl.3.dylib" "$p/lib/libcrypto.3.dylib" "$t/lib/"
+export PATH="$t/bin:$PATH" M4="$t/bin/m4" BISON_PKGDATADIR="$t/share/bison"
 ```
+
+If Homebrew is installed, take it off PATH for the build (CI strips
+`/opt/homebrew` and, on Intel, `/usr/local`): its cmake, pkgconf,
+autotools and libraries are otherwise found instead of cvcpkg's.
 
 ### Interpreters
 
 | Tool | Notes |
 |------|-------|
-| Python 3 | Ships with macOS / Homebrew |
-| Perl | Ships with macOS (used by OpenSSL Configure, Qt6) |
+| Python 3 | Runs cvcpkg itself, and meson |
+| Perl | Ships with macOS; `openssl`, `qt6`, `autoconf` and `automake` declare cvcpkg's `perl` in `depends.build` |
 
 ### System frameworks
 
@@ -155,43 +203,42 @@ All build scripts must run from a **Developer PowerShell** or
 after sourcing `vcvarsall.bat x64` so that the MSVC tools are on
 PATH.
 
-### Build systems
+### Build systems, assembler and Perl (from cvcpkg)
 
-| Tool | Install | Notes |
-|------|---------|-------|
-| CMake | `choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' -y` | Pinned < 4.x for Boost compat |
-| Ninja | `choco install ninja -y` | CMake generator |
+Everything comes from cvcpkg: no Chocolatey, no vcpkg, no system copies.
+
+| Tool | cvcpkg component | Notes |
+|------|------------------|-------|
+| CMake | `cmake` (3.31.7) | Pinned < 4.x for Boost compat |
+| Ninja | `ninja` | CMake generator |
+| NASM | `nasm` | OpenSSL and libjpeg-turbo use NASM for optimised x86_64 assembly. Without it OpenSSL falls back to unoptimised C (`no-asm`) and libjpeg-turbo disables SIMD. |
+| Perl | `perl` | OpenSSL Configure |
 | nmake | Visual Studio | OpenSSL build |
 
-### Assembler
-
-| Tool | Install | Notes |
-|------|---------|-------|
-| NASM | `choco install nasm -y` | OpenSSL and libjpeg-turbo use NASM for optimised x86_64 assembly. Install dir: `C:\Program Files\NASM` — ensure it is on PATH. |
-
-After installing, add NASM to your PATH:
+Install them into a tools prefix, then put **only the tools** on PATH,
+the way `windows-build.yml` and `windows-recipe-check.yml` do. CMake
+searches its own install prefix for packages, and that prefix also holds
+the curl/openssl headers and libraries cvcpkg installed with cmake, which
+a recipe build would otherwise pick up instead of its declared deps:
 
 ```powershell
-$env:PATH = "C:\Program Files\NASM;$env:PATH"
+cvcpkg install cmake ninja nasm --prefix C:\cvcpkg-tools-prefix --config release --link shared
+New-Item -ItemType Directory -Force C:\cvcpkg-tools\bin, C:\cvcpkg-tools\share | Out-Null
+'cmake','ctest','cpack','cmcldeps','ninja','nasm','ndisasm' | ForEach-Object {
+  Copy-Item "C:\cvcpkg-tools-prefix\bin\$_.exe" C:\cvcpkg-tools\bin\
+}
+Copy-Item -Recurse C:\cvcpkg-tools-prefix\share\cmake-* C:\cvcpkg-tools\share\
+$env:PATH = "C:\cvcpkg-tools\bin;$env:PATH"
 ```
 
-Without NASM, OpenSSL falls back to unoptimised C code (`no-asm`)
-and libjpeg-turbo disables SIMD, resulting in significantly slower
-crypto and JPEG operations.
+`perl` can go into its own prefix the same way, with its `bin` on PATH.
 
 ### Interpreters
 
 | Tool | Install | Notes |
 |------|---------|-------|
-| Python 3 | `choco install python3 -y` | Runs cvcpkg |
-| Perl | Strawberry Perl (pre-installed on GitHub runners, or `choco install strawberryperl -y`) | OpenSSL Configure |
-
-### Package manager
-
-| Tool | Install | Notes |
-|------|---------|-------|
-| vcpkg | Pre-installed at `C:\vcpkg` on GitHub runners. For local builds: `git clone https://github.com/microsoft/vcpkg && .\vcpkg\bootstrap-vcpkg.bat` | Used by `clapack` and `pthreads4w` recipes |
-| Chocolatey | https://chocolatey.org/install | Installs cmake, ninja, nasm |
+| Python 3 | python.org installer | Runs cvcpkg itself (`pip install` of this repo) |
+| PowerShell 7 | `cvcpkg install powershell` | Runs the `.ps1` recipe scripts |
 
 ### Qt6 (pre-built)
 
@@ -205,19 +252,10 @@ installer](https://www.qt.io/download-qt-installer-oss) and set
 $env:Qt6_DIR = "C:\Qt\6.7.3\msvc2019_64\lib\cmake\Qt6"
 ```
 
-### One-liner install (Chocolatey)
+### Getting started
 
-From an **elevated PowerShell** (Administrator):
-
-```powershell
-choco install -y cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System'
-choco install -y ninja nasm strawberryperl python3
-# Add NASM to PATH for the current session
-$env:PATH = "C:\Program Files\NASM;$env:PATH"
-```
-
-Then open a **Developer PowerShell for VS 2022** to get `cl.exe`
-and `nmake` on PATH.
+Open a **Developer PowerShell for VS 2022** to get `cl.exe`
+and `nmake` on PATH, then install the tools from cvcpkg as shown above.
 
 ---
 
@@ -233,10 +271,9 @@ Which recipes require which non-standard tools beyond the baseline
 | NASM | `openssl` (Windows), `libjpeg-turbo` (Windows — SIMD) |
 | Autotools | `nfft3` |
 | nmake | `openssl` (Windows) |
-| vcpkg | `clapack` (Windows), `pthreads4w` (Windows) |
 | pkg-config | `nfft3`, various `find_package` module-mode lookups |
 | patchelf | Post-build RPATH fixup (Linux shared only) |
-| libomp | `fftw3` (macOS — OpenMP threading) |
+| OpenMP runtime (`openmp`) | None on macOS: Apple clang ships no libomp, so `openblas` and `nfft3` build without OpenMP there, and `fftw3` threads with pthreads |
 
 ## Environment variables
 
