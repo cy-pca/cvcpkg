@@ -81,11 +81,8 @@ CEOF
     "${CC:-cc}" -o "${D}/t" "${D}/t.c" -I"${CVC_INSTALL_DIR}/include" -I"${CVC_INSTALL_DIR}/include/openblas" \
         -L"${CVC_INSTALL_DIR}/lib" -lopenblas -Wl,-rpath,"${CVC_INSTALL_DIR}/lib"
     otool -L "${D}/t"
-    for _thr in "" 1; do
-        for _ct in "" Haswell SkylakeX Zen Sandybridge Nehalem Prescott; do
-            echo "== OPENBLAS_CORETYPE=${_ct:-auto} OPENBLAS_NUM_THREADS=${_thr:-default}"
-            OPENBLAS_VERBOSE=2 OPENBLAS_CORETYPE="${_ct}" OPENBLAS_NUM_THREADS="${_thr}" "${D}/t" || echo "== rc=$?"
-        done
-    done
+    OPENBLAS_VERBOSE=2 lldb --batch -o run -o bt -o "register read" -o "disassemble --pc" -o quit -- "${D}/t" 2>&1 | head -120 || true
+    nm -m "${CVC_INSTALL_DIR}/lib/libopenblas.dylib" 2>/dev/null | grep -c " (__TEXT,__text) external" || true
+    otool -l "${CVC_INSTALL_DIR}/lib/libopenblas.dylib" | grep -A4 -E "LC_BUILD_VERSION|LC_VERSION_MIN" | head -12 || true
     exit 1
 fi
