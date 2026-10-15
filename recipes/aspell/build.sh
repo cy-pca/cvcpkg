@@ -13,6 +13,16 @@ cd "${CVC_SOURCE_DIR}"
 export CFLAGS="${CFLAGS:-} -Wno-error=implicit-function-declaration"
 export CXXFLAGS="${CXXFLAGS:-} -Wno-error=implicit-function-declaration"
 
+# VectorHashTable<Parms>::recalc_size() names members that do not exist
+# (this->e, this->_size).  Nothing instantiates it, so gcc and older clang let
+# it pass, but current clang checks the template body and every macOS build
+# failed: "no member named 'e' in 'VectorHashTable<Parms>'".  Still present in
+# 0.60.8.1.  Use the members it means, end() and size_.
+_vh=modules/speller/default/vector_hash-t.hpp
+sed -i.orig 's/i != this->e; ++i, ++this->_size/i != end(); ++i, ++size_/' "${_vh}"
+rm -f "${_vh}.orig"
+grep -q 'i != end(); ++i, ++size_' "${_vh}"
+
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
     --disable-dependency-tracking
