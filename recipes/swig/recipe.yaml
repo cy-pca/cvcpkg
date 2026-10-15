@@ -76,8 +76,8 @@ package:
     - bin/swig*
     # bin/Lib/ is swig.exe's compiled-in runtime library location on Windows
     # (`swig -swiglib` reports <exedir>\Lib); without it FindSWIG's module
-    # mode cannot locate SWIG_DIR. Harmless on POSIX, where no such tree exists.
-    - bin/Lib/
+    # mode cannot locate SWIG_DIR. POSIX installs it under share/swig/ instead.
+    - { glob: "bin/Lib/", platforms: [windows] }
     - share/swig/
     - lib/cmake/SWIG/
   cmake_packages:
