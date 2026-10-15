@@ -1044,6 +1044,16 @@ def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: st
     """
     src = recipe.source
     if src.type == "tarball":
+        if src.artifacts:
+            # A prebuilt toolchain differs per host (llvm-mingw ships x86_64 and
+            # aarch64 tarballs): pick this platform's entry, as for an sdist.
+            # _artifacts_cover skips a platform/arch with none in pack-all.
+            url, sha256, _ = _resolve_artifact(
+                src, platform or detect_platform(), arch or detect_arch()
+            )
+            if not sha256:
+                raise RecipeError("tarball artifacts require a sha256 (pinning is required)")
+            return _fetch_tarball(replace(src, url=url, sha256=sha256, mirror=""), work_dir)
         return _fetch_tarball(src, work_dir)
     if src.type == "vendored":
         return _resolve_vendored(src, recipe.recipe_dir)

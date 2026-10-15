@@ -1081,6 +1081,38 @@ class TestFetchSource:
         src = fetch_source(r, work_dir)
         assert src.is_dir()
 
+    def _tarball_artifacts_recipe(self, tmp_path, artifacts):
+        recipe_dict = {
+            **MINIMAL_RECIPE,
+            "source": {"type": "tarball", "artifacts": artifacts, "strip_components": 1},
+        }
+        recipe_dir = tmp_path / "recipes" / "testpkg"
+        _write_recipe(recipe_dir, recipe_dict)
+        work_dir = tmp_path / "work"
+        work_dir.mkdir()
+        return Recipe.load(recipe_dir), work_dir
+
+    def test_tarball_artifacts_pick_the_host_entry(self, tmp_path):
+        # mingw-w64: llvm-mingw ships one toolchain tarball per build host.
+        x86 = {"url": "https://example.invalid/tool-x86_64.tar.xz", "sha256": "a" * 64}
+        arm = {"url": "https://example.invalid/tool-aarch64.tar.xz", "sha256": "b" * 64}
+        r, work_dir = self._tarball_artifacts_recipe(
+            tmp_path, {"linux-x86_64": x86, "linux-arm64": arm}
+        )
+        with mock.patch("cvcpkg.builder._fetch_tarball", return_value=work_dir) as fetch:
+            fetch_source(r, work_dir, platform="linux", arch="aarch64")
+        src = fetch.call_args.args[0]
+        assert (src.url, src.sha256, src.strip_components) == (arm["url"], "b" * 64, 1)
+
+    def test_tarball_artifacts_without_a_host_entry_or_sha_fail(self, tmp_path):
+        r, work_dir = self._tarball_artifacts_recipe(
+            tmp_path, {"linux-x86_64": {"url": "https://example.invalid/t.tar.xz"}}
+        )
+        with pytest.raises(RecipeError, match="no artifact for linux-arm64"):
+            fetch_source(r, work_dir, platform="linux", arch="arm64")
+        with pytest.raises(RecipeError, match="require a sha256"):
+            fetch_source(r, work_dir, platform="linux", arch="x86_64")
+
     def test_git_source_without_a_url_is_rejected(self, tmp_path):
         # Was test_git_source_not_implemented, which asserted the placeholder
         # RecipeError("Git source fetching not yet implemented").  The git
