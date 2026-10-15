@@ -20,41 +20,33 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
+# Link the cvcpkg ncurses (its wide-char libncursesw, which carries the
+# termcap functions), never the build host's.  Before cvc.5 nothing named it:
+# make's SHLIB_LIBS fell back to the host's -ltinfo, so libreadline.so NEEDED
+# the build machine's libtinfo.so.6, while configure, probing the host on its
+# own, wrote "Requires.private: ncurses" into readline.pc -- a .pc no cvcpkg
+# package ships (cvcpkg's ncurses installs ncursesw.pc).  pkg-config therefore
+# rejected readline in every consumer: postgresql's meson (-Dreadline=enabled)
+# failed on linux, linux/arm64 and macOS with "library 'libedit' not found".
+# bash_cv_termcap_lib picks the library (TERMCAP_LIB=-lncursesw, and
+# readline.pc's Requires.private becomes ncursesw), and
+# --with-shared-termcap-library links libreadline.so against it.
+export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
+export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+CONFIGURE_ARGS+=(bash_cv_termcap_lib=libncursesw --with-shared-termcap-library)
+
 ./configure "${CONFIGURE_ARGS[@]}"
 
-# Ensure libreadline.so links against the curses/termcap library that
-# provides tgetent/tgoto/tputs/etc.  Without this, downstream consumers
-# (e.g. libpq's psql) fail to link against our libreadline.so with
-# "undefined reference to `tgetent'" errors.  On modern Linux these
-# symbols live in libtinfo (split out from ncurses); macOS and OpenBSD keep
-# them in libncurses itself.
-SHLIB_LIBS=""
-if command -v pkg-config >/dev/null 2>&1; then
-    if pkg-config --exists tinfo 2>/dev/null; then
-        SHLIB_LIBS="$(pkg-config --libs tinfo)"
-    elif pkg-config --exists ncursesw 2>/dev/null; then
-        SHLIB_LIBS="$(pkg-config --libs ncursesw)"
-    elif pkg-config --exists ncurses 2>/dev/null; then
-        SHLIB_LIBS="$(pkg-config --libs ncurses)"
-    fi
-fi
-if [[ -z "${SHLIB_LIBS}" ]]; then
-    case "$(uname)" in
-        Linux)  SHLIB_LIBS="-ltinfo" ;;
-        # NetBSD ships BSD curses plus a separate libterminfo and has NO
-        # libncurses at all, so the generic BSD fallback below fails at link
-        # time with "ld: cannot find -lncurses".  That is why readline had no
-        # NetBSD build: every attempt died linking a library the platform does
-        # not provide.  tgetent/tgoto/tputs live in libterminfo here.
-        NetBSD) SHLIB_LIBS="-lcurses -lterminfo" ;;
-        *)      SHLIB_LIBS="-lncurses" ;;
-    esac
-fi
-
-make -j "${CVC_JOBS}" SHLIB_LIBS="${SHLIB_LIBS}"
+make -j "${CVC_JOBS}"
 make install
 
 # Relocate installed .pc/.cmake files and bin/*-config scripts, which keep this
 # build's temporary install dir otherwise (recipes/_common/rewrite-install-paths.sh).
 . "$(cd "$(dirname "$0")" && pwd)/../_common/rewrite-install-paths.sh"
 cvc_rewrite_install_paths
+
+grep -q '^Requires.private: ncursesw$' "${CVC_INSTALL_DIR}/lib/pkgconfig/readline.pc" || {
+    echo "readline: readline.pc does not require ncursesw:" >&2
+    cat "${CVC_INSTALL_DIR}/lib/pkgconfig/readline.pc" >&2
+    exit 1
+}
