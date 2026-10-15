@@ -45,3 +45,14 @@ cmake -G Ninja \
 
 cmake --build "${CVC_BUILD_DIR}" --target llvm-cbe -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
+
+# Built against an installed LLVM, llvm-cbe's tool target has no install rule
+# (add_llvm_tool installs only inside an LLVM build tree), so `cmake --install`
+# leaves bin/ empty and strict package.files refused the pack.  Install the
+# binary the build produced.
+if [ ! -x "${CVC_INSTALL_DIR}/bin/llvm-cbe" ]; then
+    _cbe="$(find "${CVC_BUILD_DIR}" -type f -name llvm-cbe -perm -u+x | sed -n 1p)"
+    [ -n "${_cbe}" ] || { echo "llvm-cbe: no llvm-cbe binary under ${CVC_BUILD_DIR}" >&2; exit 1; }
+    mkdir -p "${CVC_INSTALL_DIR}/bin"
+    install -m 755 "${_cbe}" "${CVC_INSTALL_DIR}/bin/llvm-cbe"
+fi
