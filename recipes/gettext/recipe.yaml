@@ -63,12 +63,14 @@ build:
 
 package:
   files:
-    - lib/libintl*
+    # libintl only where libc lacks it: glibc provides it, so the Linux build
+    # installs no libintl (strict package.files refused cvc.2 on linux/x86_64).
+    - { glob: "lib/libintl*", platforms: [macos, freebsd, openbsd, netbsd, windows] }
     - lib/libasprintf*
     - lib/libgettextlib*
     - lib/libgettextpo*
     - lib/libtextstyle*
-    - include/libintl.h
+    - { glob: "include/libintl.h", platforms: [macos, freebsd, openbsd, netbsd, windows] }
     - include/autosprintf.h
     - include/gettext-po.h
     - include/textstyle.h

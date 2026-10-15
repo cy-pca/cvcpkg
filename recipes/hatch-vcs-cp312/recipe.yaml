@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: hatch-vcs-cp312
   upstream_version: "0.4.0"
-  cvc_revision: 3
+  # cvc.4: declare the setuptools-scm runtime dependency.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -46,6 +47,10 @@ depends:
   runtime:
     - name: python312
     - name: hatchling-cp312
+    # hatch_vcs imports setuptools_scm (the seed in tools/gen_python_recipes.py
+    # lists it); without it a consumer's build died "No module named
+    # 'setuptools_scm'" (filelock/fsspec/platformdirs-cp313t, 2026-10-15).
+    - name: setuptools-scm-cp312
   host_tools:
     - python312
 

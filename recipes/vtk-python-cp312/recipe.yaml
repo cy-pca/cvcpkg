@@ -165,8 +165,8 @@ package:
     # wasm STATIC build: the compiled modules aggregate into _vtkmodules_static.a
     # (registered via PyImport_AppendInittab), and the pure-Python stubs ship as
     # VTK's _vtk.zip rather than an unpacked vtkmodules/ tree.
-    - lib/_vtkmodules_static.a
-    - { glob: "lib/python*/site-packages/_vtk.zip", platforms: [linux, wasm, wasm-mt] }
+    - { glob: "lib/_vtkmodules_static.a", platforms: [wasm, wasm-mt] }
+    - { glob: "lib/python*/site-packages/_vtk.zip", platforms: [wasm, wasm-mt] }
     # The importable Python package (site-packages layout differs per platform).
     - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux, wasm, wasm-mt] }
     - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux, wasm, wasm-mt] }

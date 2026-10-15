@@ -69,7 +69,8 @@ package:
     - lib/libxkbcommon*
     - lib/pkgconfig/xkbcommon*.pc
     - include/xkbcommon/
-    - libexec/xkbcommon/
+    # No libexec/xkbcommon/: build.sh passes -Denable-tools=false, so the xkbcli
+    # helpers that live there are never built (strict package.files refused it).
   pkg_config:
     - xkbcommon
     - xkbcommon-x11
