@@ -24,11 +24,10 @@ source:
 patches: []
 
 depends:
-  build:
-    - name: libmp3lame
-    - pkg-config
-  runtime:
-    - name: libmp3lame
+  # bin/lame links the static libmp3lame built from this same tarball, so the
+  # packaged libmp3lame is neither a build nor a runtime dependency.
+  build: []
+  runtime: []
   host_tools: []
 
 build:

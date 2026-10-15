@@ -21,7 +21,7 @@ $depsFlag = if ($msysDeps) {
     "PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig' CPPFLAGS='-I$msysDeps/include' LDFLAGS='-L$msysDeps/lib' PATH='$msysDeps/bin:'`$PATH "
 } else { '' }
 
-$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --enable-frontend --disable-shared --disable-static --disable-nls --disable-dependency-tracking && make -j $jobs -C frontend && mkdir -p '$msysPrefix/bin' && install -m 755 frontend/lame.exe '$msysPrefix/bin/lame.exe'"
+$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --enable-frontend --enable-static --disable-shared --disable-nls --disable-dependency-tracking && make -j $jobs && mkdir -p '$msysPrefix/bin' && install -m 755 frontend/lame.exe '$msysPrefix/bin/lame.exe'"
 Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
 if ($LASTEXITCODE -ne 0) { throw 'lame build failed' }
