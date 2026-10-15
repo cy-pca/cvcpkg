@@ -404,6 +404,40 @@ def _cache_key(source: SourceSpec) -> str:
     return hashlib.sha256(source.url.encode()).hexdigest()
 
 
+# Bounds for fetching a recipe's pinned upstream source.  Looser than the
+# install path's (retry.DEFAULT_*): a source download is one big file from a
+# third-party host, fetched once per build, and a runner whose resolver or
+# uplink blips for a minute should not fail the recipe and every recipe
+# behind it.
+_SOURCE_FETCH_ATTEMPTS = 5
+_SOURCE_FETCH_BUDGET_S = 120.0
+_SOURCE_FETCH_MAX_DELAY_S = 30.0
+
+
+def _urlretrieve_retrying(url: str, path: Path) -> None:
+    """``urllib.request.urlretrieve(url, path)``, retrying transport failures.
+
+    Each URL used to get exactly one attempt: on the 2026-10-14 populates about
+    55 recipes failed on a DNS outage on one macOS runner ("nodename nor
+    servname provided") or connection resets from mirrors on linux/arm64, and
+    took their dependents down with them.  What is retried is
+    :func:`cvcpkg.retry.is_transient_fetch`: timeouts, resets, 408/429/5xx and
+    DNS failures -- never a 404, a certificate failure or a checksum mismatch.
+    """
+    import urllib.request
+
+    from cvcpkg.retry import is_transient_fetch, with_retry
+
+    with_retry(
+        lambda: urllib.request.urlretrieve(url, path),  # noqa: S310
+        what=f"download {url}",
+        attempts=_SOURCE_FETCH_ATTEMPTS,
+        budget_s=_SOURCE_FETCH_BUDGET_S,
+        max_delay_s=_SOURCE_FETCH_MAX_DELAY_S,
+        transient=is_transient_fetch,
+    )
+
+
 def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
     """Download an archive (tar.gz/.tar.xz/.tar.bz2/.zip), verify SHA-256, and extract.
 
@@ -452,7 +486,7 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
         last_error: Exception | None = None
         for url in urls:
             try:
-                urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+                _urlretrieve_retrying(url, archive_path)
                 last_error = None
                 break
             except (urllib.error.URLError, OSError) as e:
@@ -956,7 +990,7 @@ def _download_pinned_wheel(url: str, sha256: str, filename: str, source_dir: Pat
         return wheel_path
 
     try:
-        urllib.request.urlretrieve(url, wheel_path)  # noqa: S310
+        _urlretrieve_retrying(url, wheel_path)
     except (urllib.error.URLError, OSError) as e:
         raise RecipeError(f"failed to download wheel from {url}: {e}") from e
 

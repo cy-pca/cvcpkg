@@ -7,15 +7,37 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 SKIA_TAG="chrome/m137"
 
+# Network steps get three tries.  git-sync-deps clones ~30 third-party repos
+# from googlesource, and one "fatal: remote transport reported error" failed the
+# whole build on the 2026-10-14 linux fleet populate.  Both steps are safe to
+# re-run: the clone is retried into a fresh directory, and git-sync-deps
+# resumes.
+_retry() {  # what, command...
+    local what="$1" _try
+    shift
+    for _try in 1 2 3; do
+        "$@" && return 0
+        [ "${_try}" = 3 ] && break
+        echo "skia: ${what} failed (attempt ${_try}/3); retrying in $((_try * 30))s" >&2
+        sleep $((_try * 30))
+    done
+    echo "skia: ${what} failed 3 times" >&2
+    return 1
+}
+
 # --- 1. Clone (or update) skia. ---
 SRC="${CVC_SOURCE_DIR}/skia"
-if [[ ! -d "${SRC}/.git" ]]; then
+_clone_skia() {
+    rm -rf "${SRC}"
     git clone --depth=1 --branch "${SKIA_TAG}" https://skia.googlesource.com/skia.git "${SRC}"
+}
+if [[ ! -d "${SRC}/.git" ]]; then
+    _retry "cloning skia" _clone_skia
 fi
 cd "${SRC}"
 
 # --- 2. Sync DEPS. ---
-python3 tools/git-sync-deps
+_retry "git-sync-deps" python3 tools/git-sync-deps
 
 # --- 3. GN args. ---
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
