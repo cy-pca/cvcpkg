@@ -111,8 +111,9 @@ if ! "${PY}" -m pip wheel \
     exit 1
 fi
 
-readarray -t _wheel_matches < <(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl')
-WHEEL="${_wheel_matches[0]:-}"
+# First match only.  `sed -n 1p` reads all of find's output, so find never sees
+# SIGPIPE under pipefail, and this runs on macOS's /bin/bash 3.2 (no readarray).
+WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'numpy-*.whl' | sed -n 1p)"
 [ -n "${WHEEL}" ] || { echo "numpy-cp313: no wheel produced" >&2; exit 1; }
 echo "numpy-cp313: built $(basename "${WHEEL}")"
 
@@ -122,8 +123,7 @@ echo "numpy-cp313: built $(basename "${WHEEL}")"
 "${PY}" -m pip install --no-deps --no-index --no-compile --ignore-installed \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
-readarray -t _np_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy)
-NP_DIR="${_np_dir_matches[0]:-}"
+NP_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name numpy | sed -n 1p)"
 [ -n "${NP_DIR}" ] || { echo "numpy-cp313: staged numpy/ not found" >&2; exit 1; }
 
 # ── Relocatable RUNPATH per-file (meson strips the build rpath on install) ──

@@ -87,8 +87,9 @@ mkdir -p "${WHEELHOUSE}"
     --wheel-dir "${WHEELHOUSE}" \
     "${CVC_SOURCE_DIR}"
 
-readarray -t _wheel_matches < <(find "${WHEELHOUSE}" -maxdepth 1 -name 'h5py-*.whl')
-WHEEL="${_wheel_matches[0]:-}"
+# First match only.  `sed -n 1p` reads all of find's output, so find never sees
+# SIGPIPE under pipefail, and this runs on macOS's /bin/bash 3.2 (no readarray).
+WHEEL="$(find "${WHEELHOUSE}" -maxdepth 1 -name 'h5py-*.whl' | sed -n 1p)"
 [ -n "${WHEEL}" ] || { echo "h5py-cp311: no wheel produced under ${WHEELHOUSE}" >&2; exit 1; }
 echo "h5py-cp311: built $(basename "${WHEEL}")"
 
@@ -107,8 +108,7 @@ echo "h5py-cp311: built $(basename "${WHEEL}")"
     "${WHEEL}"
 
 # Locate the staged h5py package dir (covers lib/pythonX.Y/site-packages).
-readarray -t _h5py_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name h5py)
-H5PY_DIR="${_h5py_dir_matches[0]:-}"
+H5PY_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name h5py | sed -n 1p)"
 [ -n "${H5PY_DIR}" ] || { echo "h5py-cp311: staged h5py/ not found under ${CVC_INSTALL_DIR}" >&2; exit 1; }
 SITE_PACKAGES="$(dirname "${H5PY_DIR}")"
 echo "h5py-cp311: staged into ${SITE_PACKAGES}"
