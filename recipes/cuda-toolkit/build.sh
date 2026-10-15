@@ -21,7 +21,7 @@
 #                                     libnvptxcompiler_static.a, cmake/ (CCCL)
 #   cuda/version.json, cuda/EULA.txt
 #   bin/nvcc                          wrapper, so PATH / CMAKE_PREFIX_PATH find nvcc
-#   lib/pkgconfig/cuda{,rt}-12.5.pc   ${pcfiledir}-relative
+#   lib/pkgconfig/cuda{,rt}-12.9.pc   ${pcfiledir}-relative
 #
 # Consumers: -DCMAKE_PREFIX_PATH=<prefix> is enough for enable_language(CUDA)
 # and find_package(CUDAToolkit); CUDAToolkit_ROOT=<prefix>/cuda and
