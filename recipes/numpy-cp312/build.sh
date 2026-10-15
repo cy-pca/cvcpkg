@@ -148,6 +148,19 @@ if [ "${CVC_PLATFORM}" = "macos" ]; then
 else
   export LD_LIBRARY_PATH="${_LOADPATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
+# DIAGNOSTIC (not for merge): which OpenBLAS kernel / threading crashes on Intel.
+echo "== cpu: $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
+sysctl -n machdep.cpu.features machdep.cpu.leaf7_features 2>/dev/null || true
+otool -L "$("${PY}" -c 'import numpy, glob, os; print(glob.glob(os.path.join(os.path.dirname(numpy.__file__), "_core", "_multiarray_umath*.so"))[0])')" || true
+for _thr in "" 1; do
+  for _ct in "" Haswell SkylakeX Sandybridge Nehalem Prescott; do
+    echo "== OPENBLAS_CORETYPE=${_ct:-auto} OPENBLAS_NUM_THREADS=${_thr:-default}"
+    OPENBLAS_VERBOSE=2 OPENBLAS_CORETYPE="${_ct}" OPENBLAS_NUM_THREADS="${_thr}" "${PY}" -c \
+      'import numpy as np; a = np.arange(12.0).reshape(3, 4); print("dot ok", (a @ a.T).sum()); b = np.ones((300, 300)); print("big ok", (b @ b).sum())' \
+      || echo "== rc=$?"
+  done
+done
+exit 1
 "${PY}" - <<'PYCHECK'
 import os, numpy as np
 a = np.arange(12, dtype=np.float64).reshape(3, 4)
