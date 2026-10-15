@@ -40,7 +40,7 @@ for d in "${P}" "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
     [ -n "${d}" ] && [ -d "${d}" ] || continue
     roots+=("${d%/}" "$(cd "${d}" && pwd -P)")
 done
-for root in "${roots[@]}"; do
+for root in ${roots[@]+"${roots[@]}"}; do
     if leaks="$(grep -rlF -- "${root}" "${R}" 2>/dev/null)"; then
         fail "relocated prefix still references ${root}:
 ${leaks}"

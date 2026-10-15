@@ -97,8 +97,9 @@ WHEELOUT="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"; mkdir -p "${WHEELOUT}
   -C parallel="${CVC_JOBS:-4}" \
   "${CVC_SOURCE_DIR}"
 
-readarray -t _wheel_matches < <(find "${WHEELOUT}" -maxdepth 1 -name 'pillow-*.whl')
-WHEEL="${_wheel_matches[0]:-}"
+# First match only.  `sed -n 1p` reads all of find's output, so find never sees
+# SIGPIPE under pipefail, and this runs on macOS's /bin/bash 3.2 (no readarray).
+WHEEL="$(find "${WHEELOUT}" -maxdepth 1 -name 'pillow-*.whl' | sed -n 1p)"
 [ -n "${WHEEL}" ] || { echo "pillow-cp313: no wheel produced" >&2; exit 1; }
 echo "pillow-cp313: built $(basename "${WHEEL}")"
 
@@ -106,8 +107,7 @@ echo "pillow-cp313: built $(basename "${WHEEL}")"
 "${PY}" -m pip install --no-deps --no-index --no-compile --ignore-installed \
   --prefix "${CVC_INSTALL_DIR}" "${WHEEL}"
 
-readarray -t _pil_dir_matches < <(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name PIL)
-PIL_DIR="${_pil_dir_matches[0]:-}"
+PIL_DIR="$(find "${CVC_INSTALL_DIR}" -maxdepth 4 -type d -name PIL | sed -n 1p)"
 [ -n "${PIL_DIR}" ] || { echo "pillow-cp313: staged PIL/ not found" >&2; exit 1; }
 
 # ── Relocatable RUNPATH per-file ────────────────────────────────────────────

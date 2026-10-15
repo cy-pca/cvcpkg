@@ -32,7 +32,7 @@ fi
     --disable-documentation \
     --disable-openssl \
     --disable-assembler \
-    "${shared_flags[@]}"
+    ${shared_flags[@]+"${shared_flags[@]}"}
 
 make -j "${CVC_JOBS}"
 make install

@@ -75,7 +75,7 @@ while read -r kind path version _; do
     esac
 done < <(sed 's/^[[:space:]]*//' "${DOC}/MODULES.txt")
 missing=0
-for m in "${mods[@]}"; do
+for m in ${mods[@]+"${mods[@]}"}; do
     path="${m% *}"; version="${m#* }"
     case "${path}" in
         ./*|../*|/*) dir="${CVC_SOURCE_DIR}/${path#./}" ;;   # local replace

@@ -146,7 +146,7 @@ cmake -G Ninja \
     -DCMAKE_DISABLE_FIND_PACKAGE_URING=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_LIBAIO=ON \
     -DWITH_SAFEMALLOC=OFF \
-    "${PLUGIN_ARGS[@]}"
+    ${PLUGIN_ARGS[@]+"${PLUGIN_ARGS[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}/build" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}/build"

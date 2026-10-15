@@ -44,7 +44,7 @@ fi
     --without-tpm \
     --without-tpm2 \
     --with-included-unistring \
-    "${shared_flags[@]}"
+    ${shared_flags[@]+"${shared_flags[@]}"}
 
 make -j "${CVC_JOBS}"
 make install
