@@ -81,7 +81,9 @@ package:
   files:
     - lib/libassimp*
     - lib/assimp*
-    - bin/assimp*
+    # Only Windows puts anything under bin/ (the assimp DLL): ASSIMP_BUILD_ASSIMP_TOOLS
+    # is OFF, so there is no assimp CLI on the other platforms.
+    - { glob: "bin/assimp*", platforms: [windows] }
     - lib/pkgconfig/assimp.pc
     - lib/cmake/assimp*/
     - include/assimp/
