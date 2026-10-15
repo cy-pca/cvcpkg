@@ -58,7 +58,8 @@ package:
   files:
     - bin/
     - lib/
-    - include/
+    # No top-level include/: llvm-mingw keeps the headers under
+    # generic-w64-mingw32/include and x86_64-w64-mingw32/ (strict globs failed it).
     - share/
     - x86_64-w64-mingw32/
     - generic-w64-mingw32/
