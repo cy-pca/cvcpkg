@@ -73,7 +73,11 @@ package:
     - include/gettext-po.h
     - include/textstyle.h
     - include/textstyle/
-    - share/locale/
+    # gettext's own message catalogs are compiled with a msgfmt found at configure
+    # time, before this build's msgfmt exists.  Linux and the BSDs find the build
+    # host's; macOS (no Homebrew) has none, so its bundle ships the tools but no
+    # catalogs.  Compiling them with the freshly built msgfmt is a follow-up.
+    - { glob: "share/locale/", platforms: [linux, freebsd, openbsd, netbsd, windows] }
     - bin/gettext
     - bin/ngettext
     - bin/envsubst
