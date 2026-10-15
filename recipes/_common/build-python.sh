@@ -349,6 +349,21 @@ if [ "$IS_CROSS" = false ]; then
     fi
 fi
 
+# --- pip only: no setuptools in the interpreter bundle ---
+# Python 3.11's ensurepip still installs setuptools (65.5.0) next to pip; 3.12
+# dropped it.  setuptools is its own cvcpkg package (setuptools-cp3XX), and
+# installing that over 3.11's left two setuptools dist-infos in one
+# site-packages.  The old one's entry points still name
+# setuptools.dist:check_test_suite, which setuptools 72 removed, so every
+# setup.py passing test_suite= failed with "module 'setuptools.dist' has no
+# attribute 'check_test_suite'" (gast-cp311 and pyrsistent-cp311, on every
+# platform, 2026-10-14).  Ship pip only, as the 3.12+ builds already do.
+_SITE="${CVC_INSTALL_DIR}/lib/python${PYTHON_LDVERSION}/site-packages"
+[ -d "${_SITE}" ] || _SITE="${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}/site-packages"
+if [ -d "${_SITE}" ]; then
+    rm -rf "${_SITE}"/setuptools "${_SITE}"/setuptools-*.dist-info         "${_SITE}"/pkg_resources "${_SITE}"/_distutils_hack         "${_SITE}"/distutils-precedence.pth
+fi
+
 # --- Alias hygiene: keep version-specific builds side-by-side safe ---
 # Version-specific recipes must ship ONLY versioned binaries (python3.X,
 # pip3.X, ...) so that several minor versions can be installed into the same
