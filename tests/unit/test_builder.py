@@ -2377,6 +2377,50 @@ class TestBuildAllKeepGoing:
 
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
+    def test_dependents_of_a_recipe_with_no_artifact_are_skipped(
+        self, mock_fetch, mock_build, tmp_path
+    ):
+        # linux/arm64: pillow-cp311 (no arm64 wheel) was skipped, but
+        # weasyprint-cp311 still built and failed its import check.
+        from cvcpkg.builder import _not_applicable, build_all, list_recipes
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "pillow")
+        self._make_recipe(recipes_dir, "weasyprint", deps=["pillow"])
+        self._make_recipe(recipes_dir, "report", deps=["weasyprint"])
+        self._make_recipe(recipes_dir, "zlib")
+        y = recipes_dir / "pillow" / "recipe.yaml"
+        data = yaml.safe_load(y.read_text())
+        data["source"] = {
+            "type": "python_wheel",
+            "artifacts": {"linux-x86_64": {"url": "https://example.invalid/p.whl"}},
+        }
+        y.write_text(yaml.dump(data))
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
+
+        reasons = _not_applicable(list_recipes(recipes_dir), "linux", "arm64")
+        assert reasons == {
+            "pillow": "no linux-arm64 artifact",
+            "weasyprint": "depends on pillow, which has no linux-arm64 artifact",
+            "report": ("depends on pillow, which has no linux-arm64 artifact (through weasyprint)"),
+        }
+        assert _not_applicable(list_recipes(recipes_dir), "linux", "x86_64") == {}
+
+        built = build_all(
+            recipes_dir,
+            platform="linux",
+            arch="arm64",
+            prefix=tmp_path / "prefix",
+            per_component=True,
+            no_cache=True,
+        )
+        assert [c.recipe.name for c in built] == ["zlib"]
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
     def test_keep_going_continues_after_failure(self, mock_fetch, mock_build, tmp_path):
         from cvcpkg.builder import BuildError, build_all
 
