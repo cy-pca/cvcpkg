@@ -79,10 +79,17 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_P
 T="${W}/smoke"
 rm -rf "${T}" && mkdir -p "${T}"
 printf '<html><body><h1>cvcpkg libreoffice</h1><p>smoke test</p></body></html>\n' > "${T}/smoke.html"
-HOME="${T}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
-    "-env:UserInstallation=file://${T}/profile" \
-    --convert-to pdf --outdir "${T}" "${T}/smoke.html" >/dev/null 2>&1 \
-    || { echo "soffice --convert-to pdf failed" >&2; exit 1; }
+# soffice's own output is kept and shown on failure: the fleet's 2026-10-15
+# populate logged only "soffice --convert-to pdf failed".
+if ! HOME="${T}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
+        "-env:UserInstallation=file://${T}/profile" \
+        --convert-to pdf --outdir "${T}" "${T}/smoke.html" >"${T}/soffice.log" 2>&1; then
+    echo "soffice --convert-to pdf failed:" >&2
+    cat "${T}/soffice.log" >&2
+    echo "libraries soffice.bin cannot resolve:" >&2
+    ldd "${CVC_INSTALL_DIR}/lib/libreoffice/program/soffice.bin" 2>&1 | grep "not found" >&2 || true
+    exit 1
+fi
 [ -s "${T}/smoke.pdf" ] || { echo "soffice produced no PDF" >&2; exit 1; }
 "${CVC_INSTALL_DIR}/bin/soffice" --version
 rm -rf "${T}"
