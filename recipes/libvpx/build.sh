@@ -32,6 +32,15 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
+# macOS: name the target.  libvpx 1.15 derives it from `gcc -dumpmachine`, but
+# its table only knows darwin20-23; the macOS 15/26 runners report darwin24/25,
+# so it fell back to generic-gnu and linked with ELF flags ("ld: unknown
+# options: -z -soname --version-script").  The darwin20-23 targets differ only
+# in adding -arch; the deployment target comes from MACOSX_DEPLOYMENT_TARGET.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    CONFIGURE_ARGS+=(--target="$(uname -m)-darwin23-gcc")
+fi
+
 # Use gmake on BSDs — their system make(1) is BSD make, not GNU make.
 MAKE=make
 case "$(uname -s)" in
