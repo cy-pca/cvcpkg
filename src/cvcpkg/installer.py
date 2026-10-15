@@ -676,6 +676,56 @@ def not_redistributable_deps(
     return [d["name"] for d in runtime_dependencies(recipe, platform)]
 
 
+def source_build_deps(
+    name: str, recipes_dirs: list[Path] | None, platform: str
+) -> list[str] | None:
+    """What a ``--fallback-to-source`` build of *name* needs installed first.
+
+    ``None`` when there is no recipe for *name* or it does not build for
+    *platform*. Otherwise the recipe's ``depends.build`` followed by its
+    runtime deps, filtered to *platform*. The build runs against the
+    install prefix (single-prefix model), so all of them must be resolved
+    and in place before it. This is the resolver's ``local_only`` hook for
+    a component with no bundle for the platform: before it existed, such a
+    component was built with whatever the rest of the request happened to
+    pull in, and a recipe whose build deps were not also deps of something
+    else failed (cython-cp312 under ``install-deps numpy-cp312``: setuptools
+    and wheel were in nobody else's closure, so its build died with "Cannot
+    import 'setuptools.build_meta'").
+    """
+    import yaml
+
+    from cvcpkg.builder import Recipe, RecipeError, runtime_dependencies
+
+    recipe_dir = _find_recipe_dir(name, recipes_dirs)
+    if recipe_dir is None:
+        return None
+    try:
+        recipe = Recipe.load(recipe_dir)
+    except (RecipeError, OSError, ValueError, yaml.YAMLError):
+        return None
+    # A recipe with no build for this platform cannot be the fallback: let the
+    # resolver report the name unsatisfiable instead of starting a doomed build.
+    if not any(m.platform in (platform, "any") for m in recipe.build_matrix):
+        return None
+
+    names: list[str] = []
+    for d in (recipe.raw.get("depends") or {}).get("build") or []:
+        if isinstance(d, str):
+            dep = d.split("/", 1)[-1]
+        else:
+            plats = d.get("platforms")
+            if plats and platform not in plats:
+                continue
+            dep = d["name"]
+        if dep != name and dep not in names:
+            names.append(dep)
+    for d in runtime_dependencies(recipe, platform):
+        if d["name"] != name and d["name"] not in names:
+            names.append(d["name"])
+    return names
+
+
 def license_gated_components(
     names: list[str], recipes_dirs: list[Path] | None
 ) -> list[tuple[str, LicenseAcceptance]]:
