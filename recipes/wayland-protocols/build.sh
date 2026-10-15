@@ -21,4 +21,12 @@ meson setup "${CVC_BUILD_DIR}" \
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
 
+# meson installs the .pc into share/pkgconfig (the package is arch-independent),
+# but cvcpkg consumers search <prefix>/lib/pkgconfig, and package.files declares
+# it there; strict globs refused cvc.2 for the mismatch.  Move it.  The rewrite
+# below makes its prefix ${pcfiledir}-relative, two levels up either way.
+mkdir -p "${CVC_INSTALL_DIR}/lib/pkgconfig"
+mv "${CVC_INSTALL_DIR}/share/pkgconfig/wayland-protocols.pc" "${CVC_INSTALL_DIR}/lib/pkgconfig/"
+rmdir "${CVC_INSTALL_DIR}/share/pkgconfig" 2>/dev/null || true
+
 cvc_rewrite_install_paths
