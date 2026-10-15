@@ -50,7 +50,7 @@ cp "${CVC_SOURCE_DIR}"/COPYING3 "${CVC_SOURCE_DIR}"/COPYING.RUNTIME \
     "${CVC_SOURCE_DIR}"/COPYING.LIB "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime/"
 
 # Each library must load on its own, from here, with nothing else on the path.
-for _so in "${_copied[@]}"; do
+for _so in ${_copied[@]+"${_copied[@]}"}; do
     _ldd=$(env -u LD_LIBRARY_PATH ldd "${_so}")
     echo "${_ldd}"
     if grep -q "not found" <<<"${_ldd}"; then
