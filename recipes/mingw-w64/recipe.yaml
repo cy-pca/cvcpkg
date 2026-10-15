@@ -28,11 +28,17 @@ cross_toolchain:
     CVC_MINGW_DIR: "${PREFIX}"
 
 source:
-  # Single Linux-host artifact (this toolchain only runs on the build host), so
-  # a sha256-pinned tarball is simpler than a per-platform prebuilt block.
+  # One sha256-pinned tarball per Linux build host (this toolchain runs on the
+  # build host).  The x86_64 tarball alone left linux/arm64 running x86_64 clang
+  # ("Exec format error", exit 126).
   type: tarball
-  url: https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
-  sha256: "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda"
+  artifacts:
+    linux-x86_64:
+      url: https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
+      sha256: "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda"
+    linux-arm64:
+      url: https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-aarch64.tar.xz
+      sha256: "e7e5d135d93d3f2a3beaaea633a5b0e66ac75391a53feae654391913dd76102b"
   strip_components: 1
 
 patches: []
