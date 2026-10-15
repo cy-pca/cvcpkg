@@ -1,0 +1,45 @@
+libigl 2.6.4: qualify abs() on floating-point values as std::abs.
+
+marching_tets.cpp, boundary_conditions.cpp and kelvinlets.cpp call an
+unqualified abs() on double/Scalar expressions. Where <cmath> does not also
+declare the floating-point overloads in the global namespace (NetBSD's C++
+headers), that resolves to C's int abs(int): marching_tets then interpolates
+with 0/0 and emits NaN vertices (caught by the recipe smoke test on
+netbsd-build-2). tri_tri_intersect.cpp already has `using std::abs;`.
+Upstreamable as-is.
+
+--- a/include/igl/marching_tets.cpp
++++ b/include/igl/marching_tets.cpp
+@@ -167,8 +167,8 @@
+         using Scalar = typename DerivedS::Scalar;
+         const RowVector v1 =  TV.row(edge.first).template cast<Scalar>();
+         const RowVector v2 = TV.row(edge.second).template cast<Scalar>();
+-        const Scalar a = abs(isovals(edge.first, 0) - isovalue);
+-        const Scalar b = abs(isovals(edge.second, 0) - isovalue);
++        const Scalar a = std::abs(isovals(edge.first, 0) - isovalue);
++        const Scalar b = std::abs(isovals(edge.second, 0) - isovalue);
+         const Scalar w = a / (a+b);
+ 
+         // Create a casted copy in case BCType is a float and we need to downcast
+--- a/include/igl/boundary_conditions.cpp
++++ b/include/igl/boundary_conditions.cpp
+@@ -149,7 +149,7 @@
+       }
+       Eigen::Vector3d point = V.row(i);
+       Eigen::Vector3d v = point - v_0;
+-      double dist = abs(v.dot(n));
++      double dist = std::abs(v.dot(n));
+       if (dist <= 1.e-1f)
+       {
+         //barycentric coordinates
+--- a/include/igl/kelvinlets.cpp
++++ b/include/igl/kelvinlets.cpp
+@@ -220,7 +220,7 @@
+         t += dt;
+         dt = new_dt;
+       } else {
+-        dt = std::max(abs(new_dt - dt) < 0.001 ? dt / 2.f : new_dt, 0.001);
++        dt = std::max(std::abs(new_dt - dt) < 0.001 ? dt / 2.f : new_dt, 0.001);
+       }
+     }
+     U.row(index) = x.transpose();

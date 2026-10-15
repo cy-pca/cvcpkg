@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: libigl
   upstream_version: "2.6.4"
-  cvc_revision: 1
+  # 2: patches/std-abs-floating-point.patch -- upstream calls an unqualified abs()
+  # on doubles, which NetBSD resolves to int abs(int), so marching_tets emitted NaN
+  # vertices (smoke test on netbsd-build-2). Republished on every platform so all
+  # bundles carry identical headers.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -40,7 +44,8 @@ source:
   sha256: "09fa1b9b44e0ecbd8fbaa17ec8d9ac0cb4efcedcb2427970f8a4e90bc96e0970"
   strip_components: 1
 
-patches: []
+patches:
+  - patches/std-abs-floating-point.patch
 
 depends:
   build:

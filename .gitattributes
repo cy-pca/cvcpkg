@@ -1,2 +1,6 @@
 # Force LF line endings for shell scripts so they work on Windows (Git Bash).
 *.sh text eol=lf
+
+# Recipe patches are applied with `git apply` / `patch -p1` against LF upstream
+# sources; never let a Windows checkout convert them to CRLF.
+*.patch -text
