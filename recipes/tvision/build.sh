@@ -18,13 +18,18 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 : "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
 : "${CVC_JOBS:=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}"
 
-# Prefer the ncurses RECIPE in the flat prefix over any system ncurses, so
-# tvision's find_library(ncursesw)/find_library(tinfo) resolve hermetically.
+# Find the ncurses RECIPE in the deps prefix, never a system ncurses.  Until
+# cvc.2 this pointed CMAKE_PREFIX_PATH at the INSTALL dir, where nothing lives,
+# so find_path settled on <prefix>/include/ncursesw only.  Linux silently used
+# the build host's /usr/include/ncursesw headers, and macOS, which has none,
+# failed: <ncursesw/ncurses.h> includes <ncursesw/ncurses_dll.h>, which needs
+# the include ROOT on the path ("'ncursesw/ncurses_dll.h' file not found").
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
-    -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}" \
+    -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
+    -DCMAKE_CXX_FLAGS="${CXXFLAGS:-} -I${CVC_DEPS_PREFIX}/include" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DTV_BUILD_EXAMPLES=OFF \

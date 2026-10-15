@@ -4,7 +4,9 @@ recipe:
   # magiblot/tvision has no tagged releases — pin a specific commit (same
   # convention as recipes/llvm-cbe).
   upstream_version: "0.0.0-git.b4831e2"
-  cvc_revision: 1
+  # cvc.2: build against the cvcpkg ncurses in the deps prefix (Linux used the build
+  # host's ncursesw headers; macOS could not find ncursesw/ncurses_dll.h).
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
