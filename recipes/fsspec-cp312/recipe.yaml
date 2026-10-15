@@ -59,7 +59,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/fsspec/
-    - lib/python3.12/site-packages/fsspec-*.dist-info/
-    - Lib/site-packages/fsspec/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/fsspec/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/fsspec-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/fsspec/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -13,7 +13,28 @@ recipe:
   # RPATH for relocatability, which OpenBSD's ld.so does not implement (see
   # _ELF_RPATH_PLATFORMS in builder.py) — the bundle would build but not
   # relocate.
-  cvc_revision: 3
+  # Bumped 3 -> 4: two platform-disjoint fixes (#174 and #178), so each
+  # platform's cvc.4 bundle is built from the change that applies to it.
+  # Windows (#174): build.ps1 passes LLVM_ENABLE_DIA_SDK=OFF.  With the DIA SDK
+  # on (LLVM's default whenever the building Visual Studio has one), the
+  # exported LLVMDebugInfoPDB target linked diaguids.lib by the windows-2022
+  # runner's absolute "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/
+  # DIA SDK" path, so consumers (wasmedge's AOT, through lld's COFF driver)
+  # linked only on a machine with that exact Visual Studio install.  build.ps1
+  # now fails if any installed lib/cmake file names an absolute Visual Studio or
+  # Windows Kits path.
+  # Unix (#178): the linux libLLVM.so.18.1 of cvc.3 needed the host's
+  # libtinfo.so.6 and libzstd.so.1, neither declared (cvcpkg's ncurses builds
+  # no separate libtinfo, so the build edge never supplied it). build.sh now
+  # turns LLVM_ENABLE_TERMINFO off -- it only picks terminal colours, and LLVM
+  # falls back to $TERM -- so the ncurses build edge is gone, and zstd is a
+  # build and runtime dependency on the Unix platforms with LLVM_ENABLE_ZSTD
+  # forced on. The Windows bundle links neither (its clang-cl.exe imports only
+  # zlib1.dll and the MSVC runtime).
+  # Not bumped for the package.files platform scoping below: it changes only
+  # what the Windows pack checks, not what any platform builds, and the Windows
+  # cvc.4 had not been published (its pack failed on those entries).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,19 +64,26 @@ depends:
   build:
     - name: zlib
       version: "^1.3"
-    - name: ncurses
-      version: "^6.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   runtime:
+    # libLLVM / lld / libclang-cpp link zlib and (on Unix) zstd.
     - name: zlib
       version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+      platforms: [linux, macos, freebsd, netbsd]
   host_tools: []
 
 build:
   # A full LLVM+Clang+LLD build exceeds the server's default 2h reap timeout on
-  # the fleet (it reached ~76% compile in 2h on a modest builder). Give it 5h so
-  # it can finish, link, install and publish. submit-dag propagates this per job.
-  timeout_seconds: 18000
+  # the fleet (it reached ~76% compile in 2h on a modest builder). 5h was not
+  # enough either: the FreeBSD cvc.3 build took 5h17m and cvc.4 (job 19061) was
+  # reaped at 5h.  Give it 10h so it can finish, link, install and publish.
+  # submit-dag propagates this per job.  A build-metadata change, not a
+  # cvc_revision bump: it changes no bundle.
+  timeout_seconds: 36000
   # The monorepo source (~4 GiB unpacked) plus a Release Ninja tree for
   # llvm+clang+lld with three targets and the LLVM dylib runs ~20 GiB of
   # objects and archives before the install prefix is even staged.  20 GiB
@@ -79,34 +107,49 @@ build:
 
 package:
   files:
+    # Entries scoped to the Unix platforms are Unix spellings with no suffix
+    # (.so, .dll, .exe, ...) from which the strict-globs check can tell that
+    # Windows never produces them, so unscoped they were required there too
+    # and failed the Windows pack.  Their Windows spellings are declared below.
     - bin/clang*
     - bin/lld*
-    - bin/ld.lld
-    - bin/ld64.lld
+    - { glob: "bin/ld.lld", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/ld64.lld", platforms: [linux, macos, freebsd, netbsd] }
     - bin/llvm-*
-    - bin/opt
-    - bin/llc
-    - bin/lli
-    - lib/libLLVM*
+    - { glob: "bin/opt", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/llc", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "bin/lli", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/libLLVM*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/libclang*
-    - lib/liblld*
+    - { glob: "lib/liblld*", platforms: [linux, macos, freebsd, netbsd] }
     - lib/cmake/llvm/
     - lib/cmake/clang/
     - lib/cmake/lld/
     # Clang builtin/resource headers (lib/clang/<ver>/include — stddef.h,
     # arm_acle.h, immintrin.h, …). REQUIRED by any libclang parser (e.g.
-    # shiboken's ApiExtractor); the top-level `llvm` recipe omits these.
+    # shiboken's ApiExtractor) and by clang itself.
     - lib/clang/
     - include/llvm/
     - include/llvm-c/
     - include/clang/
     - include/clang-c/
     - include/lld/
-    # Windows (globs matching nothing are skipped): DLLs live in bin/ (libclang.dll
-    # is what shiboken's ApiExtractor loads), and the static + import libraries are
-    # lib/*.lib (no "lib" prefix / .so suffix) — the LLVM/Clang component libs that
-    # find_package(Clang)/find_package(LLVM) resolve.
+    # Windows.  An entry that matches nothing on a platform it applies to fails
+    # the pack; the .exe/.dll/.lib suffix is what limits these to Windows.  The
+    # tools are .exe files (ld.lld.exe and ld64.lld.exe are copies of lld.exe
+    # where Unix has symlinks).  DLLs live in bin/ (libclang.dll is what
+    # shiboken's ApiExtractor loads), and the static + import libraries are
+    # lib/*.lib (no "lib" prefix / .so suffix) — the LLVM/Clang component libs
+    # that find_package(Clang)/find_package(LLVM) resolve.  MSVC builds no
+    # libLLVM DLL, so LLVM and lld ship as their component libraries.
+    - bin/ld.lld.exe
+    - bin/ld64.lld.exe
+    - bin/opt.exe
+    - bin/llc.exe
+    - bin/lli.exe
     - bin/*.dll
+    - lib/LLVM*.lib
+    - lib/lld*.lib
     - lib/*.lib
   cmake_packages:
     - { name: LLVM, targets: ["LLVM"] }
@@ -135,6 +178,15 @@ notes:
       LLVM_BUILD_LLVM_DYLIB=ON produces a single libLLVM.so/.dylib that
       all LLVM tools link against, keeping the total install size smaller.
       Downstream consumers can also link against it.
+  - title: "Windows: no DIA SDK"
+    platforms: [windows]
+    description: >-
+      Built with LLVM_ENABLE_DIA_SDK=OFF, so the exported CMake package names
+      no Visual Studio path and links on any MSVC install.  LLVMDebugInfoPDB
+      keeps its native PDB reader and writer (what lld-link and
+      llvm-symbolizer use by default); only the DIA-backed reader is absent:
+      `llvm-symbolizer --dia` reports that the DIA SDK is not present, and
+      `llvm-pdbutil pretty` / `diadump` need `-native`.
   - title: "llvm-cbe C backend"
     platforms: [linux, macos, windows, freebsd]
     description: >-

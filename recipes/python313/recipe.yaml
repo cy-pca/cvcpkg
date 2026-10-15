@@ -22,7 +22,17 @@ recipe:
   # and patches the wasm table at runtime — so it needs an Emscripten JS engine
   # and cannot work on wasip1. CPython upstream ships its own WASI build without
   # _ctypes for the same reason. wasm keeps the dependency.
-  cvc_revision: 6
+  # cvc.7: rebuild with no Homebrew.  The published macOS x86_64 cvc.6 bundle was built
+  # before macOS CI moved Homebrew aside (#182): bin/python3.13, libpython3.13.dylib,
+  # _dbm, _gdbm and _decimal load gettext's libintl, gdbm and mpdecimal from
+  # /usr/local/opt, so it aborts on any Mac without Homebrew.  _common/build-python.sh
+  # now also turns those off on macOS explicitly.  Every platform rebuilds.
+  # windows (2026-10-14, same revision: no windows bundle existed at any): the
+  # libffi edge is scoped off windows as python311's is (CPython fetches its own
+  # via get_externals), and build.ps1 takes python311's lean-PATH + vcvars64 steps
+  # and --no-tkinter; PC/layout gets --preset-default (venv, ensurepip) as in
+  # python311. Other platforms are unchanged.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -53,7 +63,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -73,7 +83,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -135,14 +145,14 @@ build:
 
 package:
   files:
-    - bin/python3.13*
-    - bin/pip3.13*
-    - bin/idle3.13*
-    - bin/pydoc3.13*
-    - lib/libpython3.13*
-    - lib/python3.13/
-    - lib/pkgconfig/python-3.13*.pc
-    - include/python3.13/
+    - { glob: "bin/python3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/idle3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pydoc3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/libpython3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/python3.13/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/pkgconfig/python-3.13*.pc", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "include/python3.13/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     # Windows layout (PCbuild). CPython on Windows installs a flat tree — the
     # interpreter, the DLLs and the MSVC runtime at the ROOT, headers directly
     # under include/ (no python3.13/ level), the stdlib in Lib/, extension
@@ -150,18 +160,18 @@ package:
     # match any of it, so without these the windows build packages ZERO files
     # and `cvcpkg install python313` reports success with 0 components. Same
     # omission that was fixed in recipes/python312.
-    - python.exe
-    - pythonw.exe
-    - python313.dll
+    - { glob: "python.exe", platforms: [windows] }
+    - { glob: "pythonw.exe", platforms: [windows] }
+    - { glob: "python313.dll", platforms: [windows] }
     # The limited-API forwarder, staged by PC\layout --include-stable. Every
     # abi3 extension module names python3.dll in its import table, so without
     # this the prefix cannot load a single stable-ABI wheel.
-    - python3.dll
-    - vcruntime140*.dll
-    - DLLs/
-    - Lib/
-    - libs/
-    - include/
+    - { glob: "python3.dll", platforms: [windows] }
+    - { glob: "vcruntime140*.dll", platforms: [windows] }
+    - { glob: "DLLs/", platforms: [windows] }
+    - { glob: "Lib/", platforms: [windows] }
+    - { glob: "libs/", platforms: [windows] }
+    - { glob: "include/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

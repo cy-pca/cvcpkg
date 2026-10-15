@@ -300,6 +300,11 @@ and packaging wasm apps*; the CI reference is
    `depends:`.
 2. Build + install into a *clean* prefix (`/tmp/myapp/inst` — separate
    from the deps prefix, so the bundle archives only *your* app).
+   `pack --from-prefix` refuses a prefix holding other packages' cvcpkg
+   manifests (`share/libcvc-deps/<pkg>/manifest.yaml`), i.e. one with
+   dependencies installed in it: the bundle would carry them all. (Plain
+   `cvcpkg pack <recipe> --prefix <deps>` builds into an isolated install dir
+   itself and archives only that.)
 3. Archive it against the recipe's metadata:
 
    ```bash
@@ -310,11 +315,12 @@ and packaging wasm apps*; the CI reference is
 
    `--from-prefix` skips the build and packages the installed tree: name,
    version, deps and cmake packages come from the recipe.
-4. Publish **by archive path** (the manifest carries the platform —
-   publish-by-name would re-derive the *host* arch):
+4. Publish it. By name, the same `--platform`/`--link` find the
+   `wasm32` archive in `dist/` (wasm bundles are tagged `wasm32` whatever the
+   host); the archive's own manifest supplies its identity:
 
    ```bash
-   cvcpkg publish dist/myapp-<ver>-wasm-mt-release-static.tar.gz \
+   cvcpkg publish myapp --platform wasm-mt --link static \
        --server https://cvcpkg.org --org <org> --token "$CVCPKG_TOKEN"
    ```
 

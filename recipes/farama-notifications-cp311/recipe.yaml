@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/farama_notifications/
-    - lib/python3.11/site-packages/farama_notifications-*.dist-info/
-    - Lib/site-packages/farama_notifications/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/farama_notifications/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/farama_notifications-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/farama_notifications/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

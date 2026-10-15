@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: secp256k1
+  upstream_version: "0.8.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    libsecp256k1 — Bitcoin Core's optimized, constant-time C library for ECDSA
+    and Schnorr signatures and secret/public-key operations on the secp256k1
+    curve. Built with the ecdh, recovery, extrakeys and schnorrsig modules
+    enabled (recovery is off by default upstream; coincurve needs it), plus
+    the default-on musig, ellswift and silentpayments modules. Ships the shared
+    library, libsecp256k1.pc and the secp256k1 CMake package; the
+    coincurve-cpNNN columns link it.
+  homepage: https://github.com/bitcoin-core/secp256k1
+  license: MIT
+  tags: [crypto, bitcoin]
+
+source:
+  type: tarball
+  url: https://github.com/bitcoin-core/secp256k1/archive/refs/tags/v0.8.0.tar.gz
+  sha256: "eb52b0e9239dff7dc26be5f9623567141b8720ec47da29eb3c1e0a660d17c8bb"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # Unix: libsecp256k1.so.* / .dylib. MSVC: libsecp256k1.lib (import) +
+    # libsecp256k1-<abi>.dll (cmake/SetLibtoolAbiVersion.cmake).
+    - { glob: "lib/libsecp256k1*", platforms: [linux, macos, freebsd, openbsd, netbsd, windows] }
+    - { glob: "bin/libsecp256k1*.dll", platforms: [windows] }
+    - lib/pkgconfig/libsecp256k1.pc
+    - lib/cmake/libsecp256k1/
+    - include/secp256k1.h
+    - include/secp256k1_*.h
+  cmake_packages:
+    - { name: libsecp256k1, targets: ["libsecp256k1::secp256k1"] }
+  pkg_config:
+    - libsecp256k1
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17

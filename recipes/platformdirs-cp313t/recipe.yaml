@@ -61,7 +61,7 @@ build:
 
 package:
   files:
-    - lib/python3.13t/site-packages/platformdirs/
-    - lib/python3.13t/site-packages/platformdirs-*.dist-info/
-    - Lib/site-packages/platformdirs/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13t/site-packages/platformdirs/", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/platformdirs-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/platformdirs/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

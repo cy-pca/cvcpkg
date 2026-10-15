@@ -55,7 +55,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/tinyhtml5/
-    - lib/python3.12/site-packages/tinyhtml5-*.dist-info/
-    - Lib/site-packages/tinyhtml5/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/tinyhtml5/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/tinyhtml5-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/tinyhtml5/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

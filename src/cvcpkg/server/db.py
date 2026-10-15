@@ -107,7 +107,12 @@ class PackageRow(Base):
     homepage: Mapped[str] = mapped_column(
         String(512), nullable=False, default="", server_default=""
     )
-    license: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    # An SPDX expression for a bundle that statically links several
+    # differently-licensed libraries easily passes 128 characters
+    # (litecoin-core's is 129); migration 030 widened it from String(128).
+    license: Mapped[str] = mapped_column(
+        String(1024), nullable=False, default="", server_default=""
+    )
     maintainer: Mapped[str] = mapped_column(
         String(255), nullable=False, default="", server_default=""
     )

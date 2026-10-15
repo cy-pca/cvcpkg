@@ -69,6 +69,7 @@ from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
+    BackfillDepsRequest,
     DeviceAuthRequest,
     DevicePollRequest,
     RevokeRequest,
@@ -278,6 +279,26 @@ def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
             422,
             f"non-canonical arch '{arch}'; expected one of " f"{sorted(CANONICAL_ARCHES)}{suffix}",
         )
+
+
+def _reject_overlong_package_fields(**fields: str) -> None:
+    """422 when a value cannot fit its ``packages`` column.
+
+    PostgreSQL and MySQL refuse an over-long VARCHAR only at INSERT, which
+    surfaced as a bare 500 once the whole archive had been uploaded; the
+    builder logs nothing but "publish completed with 1 error(s)".  The limits
+    are read from the ORM, so they follow the schema.
+    """
+    from cvcpkg.server.db import PackageRow
+
+    cols = PackageRow.__table__.c
+    for column, value in fields.items():
+        limit = getattr(cols[column].type, "length", None)
+        if limit is not None and value and len(value) > limit:
+            raise HTTPException(
+                422,
+                f"{column} is {len(value)} characters; the catalog stores at most {limit}",
+            )
 
 
 def _edge_public_publish_warning(org: str) -> str:
@@ -2297,16 +2318,17 @@ def create_app(
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
-        # Register graceful shutdown on SIGTERM (only works in main thread)
-        import threading
-
-        if threading.current_thread() is threading.main_thread():
-
-            def _handle_sigterm(signum, frame):
-                logger.info("received SIGTERM — shutting down gracefully")
-                raise SystemExit(0)
-
-            signal.signal(signal.SIGTERM, _handle_sigterm)
+        # No SIGTERM handler here: SIGTERM belongs to uvicorn.  uvicorn installs
+        # its own before running this lifespan, and that one shuts down
+        # gracefully: stop accepting, let in-flight responses finish (bounded
+        # by --graceful-timeout, see server/cli.py), then run the shutdown
+        # half of this lifespan.  A handler that raised SystemExit used to sit
+        # here and replaced it, so every `docker stop` -- every deploy -- tore
+        # the event loop down mid-response.  Each archive being downloaded at
+        # that moment was cut off at a 64 KiB chunk boundary, and the cvcpkg
+        # client, seeing a clean EOF, hashed the partial file: on 2026-10-12
+        # CI jobs failed with "sha256 mismatch" for python311 (first 65,536
+        # bytes received) and emsdk (first 40,632,320) during a prod deploy.
 
         db_url = os.environ.get("CVCPKG_DATABASE_URL", "")
         if db_url:
@@ -3166,6 +3188,71 @@ def create_app(
                     out[f"_common/{f.relative_to(common).as_posix()}"] = f.read_bytes()
         return out or None
 
+    def _recipe_doc_sync(name: str, org: str, bundle_path: str | None) -> dict | None:
+        """recipe.yaml of *name*, parsed: the pushed bundle (*bundle_path*) when
+        there is one, else the server's own recipe tree -- the precedence
+        :func:`_recipe_files` uses.  Reads that one member, not the whole
+        recipe, so a large DAG can afford one call per recipe."""
+        import tarfile as _tf
+
+        body: bytes | None = None
+        if bundle_path and Path(bundle_path).is_file():
+            try:
+                with _tf.open(bundle_path, "r:gz") as tar:
+                    for member in tar:
+                        if member.isfile() and member.name.lstrip("./") == f"{name}/recipe.yaml":
+                            fh = tar.extractfile(member)
+                            body = fh.read() if fh is not None else None
+                            break
+            except (OSError, _tf.TarError):
+                body = None
+        if body is None and not org:
+            from cvcpkg.builder import RecipeError, find_recipes_dir
+
+            try:
+                path = find_recipes_dir() / name / "recipe.yaml"
+                body = path.read_bytes() if path.is_file() else None
+            except (RecipeError, OSError):
+                body = None
+        if body is None:
+            return None
+        try:
+            doc = yaml.safe_load(body)
+        except yaml.YAMLError:
+            return None
+        return doc if isinstance(doc, dict) else None
+
+    async def _not_redistributable(names: set[str], org: str = "") -> list[str]:
+        """Those of *names* whose recipe declares ``redistributable: false``.
+
+        Such a payload (the NVIDIA CUDA toolkit) may never be published, so it
+        is never built as a job either: ``cvcpkg install`` builds it where it is
+        installed.  The CLI refuses to pack or submit one; checking here as well
+        covers clients and builders older than that refusal.  A name with no
+        recipe the server can see is unaffected.
+        """
+        out: list[str] = []
+        for name in sorted(names):
+            if not _RECIPE_NAME_RE.match(name) or (org and not _RECIPE_NAME_RE.match(org)):
+                continue
+            bundle_path = None
+            if _use_db and _db_recipes is not None:
+                try:
+                    bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org)
+                except Exception:  # pragma: no cover - store/back-end hiccup
+                    bundle_path = None
+            doc = await asyncio.to_thread(_recipe_doc_sync, name, org, bundle_path)
+            if doc is not None and doc.get("redistributable") is False:
+                out.append(name)
+        return out
+
+    def _not_redistributable_detail(names: list[str]) -> str:
+        return (
+            f"{', '.join(names)}: redistributable: false -- the payload's license does "
+            f"not allow publishing it, so it is never built or published here; "
+            f"`cvcpkg install` builds it on the installing machine"
+        )
+
     async def _load_recipe_or_error(name: str, org: str, caller: TokenRecord | None):
         """Shared guard: validate, authorize, load.  Returns (files, None) or
         (None, JSONResponse)."""
@@ -3697,25 +3784,112 @@ def create_app(
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
         if not include_yanked:
             bundles = [b for b in bundles if not b.get("yanked", False)]
-        packages = [
-            PackageInfo(
-                name=b["name"],
-                version=b["version"],
-                platform=b.get("platform", ""),
-                arch=b.get("arch", ""),
-                build_type=b.get("build_type", ""),
-                link=b.get("link", ""),
-                sha256=b.get("sha256", ""),
-                size_bytes=b.get("size_bytes", 0),
-                archive_url=b.get("archive_url", ""),
-                published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
-                yanked=b.get("yanked", False),
-                published_by=b.get("published_by", ""),
-                org=b.get("org", ""),
-            )
-            for b in bundles
-        ]
+        packages = [_index_package_info(b) for b in bundles]
         return PackageListResponse(total=len(packages), packages=packages)
+
+    def _index_package_info(b: dict) -> PackageInfo:
+        """A ``state.index`` bundle dict as a PackageInfo (YAML / mirror backends)."""
+        return PackageInfo(
+            name=b["name"],
+            version=b["version"],
+            platform=b.get("platform", ""),
+            arch=b.get("arch", ""),
+            build_type=b.get("build_type", ""),
+            link=b.get("link", ""),
+            sha256=b.get("sha256", ""),
+            size_bytes=b.get("size_bytes", 0),
+            archive_url=b.get("archive_url", ""),
+            published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
+            yanked=b.get("yanked", False),
+            published_by=b.get("published_by", ""),
+            org=b.get("org", ""),
+        )
+
+    @app.get("/v1/packages/{name}/latest", response_model=PackageInfo, tags=["packages"])
+    async def get_latest_package(
+        name: str,
+        platform: str = Query("", description="Target platform, e.g. 'linux'"),
+        arch: str = Query("", description="Target architecture, e.g. 'x86_64'"),
+        build_type: str = Query("release", description="Build type"),
+        link: str = Query("", description="Link mode; empty matches any"),
+        version: str = Query(
+            "",
+            description=(
+                "Version constraint: '2.3.0' (any +cvc.N of it), '2.3.0+cvc.2', "
+                "or a range like '>=2.2,<3'.  Empty means the newest stable "
+                "version (pre-releases such as 2.3.0-rc.1 are skipped)."
+            ),
+        ),
+        org: str = Query(
+            "",
+            description="Organization slug.  Empty means the official (unscoped) package.",
+        ),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """The newest non-yanked bundle of *name* matching the filters; 404 if none.
+
+        This is what ``/install.sh`` and ``/install.ps1`` ask for (name
+        ``cvcpkg``), so they install this deployment's own build.  "Newest" is
+        ``semver.version_sort_key`` -- not publish time, since a rebuild of an
+        older revision lands after the newer one, and not a client-side sort,
+        since the installers have no comparator that agrees with it on every
+        shell they run under.
+
+        Unlike ``/v1/packages/{name}``, an empty ``org`` means the unscoped
+        package, not "any org": choosing ONE winner across orgs would let any
+        org that publishes a same-named package at a higher version take over
+        the answer, and the installers execute what this returns.
+        """
+        from cvcpkg.semver import Version, parse_range, satisfies, version_sort_key
+
+        if version:
+            try:
+                parse_range(version)
+            except ValueError as exc:
+                raise HTTPException(422, f"invalid version constraint {version!r}: {exc}") from exc
+
+        if _use_db and not MIRROR_MODE:
+            candidates, _total = await _db_packages.get_bundles(
+                name=name,
+                platform=platform,
+                arch=arch,
+                build_type=build_type,
+                link=link,
+                org_slug=org,
+                caller_token_name=(caller.name if caller else ""),
+            )
+        else:
+            candidates = [
+                _index_package_info(b)
+                for b in _get_state().index.get("bundles", [])
+                if b.get("name") == name
+                and not b.get("yanked", False)
+                and (not platform or b.get("platform", "") == platform)
+                and (not arch or b.get("arch", "") == arch)
+                and (not build_type or b.get("build_type", "") == build_type)
+                and (not link or b.get("link", "") == link)
+            ]
+        # get_bundles treats an empty org_slug as "no filter"; here it is a value.
+        candidates = [p for p in candidates if (p.org or "") == org]
+
+        def _matches(v: str) -> bool:
+            try:
+                if version:
+                    return satisfies(v, version)
+                # Unpinned: stable only, as GitHub's "latest" skips -rc tags.
+                return not Version.parse(v).pre
+            except ValueError:  # unparseable: cannot match a pin; still stable-ish
+                return not version
+
+        candidates = [p for p in candidates if _matches(p.version)]
+        if not candidates:
+            want = " ".join(x for x in (platform, arch, build_type, link) if x)
+            raise HTTPException(
+                404,
+                f"no {name}{' ' + version if version else ''} published"
+                f"{' for ' + want if want else ''}",
+            )
+        return max(candidates, key=lambda p: version_sort_key(p.version))
 
     # ── Cache status probe ──────────────────────────────────
 
@@ -4220,6 +4394,19 @@ def create_app(
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
         _reject_noncanonical_platform_arch(platform, arch)
+        _reject_overlong_package_fields(
+            name=name,
+            version=version,
+            build_type=build_type,
+            link=link,
+            key_fingerprint=key_fingerprint,
+            release_tag=release_tag,
+            recipe_version=recipe_version,
+            homepage=homepage,
+            license=pkg_license,
+            maintainer=maintainer,
+            org_slug=org,
+        )
         _check_rate_limit(request)
         state = _get_state()
 
@@ -4230,6 +4417,10 @@ def create_app(
             err = validate_org_slug(org)
             if err:
                 raise HTTPException(422, err)
+
+        blocked = await _not_redistributable({name}, org)
+        if blocked:
+            raise HTTPException(403, _not_redistributable_detail(blocked))
 
         # Validate org membership and storage limit if publishing to an org
         if org and _use_db and _db_orgs is not None:
@@ -4405,6 +4596,7 @@ def create_app(
                 "published_by": actor.name,
                 "org": org,
                 "required_deps": json.loads(required_deps),
+                "provides": json.loads(provides),
             }
             async with _audit_txn(
                 AuditAction.publish,
@@ -4493,6 +4685,19 @@ def create_app(
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)
         _reject_noncanonical_platform_arch(platform, arch)
+        _reject_overlong_package_fields(
+            name=name,
+            version=version,
+            build_type=build_type,
+            link=link,
+            key_fingerprint=key_fingerprint,
+            release_tag=release_tag,
+            recipe_version=recipe_version,
+            homepage=homepage,
+            license=pkg_license,
+            maintainer=maintainer,
+            org_slug=org,
+        )
         if org:
             from cvcpkg.server.models import validate_org_slug
 
@@ -5006,6 +5211,94 @@ def create_app(
                     n += 1
                 state.save_index()
         return {"message": f"unyanked {target}", "count": n}
+
+    @app.post("/v1/admin/packages/{name}/{version}/backfill-deps", tags=["admin"])
+    async def backfill_deps(
+        name: str,
+        version: str,
+        body: BackfillDepsRequest,
+        platform: str = Query(..., description="Variant platform"),
+        arch: str = Query(..., description="Variant arch"),
+        build_type: str = Query(..., description="Variant build type (release/debug)"),
+        link: str = Query(..., description="Variant link mode (shared/static)"),
+        org: str = Query("", description="Owning org slug ('' for the public namespace)"),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Fill one published variant's EMPTY required_deps / provides.
+
+        Rows published before #152 reached the catalog with no edges, so the
+        resolver installs them without their runtime dependencies.  This fills
+        a column only while it is still ``[]`` -- a row that records its edges
+        is never rewritten -- and addresses exactly one variant: every key is
+        required, so no request can touch more than the variant it names.
+
+        With ``expect_required_deps`` it corrects a backfill instead: the row's
+        required_deps is replaced (possibly by ``[]``) only while it records
+        exactly the expected entries, so a row anything else has changed since
+        is left alone.
+        """
+        for dep in [*body.required_deps, *(body.expect_required_deps or [])]:
+            if not dep.get("name") or set(dep) - {"name", "org", "version"}:
+                raise HTTPException(
+                    422, f"required_deps entries are {{name, org?, version?}}, got {dep!r}"
+                )
+        if any(not p for p in body.provides):
+            raise HTTPException(422, "provides entries must be non-empty names")
+        required_json = json.dumps(body.required_deps)
+        provides_json = json.dumps(body.provides)
+        expect_json = (
+            None if body.expect_required_deps is None else json.dumps(body.expect_required_deps)
+        )
+        target = (
+            f"{name}=={version} [platform={platform},arch={arch},"
+            f"build_type={build_type},link={link}{',org=' + org if org else ''}]"
+        )
+        async with _audit_txn(
+            AuditAction.backfill_deps,
+            actor.name,
+            target,
+            f"required_deps={required_json} provides={provides_json}"
+            + ("" if expect_json is None else f" expect_required_deps={expect_json}"),
+        ):
+            if _use_db:
+                counts = await _db_packages.backfill_deps(
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    org_slug=org,
+                    required_deps=required_json,
+                    provides=provides_json,
+                    expect_required_deps=expect_json,
+                )
+            else:
+                state = _get_state()
+                counts = {"required_deps": 0, "provides": 0}
+                for b in state.index.get("bundles", []):
+                    if (
+                        b.get("name"),
+                        b.get("version"),
+                        b.get("platform"),
+                        b.get("arch"),
+                        b.get("build_type"),
+                        b.get("link"),
+                        b.get("org") or "",
+                    ) != (name, version, platform, arch, build_type, link, org):
+                        continue
+                    if body.expect_required_deps is not None:
+                        if (b.get("required_deps") or []) == body.expect_required_deps:
+                            b["required_deps"] = body.required_deps
+                            counts["required_deps"] += 1
+                    elif body.required_deps and not b.get("required_deps"):
+                        b["required_deps"] = body.required_deps
+                        counts["required_deps"] += 1
+                    if body.provides and not b.get("provides"):
+                        b["provides"] = body.provides
+                        counts["provides"] += 1
+                state.save_index()
+        return {"message": f"backfilled {target}", "count": counts}
 
     @app.post("/v1/packages/{name}/{version}/nuke", tags=["publish"])
     async def nuke(
@@ -8397,27 +8690,18 @@ def create_app(
     ):
         """Return all tag names (curated + ad-hoc) with package counts.
 
-        Used by the front-page tag browser.
+        One entry per tag name, merged across the orgs the caller can see.
+        Used by the tag browser.
         """
         if not _use_db or _db_tags is None:
             return {"tags": []}
-        all_tags = await _db_tags.list_all_tag_names()
-        # Filter out tags belonging to private orgs for unauthenticated users
-        if _db_orgs is not None:
-            visible: list[dict] = []
-            for t in all_tags:
-                org_slug = t.get("org_slug", "")
-                if org_slug:
-                    org_info = await _db_orgs.get(org_slug)
-                    if org_info and org_info.is_private:
-                        if _auth is None or (
-                            _auth.role != TokenRole.admin
-                            and not await _db_orgs.is_member(org_slug, _auth.name)
-                        ):
-                            continue
-                visible.append(t)
-            return {"tags": visible}
-        return {"tags": all_tags}
+        # Private orgs the caller is not in contribute neither tags nor counts.
+        hidden: set[str] = set()
+        if _db_orgs is not None and (_auth is None or _auth.role != TokenRole.admin):
+            hidden = await _db_orgs.private_slugs()
+            if hidden and _auth is not None:
+                hidden -= await _db_orgs.member_org_slugs(_auth.name)
+        return {"tags": await _db_tags.list_all_tag_names(exclude_orgs=hidden)}
 
     @app.post("/v1/tags", response_model=TagInfo, tags=["tags"])
     async def create_tag(
@@ -8909,6 +9193,9 @@ def create_app(
         if body.org_slug and actor.role != TokenRole.admin and _db_orgs is not None:
             if not await _db_orgs.is_member(body.org_slug, actor.name):
                 raise HTTPException(403, "not a member of this organization")
+        blocked = await _not_redistributable({body.recipe_name}, body.org_slug)
+        if blocked:
+            raise HTTPException(422, _not_redistributable_detail(blocked))
         # wasm/wasi/cosmo only support static linking — enforce server-side.
         link = body.link
         if body.platform in ("wasm", "wasm-mt", "wasi", "cosmo") and link != "static":
@@ -8959,6 +9246,13 @@ def create_app(
 
         if not _re_dag.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$", dag_id):
             raise HTTPException(422, "invalid dag_id (allowed: letters, digits, . _ -)")
+        blocked: list[str] = []
+        for _org in {j.org_slug for j in body.jobs}:
+            blocked += await _not_redistributable(
+                {j.recipe_name for j in body.jobs if j.org_slug == _org}, _org
+            )
+        if blocked:
+            raise HTTPException(422, _not_redistributable_detail(sorted(set(blocked))))
         jobs_dicts = [
             {
                 "recipe_name": j.recipe_name,
@@ -9814,7 +10108,7 @@ def create_app(
                 if msg_type == "heartbeat":
                     status = data.get("status", "online")
                     current_jobs = data.get("current_jobs", 0)
-                    await _db_builders.heartbeat(
+                    beat = await _db_builders.heartbeat(
                         builder_id,
                         status=status,
                         current_jobs=current_jobs,
@@ -9823,6 +10117,17 @@ def create_app(
                         # stored figure is left alone (never zeroed).
                         free_disk_gb=data.get("free_disk_gb"),
                     )
+                    if beat is None:
+                        # The row is gone (unregistered, or the database was
+                        # reset).  Acking would keep the builder believing it
+                        # reports in while nothing is recorded; closing sends
+                        # it back to its HTTP heartbeat, whose 404 makes it
+                        # register again.
+                        logger.info(
+                            "builder %d no longer registered; closing its socket", builder_id
+                        )
+                        await websocket.close(code=4004, reason="builder not found")
+                        break
                     await websocket.send_json({"type": "heartbeat_ack"})
 
                 elif msg_type in _WS_HTTP_ONLY_JOB_FRAMES:

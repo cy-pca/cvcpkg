@@ -2,12 +2,28 @@ schema_version: 1
 recipe:
   name: mariadb-connector-c
   upstream_version: "3.4.8"
-  cvc_revision: 2
+  # Bumped 2 -> 3: no build change. The licence was wrong (Apache-2.0), and
+  # every published bundle embeds it (share/libcvc-deps/manifest.yaml
+  # meta.license and the bundled recipe.yaml), as does each catalog row.
+  # Published variants are immutable, so only a new revision corrects them.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://mariadb.com/downloads/connectors/connectors-data-access/
-  license: Apache-2.0
+  # COPYING.LIB is the LGPL 2.1 text. Most sources are "GNU Library General
+  # Public License, version 2, or (at your option) any later version"; the
+  # async context code (ma_context.c, ma_context.h, mariadb_async.h) is LGPL
+  # 2.1 or later, so the library as a whole is LGPL-2.1-or-later.
+  # PHP-3.01: the prepared-statement and LOAD DATA LOCAL code (mariadb_stmt.c,
+  # ma_stmt_codec.c, ma_loaddata.c) is ported from PHP's mysqlnd and keeps its
+  # PHP License 3.01 header (ma_password.c's three-line XOR helper cites PHP
+  # License 3.0); README carries that licence's "This product includes PHP
+  # software" acknowledgement.
+  # No term for the public-domain ref10 Ed25519 code in the client_ed25519
+  # plugin or the public-domain mariadb_version.h. The bundled external/zlib
+  # is not built (WITH_EXTERNAL_ZLIB=ON links cvcpkg's zlib).
+  license: "LGPL-2.1-or-later AND PHP-3.01"
   tags: [database]
   description: >-
     MariaDB Connector/C — wire-compatible MySQL client library.
@@ -58,13 +74,14 @@ build:
       script: build.ps1
 
 package:
+  # Connector/C 3.4 installs no lib/cmake/mariadb/ and, with
+  # INSTALL_INCLUDEDIR=include/mariadb, no include/mysql/ (the published
+  # +cvc.2 bundles have neither); listing them fails pack's strict globs.
   files:
     - lib/libmariadb*
     - lib/mariadb*
-    - lib/cmake/mariadb/
     - lib/pkgconfig/libmariadb.pc
     - include/mariadb/
-    - include/mysql/
   cmake_packages:
     - { name: mariadb, targets: ["mariadb::mariadb"] }
 

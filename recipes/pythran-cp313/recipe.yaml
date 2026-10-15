@@ -62,8 +62,8 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/pythran/
-    - lib/python3.13/site-packages/omp/
-    - lib/python3.13/site-packages/pythran-*.dist-info/
-    - Lib/site-packages/pythran/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/pythran/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/omp/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/pythran-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pythran/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

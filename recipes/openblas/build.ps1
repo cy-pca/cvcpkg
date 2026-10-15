@@ -14,6 +14,8 @@ Invoke-CvcCMakeBuild @(
     '-DC_LAPACK=ON',
     '-DBUILD_TESTING=OFF',
     '-DUSE_THREAD=1',
+    # Not the builder's core count; see build.sh.
+    '-DNUM_THREADS=64',
     '-DDYNAMIC_ARCH=OFF',
     '-DTARGET=GENERIC',
     '-DCMAKE_C_FLAGS=/wd4013 /wd4133 /wd4244 /wd4267 /wd4996 /D_CRT_SECURE_NO_WARNINGS'

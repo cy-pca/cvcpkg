@@ -68,6 +68,10 @@ depends:
     - name: pyinstaller-hooks-contrib-cp311
     - name: setuptools-cp311
     - name: zlib
+    # PyInstaller's Windows-only requirements (its pyproject.toml marks them
+    # sys_platform == 'win32'): PE analysis and the Win32 resource API.
+    - { name: pefile-cp311, platforms: [windows] }
+    - { name: pywin32-ctypes-cp311, platforms: [windows] }
   host_tools:
     - python311
 
@@ -96,14 +100,14 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/PyInstaller/
-    - lib/python3.11/site-packages/pyinstaller-*.dist-info/
-    - bin/pyinstaller
-    - bin/pyi-makespec
-    - bin/pyi-archive_viewer
-    - bin/pyi-bindepend
-    - bin/pyi-grab_version
-    - bin/pyi-set_version
-    - Lib/site-packages/PyInstaller/
-    - Lib/site-packages/pyinstaller-*.dist-info/
-    - Scripts/pyinstaller.exe
+    - { glob: "lib/python3.11/site-packages/PyInstaller/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.11/site-packages/pyinstaller-*.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyinstaller", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyi-makespec", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyi-archive_viewer", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyi-bindepend", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyi-grab_version", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/pyi-set_version", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "Lib/site-packages/PyInstaller/", platforms: [windows] }
+    - { glob: "Lib/site-packages/pyinstaller-*.dist-info/", platforms: [windows] }
+    - { glob: "Scripts/pyinstaller.exe", platforms: [windows] }

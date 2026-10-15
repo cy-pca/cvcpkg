@@ -82,6 +82,17 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     )
 fi
 
+# libmp3lame ships no pkg-config file, so configure's check_lib finds lame/lame.h
+# and -lmp3lame only on the compiler's own search paths.  cvc.1 resolved them
+# from whatever the build host had (a system lame on Linux, Homebrew's on macOS);
+# on today's builders configure stops with "libmp3lame >= 3.98.3 not found"
+# although the cvcpkg libmp3lame is installed.  Point the probes at the cvcpkg
+# dependency prefix.
+CONFIGURE_ARGS+=(
+    --extra-cflags="-I${CVC_DEPS_PREFIX}/include"
+    --extra-ldflags="-L${CVC_DEPS_PREFIX}/lib"
+)
+
 # fontconfig is Linux/BSD/macOS only (no Windows port in cvcpkg).
 if [[ "${CVC_PLATFORM}" != "windows" ]]; then
     CONFIGURE_ARGS+=(--enable-libfontconfig)
@@ -115,6 +126,14 @@ fi
 # BSDs), so we stamp the RPATH after install with patchelf instead.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     CONFIGURE_ARGS+=(--extra-ldflags="-Wl,-rpath,@loader_path")
+fi
+
+# X11 is not a cvcpkg dependency.  FFmpeg's configure autodetects xlib and
+# libxcb through pkg-config, and the macOS arm64 cvc.1 bundle picked up
+# Homebrew's that way: every libav*/libsw* dylib loaded
+# /opt/homebrew/opt/libx11/lib/libX11.6.dylib.  Turn the autodetection off.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    CONFIGURE_ARGS+=(--disable-xlib --disable-libxcb)
 fi
 
 ./configure "${CONFIGURE_ARGS[@]}" || {

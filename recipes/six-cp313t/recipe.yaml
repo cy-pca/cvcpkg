@@ -44,5 +44,5 @@ build:
 
 package:
   files:
-    - lib/python3.13t/site-packages/six/
-    - lib/python3.13t/site-packages/*.dist-info/
+    - lib/python3.13t/site-packages/six.py
+    - lib/python3.13t/site-packages/six-*.dist-info/

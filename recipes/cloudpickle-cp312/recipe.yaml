@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/cloudpickle/
-    - lib/python3.12/site-packages/cloudpickle-*.dist-info/
-    - Lib/site-packages/cloudpickle/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/cloudpickle/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/cloudpickle-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/cloudpickle/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

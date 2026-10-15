@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,21 @@ if TYPE_CHECKING:
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import CatalogEntry
     from cvcpkg.uninstaller import InstalledPackage
+
+# A recipe with `license_acceptance:` is built only once the user accepts its
+# vendor's terms (see cvcpkg.installer.require_license_acceptance).
+_accept_license_opt = click.option(
+    "--accept-license",
+    "accept_licenses",
+    multiple=True,
+    metavar="NAME",
+    help=(
+        "Accept the vendor license of component NAME (repeatable).  A recipe "
+        "with license_acceptance (e.g. msvc) is built only after you accept its "
+        "terms: on a terminal cvcpkg asks; otherwise pass this flag or set the "
+        "recipe's CVCPKG_ACCEPT_<NAME>_LICENSE=1."
+    ),
+)
 
 # ── install ─────────────────────────────────────────────────────
 
@@ -117,6 +133,7 @@ if TYPE_CHECKING:
     default=False,
     help="Build from source recipe when no prebuilt binary is available.",
 )
+@_accept_license_opt
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
@@ -171,6 +188,7 @@ def install(
     keep_build_prefix: bool,
     keep_host_tools: bool | None,
     trust_mirror: bool | None,
+    accept_licenses: tuple[str, ...] = (),
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -211,8 +229,15 @@ def install(
         load_catalog_from_file,
         newer_revision_available,
     )
-    from cvcpkg.errors import InstallError, IntegrityError
-    from cvcpkg.installer import build_from_source_fallback, install_entry
+    from cvcpkg.errors import InstallError, IntegrityError, SchemaError
+    from cvcpkg.installer import (
+        build_from_source_fallback,
+        install_entry,
+        license_gated_components,
+        not_redistributable_deps,
+        require_license_acceptance,
+        source_build_deps,
+    )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
     from cvcpkg.platform import detect_platform, is_static_only_platform
@@ -357,6 +382,38 @@ def install(
     source_only: list[str] = []
     requested_names = [c.name for c in reqs.components]
 
+    # A `redistributable: false` recipe (the NVIDIA CUDA toolkit) is never in
+    # the catalog -- its license forbids publishing the built tree -- so it is
+    # built here from its recipe, whose script downloads the payload from the
+    # vendor under the vendor's license.  The resolver treats such a name as
+    # satisfied (requested directly or as a catalog bundle's dependency, with
+    # or without --fallback-to-source) and resolves its own deps from the
+    # catalog; local_built lists them, dependencies first.
+    _local_rdirs = (
+        _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes) if recipes_dirs else None
+    )
+    _local_memo: dict[str, list[str] | None] = {}
+    # With --fallback-to-source, a name with no bundle for this platform but a
+    # recipe that builds here is satisfied the same way: built locally, after
+    # its build and runtime deps join the search (resolved from the catalog, or
+    # source-built in turn). Without its build deps it was built against
+    # whatever else the request pulled in, and a build dep nothing else needed
+    # was simply missing (cython-cp312's setuptools under install-deps
+    # numpy-cp312).
+    _fallback_built: set[str] = set()
+
+    def _local_only(name: str) -> list[str] | None:
+        if name not in _local_memo:
+            deps = not_redistributable_deps(name, _local_rdirs, plat)
+            if deps is None and fallback_to_source:
+                deps = source_build_deps(name, _local_rdirs, plat)
+                if deps is not None:
+                    _fallback_built.add(name)
+            _local_memo[name] = deps
+        return _local_memo[name]
+
+    local_built: list[str] = []
+
     # Component requests qualified with an org (e.g. "cvc/libcvc") scope
     # candidate selection to that org for that name — see the org-qualified
     # spec bugfix below: without this, "cvc/libcvc" and "libcvc" were
@@ -405,17 +462,27 @@ def install(
                 virtual_names.update(e.provides)
 
             # Only resolve components that have candidates in the catalog,
-            # either by concrete name or as a virtual package provider.
+            # either by concrete name or as a virtual package provider, or
+            # that are satisfied without one (see _local_only).
             resolvable = [
-                c for c in reqs.components if c.name in candidates or c.name in virtual_names
+                c
+                for c in reqs.components
+                if c.name in candidates
+                or c.name in virtual_names
+                or _local_only(c.name) is not None
             ]
             if resolvable:
-                result = resolve(resolvable, candidates)
+                result = resolve(resolvable, candidates, local_only=_local_only)
                 picked = result.picked
+                local_built = result.local
 
             # Components not in the catalog need source build.
             if fallback_to_source:
-                source_only = [c.name for c in reqs.components if c.name not in picked]
+                source_only = [
+                    c.name
+                    for c in reqs.components
+                    if c.name not in picked and c.name not in local_built
+                ]
         elif fallback_to_source:
             source_only = requested_names
     else:
@@ -424,6 +491,49 @@ def install(
         # verified above, so this branch is only reachable when the
         # flag is set).
         source_only = requested_names
+
+    for name in local_built:
+        if name in _fallback_built:
+            click.echo(
+                f"cvcpkg: {name} has no bundle for this platform; building it from "
+                f"its recipe after its build and runtime deps (--fallback-to-source)."
+            )
+            continue
+        click.echo(
+            f"cvcpkg: {name} is not redistributable, so it is never published; "
+            f"building it from its recipe, which downloads it from the vendor "
+            f"under the vendor's license."
+        )
+    # Built after every catalog bundle is in place (the source loop runs last),
+    # so a local build finds its catalog deps -- a wheel, its interpreter.
+    source_only = local_built + [n for n in source_only if n not in local_built]
+
+    # A recipe with `license_acceptance:` (msvc: Microsoft's Build Tools and
+    # Windows SDK licenses) downloads its payload under terms only the user can
+    # accept.  Get that yes for every such component before building anything;
+    # cvcpkg never assumes it.
+    _interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    for name, gate in license_gated_components(
+        list(source_only),
+        (
+            _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
+            if recipes_dirs
+            else None
+        ),
+    ):
+        try:
+            how = require_license_acceptance(
+                name,
+                gate,
+                accepted=accept_licenses,
+                interactive=_interactive,
+                confirm=lambda text: click.confirm(text, default=False),
+            )
+        except InstallError as exc:
+            raise click.ClickException(str(exc)) from None
+        if how != "prompt":
+            via = "--accept-license" if how == "flag" else gate.env
+            click.echo(f"cvcpkg: {name}: license accepted ({via}): {' '.join(gate.urls)}")
 
     if picked:
         click.echo(f"cvcpkg: resolved {len(picked)} component(s) from catalog:")
@@ -615,6 +725,8 @@ def install(
     # The lockfile records exactly which bundles were installed, their
     # SHA-256 hashes, and archive URLs.  It enables 'cvcpkg verify'
     # (integrity check) and 'cvcpkg sync' (re-download missing bundles).
+    # It is the record of the whole prefix, so entries from earlier installs
+    # are kept; a bundle installed now replaces its old entry.
     lock = Lockfile(
         platform=plat,
         arch=arc,
@@ -624,8 +736,31 @@ def install(
         bundles=lock_entries,
     )
     lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
+    kept = 0
+    if lock_path.is_file():
+        try:
+            previous = Lockfile.read(lock_path)
+        except SchemaError as exc:
+            click.echo(
+                f"cvcpkg: warning — replacing an unreadable lockfile at {lock_path}: {exc}",
+                err=True,
+            )
+        else:
+            old_tuple = (previous.platform, previous.arch, previous.config, previous.link)
+            if old_tuple != (plat, arc, reqs.config, reqs.link):
+                click.echo(
+                    "cvcpkg: warning — this prefix's lockfile was written for "
+                    f"{'/'.join(old_tuple)}, not {plat}/{arc}/{reqs.config}/{reqs.link}; "
+                    "keeping its entries",
+                    err=True,
+                )
+            lock = lock.merge(previous)
+            kept = len(lock.bundles) - len(lock_entries)
     lock.write(lock_path)
-    click.echo(f"cvcpkg: lockfile written to {lock_path}")
+    detail = (
+        f" ({kept} entr{'y' if kept == 1 else 'ies'} kept from earlier installs)" if kept else ""
+    )
+    click.echo(f"cvcpkg: lockfile written to {lock_path}{detail}")
 
     # ── Write the CMake package config into the prefix ──
     #
@@ -711,7 +846,9 @@ def install(
     except OSError as exc:
         click.echo(f"cvcpkg: warning — could not strip the build prefix: {exc}", err=True)
 
-    click.echo(f"cvcpkg: done -- {len(picked)} component(s) installed to {prefix_path}")
+    click.echo(
+        f"cvcpkg: done -- {len(picked) + len(source_only)} component(s) installed to {prefix_path}"
+    )
 
     # Opt-in telemetry (Phase 2): fire-and-forget, only when the user set
     # CVCPKG_TELEMETRY=1.  Never raises, never slows the install by more
@@ -874,6 +1011,7 @@ def _find_dep_recipe(name: str, dirs: list[Path]):  # -> Recipe | None
     default=False,
     help="Build from source recipe when no prebuilt binary is available.",
 )
+@_accept_license_opt
 @_recipes_dir_opt
 @_no_default_recipes_opt
 @_local_opt
@@ -922,6 +1060,7 @@ def install_deps(
     include_host_tools: bool,
     host_platform: str,
     trust_mirror: bool | None,
+    accept_licenses: tuple[str, ...] = (),
 ) -> None:
     """Install a recipe's dependency closure into --prefix.
 
@@ -1070,6 +1209,7 @@ def install_deps(
             keep_build_prefix=False,
             keep_host_tools=None,
             trust_mirror=trust_mirror,
+            accept_licenses=accept_licenses,
         )
 
 
@@ -1699,13 +1839,16 @@ def repair(
 
     click.echo(f"cvcpkg: repaired {repaired} bundle(s).")
 
-    # Final pass: re-classify what we repaired against a fresh view of the
-    # prefix; anything still broken means the restore did not take.
+    # Final pass: re-classify every targeted bundle against a fresh view of
+    # the prefix, not only the ones repaired -- reinstalling one bundle can
+    # break a sibling (a legacy flat manifest overwritten), and that must not
+    # be reported as a successful repair.
     fresh = uninstaller.load_installed(lock, cache_dir, recipe_dirs=rdirs)
     still_broken = [
         n
-        for n in broken
-        if _diagnose_bundle(fresh[n], lock, prefix_path, cache_dir, force=False)[0] == "broken"
+        for n in targeted
+        if statuses[n][0] != "unrepairable"
+        and _diagnose_bundle(fresh[n], lock, prefix_path, cache_dir, force=False)[0] == "broken"
     ]
     if still_broken:
         raise click.ClickException(f"repair could not restore: {', '.join(still_broken)}")

@@ -405,6 +405,14 @@ References:
      `install zlib`). A green smoke run is the gate for any publish.
    - `publish-pypi` → trusted-publish to PyPI, if every gate in §11.1
      passes.
+6. Once the tag exists, bump
+   [`recipes/cvcpkg/recipe.yaml`](../recipes/cvcpkg/recipe.yaml) to it:
+   `upstream_version`, the tag in `source.url`, its `sha256`
+   (`curl -fsSL <url> | sha256sum`), and `cvc_revision: 1`. That recipe
+   builds the registry's own `cvcpkg` package, which `/install.sh` and
+   `/install.ps1` install. It pins the release tag because it cannot pin
+   the commit it lives in, so it lags until this bump lands, and the
+   one-line installers keep handing out the previous release meanwhile.
 
 ### 11.4. Pre-release flow (recommended for any version bump)
 

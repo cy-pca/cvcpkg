@@ -26,6 +26,24 @@
 
 set -euo pipefail
 
+# Keep the builder account's user site (~/.local/lib/pythonX.Y/site-packages)
+# out of the build.  The prefix interpreter searches it AHEAD of its own
+# site-packages, and builders do have one (cvcpkg itself is often a
+# `pip install --user`).  With it visible, a PEP-517 backend or import missing
+# from the declared closure is found there instead of failing, so the build
+# passes on one builder and breaks on the next (pyinstaller-cp313's "No module
+# named 'pathspec'"), cvc_python_check can import a user-site copy instead of
+# the one being shipped, and anything that bundles what it can import ships
+# it: recipes/cvcpkg's PyInstaller froze sqlalchemy and brotli from there.
+#
+# An environment variable, not `-s`: pip runs the build backend in a child
+# interpreter, which inherits the environment but not the flag.  Set here
+# rather than in the builder's environment for every recipe, because a
+# non-Python build may still run a tool that lives in the user site: numpy's
+# and vtk-python's wasm builds run the builder's own cvcpkg, often a
+# `pip install --user` (neither sources this file).
+export PYTHONNOUSERSITE=1
+
 # Map a cvcpkg interpreter recipe name to the X.Y[t] version it reports.
 #
 #   python311  -> 3.11      python313t -> 3.13t

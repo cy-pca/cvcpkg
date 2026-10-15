@@ -1,0 +1,105 @@
+schema_version: 1
+recipe:
+  name: playwright
+  upstream_version: "1.64.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://playwright.dev/
+  # Apache-2.0 for all three packages. playwright-core bundles its own
+  # dependencies (MIT / ISC / BSD / Apache-2.0); their notices ship as
+  # lib/node_modules/playwright-core/ThirdPartyNotices.txt and the *.LICENSE
+  # files beside the bundles.
+  license: Apache-2.0
+  tags: [testing, javascript, browser, tools]
+  description: >-
+    Playwright Test -- @playwright/test, playwright and playwright-core
+    1.64.0 from the npm registry, laid out as a global node_modules tree and
+    run on the cvcpkg nodejs22 by bin/playwright. Browsers are separate
+    packages; playwright-chromium-headless-shell is the headless Chromium this exact version
+    drives, installed where bin/playwright points PLAYWRIGHT_BROWSERS_PATH.
+
+# The three npm tarballs, fetched and verified by build.sh (sha256 enforced
+# there; each also matches the registry's sha512 `integrity`):
+#   @playwright/test  test-1.64.0.tgz
+#     sha256 5b97c581e4d66baf4110d16562d3f11d573035af03d5354ece3d9d4bfbd0a3e5
+#     sha512-oTN9FNYuN6bqQMwiho6jJKLCG2/QOYCixGXuCjRmzOq23eODeukuY2XiAVoVpAECbuezMt1MHQjAiQxK8F+Y+g==
+#   playwright        playwright-1.64.0.tgz
+#     sha256 55cf2db31a1d9037b050ac272bec7a824c3c9ed3ef75a6e26d6e9e89d104f155
+#     sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg==
+#   playwright-core   playwright-core-1.64.0.tgz
+#     sha256 90c8b6b19da0a1b1e9a004cd6ff3e49e82668a0856e01efcc0e2d9c2b4466bb6
+#     sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==
+source:
+  type: prebuilt
+  base_url: https://registry.npmjs.org
+  artifacts:
+    any:
+      url: https://registry.npmjs.org/@playwright/test/-/test-1.64.0.tgz
+      sha256: "5b97c581e4d66baf4110d16562d3f11d573035af03d5354ece3d9d4bfbd0a3e5"
+      playwright_url: https://registry.npmjs.org/playwright/-/playwright-1.64.0.tgz
+      playwright_sha256: "55cf2db31a1d9037b050ac272bec7a824c3c9ed3ef75a6e26d6e9e89d104f155"
+      playwright_core_url: https://registry.npmjs.org/playwright-core/-/playwright-core-1.64.0.tgz
+      playwright_core_sha256: "90c8b6b19da0a1b1e9a004cd6ff3e49e82668a0856e01efcc0e2d9c2b4466bb6"
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: nodejs22
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # Pure JavaScript (the three packages have no native parts), so one noarch
+    # bundle with an sh and a cmd launcher.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - lib/node_modules/@playwright/test/
+    - lib/node_modules/playwright/
+    - lib/node_modules/playwright-core/
+    - bin/playwright
+    - bin/playwright.cmd
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Two ways to use it"
+    description: >-
+      (1) As a tool: `bin/playwright test` runs with this prefix's node, sets
+      NODE_PATH=<prefix>/lib/node_modules so CommonJS (and TypeScript, which
+      Playwright compiles to CommonJS) specs can `require('@playwright/test')`
+      without a node_modules of their own, and sets PLAYWRIGHT_BROWSERS_PATH
+      to <prefix>/share/ms-playwright when it is unset.
+      (2) As the browser source for a project that pins @playwright/test in
+      its own package-lock: run the project's `npx playwright test` on the
+      cvcpkg node with PLAYWRIGHT_BROWSERS_PATH=<prefix>/share/ms-playwright
+      and PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1. The project's lockfile must pin
+      exactly 1.64.0: every Playwright release expects one specific browser
+      revision (chromium_headless_shell-1248 here) and will not use another.
+  - title: "No browser downloads"
+    description: >-
+      Nothing in this package downloads a browser. `playwright install` would
+      fetch from Microsoft's CDN into PLAYWRIGHT_BROWSERS_PATH -- install the
+      cvcpkg browser package (playwright-chromium-headless-shell) instead, and set
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 in CI so an `npm ci` of
+      @playwright/test cannot trigger one either. ES-module specs
+      (`import` in a "type": "module" project) do not honour NODE_PATH; use
+      mode (2) for those.
+  - title: "Layout"
+    description: >-
+      The packages are unpacked as npm would install them globally:
+      lib/node_modules/@playwright/test, lib/node_modules/playwright and
+      lib/node_modules/playwright-core, so their require() chain resolves
+      without npm at build or run time. bin/playwright (sh) and
+      bin/playwright.cmd (Windows) find node and the packages relative to
+      their own location, so the prefix relocates. The noarch bundle is built
+      and tested on linux-x86_64; the .cmd launcher has not been run on
+      Windows.

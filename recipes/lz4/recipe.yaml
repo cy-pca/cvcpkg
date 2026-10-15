@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: lz4
   upstream_version: "1.10.0"
-  cvc_revision: 3
+  # cvc.4: relocatable .pc/.cmake/bin/*-config.  The published cvc.3
+  # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
+  # find_package or the -config script handed consumers dead -I/-L paths
+  # (2026-10-13 scan of every published linux bundle).
+  cvc_revision: 4
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/uvicorn-cp313t/build.sh — build uvicorn 0.47.0 FROM SOURCE (generated).
+# recipes/uvicorn-cp313t/build.sh — build uvicorn 0.53.0 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

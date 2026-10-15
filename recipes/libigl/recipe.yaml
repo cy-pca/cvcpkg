@@ -1,0 +1,120 @@
+schema_version: 1
+recipe:
+  name: libigl
+  upstream_version: "2.6.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    libigl: C++ geometry-processing library (discrete differential geometry,
+    cotangent Laplacian/mass matrices, geodesics, parameterization, deformation,
+    AABB trees, signed distance and winding numbers, marching cubes/tets, mesh
+    I/O).  Ships the permissive core only, header-only
+    (LIBIGL_USE_STATIC_LIBRARY=OFF), as the igl::core CMake target
+    (find_package(libigl CONFIG)).  Every optional module is OFF: each one
+    FetchContent-downloads its own third-party code, which a hermetic build must
+    not do, and the copyleft/restricted modules are GPL/AGPL/non-commercial.
+    igl::parallel_for uses the internal thread pool, except on single-threaded
+    wasm, where the exported target carries IGL_PARALLEL_FOR_FORCE_SERIAL.
+  homepage: https://libigl.github.io/
+  # Core is MPL-2.0 (LICENSE.MPL2, shipped in share/licenses/libigl/).  Some
+  # top-level core files carry third-party code under their own notices, and
+  # ship too:
+  #  - MIT: FastWindingNumberForSoups.h (Side Effects Software),
+  #    exact_geodesic.cpp (Danil Kirsanov) and tri_tri_intersect.h (jgt-code).
+  #  - BSD-2-Clause: the Singular_Value_Decomposition_*.hpp kernels (Eftychios
+  #    Sifakis).
+  #  - CC0-1.0: the matplotlib colormap tables in colormap.cpp.
+  # Public-domain code adds no term: raytri.c (Moller), tinyply.h, and the Paul
+  # Bourke tables marching_cubes.cpp adapts.  LICENSE.GPL covers only the
+  # igl_copyleft::* modules, which this recipe neither builds nor ships.
+  license: MPL-2.0 AND MIT AND BSD-2-Clause AND CC0-1.0
+  tags: [math, geometry, mesh, graphics, header-only, wasm]
+
+source:
+  type: tarball
+  # v2.6.4 = commit 7100764c2a2833284a8bdfa9b948d2b3bf124624 (annotated tag
+  # 9ad6ff06).  GitHub-generated archive; digest re-verified from two downloads.
+  url: https://github.com/libigl/libigl/archive/refs/tags/v2.6.4.tar.gz
+  sha256: "09fa1b9b44e0ecbd8fbaa17ec8d9ac0cb4efcedcb2427970f8a4e90bc96e0970"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # Also needed at configure time (the injected find_package(Eigen3)); listed
+    # here as json-schema-validator lists nlohmann-json.  Runtime wins placement.
+    - eigen
+  runtime:
+    # Public: every igl header includes <Eigen/...>, igl::core INTERFACE-links
+    # Eigen3::Eigen, and the installed libigl-config.cmake does
+    # find_dependency(Eigen3 CONFIG REQUIRED).  RUNTIME (not only build) is also
+    # what puts it in CVC_DEPS_PREFIX, the only root env-macos/BSD
+    # (CMAKE_PREFIX_PATH) and env-wasm (CMAKE_FIND_ROOT_PATH) search.
+    - name: eigen
+      version: "^5.0"    # libigl >= 2.6.3 is ported to Eigen 5 (libigl PR #2538)
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+    # Single-threaded wasm cannot spawn std::threads, so the exported igl::core
+    # carries IGL_PARALLEL_FOR_FORCE_SERIAL there (the scripts key off
+    # CVC_PLATFORM); wasm-mt keeps the thread pool.  A consumer must use the
+    # backend igl::core exports: defining IGL_PARALLEL_FOR_FORCE_SERIAL only in
+    # its own TUs gives igl::parallel_for two bodies in one static link (ODR),
+    # so a wasm-mt app keeps igl work off the browser main thread instead (a
+    # worker beyond the pre-spawned pthread pool cannot start while the main
+    # thread blocks in parallel_for).  NOT wasi: parallel_for.h
+    # includes <thread>/<mutex>/<condition_variable> unconditionally, even in
+    # SERIAL mode, and wasi-sdk's wasm32-wasip1 libc++ has no threads.  NOT cosmo
+    # either, for now: unverified there and nothing consumes it.
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    # Header-only mode: the .cpp implementation files sit next to the headers,
+    # plus the non-.h/.cpp top-level files the build scripts copy in (raytri.c,
+    # the Singular_Value_Decomposition_*.hpp kernels, IO).
+    - include/igl/
+    # Upstream installs to lib/cmake/igl/ (unfindable as find_package(libigl));
+    # the build scripts move it here and write libigl-config-version.cmake.
+    - lib/cmake/libigl/
+    - share/licenses/libigl/
+  cmake_packages:
+    - { name: libigl, targets: ["igl::core"] }
+
+# Builds and runs smoke/ (find_package(libigl 2.6) + igl::core) natively and
+# under node for wasm.  Windows runs the same smoke inside build.ps1, where the
+# MSVC environment is active; the test shell has no cl.exe.
+test:
+  script: test.sh
+
+abi:
+  # igl_add_library: target_compile_features(... cxx_std_17).
+  cxx_std: 17

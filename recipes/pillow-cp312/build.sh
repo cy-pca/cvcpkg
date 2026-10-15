@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/pillow-cp312/build.sh — build Pillow 11.1.0 FROM SOURCE against
+# recipes/pillow-cp312/build.sh — build Pillow 12.3.0 FROM SOURCE against
 # cvcpkg's zlib / libjpeg-turbo / libtiff / freetype / libwebp, then install
 # the wheel into the python312 interpreter's site-packages.
 #
@@ -77,6 +77,8 @@ WHEELOUT="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"; mkdir -p "${WHEELOUT}
 # excludes it.  Everything the grl-snam imaging path needs is enabled;
 # everything without a cvcpkg recipe is disabled so nothing can leak in from
 # the system (raqm/lcms/openjpeg/imagequant/xcb have no recipes today).
+# avif (the PIL._avif module, new since Pillow 11.2) needs libavif, which has
+# no cvcpkg recipe either, so it is disabled explicitly too.
 "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \
@@ -90,6 +92,7 @@ WHEELOUT="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"; mkdir -p "${WHEELOUT}
   -C jpeg2000=disable \
   -C imagequant=disable \
   -C xcb=disable \
+  -C avif=disable \
   -C platform-guessing=disable \
   -C parallel="${CVC_JOBS:-4}" \
   "${CVC_SOURCE_DIR}"

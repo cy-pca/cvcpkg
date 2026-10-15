@@ -1,0 +1,141 @@
+schema_version: 1
+recipe:
+  name: luajit
+  # LuaJIT 2.1 is a rolling release: upstream tags no 2.1.x versions, and the
+  # version of a build is 2.1.<commit timestamp> (the Makefile reads it from
+  # git, or from the .relver file a `git archive` tarball carries). Pinned:
+  # v2.1 branch head c6ffc141a8762b41703f9287d63d93622a13dd8f, committed
+  # 2026-09-08T08:43:01Z = 1788856981.
+  upstream_version: "2.1.1788856981"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    LuaJIT 2.1 — a just-in-time compiler and fast interpreter for Lua, with
+    the FFI library for calling C directly from Lua. LuaJIT implements the
+    Lua 5.1 language and C API (plus selected 5.2 features) — the same
+    dialect Redis and Valkey run EVAL / FUNCTION scripts under, so it is the
+    engine to test such scripts against. Ships for embedding: the shared
+    library (libluajit-5.1.so.2 / libluajit-5.1.2.dylib / lua51.dll) and the
+    static libluajit-5.1.a, headers in include/luajit-2.1, pkg-config luajit
+    and a CMake package — find_package(luajit 2.1 CONFIG REQUIRED) then link
+    luajit::luajit (shared) or luajit::luajit_static — plus the luajit
+    interpreter and its jit.* modules (bytecode saver, -jv/-jdump/-jp).
+  homepage: https://luajit.org/
+  license: MIT
+  tags: [scripting, libraries, jit]
+
+source:
+  # A tarball of the pinned commit (the pocketfft precedent): GitHub's archive
+  # endpoint applies LuaJIT's export-subst, so the tarball's .relver carries
+  # the commit timestamp the version number is made of.
+  type: tarball
+  url: https://github.com/LuaJIT/LuaJIT/archive/c6ffc141a8762b41703f9287d63d93622a13dd8f.tar.gz
+  sha256: "6e5fec07750add912e7c3eae0c194d24cd6d023714e1f04a0298a5b4819e4457"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # Only for test.sh, which builds small embedding programs against a
+    # relocated copy of the installed prefix through find_package(luajit) and
+    # through pkg-config.
+    - name: cmake
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: ninja
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: pkg-config
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        # LuaJIT's Makefile refuses to build on macOS without it.
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # The BSDs need GNU make (gmake); build.sh fails with that message if the
+    # builder has none.
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libluajit-5.1.a
+    - { glob: "lib/libluajit-5.1.so*", platforms: [linux, freebsd, openbsd, netbsd] }
+    - lib/libluajit-5.1*.dylib
+    - lib/lua51.lib
+    - bin/lua51.dll
+    - lib/pkgconfig/luajit.pc
+    - lib/cmake/luajit/
+    - include/luajit-2.1/
+    - { glob: "bin/luajit", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/luajit-2.1.*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - bin/luajit.exe
+    # jit.* modules: share/luajit-2.1/jit on Unix; bin/lua/jit on Windows,
+    # where luajit.exe's default package.path ("!\lua\?.lua") looks.
+    - { glob: "share/luajit-2.1/jit/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/lua/jit/", platforms: [windows] }
+  cmake_packages:
+    - { name: luajit, targets: ["luajit::luajit", "luajit::luajit_static"] }
+  pkg_config:
+    - luajit
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Lua 5.1 dialect (Redis / Valkey scripting)"
+    description: >-
+      LuaJIT runs Lua 5.1 code: no integers/`//`/bitwise operators of 5.3+,
+      setfenv/getfenv and module() exist, bit.* for bit operations. Redis
+      and Valkey execute EVAL/FUNCTION scripts in Lua 5.1 too, so scripts
+      written and tested against LuaJIT stay within the dialect those servers
+      accept (their FFI/jit extensions excepted). For Lua 5.4 use the lua
+      recipe; the two install side by side (LuaJIT's headers are in
+      include/luajit-2.1).
+  - title: "Relocation: package.path and the jit.* modules"
+    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    description: >-
+      LuaJIT compiles its install prefix into the default package.path. A
+      cvcpkg bundle unpacks at an arbitrary prefix, so this recipe builds with
+      upstream's default PREFIX=/usr/local (no builder path baked in) and only
+      installs into the bundle. The libraries and the luajit binary relocate
+      freely (RUNPATH $ORIGIN / @rpath; .pc and CMake files resolve from their
+      own location); what does not follow the prefix is the default module
+      search path, which names /usr/local/share/luajit-2.1 exactly as an
+      upstream build does. The jit.* modules (`luajit -b`, -jv, -jdump, -jp)
+      ship in <prefix>/share/luajit-2.1 — set
+      LUA_PATH="<prefix>/share/luajit-2.1/?.lua;;" to use them, or prepend
+      that to package.path from an embedding program. On Windows LuaJIT
+      searches relative to luajit.exe and they are found with no setup.
+  - title: "Windows: shared library only"
+    platforms: [windows]
+    description: >-
+      Built with upstream's src/msvcbuild.bat (dynamic mode): lua51.dll,
+      lua51.lib and luajit.exe. msvcbuild's static mode writes a different
+      lua51.lib under the same name, and a static LuaJIT cannot load C
+      modules, so there is no luajit::luajit_static on Windows.

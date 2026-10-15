@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: maxminddb-cp312
+  upstream_version: "3.1.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/maxminddb/
+  license: "Apache-2.0"
+  tags: [python, source]
+  description: >-
+    maxminddb 3.1.1 for CPython 3.12 — the cp312 column of cvcpkg's per-interpreter
+    matrix, BUILT FROM SOURCE against cvcpkg's own libmaxminddb
+    (recipes/libmaxminddb) instead of the copy the PyPI sdist/wheel bundles. The
+    extension resolves the library by soname out of the merged prefix through an
+    $ORIGIN-relative RUNPATH. Installed as a real wheel (dist-info/RECORD/METADATA)
+    via pip.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/31/83/bcd7f2e7dfcf601258a4eab92155816218e8f8adf6608d5f7d39da7ba863/maxminddb-3.1.1.tar.gz
+  sha256: "b19a938c481518f19a2c534ffdcb3bc59582f0fbbdcf9f81ac9adf912a0af686"
+  strip_components: 1
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: setuptools-cp312
+    - name: setuptools-scm-cp312
+    - name: packaging-cp312
+    - name: libmaxminddb
+  runtime:
+    - name: python312
+    - name: libmaxminddb
+  host_tools:
+    - python312
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.12/site-packages/maxminddb/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/maxminddb-*.dist-info/", platforms: [linux, macos] }
+
+notes:
+  - title: "Not built on Windows yet"
+    platforms: [linux, macos]
+    description: >-
+      Upstream ships Windows wheels; a Windows column needs maxminddb.dll staged
+      next to the extension .pyd. Not written or verified yet.

@@ -1,4 +1,4 @@
-# recipes/starlette-cp313/build.ps1 — build starlette 1.0.1 FROM SOURCE (generated).
+# recipes/starlette-cp313/build.ps1 — build starlette 1.7.0 FROM SOURCE (generated).
 # Windows counterpart of build.sh; same contract (see that file for the why).
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'

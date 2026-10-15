@@ -1,0 +1,31 @@
+pycares: keep the ARES_OPT_LOOKUPS string alive until ares_init_options().
+
+Channel.__init__ assigns a temporary straight to a struct field:
+
+    options.lookups = _ffi.new('char[]', ascii_bytes(lookups))
+
+cffi does not keep an owning cdata alive through a pointer stored in a struct
+field, so the buffer is freed as soon as the statement ends, before
+ares_init_options() copies it. c-ares can then read garbage lookup flags, and
+Channel(lookups="f").getaddrinfo("localhost") fails intermittently. This
+recipe's own build check hit it in most runs on linux-x86_64 (against c-ares
+1.34.4 and 1.34.8). The fix holds a local reference until init, the way the
+domains option already does.
+
+Pending upstream: still present in pycares 5.1.0. Drop this patch once a
+pycares release carries the fix.
+
+--- a/src/pycares/__init__.py
++++ b/src/pycares/__init__.py
+@@ -552,7 +552,10 @@
+             options.evsys = _lib.ARES_EVSYS_DEFAULT
+
+         if lookups:
+-            options.lookups = _ffi.new('char[]', ascii_bytes(lookups))
++            # Keep the buffer alive until ares_init_options() has copied it: a
++            # temporary assigned to a struct field is freed straight away.
++            lookups_buf = _ffi.new('char[]', ascii_bytes(lookups))
++            options.lookups = lookups_buf
+             optmask = optmask |  _lib.ARES_OPT_LOOKUPS
+
+         if domains:

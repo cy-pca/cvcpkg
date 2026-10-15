@@ -1,0 +1,122 @@
+schema_version: 1
+recipe:
+  name: cvcpkg
+  # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
+  # in, so it pins the release TAG's source tarball and is bumped after each
+  # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
+  upstream_version: "2.5.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://cvcpkg.org/
+  license: MIT
+  tags: [tools, packaging]
+  description: >-
+    The cvcpkg CLI as one self-contained executable, bin/cvcpkg: PyInstaller
+    freezes CPython 3.12, cvcpkg, its client extras (remote, builder, signing,
+    validate) and the standard recipe set into a single file that needs no
+    Python on the host.  This is the package the one-line installers
+    (/install.sh, /install.ps1) install, so a registry serves its own build
+    of cvcpkg rather than the GitHub release's.
+
+# The release tag's source.  The spec that freezes it, packaging/cvcpkg.spec,
+# comes from the same tarball, so the binary is built exactly as that release's
+# GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
+source:
+  type: tarball
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.0.tar.gz
+  sha256: "c331a12f0971ef02dd0115ddc20704ffe57abbb8887e8232066933626b798425"
+  strip_components: 1
+
+# Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and
+# every package cvcpkg imports INTO the executable, so the bundle has no
+# runtime dependencies at all.  Listed here are what cvcpkg and the spec import
+# directly; their own closures (anyio/httpcore/certifi under httpx, cffi under
+# cryptography, altgraph under pyinstaller, ...) come in transitively.
+depends:
+  build:
+    - name: python312
+    # cvcpkg's PEP-517 backend (pep517-backend/ wraps poetry-core).  cvcpkg is
+    # pip-installed before freezing because the spec copies its .dist-info,
+    # which is where `cvcpkg --version` reads the version from.
+    - name: poetry-core-cp312
+    - name: pyinstaller-cp312
+    # PyInstaller needs macholib to analyse Mach-O binaries on macOS, and the
+    # pyinstaller-cp312 recipe does not declare it.
+    - name: macholib-cp312
+      platforms: [macos]
+    # cvcpkg's core dependencies.
+    - name: click-cp312
+    - name: pyyaml-cp312
+    # The client extras the standalone binary bundles, as the release workflow
+    # installs them ('.[remote,builder,signing,validate]'):
+    - name: httpx-cp312 # remote, publish, builder
+    - name: websockets-cp312 # builder: the push channel (job dispatch, builder.update)
+    - name: cryptography-cp312 # signing
+    - name: jsonschema-cp312 # validate (4.17.x: below the Rust rewrite)
+    # jsonschema's own runtime deps.  They should arrive transitively, but the
+    # published jsonschema-cp312 4.17.3+cvc.3 bundles record no required_deps,
+    # so a catalog-resolved closure (`cvcpkg install-deps`) drops them and the
+    # frozen `cvcpkg validate` reports jsonschema missing.
+    - name: attrs-cp312
+    - name: pyrsistent-cp312
+    # Windows only: PyInstaller analyses PE files with pefile and reaches the
+    # Win32 resource API through pywin32-ctypes.  pyinstaller-cp312 declares
+    # both at runtime for windows; they are listed here as well so the build
+    # does not depend on that bundle's recorded required_deps being complete.
+    - { name: pefile-cp312, platforms: [windows] }
+    - { name: pywin32-ctypes-cp312, platforms: [windows] }
+    # click writes to the Windows console through colorama.  On macOS it is one
+    # more piece of the closure the next block declares outright.
+    - { name: colorama-cp312, platforms: [windows, macos] }
+    # macOS only: the rest of the closure, declared outright.  The published
+    # macOS bundles of python312, pyinstaller-cp312, cryptography-cp312 and
+    # pyyaml-cp312 record no required_deps, so a catalog-resolved closure
+    # (`cvcpkg install-deps`, what macos-build.yml runs) installs them without
+    # their own dependencies: python312's first `import zlib` fails with
+    # "Library not loaded: @rpath/libz.1.3.1.dylib", PyInstaller with
+    # "No module named 'altgraph'".  This is exactly the recipe-declared
+    # runtime closure those rows dropped; remove it once they are repaired.
+    - { name: openssl, platforms: [macos] }
+    - { name: zlib, platforms: [macos] }
+    - { name: libffi, platforms: [macos] }
+    - { name: bzip2, platforms: [macos] }
+    - { name: xz, platforms: [macos] }
+    - { name: readline, platforms: [macos] }
+    - { name: sqlite, platforms: [macos] }
+    - { name: ncurses, platforms: [macos] }
+    - { name: altgraph-cp312, platforms: [macos] }
+    - { name: packaging-cp312, platforms: [macos] }
+    - { name: pyinstaller-hooks-contrib-cp312, platforms: [macos] }
+    - { name: setuptools-cp312, platforms: [macos] }
+    - { name: cffi-cp312, platforms: [macos] }
+    - { name: pycparser-cp312, platforms: [macos] }
+    - { name: typing-extensions-cp312, platforms: [macos] }
+    - { name: yaml, platforms: [macos] }
+  host_tools:
+    - python312
+
+build:
+  # A frozen executable has no debug/release or shared/static variants worth
+  # distinguishing; build once.
+  build_type_independent: true
+  # Only the platforms whose whole cp312 closure is published.  The BSDs need
+  # python312 first; until then their installers fall back to the GitHub
+  # release binary.
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - glob: bin/cvcpkg
+      platforms: [linux, macos]
+    # The executable /install.ps1 looks for in a registry bundle.
+    - glob: bin/cvcpkg.exe
+      platforms: [windows]

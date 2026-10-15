@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: werkzeug-cp313
   upstream_version: "3.1.8"
-  cvc_revision: 1
+  # cvc.2 (freethreaded-leak republish): the published cvc.1 any/noarch bundle
+  # installs to lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
+  # python3.13 when it was built -- so python3.13 cannot import it and cp313 builds that
+  # depend on it fail (aiokafka-cp313 on async-timeout-cp313, 2026-10-13).  Rebuilding
+  # lays it under lib/python3.13/.  Found by auditing every published cp313 bundle.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -55,7 +60,7 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/werkzeug/
-    - lib/python3.13/site-packages/werkzeug-*.dist-info/
-    - Lib/site-packages/werkzeug/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/werkzeug/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/werkzeug-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/werkzeug/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

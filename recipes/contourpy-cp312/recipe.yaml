@@ -59,7 +59,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/contourpy/
-    - lib/python3.12/site-packages/contourpy-*.dist-info/
-    - Lib/site-packages/contourpy/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/contourpy/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/contourpy-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/contourpy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

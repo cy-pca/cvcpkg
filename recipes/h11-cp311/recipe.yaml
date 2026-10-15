@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/h11/
-    - lib/python3.11/site-packages/*.dist-info/
-    - Lib/site-packages/h11/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/h11/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/h11/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

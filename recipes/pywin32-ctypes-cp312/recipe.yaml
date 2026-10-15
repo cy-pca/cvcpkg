@@ -54,7 +54,7 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/win32ctypes/
-    - lib/python3.12/site-packages/pywin32_ctypes-*.dist-info/
-    - Lib/site-packages/pywin32_ctypes/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/win32ctypes/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/pywin32_ctypes-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pywin32_ctypes/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

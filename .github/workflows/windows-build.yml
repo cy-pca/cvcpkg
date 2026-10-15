@@ -112,6 +112,12 @@ jobs:
     # with MSB8020. v143 is the newest toolset CPython 3.11 builds against cleanly.
     runs-on: windows-2022
     timeout-minutes: 350
+    # The runner image ships vcpkg at C:\vcpkg and exports its location.
+    # Clear it so no recipe's build system (CMake, a configure script, ...)
+    # discovers and uses it. Everything comes from cvcpkg.
+    env:
+      VCPKG_INSTALLATION_ROOT: ""
+      VCPKG_ROOT: ""
     strategy:
       fail-fast: false
       matrix:
@@ -133,26 +139,17 @@ jobs:
         with:
           arch: x64
 
-      - name: Install system build tools
-        shell: powershell
+      # The runner image puts C:\vcpkg on PATH, and the Visual Studio developer
+      # environment can add Visual Studio's own vcpkg and VCPKG_ROOT. Strip them
+      # for every later step; "Check build tools come from cvcpkg" fails if vcpkg
+      # is still reachable.
+      - name: Remove vcpkg from the environment
+        shell: pwsh
         run: |
-          # windows-latest pre-installs chocolatey, cmake, ninja, python3,
-          # nasm, vcpkg, git bash and pwsh.  Pin cmake to 3.x to match
-          # Boost 1.86 expectations.
-          choco install ninja --no-progress -y 2>&1 | Out-Null
-          choco install cmake --version=3.31.7 --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y 2>&1 | Out-Null
-          choco install nasm --no-progress -y 2>&1 | Out-Null
-          # vcpkg pre-installed at C:\vcpkg on windows-latest; bootstrap
-          # only if missing.
-          if (-not (Test-Path 'C:\vcpkg\vcpkg.exe')) {
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-            & C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          }
-          echo 'C:\vcpkg' | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-          # Refresh PATH so downstream bash steps see choco-installed tools.
-          foreach ($dir in ([System.Environment]::GetEnvironmentVariable('PATH', 'Machine') -split ';')) {
-            if ($dir) { echo $dir | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
-          }
+          $clean = ($env:PATH -split ';' | Where-Object { $_ -and $_ -notmatch '\\vcpkg(\\|$)' }) -join ';'
+          "PATH=$clean" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VCPKG_ROOT=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VCPKG_INSTALLATION_ROOT=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Ensure pwsh is on PATH
         shell: bash
@@ -180,6 +177,49 @@ jobs:
           # On Windows, pip puts scripts in the Python install Scripts dir.
           PY_SCRIPTS=$(python -c "import sysconfig; print(sysconfig.get_path('scripts'))")
           echo "$PY_SCRIPTS" >> "$GITHUB_PATH"
+
+      # Build tools from cvcpkg: cmake (3.31.7, the version Boost 1.86's
+      # configs expect), ninja and nasm. Nothing comes from Chocolatey, vcpkg or
+      # the runner image's own copies, which these shadow on PATH. cmake is
+      # copied into a tree holding only the tools: CMake searches its own install
+      # prefix (the parent of share/cmake-X.Y) for packages, and the prefix
+      # cvcpkg installs it into also holds curl and openssl headers and libraries
+      # that a recipe build would otherwise find instead of its declared deps.
+      - name: Install build tools (cvcpkg)
+        shell: bash
+        run: |
+          set -euo pipefail
+          temp=$(cygpath -u "$RUNNER_TEMP")
+          prefix="$temp/cvcpkg-tools-prefix"
+          tree="$temp/cvcpkg-tools"
+          cvcpkg install cmake ninja nasm --prefix "$(cygpath -m "$prefix")" --config release --link shared
+          mkdir -p "$tree/bin" "$tree/share"
+          # All of these import only Windows system DLLs, so no DLLs travel with them.
+          for exe in cmake ctest cpack cmcldeps ninja nasm ndisasm; do
+            cp "$prefix/bin/$exe.exe" "$tree/bin/"
+          done
+          cp -R "$prefix"/share/cmake-* "$tree/share/"
+          cygpath -w "$tree/bin" >> "$GITHUB_PATH"
+
+      - name: Check build tools come from cvcpkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          want="$(cygpath -u "$RUNNER_TEMP")/cvcpkg-tools/bin"
+          for t in cmake ninja nasm; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$want"/*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($want)"; exit 1 ;;
+            esac
+          done
+          cmake --version | sed -n 1p
+          ninja --version
+          nasm -v
+          if command -v vcpkg >/dev/null 2>&1; then
+            echo "::error::vcpkg is on PATH ($(command -v vcpkg)); nothing may build with it"
+            exit 1
+          fi
 
       - name: Build shard ${{ matrix.shard }} (pack-all)
         shell: bash
@@ -270,7 +310,9 @@ jobs:
           # server storage, never the local pack output). Globbing *.tar.zst here
           # matched nothing, so this guard silently skipped publishing after a
           # successful pack (exit 0) — the reason python311/windows never landed.
-          ARCHIVES=($(ls "$DIST"/*.zip 2>/dev/null || true))
+          # A recipe served by its `any` entry packs an any-noarch .tar.gz even
+          # here, and `publish --all` picks those up too, so count them.
+          ARCHIVES=($(ls "$DIST"/*.zip "$DIST"/*.tar.gz 2>/dev/null || true))
           if [ ${#ARCHIVES[@]} -eq 0 ]; then
             echo "::warning::No archives found in dist/ — nothing to publish"
             exit 0

@@ -504,6 +504,23 @@ class TestPlatformArchValidation:
         assert len(lock_data["bundles"]) == 1
         assert lock_data["bundles"][0]["name"] == "zlib"
 
+    def test_second_install_keeps_the_first_in_the_lockfile(self, tmp_path):
+        """Regression: each install replaced the prefix's lockfile with only its
+        own closure, so verify, uninstall, upgrade and the conflict check all
+        forgot what earlier installs had put in the same prefix."""
+        cat = _make_catalog(tmp_path)
+        prefix = tmp_path / "prefix"
+        common = ["--catalog", str(cat), "--prefix", str(prefix), "--platform", "linux"]
+        common += ["--arch", "x86_64"]
+        with mock.patch("cvcpkg.installer.install_entry"):
+            assert main(["install", "zlib", *common]) in (0, None)
+            assert main(["install", "yaml", *common]) in (0, None)
+            # Reinstalling a name replaces its entry rather than duplicating it.
+            assert main(["install", "zlib", *common]) in (0, None)
+        lock_path = prefix / "share" / "libcvc-deps" / "lockfile.yaml"
+        names = [b["name"] for b in yaml.safe_load(lock_path.read_text())["bundles"]]
+        assert names == ["yaml", "zlib"]
+
     def test_install_from_requirements_file(self, tmp_path, capsys):
         cat = _make_catalog(tmp_path)
         prefix = tmp_path / "prefix"
@@ -1628,6 +1645,28 @@ class TestPublishRecipeName:
         assert len(result) == 1
         assert "zlib-" in result[0].name
 
+    def test_resolve_all_includes_noarch(self, tmp_path):
+        """pack/pack-all name a noarch recipe any-noarch on every host, so
+        ``publish --all --platform macos`` must pick those archives up too."""
+        from cvcpkg.cli import _resolve_all_archives
+
+        self._make_archive(tmp_path, "zlib", "1.3.1+cvc.1", "macos", "arm64", "release", "shared")
+        self._make_archive(
+            tmp_path, "attrs-cp312", "26.1.0+cvc.3", "any", "noarch", "release", "shared"
+        )
+        self._make_archive(
+            tmp_path, "six-cp312", "1.17.0+cvc.1", "any", "noarch", "debug", "shared"
+        )
+        result = _resolve_all_archives(str(tmp_path), "macos", "arm64", "release", "shared")
+        assert [r.name for r in result] == [
+            "attrs-cp312-26.1.0+cvc.3-any-noarch-release-shared.tar.gz",
+            "zlib-1.3.1+cvc.1-macos-arm64-release-shared.tar.gz",
+        ]
+        result = _resolve_all_archives(str(tmp_path), "any", "noarch", "release", "shared")
+        assert [r.name for r in result] == [
+            "attrs-cp312-26.1.0+cvc.3-any-noarch-release-shared.tar.gz",
+        ]
+
     def test_resolve_all_nonexistent_dir(self, tmp_path):
         """_resolve_all_archives returns [] for a missing directory."""
         from cvcpkg.cli import _resolve_all_archives
@@ -1779,7 +1818,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple", return_value="published"
             ) as mock_simple,
@@ -1798,7 +1837,7 @@ class TestPublishToServer:
             assert args[0][2]["name"] == "zlib"  # params
 
     def test_publish_skips_existing_variant(self, tmp_path, capsys):
-        """_publish_to_server skips when _variant_exists returns True."""
+        """_publish_to_server skips a variant the server already has."""
         from cvcpkg.cli import _publish_to_server
 
         archive = self._make_manifest_archive(
@@ -1806,7 +1845,9 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=True),
+            mock.patch(
+                "cvcpkg.cli._publish._find_variant", return_value={"version": "1.3.1+cvc.1"}
+            ),
             mock.patch("cvcpkg.cli._publish._publish_simple") as mock_simple,
         ):
             _publish_to_server(
@@ -1836,7 +1877,7 @@ class TestPublishToServer:
             info.size = len(content)
             tf.addfile(info, io.BytesIO(content))
 
-        with mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False):
+        with mock.patch("cvcpkg.cli._publish._find_variant", return_value=None):
             with pytest.raises(click.ClickException, match="manifest missing name"):
                 _publish_to_server(
                     "https://pkg.example.com",
@@ -1856,7 +1897,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple", return_value="published"
             ) as mock_simple,
@@ -1884,7 +1925,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_chunked", return_value="published"
             ) as mock_chunked,
@@ -1911,7 +1952,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch(
                 "cvcpkg.cli._publish._publish_simple",
                 side_effect=click.ClickException("upload failed"),
@@ -1941,7 +1982,7 @@ class TestPublishToServer:
         )
 
         with (
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             _publish_to_server(
@@ -2576,7 +2617,7 @@ class TestPublishCLIIntegration:
         )
         with (
             mock.patch("cvcpkg.platform.detect_arch", return_value="x86_64"),
-            mock.patch("cvcpkg.cli._publish._variant_exists", return_value=False),
+            mock.patch("cvcpkg.cli._publish._find_variant", return_value=None),
             mock.patch("cvcpkg.cli._publish._publish_simple", return_value="published"),
         ):
             ret = main(
@@ -4951,6 +4992,76 @@ class TestBuildsSubmitDagCLI:
         assert "Skipping netbsd/arm64" in out
         # No builder can serve any combo → nothing is submitted.
         assert posted == []
+
+    def _registry_client(self, posted, builders):
+        class FakeResp:
+            status_code = 200
+            text = ""
+
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                pass
+
+        class FakeClient:
+            def __init__(self, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def get(self, url, **kw):
+                if "/v1/builders" in url:
+                    return FakeResp({"builders": builders})
+                return FakeResp({"packages": [], "total": 0})
+
+            def post(self, url, **kw):
+                posted.append(kw.get("json") or {})
+                return FakeResp({"dag_id": "dag-o", "total": 1, "jobs": []})
+
+        return FakeClient
+
+    _REGISTRY = [
+        {"name": "lin", "platform": "linux", "arch": "x86_64", "status": "online"},
+        {"name": "sandipaws-dev", "platform": "windows", "arch": "x86_64", "status": "offline"},
+    ]
+
+    def _submit(self, monkeypatch, *extra):
+        posted: list = []
+        monkeypatch.setattr("httpx.Client", self._registry_client(posted, self._REGISTRY))
+        argv = ["builds", "submit-dag", "--platform", "linux,windows", "--arch", "x86_64"]
+        argv += ["--server", "https://s.example.com", "--token", "tok", "--no-deps", *extra]
+        return main([*argv, "nasm"]), posted
+
+    def test_submit_dag_online_only_skips_offline_builders(self, capsys, monkeypatch):
+        """--online-only skips a combo whose only builder is offline, and names it."""
+        ret, posted = self._submit(monkeypatch, "--online-only")
+        assert ret == 0
+        out = capsys.readouterr().out
+        assert "Skipping windows/x86_64: its builder(s) are offline (sandipaws-dev)" in out
+        assert "Skipping linux/x86_64" not in out
+        platforms = {j.get("platform") for body in posted for j in body.get("jobs", [])}
+        assert platforms == {"linux"}
+
+    def test_submit_dag_counts_offline_builders_by_default(self, capsys, monkeypatch):
+        """Without --online-only a registered-but-offline builder still counts
+        (populate runs queue jobs until it returns)."""
+        ret, posted = self._submit(monkeypatch)
+        assert ret == 0
+        assert "Skipping windows" not in capsys.readouterr().out
+        platforms = {j.get("platform") for body in posted for j in body.get("jobs", [])}
+        assert platforms == {"linux", "windows"}
+
+    def test_submit_dag_online_only_excludes_allow_unschedulable(self, monkeypatch):
+        ret, posted = self._submit(monkeypatch, "--online-only", "--allow-unschedulable")
+        assert ret != 0 and posted == []
 
     def test_submit_dag_allow_unschedulable_skips_builder_check(self, capsys, monkeypatch):
         """--allow-unschedulable bypasses the builder registry lookup."""

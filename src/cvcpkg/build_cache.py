@@ -203,15 +203,16 @@ class BuildCache:
     # ── restore ─────────────────────────────────────────────────
 
     def restore(self, archive: Path, target_dir: Path) -> None:
-        """Extract a cached archive into *target_dir*."""
-        target_dir.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive, "r:gz") as tar:
-            import sys
+        """Extract a cached archive into *target_dir*.
 
-            if sys.version_info >= (3, 12):
-                tar.extractall(target_dir, filter="data")
-            else:
-                tar.extractall(target_dir)  # pragma: no cover
+        *archive* is this cache's own ``install.tar.gz`` or a bundle downloaded
+        on a server-cache hit -- whatever ``cvcpkg publish`` or ``pack-all``
+        uploaded, e.g. a ``.zip`` for Windows -- so the format is sniffed
+        rather than assumed to be gzip.
+        """
+        from cvcpkg.installer import extract_bundle
+
+        extract_bundle(archive, target_dir)
 
     # ── evict ───────────────────────────────────────────────────
 
@@ -378,7 +379,9 @@ def _create_tarball(source_dir: Path, dest: Path) -> None:
     with tarfile.open(dest, "w:gz") as tar:
         for child in sorted(source_dir.rglob("*")):
             arcname = child.relative_to(source_dir)
-            tar.add(child, arcname=str(arcname))
+            # rglob already yields every descendant; letting tar.add recurse
+            # too stored each file once per directory above it.
+            tar.add(child, arcname=str(arcname), recursive=False)
 
 
 def _now_iso() -> str:

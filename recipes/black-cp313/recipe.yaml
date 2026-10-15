@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: black-cp313
   upstream_version: "26.5.1"
-  cvc_revision: 3
+  # cvc.4 (hermetic-closure republish): the recipe already declares this tool's
+  # transitive Python deps, but the published catalog artifact predates those edges, so
+  # `cvcpkg install-deps grl-snam-cpXXX` did not pull them and CI pip-installed them as a
+  # non-hermetic workaround (which drifted — mpmath 1.4.1 broke sympy<1.4). Bump + republish
+  # so the catalog carries the declared depends; the ci.yml pip workaround is then removed.
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -73,12 +78,12 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/black/
-    - lib/python3.13/site-packages/blackd/
-    - lib/python3.13/site-packages/blib2to3/
-    - lib/python3.13/site-packages/_black_version.py
-    - lib/python3.13/site-packages/black-*.dist-info/
-    - bin/black
-    - bin/blackd
-    - Lib/site-packages/black/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/black/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/blackd/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/blib2to3/", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/_black_version.py", platforms: [any] }
+    - { glob: "lib/python3.13/site-packages/black-*.dist-info/", platforms: [any] }
+    - { glob: "bin/black", platforms: [any] }
+    - { glob: "bin/blackd", platforms: [any] }
+    - { glob: "Lib/site-packages/black/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

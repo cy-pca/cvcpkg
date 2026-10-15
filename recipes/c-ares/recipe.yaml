@@ -1,8 +1,8 @@
 schema_version: 1
 recipe:
   name: c-ares
-  upstream_version: "1.34.4"
-  cvc_revision: 4
+  upstream_version: "1.34.8"
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -13,8 +13,15 @@ recipe:
 
 source:
   type: tarball
-  url: https://github.com/c-ares/c-ares/releases/download/v1.34.4/c-ares-1.34.4.tar.gz
-  sha256: "fa38dbed659ee4cc5a32df5e27deda575fa6852c79a72ba1af85de35a6ae222f"
+  # PGP-signed by Brad House (signing subkey 75EB6CA0E63E90C4FF2C868FC1D15611B2E4720B
+  # of DA7D64E4C82C6294CB73A20E22E3D13B5411B7CA, listed on c-ares.org/download);
+  # signature checked when this version was pinned.  1.34.5 fixed CVE-2025-31498
+  # (GHSA-6hxc-62jh-p29v), 1.34.6 CVE-2025-62408 (GHSA-jq53-42q6-pqr5), 1.34.7
+  # CVE-2026-33630, CVE-2026-69184 and CVE-2026-69186 (GHSA-6wfj-rwm7-3542,
+  # GHSA-pjmc-gx33-gc76, GHSA-jv8r-gqr9-68wj); 1.34.8 reverts 1.34.7's
+  # const-callback API break.
+  url: https://github.com/c-ares/c-ares/releases/download/v1.34.8/c-ares-1.34.8.tar.gz
+  sha256: "c222b6d681096f9444d2c4863d2c1174019e27cacca0a4a5c114d36dd7d7bf78"
   strip_components: 1
 
 patches: []
@@ -76,7 +83,8 @@ package:
     - include/ares.h
     - include/ares_build.h
     - include/ares_dns.h
-    - include/ares_rules.h
+    - include/ares_dns_record.h
+    - include/ares_nameser.h
     - include/ares_version.h
   cmake_packages:
     - { name: c-ares, targets: ["c-ares::cares"] }

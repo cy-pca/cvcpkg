@@ -10,7 +10,14 @@ recipe:
   # cvc.3: declare the gperf build dependency (Unix). It was always required to
   # generate src/fcobjshash.h but was resolved from the builder's system
   # packages, so the build was not hermetic and not reproducible across hosts.
-  cvc_revision: 3
+  # cvc.4: relocatable on Unix. libfontconfig had this job's staging prefix
+  # compiled in as its config dir, so an installed bundle logged "Cannot load
+  # default config file" and never read the etc/fonts/fonts.conf it ships.
+  # unix-relocatable-config.patch finds etc/fonts next to the library via
+  # dladdr (Windows' DllMain already does this). fonts.conf drops the staging
+  # <cachedir> and gains <dir prefix="relative">../../share/fonts</dir>, so fonts
+  # installed into the prefix are found (build.sh, build.ps1).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -28,7 +35,10 @@ source:
   sha256: "63a0658d0e06e0fa886106452b58ef04f21f58202ea02a94c39de0d3335d7c0e"
   strip_components: 1
 
-patches: []
+patches:
+  # Unix: look for etc/fonts relative to the loaded library (dladdr) before
+  # the compiled-in path. Guarded by a meson dladdr check and !_WIN32.
+  - unix-relocatable-config.patch
 
 depends:
   build:

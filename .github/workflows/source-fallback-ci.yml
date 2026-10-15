@@ -3,6 +3,9 @@
 # Runs on merge to master (and on PRs touching the relevant code for
 # early feedback).  Builds zlib from source using the real recipe when
 # no prebuilt binary is available, verifying the full fallback chain.
+#
+# The build tools (cmake, ninja) come from cvcpkg, never apt or Homebrew; the
+# system C/C++ compiler is the only thing taken from the runner.
 
 name: Source-fallback integration tests
 
@@ -47,15 +50,188 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install build tools
+      # The system C/C++ compiler is the one thing this job takes from the
+      # runner (Apple clang on macOS). cmake and ninja come from cvcpkg below.
+      - name: Install the system compiler
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends cmake ninja-build gcc g++
+          sudo apt-get install -y --no-install-recommends gcc g++
+
+      # The macOS image ships Homebrew (/opt/homebrew on Apple Silicon,
+      # /usr/local on Intel) with cmake, pkgconf, autotools, llvm and more on
+      # PATH. Take it off PATH and move its formulae aside for every later step,
+      # as macos-build.yml does, so the zlib build cannot find any of it;
+      # "Check build tools come from cvcpkg" fails if Homebrew is still reachable.
+      - name: Remove Homebrew from the environment
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          brew_dir() {
+            case "$1" in
+              /opt/homebrew|/opt/homebrew/*) return 0 ;;
+              /usr/local/Homebrew|/usr/local/Homebrew/*|/usr/local/Cellar|/usr/local/Cellar/*) return 0 ;;
+              /usr/local/opt|/usr/local/opt/*|/usr/local/Caskroom|/usr/local/Caskroom/*) return 0 ;;
+              # Intel: Homebrew owns all of /usr/local (bin, sbin, lib/ruby/gems/*/bin, ...).
+              /usr/local|/usr/local/*) [ -d /usr/local/Homebrew ] ;;
+              *) return 1 ;;
+            esac
+          }
+          clean=""
+          set -f; IFS=:
+          for d in $PATH; do
+            [ -n "$d" ] || continue
+            if brew_dir "$d"; then echo "dropping from PATH: $d"; continue; fi
+            clean="${clean:+$clean:}$d"
+          done
+          unset IFS; set +f
+          echo "PATH=$clean" >> "$GITHUB_ENV"
+          # Off PATH is not enough on Intel: Homebrew links its formulae into
+          # /usr/local/include and /usr/local/lib, where Apple clang and ld look
+          # by default. Move the formulae aside, so every Homebrew file and every
+          # link to one is unreachable, whatever looks for it.
+          # Moving Homebrew aside is only safe on an ephemeral GitHub-hosted
+          # runner; on a persistent self-hosted Mac it would break the host.
+          if [ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]; then
+            echo "::error::refusing to move Homebrew aside on a ${RUNNER_ENVIRONMENT:-unknown} runner"
+            exit 1
+          fi
+          for d in /opt/homebrew /usr/local/Cellar; do
+            if [ -e "$d" ]; then
+              sudo mv "$d" "$d.hidden-from-builds"
+              echo "moved aside: $d"
+            fi
+          done
 
       - name: Install cvcpkg
         working-directory: .
         run: pip install .
+
+      # Build tools from cvcpkg: cmake (3.31.7) and ninja, what the zlib recipe
+      # builds with (cvc_cmake_build runs cmake -G Ninja). Nothing comes from
+      # apt, Homebrew or the runner image's own copies, which these shadow on
+      # PATH.
+      #
+      # The tools are copied into a tree holding only them: CMake searches its
+      # own install prefix (the parent of share/cmake-X.Y) for packages, and the
+      # prefix cvcpkg installs it into also holds the curl and openssl headers,
+      # libraries and pkg-config files a recipe build would otherwise find
+      # instead of its declared deps. bin/cmake loads libcurl (and through it
+      # libssl and libcrypto) from ../lib, so those come along, under their
+      # versioned names only, which find_library never matches.
+      - name: Install build tools (cvcpkg)
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/cvcpkg-tools-prefix"
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          cvcpkg install cmake ninja --prefix "$prefix" --config release --link shared
+          mkdir -p "$tree/bin" "$tree/lib" "$tree/share"
+          for exe in cmake ctest cpack ninja; do cp "$prefix/bin/$exe" "$tree/bin/"; done
+          cp -R "$prefix"/share/cmake-* "$tree/share/"
+          if [ "$RUNNER_OS" = macOS ]; then
+            # The @rpath dylibs the executables load, and the ones those load.
+            todo="$tree/bin/cmake $tree/bin/ctest $tree/bin/cpack $tree/bin/ninja"
+            while [ -n "$todo" ]; do
+              next=""
+              for f in $todo; do
+                for lib in $(otool -L "$f" | sed -n 's|^[[:space:]]*@rpath/\([^ ]*\) .*|\1|p'); do
+                  if [ ! -e "$tree/lib/$lib" ]; then
+                    cp "$prefix/lib/$lib" "$tree/lib/$lib"
+                    next="$next $tree/lib/$lib"
+                  fi
+                done
+              done
+              todo="$next"
+            done
+          else
+            # The versioned shared libraries the tools load through their
+            # RUNPATH $ORIGIN/../lib (libcurl.so.4.8.0, libssl.so.3, ...).
+            find "$prefix/lib" -maxdepth 1 -name 'lib*.so.*' \( -type f -o -type l \) -exec cp -P {} "$tree/lib/" \;
+          fi
+          echo "$tree/bin" >> "$GITHUB_PATH"
+          echo "libraries: $(ls "$tree/lib" | tr '\n' ' ')"
+
+      - name: Check build tools come from cvcpkg
+        run: |
+          set -euo pipefail
+          tree="$RUNNER_TEMP/cvcpkg-tools"
+          rc=0
+          for t in cmake ctest cpack ninja; do
+            got=$(command -v "$t" || true)
+            case "$got" in
+              "$tree/bin/"*) echo "$t -> $got" ;;
+              *) echo "::error::$t resolves to '${got:-nothing}', not cvcpkg's ($tree/bin)"; rc=1 ;;
+            esac
+          done
+          if [ "$RUNNER_OS" = macOS ]; then
+            # A tool from the tree may load only what macOS itself provides or
+            # the tree carries.
+            for f in "$tree"/bin/* "$tree"/lib/*; do
+              case "$(file -b "$f")" in *Mach-O*) ;; *) continue ;; esac
+              for dep in $(otool -L "$f" | tail -n +2 | awk '!/:$/ {print $1}'); do
+                case "$dep" in
+                  /usr/lib/*|/System/*|@rpath/*|@loader_path/*|@executable_path/*) ;;
+                  *) echo "::error::$(basename "$f") loads $dep, which macOS does not provide"; rc=1 ;;
+                esac
+              done
+            done
+            set -f; IFS=:
+            for d in $PATH; do
+              case "$d" in
+                /opt/homebrew*|/usr/local/Homebrew*|/usr/local/Cellar*|/usr/local/opt*|/usr/local/Caskroom*)
+                  echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
+                /usr/local|/usr/local/*)
+                  if [ -d /usr/local/Homebrew ]; then echo "::error::Homebrew directory on PATH: $d"; rc=1; fi ;;
+              esac
+            done
+            unset IFS; set +f
+            if command -v brew >/dev/null 2>&1; then
+              echo "::error::brew is on PATH ($(command -v brew)); nothing may build with Homebrew"
+              rc=1
+            fi
+            for d in /opt/homebrew /usr/local/Cellar; do
+              if [ -e "$d" ]; then echo "::error::$d is still in place; nothing may build with Homebrew"; rc=1; fi
+            done
+          else
+            # Every library a tool loads resolves, and one cvcpkg installed
+            # (curl, openssl) is loaded from the tree, never from the cvcpkg
+            # prefix or the host's copy of the same soname.
+            for f in "$tree"/bin/*; do
+              loaded=$(ldd "$f")
+              if grep -q 'not found' <<<"$loaded"; then
+                echo "::error::$(basename "$f") has unresolved libraries:"
+                grep 'not found' <<<"$loaded"
+                rc=1
+              fi
+              for lib in "$RUNNER_TEMP"/cvcpkg-tools-prefix/lib/lib*.so*; do
+                hit=$(awk -v n="$(basename "$lib")" '$1 == n { print $3 }' <<<"$loaded")
+                case "$hit" in
+                  ""|"$tree"/*) ;;
+                  *) echo "::error::$(basename "$f") loads $hit, not the tree's lib/$(basename "$lib")"; rc=1 ;;
+                esac
+              done
+            done
+            # A Linuxbrew on the image (/home/linuxbrew) must stay off PATH too.
+            set -f; IFS=:
+            for d in $PATH; do
+              case "$d" in
+                /home/linuxbrew*) echo "::error::Homebrew directory on PATH: $d"; rc=1 ;;
+              esac
+            done
+            unset IFS; set +f
+          fi
+          [ "$rc" = 0 ] || exit 1
+          cmake --version | sed -n 1p
+          echo "ninja $(ninja --version)"
+          # Versions prove the tools start; this proves they work from the tree:
+          # cmake (and the libcurl it loads) drives ninja and the system compiler.
+          work=$(mktemp -d)
+          printf 'int main(void) { return 0; }\n' > "$work/t.c"
+          printf 'cmake_minimum_required(VERSION 3.20)\nproject(t C)\nadd_executable(t t.c)\n' > "$work/CMakeLists.txt"
+          cmake -G Ninja -S "$work" -B "$work/build"
+          cmake --build "$work/build"
+          # Still not from cvcpkg: what these resolve to.
+          for t in cc c++ bash python3; do echo "$t -> $(command -v "$t" || echo none)"; done
 
       - name: Run source-fallback integration tests
         working-directory: .

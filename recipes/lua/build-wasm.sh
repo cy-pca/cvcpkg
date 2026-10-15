@@ -2,13 +2,16 @@
 # recipes/lua/build-wasm.sh — cross-compile Lua to wasm via Emscripten.
 #
 # Uses Lua's `generic` Makefile target (no readline / mmap dependency).
-# Produces liblua.a — wasm has no shared library concept, so the
-# .so target is skipped.
+# Produces liblua.a only — wasm has no shared library concept, so lua::lua in
+# the CMake package links the static library here.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lua-common.sh"
 
 cd "${CVC_SOURCE_DIR}"
+lua_detect_version
 
 # Emscripten replaces CC/AR/RANLIB; env-wasm.sh has already sourced
 # emsdk_env.sh so emcc/emar/emranlib are on PATH.
@@ -27,22 +30,8 @@ make install \
 rm -f "${CVC_INSTALL_DIR}/bin/lua" "${CVC_INSTALL_DIR}/bin/luac"
 rmdir "${CVC_INSTALL_DIR}/bin" 2>/dev/null || true
 
-# Synthesise pkg-config file (upstream doesn't ship one).
-mkdir -p "${CVC_INSTALL_DIR}/lib/pkgconfig"
-cat > "${CVC_INSTALL_DIR}/lib/pkgconfig/lua5.4.pc" <<PC
-prefix=\${pcfiledir}/../..
-exec_prefix=\${prefix}
-libdir=\${exec_prefix}/lib
-includedir=\${prefix}/include
-
-Name: Lua
-Description: An extensible embeddable language (wasm build)
-URL: https://www.lua.org/
-Version: 5.4.7
-Libs: -L\${libdir} -llua
-Cflags: -I\${includedir}
-PC
-ln -sf lua5.4.pc "${CVC_INSTALL_DIR}/lib/pkgconfig/lua.pc"
-ln -sf lua5.4.pc "${CVC_INSTALL_DIR}/lib/pkgconfig/lua-5.4.pc"
+# pkg-config + CMake package (static only), from the shared templates.
+lua_write_pkgconfig "An extensible embeddable language (wasm build)" ""
+lua_write_cmake_config "" "" "lib/liblua.a" 'm'
 
 cvc_rewrite_install_paths

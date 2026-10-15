@@ -94,6 +94,62 @@ def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
         # else: a real file or symlink already occupies dst -- keep it.
 
 
+# A builder installs a job's dependencies, toolchain and host tools one after
+# another on one keep-alive client, extracting each archive before the next GET.  When an extraction
+# outlasts the server's keep-alive timeout, that GET can go out on a connection
+# the server has just closed ("Server disconnected without sending a
+# response"), and a loaded server drops the odd connection outright.  On
+# 2026-10-13 that failed pycares-, nh3- and uvloop-cp312 before they built
+# anything.  The GETs are idempotent, so transport errors are retried.
+_DEP_GET_ATTEMPTS = 4
+
+
+def _get_retrying(
+    client, url: str, *, attempts: int = _DEP_GET_ATTEMPTS, sleep=time.sleep, **kwargs
+):
+    """``client.get(url, **kwargs)``, retrying transport errors with backoff.
+
+    Only connection-level failures (httpx.TransportError: disconnects, connect
+    errors, timeouts) are retried; an HTTP error status is returned as is for
+    the caller to handle.  The last attempt's exception propagates.
+    """
+    httpx = require_httpx()
+    for attempt in range(1, attempts + 1):
+        try:
+            return client.get(url, **kwargs)
+        except httpx.TransportError:
+            if attempt == attempts:
+                raise
+            sleep(min(2**attempt, 30) + random.random())
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _pick_dep_variant(
+    pkgs: list[dict], platform: str, arch: str, config: str, link: str
+) -> dict | None:
+    """The catalog row to install for one dependency; *pkgs* is newest first.
+
+    Tiers, best first: this platform/arch with the job's build_type and link;
+    this platform/arch with any; the platform-independent any/noarch rows with
+    the job's build_type and link; any/noarch with any.  The noarch tiers used
+    to take whichever row came first, so when a debug row tied the release one
+    on version a release job got the debug bundle -- and trove-classifiers-cp313
+    cvc.6's debug bundle installs into lib/python3.13t, which failed
+    hatchling-cp313 (2026-10-13).
+    """
+
+    def same_cfg(p: dict) -> bool:
+        return p.get("build_type", "release") == config and p.get("link", "shared") == link
+
+    here = [p for p in pkgs if p.get("platform") == platform and p.get("arch") == arch]
+    noarch = [p for p in pkgs if p.get("platform") == "any" and p.get("arch") == "noarch"]
+    for group, need_cfg in ((here, True), (here, False), (noarch, True), (noarch, False)):
+        for p in group:
+            if not need_cfg or same_cfg(p):
+                return p
+    return None
+
+
 def _newest_first(pkg: dict) -> tuple:
     """Newest-first ordering key for a catalog entry (a dict with "version").
 
@@ -1061,6 +1117,12 @@ def _self_update_lock(
 _CATCH_UP_RERUN_RECV_TIMEOUT = 0.5
 _CATCH_UP_RERUN_SECS = 30.0
 
+# A job's complete/fail report is asked again when no answer arrives (see
+# _report_job): this many attempts in all, the pause doubling from this many
+# seconds (2 + 4 + 8 s of waiting).
+_REPORT_ATTEMPTS = 4
+_REPORT_RETRY_DELAY = 2.0
+
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
 _RECIPE_DIR_TTL_SECS = 24 * 60 * 60
@@ -1994,7 +2056,13 @@ def builder_run(
 
     httpx = require_httpx("builder")
 
-    from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes, pack_recipe
+    from cvcpkg.builder import (
+        Recipe,
+        _rewrite_pc_prefixes,
+        _rewrite_script_prefixes,
+        build_recipe,
+        pack_recipe,
+    )
     from cvcpkg.platform import detect_arch, detect_platform
     from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env, split_names
 
@@ -2160,11 +2228,11 @@ def builder_run(
         cross_entries.append({"platform": cp, "arch": ca})
 
     # -- Advertised capabilities -----------------------------
-    # Explicit --capability flags, merged with the host probe (same probes as
-    # the install-side resolver gating: nvcc for cuda; a reachable+permitted
-    # daemon for incus and lxd, each proving WHICH server answered so an `lxc`
-    # compatibility shim fronting Incus is never advertised as lxd)
-    # unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
+    # Explicit --capability flags, merged with the host's BUILD probes (nvcc
+    # for cuda -- not the GPU, which only the install side counts; a
+    # reachable+permitted daemon for incus and lxd, each proving WHICH server
+    # answered so an `lxc` compatibility shim fronting Incus is never
+    # advertised as lxd) unless --no-auto-capabilities.  CVCPKG_CAPABILITIES, when set, is
     # authoritative inside host_capabilities() itself.  The scheduler routes a
     # job whose recipe declares requires_capabilities only to a builder
     # advertising all of them; advertising a capability never *reserves* the
@@ -2173,7 +2241,7 @@ def builder_run(
     if not no_auto_capabilities:
         from cvcpkg.platform import host_capabilities
 
-        advertised_caps |= host_capabilities()
+        advertised_caps |= host_capabilities("build")
 
         # glibc floors this machine can PRODUCE for (linux only).  Deliberately
         # not part of host_capabilities(): that set is also the install-side
@@ -2246,7 +2314,9 @@ def builder_run(
         from cvcpkg.orgs import served_set
 
         served = served_set(org_slug, serve_namespaces)
-        body = {
+        # Kept for the life of the process: _reregister() sends it again when
+        # the server no longer knows this builder.
+        register_body = {
             "name": name,
             "platform": platform,
             "arch": arch,
@@ -2259,13 +2329,13 @@ def builder_run(
         if advertised_disk is not None:
             # Omitted rather than sent as null when unknown, so an older
             # server that does not know the field is unaffected.
-            body["free_disk_gb"] = advertised_disk
+            register_body["free_disk_gb"] = advertised_disk
         if len(served) > 1:
             cross_msg += " [serves: {}]".format(
                 ", ".join(repr(ns) if ns == "" else ns for ns in served)
             )
         with httpx.Client(timeout=30) as client:
-            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=body)
+            resp = client.post(f"{base}/v1/builders/register", headers=headers, json=register_body)
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -2303,6 +2373,13 @@ def builder_run(
     # _admit_job -- and must never start a second thread.  Guarded by
     # jobs_lock; added by _admit_job, removed in _run_job_guarded's finally.
     inflight_job_ids: set[int] = set()
+    # Server job ids whose claim landed here.  The server moves a running job
+    # only to a terminal state -- pause, resume and re-dispatch apply to jobs
+    # nobody has claimed -- so once our claim lands, any later hand-out of that
+    # id is stale: typically the socket's ``job.dispatch``, read only after
+    # the catch-up poll had already started the job and it had finished.  See
+    # _admit_job.  Guarded by jobs_lock; one int per job run, never pruned.
+    claimed_job_ids: set[int] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -2357,11 +2434,17 @@ def builder_run(
         37099829036, 37106564280).  The job id is what a repeated hand-out has
         in common with the first, so dedupe on it here.
 
+        A hand-out can also outlive the run: a ``job.dispatch`` frame queued on
+        the socket while the catch-up poll started the job is read after a
+        fast job has already finished.  A job whose claim landed here can
+        never be handed out again (see ``claimed_job_ids``), so that is
+        refused too, instead of claiming it a second time.
+
         Call under jobs_lock.
         """
         job_id = job.get("id")
         if job_id is not None:
-            if job_id in inflight_job_ids:
+            if job_id in inflight_job_ids or job_id in claimed_job_ids:
                 return None
             inflight_job_ids.add(job_id)
         return _claim_slot()
@@ -2422,10 +2505,66 @@ def builder_run(
                     headers=headers,
                     json=payload,
                 )
-            if resp.status_code >= 400:
-                click.echo(f"  heartbeat failed: {resp.status_code}", err=True)
+            if resp.status_code == 404:
+                # The server has no row for this id: an admin unregistered the
+                # builder, or the server's database was reset or restored.
+                # Every other call (next-job, the socket) 404s the same way
+                # forever, so without this the process sits "running" and
+                # unseen until someone restarts it.
+                _reregister("the server no longer knows this builder")
+            elif resp.status_code in (401, 403):
+                click.echo(
+                    f"  heartbeat rejected: {resp.status_code} {_detail_of(resp)} "
+                    "(token revoked, expired or not allowed to own this builder?)",
+                    err=True,
+                )
+            elif resp.status_code >= 400:
+                click.echo(f"  heartbeat failed: {resp.status_code} {_detail_of(resp)}", err=True)
         except Exception as exc:
             click.echo(f"  heartbeat error: {exc}", err=True)
+
+    def _detail_of(resp) -> str:
+        """The server's ``detail`` for an error response, trimmed for a log line."""
+        try:
+            detail = resp.json().get("detail", "")
+        except Exception:  # noqa: BLE001 - a proxy page, an empty body
+            detail = ""
+        return str(detail or getattr(resp, "text", "") or "")[:200]
+
+    def _reregister(why: str) -> bool:
+        """Register this builder again; True when the server took it.
+
+        Registration is an upsert keyed on (name, org), so a builder the server
+        still knows keeps its id, and one it forgot gets a new one.  Everything
+        that names the builder reads ``builder_id`` / ``job_identity`` at call
+        time, so adopting a new id here redirects the poll, the socket and the
+        job reports with it.
+        """
+        nonlocal builder_id
+        if builder_id is None:
+            return False
+        payload = dict(register_body)
+        _free = _measure_free_disk()
+        if _free is not None:
+            payload["free_disk_gb"] = _free
+        try:
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(f"{base}/v1/builders/register", headers=headers, json=payload)
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  re-registration failed ({resp.status_code}): {_detail_of(resp)}",
+                    err=True,
+                )
+                return False
+            new_id = resp.json()["id"]
+        except Exception as exc:  # noqa: BLE001 - retried by the next heartbeat
+            click.echo(f"  re-registration error: {exc}", err=True)
+            return False
+        with jobs_lock:
+            builder_id = new_id
+            job_identity["builder_id"] = new_id
+        click.echo(f"Re-registered as builder #{new_id} ({why})")
+        return True
 
     def _sweep_stale_recipe_dirs() -> None:
         """Drop extraction dirs left by long-finished fetches.
@@ -2579,6 +2718,38 @@ def builder_run(
             order.append(name)
         return order
 
+    def _local_only_recipe(dep_name: str) -> Path | None:
+        """*dep_name*'s fetched recipe dir if it is ``redistributable: false``.
+
+        Such a dependency is never in the catalog -- its license forbids
+        publishing the built tree (the NVIDIA CUDA toolkit, NVIDIA's
+        proprietary wheels) -- so a job that needs it builds it into its own
+        deps prefix, as ``cvcpkg install`` does on a consumer's machine.
+        """
+        try:
+            rdir = _fetch_recipe(dep_name)
+            return None if Recipe.load(rdir).redistributable else rdir
+        except Exception:
+            return None
+
+    def _deps_first(local: dict[str, Path], job_platform: str) -> list[str]:
+        """Order the local-only deps so each follows the local-only deps it needs."""
+        order: list[str] = []
+        seen: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in seen:
+                return
+            seen.add(name)
+            for sub in _extract_dep_names(local[name], job_platform):
+                if sub in local:
+                    visit(sub)
+            order.append(name)
+
+        for name in local:
+            visit(name)
+        return order
+
     def _install_deps(
         recipe_dir: Path,
         prefix: Path,
@@ -2594,20 +2765,33 @@ def builder_run(
         the server catalog for each dep, downloads the matching
         archive, and extracts it into the shared prefix so that
         dependent builds can find headers/libraries.
+
+        A dep with no usable catalog variant whose recipe is
+        ``redistributable: false`` is built into the prefix from its recipe
+        instead, after every catalog dep is in place (a wheel needs its
+        interpreter) and dependencies first.  A failure there fails the job:
+        unlike a missing catalog dep, it is not something the build can
+        plausibly do without.
         """
         dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
         if not dep_names:
             return
 
         prefix.mkdir(parents=True, exist_ok=True)
+        local: dict[str, Path] = {}
         with httpx.Client(timeout=120) as client:
             for dep_name in dep_names:
                 # Find the package on the server
-                resp = client.get(
+                resp = _get_retrying(
+                    client,
                     f"{base}/v1/packages/{dep_name}",
                     headers=headers,
                 )
                 if resp.status_code >= 400:
+                    local_dir = _local_only_recipe(dep_name)
+                    if local_dir is not None:
+                        local[dep_name] = local_dir
+                        continue
                     log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
                     continue
 
@@ -2615,32 +2799,16 @@ def builder_run(
                 # of a dep rather than whichever the server happened to list
                 # first (see _newest_first).
                 pkgs = sorted(resp.json().get("packages", []), key=_newest_first, reverse=True)
-                # Find best match for platform/arch/config/link
-                match = None
-                for p in pkgs:
-                    if (
-                        p.get("platform") == job_platform
-                        and p.get("arch") == job_arch
-                        and p.get("build_type", "release") == job_config
-                        and p.get("link", "shared") == job_link
-                    ):
-                        match = p
-                        break
-                # Relax: try just platform/arch
+                # Best match for platform/arch/config/link, relaxing to any
+                # build_type on this platform, then to a platform-independent
+                # (noarch) variant -- a pure-Python wheel is valid on every
+                # host -- preferring the job's own build_type there too.
+                match = _pick_dep_variant(pkgs, job_platform, job_arch, job_config, job_link)
                 if match is None:
-                    for p in pkgs:
-                        if p.get("platform") == job_platform and p.get("arch") == job_arch:
-                            match = p
-                            break
-                # Final relax: a platform-independent (noarch) dependency — a
-                # pure-Python wheel — is valid on every host, so a concrete
-                # build resolves it to the single any/noarch variant.
-                if match is None:
-                    for p in pkgs:
-                        if p.get("platform") == "any" and p.get("arch") == "noarch":
-                            match = p
-                            break
-                if match is None:
+                    local_dir = _local_only_recipe(dep_name)
+                    if local_dir is not None:
+                        local[dep_name] = local_dir
+                        continue
                     log_cb(
                         f"  dep {dep_name}: no matching variant for "
                         f"{job_platform}/{job_arch} (skipping)\n"
@@ -2658,7 +2826,7 @@ def builder_run(
 
                 # Download the archive
                 log_cb(f"  Installing dep: {dep_name} ({match.get('version', '')})\n")
-                dl_resp = client.get(archive_url)
+                dl_resp = _get_retrying(client, archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
                     continue
@@ -2713,6 +2881,31 @@ def builder_run(
         # reuse the same helpers so the builder agrees with local builds.
         # Rewriting once after the loop (not per dep) keeps this O(prefix), and
         # both helpers are idempotent.
+        _rewrite_pc_prefixes(prefix)
+        _rewrite_script_prefixes(prefix)
+
+        if not local:
+            return
+        for dep_name in _deps_first(local, job_platform):
+            log_cb(
+                f"  Building dep {dep_name} from its recipe (redistributable: false, "
+                f"so never in the catalog)\n"
+            )
+            try:
+                build_recipe(
+                    local[dep_name],
+                    platform=job_platform,
+                    config=job_config,
+                    link=job_link,
+                    prefix=prefix,
+                    work_dir_root=prefix.parent,
+                    log_callback=log_cb,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"dep {dep_name} (redistributable: false) failed to build locally: {exc}"
+                ) from exc
+        # The local builds merged trees installed under their own work dirs.
         _rewrite_pc_prefixes(prefix)
         _rewrite_script_prefixes(prefix)
 
@@ -2774,7 +2967,8 @@ def builder_run(
 
             # 2. Download the pre-built package for the HOST platform
             with httpx.Client(timeout=120) as client:
-                resp = client.get(
+                resp = _get_retrying(
+                    client,
                     f"{base}/v1/packages/{tc_name}",
                     headers=headers,
                 )
@@ -2865,7 +3059,7 @@ def builder_run(
                     extract_target = tc_staging
 
                 log_cb(f"  Installing cross-toolchain: {tc_name} ({tc_version})\n")
-                dl_resp = client.get(archive_url)
+                dl_resp = _get_retrying(client, archive_url)
                 if dl_resp.status_code >= 400:
                     log_cb(f"  toolchain {tc_name}: download failed ({dl_resp.status_code})\n")
                     if tc_staging is not None:
@@ -2961,7 +3155,7 @@ def builder_run(
         so the build can proceed without the tool.
         """
         with httpx.Client(timeout=120) as client:
-            resp = client.get(f"{base}/v1/packages/{pkg_name}", headers=headers)
+            resp = _get_retrying(client, f"{base}/v1/packages/{pkg_name}", headers=headers)
             if resp.status_code >= 400:
                 log_cb(f"  host_tool {pkg_name}: not found on server ({resp.status_code})\n")
                 return
@@ -2985,7 +3179,7 @@ def builder_run(
                 archive_url = f"{base}{archive_url}"
 
             log_cb(f"  Installing host tool: {pkg_name} ({match.get('version', '')})\n")
-            dl_resp = client.get(archive_url)
+            dl_resp = _get_retrying(client, archive_url)
             if dl_resp.status_code >= 400:
                 log_cb(f"  host_tool {pkg_name}: download failed ({dl_resp.status_code})\n")
                 return
@@ -3114,6 +3308,54 @@ def builder_run(
             click.echo(f"  [{job_id}] claim error: {exc}", err=True)
             return False
 
+    def _report_job(job_id: int, verb: str, fields: dict) -> str:
+        """Tell the server a job finished (*verb* ``complete``) or failed (``fail``).
+
+        Returns ``"ok"`` (the server took it), ``"refused"`` (it answered 4xx:
+        the job is no longer ours, was cancelled or timed out, or already has
+        its outcome) or ``"lost"`` (no answer after every attempt).  Never
+        raises, and says which in the log -- httpx does not raise on a 4xx, so
+        an unchecked post printed "Completed" for a job the server had refused.
+
+        An answer that never arrived (a timeout, a dropped connection, a proxy
+        502/503/504) is asked again: repeating a report is harmless on the
+        server (it answers 200 with the job as it stands).  Before this, a
+        timeout on /complete -- after the bundle was published -- fell into
+        the job's own failure handler and reported a good build as failed.
+        """
+        payload = {**fields, **job_identity}
+        why = ""
+        for attempt in range(_REPORT_ATTEMPTS):
+            if attempt:
+                time.sleep(_REPORT_RETRY_DELAY * 2 ** (attempt - 1))
+            try:
+                with httpx.Client(timeout=30) as client:
+                    resp = client.post(
+                        f"{base}/v1/builds/{job_id}/{verb}", headers=headers, json=payload
+                    )
+            except Exception as exc:  # noqa: BLE001 - any failure to get an answer
+                why = str(exc) or type(exc).__name__
+                click.echo(f"  [{job_id}] {verb} report error: {why}", err=True)
+                continue
+            if resp.status_code in (502, 503, 504):
+                why = f"answered {resp.status_code}"
+                click.echo(f"  [{job_id}] {verb} report {why}", err=True)
+                continue
+            if resp.status_code >= 400:
+                click.echo(
+                    f"  [{job_id}] the server refused the {verb} report "
+                    f"({resp.status_code}): {_detail_of(resp)}",
+                    err=True,
+                )
+                return "refused"
+            return "ok"
+        click.echo(
+            f"  [{job_id}] could not deliver the {verb} report after "
+            f"{_REPORT_ATTEMPTS} attempts ({why}); the server will time the job out",
+            err=True,
+        )
+        return "lost"
+
     def _execute_job(job: dict) -> None:
         """Execute a single build job.  The slot is released by the calling
         _run_job_guarded wrapper, not here."""
@@ -3145,6 +3387,8 @@ def builder_run(
         # 1. Claim the job.
         if not _claim_job(job_id):
             return
+        with jobs_lock:
+            claimed_job_ids.add(job_id)
 
         error_message = ""
         archive_path: Path | None = None
@@ -3273,28 +3517,25 @@ def builder_run(
             # the server can refuse this report if the job has since moved to
             # another holder (paused and re-dispatched); an older server
             # ignores the extra fields.
-            with httpx.Client(timeout=30) as client:
-                client.post(
-                    f"{base}/v1/builds/{job_id}/complete",
-                    headers=headers,
-                    json={"result_archive_url": result_url, **job_identity},
+            # _report_job never raises, so a report that goes wrong cannot fall
+            # into the handler below and fail a job that built and published.
+            outcome = _report_job(job_id, "complete", {"result_archive_url": result_url})
+            if outcome == "ok":
+                click.echo(f"  [{job_id}] Completed: {recipe_name}")
+            else:
+                click.echo(
+                    f"  [{job_id}] Built and published {recipe_name}, but the server did "
+                    f"not record it as completed ({outcome})",
+                    err=True,
                 )
-            click.echo(f"  [{job_id}] Completed: {recipe_name}")
 
         except Exception as exc:
             # Report failure
             if not error_message:
                 error_message = f"{exc}\n{traceback.format_exc()}"
-            try:
-                with httpx.Client(timeout=30) as client:
-                    client.post(
-                        f"{base}/v1/builds/{job_id}/fail",
-                        headers=headers,
-                        json={"error_message": error_message[:4096], **job_identity},
-                    )
-            except Exception:
-                pass
-            click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}", err=True)
+            outcome = _report_job(job_id, "fail", {"error_message": error_message[:4096]})
+            suffix = "" if outcome == "ok" else f" (the server did not record it: {outcome})"
+            click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}{suffix}", err=True)
 
         finally:
             # Remove exactly this job's isolated tree (dep prefix, build work
@@ -3601,9 +3842,12 @@ def builder_run(
                                 missed_push = True
                                 continue
                             slot_id = _admit_job(job)
+                            # Refused while not in flight: its claim landed and
+                            # the run is over (see claimed_job_ids).
+                            state = "running" if job.get("id") in inflight_job_ids else "finished"
                         if slot_id is None:
                             click.echo(
-                                f"  [{job.get('id')}] already running here, "
+                                f"  [{job.get('id')}] already {state} here, "
                                 "ignoring the repeated dispatch"
                             )
                             continue

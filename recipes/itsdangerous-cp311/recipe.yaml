@@ -53,7 +53,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/itsdangerous/
-    - lib/python3.11/site-packages/itsdangerous-*.dist-info/
-    - Lib/site-packages/itsdangerous/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/itsdangerous/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/itsdangerous-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/itsdangerous/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

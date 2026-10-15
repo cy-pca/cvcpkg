@@ -1126,3 +1126,75 @@ class TestDbTagStore:
             assert by["adhoc"]["package_count"] == 2
 
         run(_t())
+
+    def test_list_all_tag_names_one_entry_per_tag_across_orgs(self):
+        # ensure_tags leaves a stub row per (tag, org) on publish; the tag
+        # browser used to list each as its own same-looking card.
+        from cvcpkg.server.db_stores import DbPackageIndex, DbTagStore
+
+        async def _t():
+            store = DbTagStore()
+            idx = DbPackageIndex()
+            await store.ensure_tags(tags_csv="asset")
+            await store.ensure_tags(tags_csv="asset", org_slug="acme")
+            await store.ensure_tags(tags_csv="asset", org_slug="stale")  # no packages left
+            await _add(idx, name="a", tags="asset", org_slug="acme")
+            await _add(idx, name="a", tags="asset", org_slug="acme", platform="macos")
+            await _add(idx, name="b", tags="Asset, gpu")
+            await _add(idx, name="c", tags="assets,dataset", org_slug="acme")
+            names = await store.list_all_tag_names()
+            assets = [t for t in names if t["name"] == "asset"]
+            assert len(assets) == 1
+            # Distinct package names, whole-token matches only: c's
+            # "assets"/"dataset" no longer count as "asset".
+            assert assets[0]["package_count"] == 2
+            assert assets[0]["orgs"] == ["acme", "stale"]
+            assert "org_slug" not in assets[0]
+            by = {t["name"]: t for t in names}
+            assert by["assets"]["package_count"] == 1 and by["dataset"]["orgs"] == ["acme"]
+            # Excluded (private) orgs contribute neither rows nor counts.
+            hidden = {t["name"]: t for t in await store.list_all_tag_names(exclude_orgs={"acme"})}
+            assert hidden["asset"]["package_count"] == 1
+            assert hidden["asset"]["orgs"] == ["stale"]
+            assert "assets" not in hidden and "dataset" not in hidden
+
+        run(_t())
+
+    def test_list_all_tag_names_curation_prefers_global_row(self):
+        from cvcpkg.server.db_stores import DbTagStore
+
+        async def _t():
+            store = DbTagStore()
+            await store.ensure_tags(tags_csv="gpu")  # stub: display_name == name
+            await store.create(
+                name="gpu", org_slug="acme", display_name="GPU", description="acme gpu"
+            )
+            by = {t["name"]: t for t in await store.list_all_tag_names()}
+            # The global stub carries no curation, so the org row fills in.
+            assert by["gpu"]["display_name"] == "GPU"
+            assert by["gpu"]["description"] == "acme gpu"
+            await store.update(name="gpu", description="Graphics hardware")
+            by = {t["name"]: t for t in await store.list_all_tag_names()}
+            assert by["gpu"]["description"] == "Graphics hardware"
+            assert by["gpu"]["display_name"] == "GPU"
+
+        run(_t())
+
+    def test_counts_match_whole_tags(self):
+        from cvcpkg.server.db_stores import DbPackageIndex, DbTagStore
+
+        async def _t():
+            idx = DbPackageIndex()
+            await _add(idx, name="a", tags="assets")
+            await _add(idx, name="b", tags="dataset,ASSET")
+            await _add(idx, name="c", tags="asset", org_slug="acme")
+            store = DbTagStore()
+            await store.create(name="asset")
+            await store.create(name="asset", org_slug="acme")
+            # A global tag counts every org; an org tag counts only its own.
+            assert (await store.get(name="asset")).package_count == 2
+            assert (await store.get(name="asset", org_slug="acme")).package_count == 1
+            listed, _ = await store.list_tags()
+            assert {(t.org_slug, t.package_count) for t in listed} == {("", 2), ("acme", 1)}
+
+        run(_t())

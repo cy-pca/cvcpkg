@@ -64,9 +64,9 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/sympy/
-    - lib/python3.11/site-packages/isympy.py
-    - lib/python3.11/site-packages/sympy-*.dist-info/
-    - bin/isympy
-    - Lib/site-packages/sympy/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/sympy/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/isympy.py", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/sympy-*.dist-info/", platforms: [any] }
+    - { glob: "bin/isympy", platforms: [any] }
+    - { glob: "Lib/site-packages/sympy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

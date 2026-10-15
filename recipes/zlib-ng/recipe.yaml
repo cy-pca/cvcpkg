@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: zlib-ng
+  upstream_version: "2.3.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    zlib-ng — zlib data compression library for the next generation systems,
+    with SIMD-accelerated deflate/inflate/CRC32/Adler32 and runtime CPU
+    detection. Built in NATIVE mode (ZLIB_COMPAT=OFF): the zng_* API in
+    libz-ng / zlib-ng.h, which installs side by side with cvcpkg's `zlib`
+    instead of replacing libz. The zlib-ng-cpNNN Python columns (PyPI
+    `zlib-ng`) link it.
+  homepage: https://github.com/zlib-ng/zlib-ng
+  license: Zlib
+  tags: [compression, utils, io]
+
+source:
+  type: tarball
+  url: https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.3.3.tar.gz
+  sha256: "f9c65aa9c852eb8255b636fd9f07ce1c406f061ec19a2e7d508b318ca0c907d1"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/libz-ng*", platforms: [linux, macos, freebsd, openbsd, netbsd] }  # libz-ng.so.2* / .dylib
+    - { glob: "lib/zlib-ng.lib", platforms: [windows] }    # import library
+    - { glob: "bin/zlib-ng2.dll", platforms: [windows] }
+    - lib/pkgconfig/zlib-ng.pc
+    - lib/cmake/zlib-ng/
+    - include/zlib-ng.h
+    - include/zconf-ng.h
+    - include/zlib_name_mangling-ng.h
+  cmake_packages:
+    - { name: zlib-ng, targets: ["zlib-ng::zlib"] }
+  pkg_config:
+    - zlib-ng
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17

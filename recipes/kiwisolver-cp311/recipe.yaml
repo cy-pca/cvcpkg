@@ -57,7 +57,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/kiwisolver/
-    - lib/python3.11/site-packages/kiwisolver-*.dist-info/
-    - Lib/site-packages/kiwisolver/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/kiwisolver/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/kiwisolver-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/kiwisolver/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

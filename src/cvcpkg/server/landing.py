@@ -13,9 +13,13 @@ from __future__ import annotations
 import functools
 import html as _html
 import json as _json
+import logging
 import os
+import re
 
 from cvcpkg import __version__
+
+_log = logging.getLogger(__name__)
 
 _GITHUB_REPO = os.environ.get("CVCPKG_GITHUB_REPO", "cy-pca/cvcpkg")
 _GITHUB_URL = f"https://github.com/{_GITHUB_REPO}"
@@ -124,6 +128,22 @@ def brand_logo_asset() -> tuple[bytes, str]:
         return b"", "image/png"
 
 
+# The default-registry and fallback-repo assignments in each install script,
+# exactly as written there.  The files carry the official deployment's values
+# so they also run as-is from a checkout; install_script_asset swaps in the
+# serving deployment's own.
+_INSTALLER_DEFAULT_LINES = {
+    "install.sh": ('DEFAULT_SERVER_URL="{}"', 'DEFAULT_GITHUB_REPO="{}"'),
+    "install.ps1": ('$DefaultServerUrl = "{}"', '$DefaultGitHubRepo = "{}"'),
+}
+_OFFICIAL_SITE_URL = "https://cvcpkg.org"
+_OFFICIAL_GITHUB_REPO = "cy-pca/cvcpkg"
+# Both values land inside a double-quoted sh / PowerShell string, so nothing
+# that could end or expand it (quotes, $, backtick, backslash) may get through.
+_INSTALLER_URL_RE = re.compile(r"^https?://[A-Za-z0-9.:/_~%\[\]-]+$")
+_INSTALLER_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
 @functools.lru_cache(maxsize=2)
 def install_script_asset(name: str) -> str:
     """Return the text of a bundled install script (``install.sh`` / ``install.ps1``).
@@ -131,10 +151,27 @@ def install_script_asset(name: str) -> str:
     Read via ``importlib.resources`` (package data, like ``brand_logo_asset``)
     so it ships in the wheel and is served identically whether cvcpkg-server
     runs from a repo checkout or a ``pip install``.
+
+    The scripts install the ``cvcpkg`` package from a registry, falling back
+    to a GitHub repo's releases.  The copy served here defaults to THIS
+    deployment's ``CVCPKG_SITE_URL`` and ``CVCPKG_GITHUB_REPO``, so a fork's
+    ``/install.sh`` installs the fork's own builds rather than the official
+    ones.  A value that is not safe to paste into the script keeps the
+    official default (and is logged).
     """
     from importlib.resources import files as _res_files
 
-    return _res_files("cvcpkg.server").joinpath("assets", name).read_text(encoding="utf-8")
+    text = _res_files("cvcpkg.server").joinpath("assets", name).read_text(encoding="utf-8")
+    url_line, repo_line = _INSTALLER_DEFAULT_LINES[name]
+    for line, official, value, pattern in (
+        (url_line, _OFFICIAL_SITE_URL, _SITE_URL, _INSTALLER_URL_RE),
+        (repo_line, _OFFICIAL_GITHUB_REPO, _GITHUB_REPO, _INSTALLER_REPO_RE),
+    ):
+        if not pattern.match(value):
+            _log.warning("%s: not baking in unsafe value %r; keeping %r", name, value, official)
+            continue
+        text = text.replace(line.format(official), line.format(value), 1)
+    return text
 
 
 def brand_logo_bytes() -> bytes:
@@ -2838,7 +2875,7 @@ function render(tags) {{
   }}
 
   grid.innerHTML = tags.map(t => {{
-    const href = '/tag/' + encodeURIComponent(t.name) + (t.org_slug ? '?org=' + encodeURIComponent(t.org_slug) : '');
+    const href = '/tag/' + encodeURIComponent(t.name);
     return `
       <div class="column is-3">
         <a href="${{href}}" class="box has-background-black-ter has-text-centered" style="display:block; border:1px solid #363636;">
@@ -2858,7 +2895,7 @@ document.addEventListener('DOMContentLoaded', () => {{
       t.name.toLowerCase().includes(q) ||
       (t.display_name || '').toLowerCase().includes(q) ||
       (t.description || '').toLowerCase().includes(q) ||
-      (t.org_slug || '').toLowerCase().includes(q)
+      (t.orgs || []).some(o => o.toLowerCase().includes(q))
     ));
   }});
   init();
@@ -2958,14 +2995,12 @@ def tag_detail_html(tag_name: str, org_slug: str = "") -> str:
 const TAG_NAME = {_js_string_literal(tag_name)};
 const TAG_ORG = {_js_string_literal(org_slug)};
 
-async function init() {{
-  // Load tag metadata (if curated)
+async function loadTagMeta() {{
+  // Curated display name / description / logo, if any.
   try {{
-    const qs = TAG_ORG ? '?org=' + encodeURIComponent(TAG_ORG) : '';
     const resp = await fetch('/v1/tags/all');
     const data = await resp.json();
-    const tags = data.tags || [];
-    const match = tags.find(t => t.name === TAG_NAME && (t.org_slug || '') === TAG_ORG);
+    const match = (data.tags || []).find(t => t.name === TAG_NAME.toLowerCase());
     if (match) {{
       if (match.display_name) {{
         document.getElementById('tag-title').textContent =
@@ -2980,12 +3015,30 @@ async function init() {{
       }}
     }}
   }} catch (_) {{}}
+}}
+
+async function fetchCandidates() {{
+  // /v1/packages caps a page at 1000 bundles; a popular tag spans several.
+  const base = '/v1/packages?limit=1000&search=' + encodeURIComponent(TAG_NAME) +
+    (TAG_ORG ? '&org=' + encodeURIComponent(TAG_ORG) : '');
+  const out = [];
+  for (let offset = 0; ; ) {{
+    const resp = await fetch(base + '&offset=' + offset);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const page = data.packages || [];
+    out.push(...page);
+    offset += page.length;
+    if (page.length === 0 || offset >= (data.total || 0)) return out;
+  }}
+}}
+
+async function init() {{
+  loadTagMeta();
 
   // Load packages with this tag
   try {{
-    const resp = await fetch('/v1/packages?limit=1000&search=' + encodeURIComponent(TAG_NAME));
-    const data = await resp.json();
-    const pkgs = (data.packages || []).filter(p => {{
+    const pkgs = (await fetchCandidates()).filter(p => {{
       const tags = (p.tags || '').split(',').map(t => t.trim().toLowerCase());
       return tags.includes(TAG_NAME.toLowerCase());
     }});

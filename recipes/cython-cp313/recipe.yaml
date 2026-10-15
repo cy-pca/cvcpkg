@@ -65,12 +65,12 @@ build:
 
 package:
   files:
-    - lib/python3.13/site-packages/Cython/
-    - lib/python3.13/site-packages/cython.py
-    - lib/python3.13/site-packages/pyximport/
-    - lib/python3.13/site-packages/cython-*.dist-info/
-    - bin/cython
-    - bin/cythonize
-    - bin/cygdb
-    - Lib/site-packages/cython/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.13/site-packages/Cython/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13/site-packages/cython.py", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13/site-packages/pyximport/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "lib/python3.13/site-packages/cython-*.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/cython", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/cythonize", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "bin/cygdb", platforms: [freebsd, linux, macos, netbsd, openbsd] }
+    - { glob: "Lib/site-packages/cython/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

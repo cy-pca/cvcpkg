@@ -59,6 +59,22 @@ if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     OPENSSL_OPTS+=(no-dynamic-engine no-legacy)
 fi
 
+# NetBSD: give every object its run path at LINK time. The post-install
+# patchelf below (linux, freebsd) is not an option here: NetBSD's ld.elf_so
+# refuses objects patchelf has grown (a third PT_LOAD; see recipes/curl). GNU ld
+# reads LD_RUN_PATH whenever a link has no -rpath of its own, so drop
+# env-netbsd.sh's -Wl,-R/usr/pkg/lib -- it made +cvc.6 search pkgsrc first and
+# load pkgsrc's libssl.so.3 wherever one is installed. One string serves every
+# object: bin/openssl reaches lib/ via $ORIGIN/../lib, the libraries via
+# $ORIGIN, the engines-3/ and ossl-modules/ plugins via $ORIGIN/.. . It is also
+# a fixed point of cvcpkg's packager rewrite (it keeps $ORIGIN first and every
+# $ORIGIN-relative entry), so that rewrite never grows it.
+if [[ "${CVC_PLATFORM}" == "netbsd" && "${CVC_LINK}" != "static" ]]; then
+    LDFLAGS="${LDFLAGS//-Wl,-R\/usr\/pkg\/lib/}"
+    export LDFLAGS
+    export LD_RUN_PATH='$ORIGIN:$ORIGIN/../lib:$ORIGIN/..'
+fi
+
 # --openssldir must point to the HOST system's CA certificate tree, not the
 # install prefix.  If it pointed into $CVC_INSTALL_DIR/etc/ssl, any process
 # that loads our libssl via LD_LIBRARY_PATH (e.g. Python, curl) would look
@@ -77,6 +93,54 @@ make -j "${CVC_JOBS}"
 # We deliberately omit install_ssldirs: we are not providing CA certificates
 # and do not want to create or own /etc/ssl entries.
 make install_sw
+
+# Linux and FreeBSD run paths. Configure links nothing with an RPATH:
+# bin/openssl would load the HOST's libssl.so.3/libcrypto.so.3 (any distro with
+# OpenSSL 3 has them) instead of the ones beside it, and the engines-3/ and
+# ossl-modules/ plugins would only search their own directory for libcrypto.
+# Set them with patchelf after the fact rather than through Configure's LDFLAGS,
+# which every object shares: the executable needs $ORIGIN/../lib, the plugins
+# $ORIGIN/.., the libraries $ORIGIN. (cvcpkg's packager prepends $ORIGIN to
+# lib/**/*.so* and keeps $ORIGIN-relative entries, so the plugins end up
+# $ORIGIN:$ORIGIN/..) NetBSD got its run path at link time, above.
+if [[ ( "${CVC_PLATFORM}" == "linux" || "${CVC_PLATFORM}" == "freebsd" ) && "${CVC_LINK}" != "static" ]]; then
+    patchelf --set-rpath '$ORIGIN/../lib' "${CVC_INSTALL_DIR}/bin/openssl"
+    for _lib in "${CVC_INSTALL_DIR}"/lib/libssl.so.* "${CVC_INSTALL_DIR}"/lib/libcrypto.so.*; do
+        if [[ -f "${_lib}" && ! -L "${_lib}" ]]; then
+            patchelf --set-rpath '$ORIGIN' "${_lib}"
+        fi
+    done
+    for _mod in "${CVC_INSTALL_DIR}"/lib/engines-3/*.so "${CVC_INSTALL_DIR}"/lib/ossl-modules/*.so; do
+        if [[ -f "${_mod}" ]]; then
+            patchelf --set-rpath '$ORIGIN/..' "${_mod}"
+        fi
+    done
+fi
+
+# The installed openssl must resolve both libraries from this tree, not from
+# the host, with no LD_LIBRARY_PATH to help it. ldd prints
+# "libssl.so.3 => /path (0x...)" on linux and FreeBSD, "-lssl.3 => /path" on
+# NetBSD: take the path after "=>" that ends in the library's name.
+case "${CVC_PLATFORM}" in
+    linux|freebsd|netbsd)
+        if [[ "${CVC_LINK}" != "static" ]]; then
+            _ldd=$(unset LD_LIBRARY_PATH; ldd "${CVC_INSTALL_DIR}/bin/openssl")
+            echo "${_ldd}"
+            _inst=$(cd "${CVC_INSTALL_DIR}" && pwd -P)
+            for _so in libssl.so.3 libcrypto.so.3; do
+                _at=$(awk -v n="/${_so}" '{ for (i = 1; i < NF; i++) if ($i == "=>" && substr($(i + 1), length($(i + 1)) - length(n) + 1) == n) { print $(i + 1); exit } }' <<<"${_ldd}")
+                _real=""
+                if [[ -n "${_at}" && -e "${_at}" ]]; then
+                    _real="$(cd "$(dirname "${_at}")" && pwd -P)/${_so}"
+                fi
+                if [[ "${_real}" != "${_inst}"/* ]]; then
+                    echo "openssl build.sh: bin/openssl loads ${_so} from '${_at:-nowhere}', not ${CVC_INSTALL_DIR}" >&2
+                    exit 1
+                fi
+            done
+        fi
+        ;;
+esac
 
 # Ensure installed .pc/.cmake files are relocatable.
 cvc_rewrite_install_paths

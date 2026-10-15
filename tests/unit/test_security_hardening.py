@@ -662,6 +662,21 @@ class TestLowSeverityFindings:
         names = {x["name"] for x in client.get("/v1/tags", headers=_hdr(stranger)).json()["tags"]}
         assert "secret-tag" not in names  # unscoped listing must not leak it
 
+    def test_private_org_tags_hidden_from_tag_browser(self, sec_server):
+        client, admin, owner, stranger, _reader = sec_server
+        for name, org in (("secret-tag", "shell"), ("shared", "shell"), ("shared", "acme")):
+            r = client.post("/v1/tags", json={"name": name, "org_slug": org}, headers=_hdr(admin))
+            assert r.status_code in (200, 201), r.text
+
+        def _browse(headers):
+            tags = client.get("/v1/tags/all", headers=headers).json()["tags"]
+            return {t["name"]: t["orgs"] for t in tags}
+
+        for outsider in ({}, _hdr(stranger)):
+            assert _browse(outsider) == {"shared": ["acme"]}
+        for insider in (_hdr(owner), _hdr(admin)):
+            assert _browse(insider) == {"secret-tag": ["shell"], "shared": ["acme", "shell"]}
+
     def test_webhook_ssrf_blocked(self, sec_server):
         client, admin, *_ = sec_server
         for bad in (

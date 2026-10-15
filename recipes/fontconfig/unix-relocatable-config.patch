@@ -1,0 +1,131 @@
+cvcpkg: find etc/fonts relative to the loaded library on Unix, as DllMain
+already does on Windows, so a relocated prefix reads its own fonts.conf.
+Detected with a meson dladdr() check; without dladdr nothing changes.
+
+--- a/meson.build
++++ b/meson.build
+@@ -295,6 +295,18 @@
+   deps += [thread_dep]
+ endif
+ 
++# cvcpkg: dladdr() lets src/fccfg.c find etc/fonts relative to the loaded
++# library, so a relocated install reads its own fonts.conf. libdl is only
++# needed on glibc < 2.34; elsewhere dladdr is in libc.
++if host_machine.system() != 'windows'
++  dl_dep = cc.find_library('dl', required: false)
++  if cc.has_function('dladdr', prefix: '#define _GNU_SOURCE\n#include <dlfcn.h>',
++                     dependencies: dl_dep)
++    conf.set('HAVE_DLADDR', 1)
++    deps += [dl_dep]
++  endif
++endif
++
+ fc_templatedir = get_option('template-dir')
+ if fc_templatedir in ['default', 'yes', 'no']
+   fc_templatedir = prefix / get_option('datadir') / 'fontconfig/conf.avail'
+--- a/src/fccfg.c
++++ b/src/fccfg.c
+@@ -2357,6 +2357,62 @@
+ #define FONTCONFIG_FILE	"fonts.conf"
+ #endif
+ 
++#if !defined (_WIN32) && defined (HAVE_DLADDR)
++#include <dlfcn.h>
++
++/* cvcpkg: the Unix counterpart of DllMain above.  A relocated install (a
++ * prefix unpacked somewhere other than where it was built) cannot use the
++ * compiled-in FONTCONFIG_PATH, which names the build machine's staging
++ * directory.  Find the object this code was loaded from -- libfontconfig,
++ * or the executable when linked statically -- and if its directory is the
++ * "lib", "lib64" or "bin" of an install tree whose etc/fonts holds
++ * FONTCONFIG_FILE, return that etc/fonts (malloc'd).  NULL otherwise, so an
++ * install in its configured location behaves exactly as before. */
++static FcChar8 *
++FcConfigRelocatedPath (void)
++{
++    Dl_info  info;
++    char    *dir, *slash, *path;
++    size_t   len;
++
++    if (!dladdr ((const void *) &FcConfigRelocatedPath, &info) ||
++	!info.dli_fname || !info.dli_fname[0])
++	return NULL;
++    dir = realpath (info.dli_fname, NULL);
++    if (!dir)
++	return NULL;
++    slash = strrchr (dir, '/');
++    if (slash)
++    {
++	*slash = '\0';
++	slash = strrchr (dir, '/');
++    }
++    if (!slash || (strcmp (slash + 1, "lib") != 0 &&
++		   strcmp (slash + 1, "lib64") != 0 &&
++		   strcmp (slash + 1, "bin") != 0))
++    {
++	free (dir);
++	return NULL;
++    }
++    *slash = '\0';
++    len = strlen (dir) + sizeof ("/etc/fonts/" FONTCONFIG_FILE);
++    path = malloc (len);
++    if (path)
++    {
++	snprintf (path, len, "%s/etc/fonts/%s", dir, FONTCONFIG_FILE);
++	if (access (path, R_OK) == 0)
++	    snprintf (path, len, "%s/etc/fonts", dir);
++	else
++	{
++	    free (path);
++	    path = NULL;
++	}
++    }
++    free (dir);
++    return (FcChar8 *) path;
++}
++#endif
++
+ static FcChar8 *
+ FcConfigFileExists (const FcChar8 *dir, const FcChar8 *file)
+ {
+@@ -2410,8 +2466,15 @@
+     FcChar8    *dir;
+     int	    npath;
+     int	    i;
++#if !defined (_WIN32) && defined (HAVE_DLADDR)
++    FcChar8    *reloc = FcConfigRelocatedPath ();
++#endif
+ 
+     npath = 2;	/* default dir + null */
++#if !defined (_WIN32) && defined (HAVE_DLADDR)
++    if (reloc)
++	npath++;	/* relocated etc/fonts */
++#endif
+     env = (FcChar8 *) getenv ("FONTCONFIG_PATH");
+     if (env)
+     {
+@@ -2458,6 +2521,13 @@
+ 		strcat ((char *) fontconfig_path, "\\fonts");
+ 	}
+ #endif
++#if !defined (_WIN32) && defined (HAVE_DLADDR)
++    if (reloc)
++    {
++	path[i++] = reloc;
++	reloc = NULL;
++    }
++#endif
+     dir = (FcChar8 *) FONTCONFIG_PATH;
+     path[i] = malloc (strlen ((char *) dir) + 1);
+     if (!path[i])
+@@ -2470,6 +2540,10 @@
+ 	free (path[i]);
+     free (path);
+ bail0:
++#if !defined (_WIN32) && defined (HAVE_DLADDR)
++    if (reloc)
++	free (reloc);
++#endif
+     return 0;
+ }
+ 

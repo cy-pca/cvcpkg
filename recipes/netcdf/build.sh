@@ -22,3 +22,8 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
 
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
+
+# Relocate installed .pc/.cmake files and bin/*-config scripts, which keep this
+# build's temporary install dir otherwise (recipes/_common/rewrite-install-paths.sh).
+. "$(cd "$(dirname "$0")" && pwd)/../_common/rewrite-install-paths.sh"
+cvc_rewrite_install_paths

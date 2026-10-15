@@ -31,7 +31,7 @@ import pytest
 
 try:
     _CVCPKG_ROOT = Path(__file__).resolve().parents[2]  # repo root
-    _REPO_ROOT = _CVCPKG_ROOT.parents[1]  # libcvc-deps
+    _REPO_ROOT = _CVCPKG_ROOT  # recipes/ sits at the repo root, beside src/
 except IndexError:
     _CVCPKG_ROOT = Path("/nonexistent")
     _REPO_ROOT = Path("/nonexistent")
@@ -43,7 +43,7 @@ pytestmark = [
     pytest.mark.source_fallback,
     pytest.mark.skipif(
         not (_RECIPES_DIR / "zlib" / "recipe.yaml").is_file(),
-        reason="zlib recipe not found — not running inside libcvc-deps repo",
+        reason="zlib recipe not found — not running inside the cvcpkg repo",
     ),
 ]
 

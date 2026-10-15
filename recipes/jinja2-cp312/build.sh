@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/jinja2-cp312/build.sh — build jinja2 3.1.4 FROM SOURCE (generated).
+# recipes/jinja2-cp312/build.sh — build jinja2 3.1.6 FROM SOURCE (generated).
 #
 # WHY FROM SOURCE: a PyPI wheel is somebody else's compiled artifact, linked
 # against libraries we did not build.  cvcpkg fetches and sha256-verifies the

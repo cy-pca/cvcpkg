@@ -13,9 +13,12 @@ source "${_COMMON_DIR}/rewrite-install-paths.sh"
 : "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
 : "${CVC_BUILD_DIR:?CVC_BUILD_DIR must be set}"
 
-# FreeBSD ships clang as the system compiler.
-export CC="${CC:-clang}"
-export CXX="${CXX:-clang++}"
+# FreeBSD ships clang as the system compiler.  Use it by absolute path,
+# never a bare `clang`: cvcpkg's llvm, llvm18 and llvm20 bundles ship one, and
+# it shadows the system's once such a bundle is in the prefix (see
+# env-macos.sh).  An explicit CC / CXX still wins.
+export CC="${CC:-/usr/bin/clang}"
+export CXX="${CXX:-/usr/bin/clang++}"
 
 _build_type_lc=$(echo "$CVC_BUILD_TYPE" | tr '[:upper:]' '[:lower:]')
 case "$_build_type_lc" in

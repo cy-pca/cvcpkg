@@ -103,13 +103,31 @@ The landing pages can be re-branded without code changes:
 | `CVCPKG_SITE_TITLE` | `cvcpkg` | Site name — page `<title>` and hero heading |
 | `CVCPKG_SITE_TAGLINE` | `Package Archive` | Appended to the page title (`cvcpkg — Package Archive`) |
 | `CVCPKG_SITE_HERO` | *(built-in blurb)* | Hero paragraph on the landing page |
-| `CVCPKG_SITE_URL` | `https://cvcpkg.org` | Absolute origin used to build social-preview (Open Graph / Twitter) image URLs |
+| `CVCPKG_SITE_URL` | `https://cvcpkg.org` | Public origin of the site: used in social-preview (Open Graph / Twitter) image URLs and the install commands shown on the site, and baked into the served installers as the registry they install from (see [Installer](#installer-installsh-installps1)) |
 | `CVCPKG_SITE_LOGO` | *(bundled gears logo)* | Favicon and social image: an `http(s)://` URL (linked directly) or a path to a local image file (png/svg/ico/jpg/gif/webp, served by the backend). Missing or unreadable files fall back to the bundled logo |
-| `CVCPKG_GITHUB_REPO` | `cy-pca/cvcpkg` | `owner/repo` slug behind the GitHub links in the navbar and footer |
+| `CVCPKG_GITHUB_REPO` | `cy-pca/cvcpkg` | `owner/repo` slug behind the GitHub links in the navbar and footer, and whose releases the served installers fall back to |
 
 `docker-compose.production.yml` does not forward these, so for Compose
 deployments add the ones you set to the `backend` service's `environment:`
 block (they are read by the server process, not baked at build time).
+
+### Installer (`/install.sh`, `/install.ps1`)
+
+The server serves the one-line installers
+(`curl -fsSL <site>/install.sh | sh`, `irm <site>/install.ps1 | iex`) with
+this deployment's `CVCPKG_SITE_URL` and `CVCPKG_GITHUB_REPO` baked in. Each
+asks this registry for the newest stable, unscoped (no org) `release` bundle
+of the package **`cvcpkg`** for the caller's platform and arch
+(`GET /v1/packages/cvcpkg/latest`), checks its recorded sha256, and installs
+the `bin/cvcpkg` (Windows: `bin\cvcpkg.exe`) inside it. So to hand your users
+your own build, publish a `cvcpkg` package per platform whose archive holds
+that self-contained executable.
+
+Only when there is no such bundle for the caller's platform (or pinned
+version) do the installers fall back to the standalone binaries attached to
+the GitHub releases of `CVCPKG_GITHUB_REPO`. A fork that leaves
+`CVCPKG_SITE_URL` at its default hands out installers pointing at
+cvcpkg.org, so set it to the fork's public origin.
 
 ## TLS Configuration
 
@@ -140,7 +158,9 @@ version):
 
     ProxyPreserveHost On
     # upgrade=websocket: tunnel the builder WebSocket (/v1/builders/{id}/ws).
-    ProxyPass / http://127.0.0.1:8420/ upgrade=websocket
+    # retry=0: after a failed connect (the backend restarting in a deploy),
+    # try it again on the next request instead of answering 503 for 60s more.
+    ProxyPass / http://127.0.0.1:8420/ upgrade=websocket retry=0
     ProxyPassReverse / http://127.0.0.1:8420/
 
     Header always set Strict-Transport-Security "max-age=63072000"
@@ -158,7 +178,7 @@ backend ahead of the plain `ProxyPass`:
     RewriteRule ^/(.*) ws://127.0.0.1:8420/$1 [P,L]
 
     ProxyPreserveHost On
-    ProxyPass / http://127.0.0.1:8420/
+    ProxyPass / http://127.0.0.1:8420/ retry=0
     ProxyPassReverse / http://127.0.0.1:8420/
 ```
 

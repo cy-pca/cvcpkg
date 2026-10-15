@@ -56,7 +56,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/trimesh/
-    - lib/python3.11/site-packages/trimesh-*.dist-info/
-    - Lib/site-packages/trimesh/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/trimesh/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/trimesh-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/trimesh/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

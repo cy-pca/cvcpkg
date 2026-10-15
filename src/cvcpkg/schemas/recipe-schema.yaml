@@ -116,6 +116,47 @@ properties:
       2.39, so `cuda` + `glibc2.35` was unsatisfiable and torch-cp311-cuda
       could not be built at all.
 
+  redistributable:
+    type: boolean
+    description: >
+      False when the payload's license forbids publishing the built tree,
+      e.g. the NVIDIA CUDA toolkit, whose EULA allows redistributing only a
+      few runtime libraries and never nvcc or the SDK as a stand-alone
+      product.  Such a recipe is only ever built on the machine that installs
+      it: `cvcpkg install` builds it from the recipe instead of looking for a
+      bundle, and every path that would turn it into one refuses (`cvcpkg
+      pack`, pack-all, `builds submit`/`submit-dag`, build-all's server-cache
+      push, and the server's /v1/publish).  The recipe itself (urls and
+      checksums) is still pushed and browsable.  Default true.
+
+  license_acceptance:
+    type: object
+    required: [urls, env]
+    additionalProperties: false
+    description: >
+      The vendor license must be accepted, explicitly, before cvcpkg builds
+      this recipe on the user's machine (e.g. Microsoft's Visual Studio Build
+      Tools and Windows SDK licenses for `msvc`).  `cvcpkg install` shows the
+      license URLs and asks on a terminal; otherwise it requires
+      `--accept-license <name>` or `<env>=1` in the environment, and refuses
+      without one.  On acceptance it exports `<env>=1` to the build script,
+      which should check it too, so `cvcpkg build` is gated the same way.
+      Pairs with `redistributable: false`: cvcpkg never accepts a license on
+      the user's behalf and never ships the payload itself.
+    properties:
+      title:
+        type: string
+        description: "What is being accepted, e.g. 'Microsoft Visual Studio Build Tools license'"
+      urls:
+        type: array
+        minItems: 1
+        items: { type: string, pattern: "^https://" }
+        description: "The license texts, in the order they are shown"
+      env:
+        type: string
+        pattern: "^CVCPKG_ACCEPT_[A-Z0-9_]+_LICENSE$"
+        description: "Environment variable that records acceptance (value 1)"
+
   cross_toolchain:
     $ref: "#/$defs/cross_toolchain_block"
 
@@ -495,6 +536,15 @@ $defs:
         type: array
         items: { type: string }
         description: "pkg-config module names shipped by this component"
+      linkage_allow:
+        type: array
+        items: { type: string, pattern: "^/" }
+        description: >
+          Absolute path prefixes this bundle's binaries may load from although
+          the pack-time relocatability gate would reject them -- on macOS, a
+          library outside /usr/lib and /System that the bundle cannot carry
+          (e.g. a vendor framework installed at a fixed location). It never
+          excuses a builder path (a job's scratch prefix, /tmp, a CI workspace).
       archive_format:
         type: string
         enum: [tar.gz, tar.xz, tar.bz2, zip]

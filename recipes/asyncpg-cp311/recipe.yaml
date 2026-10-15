@@ -56,7 +56,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/asyncpg/
-    - lib/python3.11/site-packages/*.dist-info/
-    - Lib/site-packages/asyncpg/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.11/site-packages/asyncpg/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/asyncpg/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

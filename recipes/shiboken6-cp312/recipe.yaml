@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: shiboken6-cp312
   upstream_version: "6.8.2"
-  cvc_revision: 1
+  # Bumped 1 -> 2: libclang comes only from the cvcpkg llvm18 dependency.
+  # build.sh no longer falls back to /usr/lib/llvm-18 or honours an inherited
+  # LLVM_INSTALL_DIR, and fails if libclang or Clang's resource headers are
+  # missing.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -125,8 +129,11 @@ notes: >-
   runs find_package(Clang CONFIG REQUIRED) and warns below 18.0 (hard-fails below
   14.0); the runtime parser additionally needs the Clang builtin/resource headers
   (lib/clang/18/include), which llvm18 packages. build.sh sets LLVM_INSTALL_DIR to
-  the dependency prefix (where llvm18 installs ClangConfig.cmake + libclang + the
-  resource headers), falling back to a system /usr/lib/llvm-18 only if absent.
+  whichever cvcpkg prefix (CVC_DEPS_PREFIX or CVC_BUILD_PREFIX) holds llvm18's
+  ClangConfig.cmake, pins Clang_DIR/LLVM_DIR to it, and fails if llvm18,
+  libclang.so.18.1 or the resource headers are missing. There is no fallback to
+  a system /usr/lib/llvm-*, a Homebrew llvm, llvm-config on PATH, or an
+  LLVM_INSTALL_DIR inherited from the caller.
 
   LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
   .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no

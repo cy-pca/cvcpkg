@@ -18,7 +18,8 @@ description: |
         run: cmake -B build -DCMAKE_PREFIX_PATH=<steps.deps.outputs.path> ...
 
   The action:
-    1. Checks out libcvc-deps (sparse, tools/ + packaging/ only).
+    1. Checks out libcvc-deps (sparse: the package sources, packaging/
+       and the default cvc-requirements.yaml).
     2. Installs cvcpkg from the local tree.
     3. Runs `cvcpkg install --from <requirements> --prefix <prefix>`.
     4. Exports the prefix path as the `path` output.

@@ -227,7 +227,7 @@ class TestHandWrittenDepColumns:
             d.mkdir()
             (d / "recipe.yaml").write_text("recipe:\n  name: numpy\n")
         (tmp_path / "numpy-cp312").mkdir()  # dir without recipe.yaml: not a column
-        assert gen.handwritten_columns(tmp_path, INTERPS) == {"numpy": ["311", "313t"]}
+        assert gen.handwritten_columns(tmp_path, INTERPS)["numpy"] == ["311", "313t"]
 
     def test_dep_edge_resolves_against_extra_universe(self):
         meta = self._seed_meta()
@@ -291,6 +291,14 @@ class TestHandWrittenDepColumns:
 
 
 class TestMarkers:
+    def test_single_quoted_python_version_marker(self):
+        # PEP 508 allows either quote style; aio-libs' hand-written
+        # [build-system] requires use single quotes.
+        spec = {"markers": "python_version < '3.11'"}
+        assert not gen.marker_ok(spec, "311")
+        assert gen.backend_edges(["tomli; python_version < '3.11'"], "313t") == []
+        assert gen.backend_edges(["tomli; python_version < '3.11'"], "310") == ["tomli-cp310"]
+
     def test_python_version_lt(self):
         spec = {"markers": 'python_version < "3.11"'}
         assert not gen.marker_ok(spec, "311")
@@ -1054,6 +1062,85 @@ class TestEmitSdistColumn:
         y, _, _ = self._emit(tmp_path)
         assert "tomli-cp311" not in y  # python_version < 3.11
 
+    # A pure package whose sdist compiles an OPTIONAL extension: the switch that
+    # skips it must reach every matrix entry, or the build-once noarch column
+    # ships whichever builder's .so built it (#53).
+    def test_pure_build_env_reaches_every_matrix_entry(self, tmp_path, monkeypatch):
+        import yaml
+
+        monkeypatch.setitem(gen._PURE_BUILD_ENV, "widget", {"WIDGET_NO_EXT": "1"})
+        y, _, _ = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        assert yaml.safe_load(y)["build"]["matrix"] == [
+            {"platform": "any", "script": "build.sh", "env": {"WIDGET_NO_EXT": "1"}},
+            {"platform": "windows", "script": "build.ps1", "env": {"WIDGET_NO_EXT": "1"}},
+        ]
+
+    def test_pure_build_env_leaves_compiled_columns_alone(self, tmp_path, monkeypatch):
+        # A per-platform column is SUPPOSED to compile its extension.
+        monkeypatch.setitem(gen._PURE_BUILD_ENV, "widget", {"WIDGET_NO_EXT": "1"})
+        y, _, _ = self._emit(tmp_path)
+        assert "WIDGET_NO_EXT" not in y
+
+    # Each build produces ONE install layout, and packing fails on a declared
+    # entry that matched nothing -- so every from-source pure column failed to
+    # pack on the fleet ("Lib/site-packages/... match nothing").  Each layout is
+    # scoped to the platforms whose build produces it.
+    def test_pure_column_scopes_each_layout(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        assert yaml.safe_load(y)["package"]["files"] == [
+            {"glob": "lib/python3.11/site-packages/widget/", "platforms": ["any"]},
+            {"glob": "lib/python3.11/site-packages/*.dist-info/", "platforms": ["any"]},
+            {"glob": "Lib/site-packages/widget/", "platforms": ["windows"]},
+            {"glob": "Lib/site-packages/*.dist-info/", "platforms": ["windows"]},
+        ]
+
+    def test_compiled_column_scopes_unix_layout_to_its_unix_platforms(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path)  # cext; platforms linux, macos, windows
+        files = yaml.safe_load(y)["package"]["files"]
+        assert {
+            "glob": "lib/python3.11/site-packages/widget/",
+            "platforms": ["linux", "macos"],
+        } in (files)
+        assert {"glob": "Lib/site-packages/widget/", "platforms": ["windows"]} in files
+
+    def test_column_without_a_windows_build_stays_unscoped(self, tmp_path):
+        import yaml
+
+        y, _, _ = self._emit(tmp_path, platforms=["linux", "macos"])
+        assert yaml.safe_load(y)["package"]["files"] == [
+            "lib/python3.11/site-packages/widget/",
+            "lib/python3.11/site-packages/*.dist-info/",
+        ]
+
+    @pytest.mark.parametrize(
+        ("platform", "layout"),
+        [
+            ("any", "lib/python3.11/site-packages"),
+            ("windows", "Lib/site-packages"),
+        ],
+    )
+    def test_pack_check_passes_on_each_layout(self, tmp_path, platform, layout):
+        # The emitted declaration against the tree that build really stages,
+        # judged by the same function `cvcpkg pack` and the builders use.
+        import yaml
+
+        from cvcpkg.builder import check_declared_files
+
+        y, _, _ = self._emit(
+            tmp_path / "r", kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl")
+        )
+        staged = tmp_path / "install"
+        (staged / layout / "widget").mkdir(parents=True)
+        (staged / layout / "widget" / "__init__.py").write_text("")
+        (staged / layout / "widget-1.2.3.dist-info").mkdir()
+        (staged / layout / "widget-1.2.3.dist-info" / "METADATA").write_text("")
+        files = yaml.safe_load(y)["package"]["files"]
+        assert check_declared_files(staged, files, platform) == []
+
     # A build backend must be importable under --no-build-isolation, so its own
     # runtime deps ride along as build-only edges (see _BACKEND_RUNTIME_CLOSURE).
     _CLOSURE_META = {
@@ -1266,3 +1353,154 @@ class TestResolveSourceModes:
             platforms=["linux"],
         )
         assert meta["torch"]["mode"] == "wheel"
+
+
+class TestWindowsGap:
+    """A generated column claims Windows only when its runtime closure builds
+    there.  Generated deps always do; a hand-written family (columns and
+    platforms read from disk) may not — claiming Windows over one is the phantom
+    closure edge scripts/validate_all_recipes.py rejects."""
+
+    def _family(self, tmp_path, name, platforms):
+        d = tmp_path / name
+        d.mkdir()
+        matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
+        (d / "recipe.yaml").write_text(
+            f"recipe:\n  name: {name}\nbuild:\n  matrix:\n{matrix}", encoding="utf-8"
+        )
+
+    def _emit_pure(self, tmp_path, family_platforms):
+        self._family(tmp_path, "native-cp311", family_platforms)
+        m = _meta_sdist(
+            kind="pure", wheels=PURE, deps=["native"], seed=True, build_requires=["setuptools"]
+        )
+        gen._emit_column(
+            tmp_path, "widget", m, "311", {"widget": m}, {"widget": ["311"]}, {"native"}
+        )
+        d = tmp_path / "widget-cp311"
+        return (d / "recipe.yaml").read_text(encoding="utf-8"), d
+
+    def test_windows_dropped_over_a_family_without_windows(self, tmp_path, capsys):
+        y, d = self._emit_pure(tmp_path, ["linux", "macos"])
+        assert "- platform: any" in y
+        assert "- platform: windows" not in y
+        assert "Lib/site-packages" not in y
+        assert not (d / "build.ps1").exists()
+        # any-only == noarch: the script must not read CVC_PLATFORM (test_noarch_recipes).
+        sh = (d / "build.sh").read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in sh.splitlines() if not ln.lstrip().startswith("#"))
+        assert "CVC_PLATFORM" not in code
+        err = capsys.readouterr().err
+        assert "no-windows widget-cp311: no Windows build for native-cp311" in err
+
+    def test_windows_kept_when_the_family_builds_there(self, tmp_path):
+        y, d = self._emit_pure(tmp_path, ["linux", "macos", "windows"])
+        assert "- platform: windows" in y
+        assert (d / "build.ps1").exists()
+        assert "env-${CVC_PLATFORM:-linux}.sh" in (d / "build.sh").read_text(encoding="utf-8")
+
+    def test_gap_is_found_through_a_generated_dep(self, tmp_path):
+        # ccxt -> aiodns -> pycares: the gap is two levels down.
+        self._family(tmp_path, "native-cp311", ["linux"])
+        meta = {
+            "mid": _meta_sdist(kind="pure", wheels=PURE, deps=["native"], seed=True),
+            "top": _meta_sdist(kind="pure", wheels=PURE, deps=["mid"], seed=True),
+        }
+        assert gen._windows_gap(tmp_path, "top", "311", meta, {"native"}) == ["native-cp311"]
+
+    def test_no_gap_without_hand_written_deps(self, tmp_path):
+        meta = {"widget": _meta_sdist(), "colorama": {}}
+        assert gen._windows_gap(tmp_path, "widget", "311", meta) == []
+
+
+class TestUnbuildableSdist:
+    """A published sdist that cannot build as shipped stays on its wheel."""
+
+    def test_falls_back_to_the_wheel_even_when_sdist_is_forced(self):
+        mode, reason = gen.source_mode_for(
+            "ccxt", kind="pure", has_sdist=True, missing=[], pure_policy="sdist", forced="sdist"
+        )
+        assert mode == "wheel"
+        assert "README.md" in reason
+
+    def test_other_packages_still_build_from_source(self):
+        assert gen.source_mode_for(
+            "widget", kind="pure", has_sdist=True, missing=[], pure_policy="sdist"
+        ) == ("sdist", "built from the PyPI sdist")
+
+
+# ── single-file modules from poetry.lock ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "base,module", [("six", "six"), ("typing-extensions", "typing_extensions")]
+)
+@pytest.mark.parametrize("interp", INTERPS)
+def test_lock_single_module_globs_name_the_file_not_a_dir(base, module, interp):
+    """six and typing-extensions install one top-level .py file.  Without a
+    seed of their own they used to get the "<module>/" default, which matches
+    nothing and fails a strict-globs build (six-cp313, 2026-10-13)."""
+    ver = gen.col_version(interp)
+    globs = gen._files_globs({}, base, interp, windows=True)
+    assert f"lib/python{ver}/site-packages/{module}.py" in globs
+    assert f"Lib/site-packages/{module}.py" in globs
+    assert not any(g.endswith(f"/{module}/") for g in globs)
+
+
+def test_seed_files_override_also_drives_windows_globs():
+    """A seed's "files" list is used for the Windows Lib/ layout too, not just
+    the POSIX one (mypy_extensions.py, not mypy_extensions/)."""
+    globs = gen._files_globs(
+        {"files": ["mypy_extensions.py", "mypy_extensions-*.dist-info/"]},
+        "mypy-extensions",
+        "312",
+        windows=True,
+    )
+    assert "Lib/site-packages/mypy_extensions.py" in globs
+    assert "Lib/site-packages/mypy_extensions/" not in globs
+
+
+def test_package_directories_keep_the_default():
+    globs = gen._files_globs({}, "idna", "312", windows=False)
+    assert globs[:2] == [
+        "lib/python3.12/site-packages/idna/",
+        "lib/python3.12/site-packages/*.dist-info/",
+    ]
+
+
+# ── hand-written dep families vs --interpreters ──────────────────────────────
+
+
+def _hw_recipe(root, name):
+    (root / name).mkdir(parents=True)
+    (root / name / "recipe.yaml").write_text("schema_version: 1\n")
+
+
+def test_handwritten_family_missing_only_for_this_run_is_pruned_not_fatal(tmp_path):
+    """--interpreters 313t against coincurve (cp311/312/313 only) used to be
+    FATAL; now the empty family is kept so dependents' 313t columns prune."""
+    for col in ("311", "312", "313"):
+        _hw_recipe(tmp_path, f"coincurve-cp{col}")
+    extra, fatal, notes = gen.handwritten_families(tmp_path, ["313t"], set(), {"coincurve"})
+    assert fatal is None
+    assert extra["coincurve"] == []
+    assert any("coincurve" in n and "pruned" in n for n in notes)
+    # Still in the universe (so dependents prune), with no column.
+    assert gen.compute_columns({}, ["313t"], extra)["coincurve"] == []
+
+
+def test_handwritten_family_absent_everywhere_and_referenced_is_fatal(tmp_path):
+    extra, fatal, _ = gen.handwritten_families(tmp_path, ["312"], set(), {"coincurve"})
+    assert fatal and "coincurve" in fatal
+
+
+def test_handwritten_family_absent_and_unreferenced_is_ignored(tmp_path):
+    extra, fatal, notes = gen.handwritten_families(tmp_path, ["312"], set(), set())
+    assert fatal is None and "coincurve" not in extra
+    assert any("ignored" in n for n in notes)
+
+
+def test_handwritten_family_that_is_also_generated_is_fatal(tmp_path):
+    _hw_recipe(tmp_path, "coincurve-cp312")
+    _, fatal, _ = gen.handwritten_families(tmp_path, ["312"], {"coincurve"}, set())
+    assert fatal and "pick one owner" in fatal

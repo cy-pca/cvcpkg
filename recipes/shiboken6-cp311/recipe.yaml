@@ -8,7 +8,12 @@ recipe:
   # still carried backslashes in the remainder (\Lib -> invalid CMake escape '\L');
   # +cvc.4 passes forward-slash paths to cmake so nothing backslashed is baked.
   # Downstream find_package(Shiboken6) (pyside6) now parses cleanly.
-  cvc_revision: 4
+  # +cvc.5: libclang comes only from the cvcpkg llvm18 dependency. build.sh no
+  # longer falls back to /usr/lib/llvm-18, neither script honours an inherited
+  # LLVM_INSTALL_DIR, and both fail if libclang or Clang's resource headers
+  # are missing. package.files entries are platform-scoped so the strict-globs
+  # pack check passes on linux and windows.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -103,25 +108,27 @@ package:
     # Code generator (used at pyside6 build time) + its CMake export.
     - bin/shiboken6*
     # Runtime C++ support library PySide6 bindings link against.
-    - lib/libshiboken6*
+    - { glob: "lib/libshiboken6*", platforms: [linux] }
     # Importable abi3 Python package, fanned into every interpreter
     # (cp311/cp312/cp313): exposes wrapInstance / getCppPointer.
-    - lib/python3.*/site-packages/shiboken6/
-    - lib/python3.*/site-packages/shiboken6_generator/
+    - { glob: "lib/python3.*/site-packages/shiboken6/", platforms: [linux] }
+    - { glob: "lib/python3.*/site-packages/shiboken6_generator/", platforms: [linux] }
     # CMake config consumed by the `pyside6` recipe: find_package(Shiboken6).
     - lib/cmake/Shiboken6*/
     # Public headers for anything that links libshiboken directly.
     - include/shiboken6*/
-    # Windows layout (globs matching nothing are skipped): DLLs land in bin/,
-    # import libs in lib/, and the importable package under Lib/site-packages/.
+    # Windows layout: the DLL lands in bin/, the import lib in lib/, and the
+    # importable package under Lib/site-packages/. pack fails on a declared
+    # entry that matches nothing (strict globs), so every layout-specific entry
+    # is scoped to the platform that produces it (.dll/.lib are Windows-only by
+    # suffix). The runtime DLL installs to bin/ (cvc.4 shipped
+    # bin/shiboken6.abi3.dll), and declaring it there is what stops a bundle
+    # shipping without it; the old defensive lib/shiboken6*.dll entry matched
+    # nothing and would fail every Windows pack.
     - bin/shiboken6*.dll
-    # Defensive: the runtime DLL may install to lib/ instead of bin/ (the
-    # Shiboken6 config advertises SHIBOKEN_SHARED_LIBRARY_DIR=<prefix>/lib) —
-    # harmless if empty, but avoids silently shipping without the DLL.
-    - lib/shiboken6*.dll
     - lib/shiboken6*.lib
-    - Lib/site-packages/shiboken6/
-    - Lib/site-packages/shiboken6_generator/
+    - { glob: "Lib/site-packages/shiboken6/", platforms: [windows] }
+    - { glob: "Lib/site-packages/shiboken6_generator/", platforms: [windows] }
   cmake_packages:
     - {
         name: Shiboken6,
@@ -142,9 +149,13 @@ notes: >-
   hermetically by the cvcpkg `llvm18` dependency. shiboken 6.8.2's setup_clang()
   runs find_package(Clang CONFIG REQUIRED) and warns below 18.0 (hard-fails below
   14.0); the runtime parser additionally needs the Clang builtin/resource headers
-  (lib/clang/18/include), which llvm18 packages. build.sh sets LLVM_INSTALL_DIR to
-  the dependency prefix (where llvm18 installs ClangConfig.cmake + libclang + the
-  resource headers), falling back to a system /usr/lib/llvm-18 only if absent.
+  (lib/clang/18/include), which llvm18 packages. build.sh and build.ps1 set
+  LLVM_INSTALL_DIR to whichever cvcpkg prefix (CVC_DEPS_PREFIX or
+  CVC_BUILD_PREFIX) holds llvm18's ClangConfig.cmake, pin Clang_DIR/LLVM_DIR to
+  it, and fail if llvm18, libclang or the resource headers are missing. There is
+  no fallback to a system /usr/lib/llvm-*, a Homebrew llvm, llvm-config on PATH,
+  a preinstalled C:\Program Files\LLVM, or an LLVM_INSTALL_DIR inherited from
+  the caller.
 
   LIMITED API: built with FORCE_LIMITED_API=yes (upstream default → stable-ABI
   .abi3.so). pyside6 MUST be built with the same setting. Set FORCE_LIMITED_API=no

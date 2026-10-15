@@ -1,27 +1,50 @@
 schema_version: 1
 recipe:
   name: lua
-  upstream_version: "5.4.7"
-  cvc_revision: 2
+  # 5.4.7 -> 5.4.9 (cvc_revision reset to 1): the newest 5.4.x patch release
+  # (lua.org, 2026-08-10). Same minor series, so the C API/ABI is unchanged.
+  # Lua 5.5 is out too but is a new ABI and a new dialect; it is not this recipe.
+  upstream_version: "5.4.9"
+  cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
-  description: "Lua — a powerful, efficient, lightweight, embeddable scripting language."
+  description: >-
+    Lua 5.4 — a powerful, efficient, lightweight, embeddable scripting language.
+    Ships for embedding: the shared library (liblua.so.5.4 / liblua.5.4.dylib /
+    lua54.dll) AND the static liblua.a, the C headers, pkg-config files
+    (lua5.4, lua, lua-5.4, lua54) and a CMake package —
+    find_package(lua 5.4 CONFIG REQUIRED) then link lua::lua (shared) or
+    lua::lua_static. The prefix is relocatable ($ORIGIN / @rpath, and
+    location-relative .pc and CMake files). Also the lua interpreter and the
+    luac bytecode compiler.
   homepage: https://www.lua.org/
   license: MIT
   tags: [scripting, libraries]
 
 source:
   type: tarball
-  url: https://www.lua.org/ftp/lua-5.4.7.tar.gz
-  sha256: "9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30"
+  url: https://www.lua.org/ftp/lua-5.4.9.tar.gz
+  sha256: "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6"
   strip_components: 1
 
 patches: []
 
 depends:
-  build: []
+  build:
+    # Only for test.sh, which builds small embedding programs against a
+    # relocated copy of the installed prefix through find_package(lua) and
+    # through pkg-config. The cross targets (wasm, wasi, cosmo) test with the
+    # cross compiler alone, so they do not pull these in.
+    - name: cmake
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: ninja
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: pkg-config
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   runtime:
+    # lua's line editing (linux-readline / macosx targets). liblua itself does
+    # not link it — only bin/lua does — so embedders never pull readline in.
     - name: readline
       version: ">=8.0"
       platforms: [linux, macos, freebsd, netbsd, openbsd]
@@ -51,6 +74,8 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    # Cross targets: static liblua.a only (no shared libraries there); their
+    # CMake package makes lua::lua link the static library.
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
@@ -63,15 +88,64 @@ build:
 
 package:
   files:
-    - lib/liblua*
+    - lib/liblua.a
+    - { glob: "lib/liblua.so*", platforms: [linux, freebsd, openbsd, netbsd] }
+    - lib/liblua*.dylib
+    # MSVC spellings (build.ps1): the DLL's import library, the static library
+    # and the DLL itself.
+    - lib/lua54.lib
+    - lib/lua54_static.lib
+    - bin/lua54.dll
     - lib/pkgconfig/lua*.pc
+    - lib/cmake/lua/
     - include/lua.h
     - include/luaconf.h
     - include/lualib.h
     - include/lauxlib.h
     - include/lua.hpp
-    - bin/lua*
-  cmake_packages: []
+    # The interpreter and compiler. The wasm build drops them (wasm binaries
+    # cannot run on the host); wasi keeps its .wasm-format lua/luac.
+    - { glob: "bin/lua", platforms: [linux, macos, freebsd, openbsd, netbsd, wasi, cosmo] }
+    - { glob: "bin/luac", platforms: [linux, macos, freebsd, openbsd, netbsd, wasi, cosmo] }
+    - bin/lua.exe
+    - bin/luac.exe
+  cmake_packages:
+    - { name: lua, targets: ["lua::lua", "lua::lua_static"] }
+  pkg_config:
+    - lua5.4
+    - lua
+    - lua-5.4
+    - lua54
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "Embedding: shared and static, CMake and pkg-config"
+    description: >-
+      CMake: find_package(lua 5.4 CONFIG REQUIRED) then
+      target_link_libraries(app PRIVATE lua::lua) for the shared library or
+      lua::lua_static for liblua.a (lua54_static.lib on Windows). The version
+      file follows Lua's ABI rule: any 5.4.y satisfies a 5.4 request, 5.3 and
+      5.5 do not. pkg-config: `pkg-config --cflags --libs lua5.4` links the
+      shared library; for a static link put lib/liblua.a on the link line
+      followed by `pkg-config --static --libs-only-l lua5.4` minus -llua.
+      Both the CMake package and the .pc files locate the prefix from their
+      own path, and the shared library carries no absolute paths, so the
+      prefix can be moved or unpacked anywhere.
+  - title: "Default package.path is upstream's"
+    description: >-
+      luaconf.h is left as upstream ships it, so the compiled-in
+      package.path/cpath still name /usr/local/share/lua/5.4 and
+      /usr/local/lib/lua/5.4 (Windows: paths relative to lua.exe). Baking the
+      build prefix in instead would bake a builder path. Set LUA_PATH_5_4 /
+      LUA_CPATH_5_4 (or package.path from the host program) to load Lua
+      modules from the cvcpkg prefix.
+  - title: "Cross targets are static-only"
+    platforms: [wasm, wasi, cosmo]
+    description: >-
+      wasm, wasi and cosmo have no shared libraries; those builds ship
+      liblua.a only and lua::lua links it.

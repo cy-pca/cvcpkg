@@ -49,9 +49,9 @@ build:
 
 package:
   files:
-    - lib/python3.12/site-packages/setuptools/
-    - lib/python3.12/site-packages/pkg_resources/
-    - lib/python3.12/site-packages/_distutils_hack/
-    - lib/python3.12/site-packages/setuptools-*.dist-info/
-    - Lib/site-packages/setuptools/
-    - Lib/site-packages/*.dist-info/
+    - { glob: "lib/python3.12/site-packages/setuptools/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/pkg_resources/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/_distutils_hack/", platforms: [any] }
+    - { glob: "lib/python3.12/site-packages/setuptools-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/setuptools/", platforms: [windows] }
+    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

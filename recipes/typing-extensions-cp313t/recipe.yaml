@@ -44,5 +44,5 @@ build:
 
 package:
   files:
-    - lib/python3.13t/site-packages/typing_extensions/
-    - lib/python3.13t/site-packages/*.dist-info/
+    - lib/python3.13t/site-packages/typing_extensions.py
+    - lib/python3.13t/site-packages/typing_extensions-*.dist-info/
