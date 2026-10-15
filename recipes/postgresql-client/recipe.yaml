@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: postgresql-client
   upstream_version: "18.4"
-  cvc_revision: 1
+  # cvc.2: pass the deps prefix as extra_include_dirs/extra_lib_dirs so
+  # meson finds cvcpkg's libintl on macOS and the BSDs.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

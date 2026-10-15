@@ -21,6 +21,14 @@ else
     _rpath_flags="-Wl,-rpath,\$ORIGIN"
 fi
 
+# Pango's macOS font backend is CoreText and includes <hb-coretext.h>, which
+# HarfBuzz installs only when built with its CoreText integration (off by
+# default).  CoreText is a system framework, like the SDK itself.
+_platform_opts=()
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    _platform_opts+=(-Dcoretext=enabled)
+fi
+
 cd "${CVC_SOURCE_DIR}"
 
 meson setup "${CVC_BUILD_DIR}" \
@@ -31,6 +39,7 @@ meson setup "${CVC_BUILD_DIR}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dc_link_args="${_rpath_flags}" \
     -Dcpp_link_args="${_rpath_flags}" \
+    ${_platform_opts[@]+"${_platform_opts[@]}"} \
     -Dglib=enabled \
     -Dgobject=enabled \
     -Dfreetype=enabled \

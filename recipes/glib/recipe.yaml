@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: glib
   upstream_version: "2.80.5"
-  cvc_revision: 2
+  # cvc.3: macOS links cvcpkg's gettext libintl (and its libiconv) instead of
+  # building proxy-libintl, whose libintl.8.dylib the bundle never shipped, so
+  # libglib loaded gettext's and dyld could not find g_libintl_* (qt6 rcc).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -38,9 +41,15 @@ depends:
     # libiconv.so and glib-2.0.pc references -liconv.  Filing it under `build:`
     # would strip it from the deliverable and break consumers on OpenBSD (and
     # would hide it from build.sh's ${CVC_DEPS_PREFIX}/include/iconv.h probe).
+    # macOS links it too: gettext's libintl.h and libintl are built against it.
     - name: iconv
       version: ">=1.17"
-      platforms: [openbsd]
+      platforms: [openbsd, macos]
+    # macOS libc has no gettext; without this GLib builds and links its
+    # proxy-libintl subproject, whose libintl.8.dylib it never ships.
+    - name: gettext
+      version: "^1.0"
+      platforms: [macos]
     - name: libffi
       version: "^3.4"
     - name: pcre2
