@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: geos
   upstream_version: "3.14.1"
-  cvc_revision: 1
+  # cvc.2: build.sh works on the POSIX platforms (it sourced a nonexistent
+  # _common/env-posix.sh); cmake and ninja come from cvcpkg.  Windows is
+  # unchanged apart from those declared build deps.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -31,7 +34,9 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    - cmake
+    - ninja
   runtime: []
   host_tools: []
 
