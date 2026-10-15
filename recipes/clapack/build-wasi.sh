@@ -35,7 +35,7 @@ cmake -G Ninja \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_C_FLAGS="-Wno-implicit-function-declaration" \
     -DBUILD_TESTING=OFF \
-    "${_toolchain_args[@]}"
+    ${_toolchain_args[@]+"${_toolchain_args[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 

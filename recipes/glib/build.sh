@@ -60,7 +60,7 @@ meson setup "${CVC_BUILD_DIR}" \
     --libdir=lib \
     --default-library="${_default_lib}" \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
-    "${ICONV_ARGS[@]}" \
+    ${ICONV_ARGS[@]+"${ICONV_ARGS[@]}"} \
     -Dc_link_args="${_rpath_flags}" \
     -Dcpp_link_args="${_rpath_flags}" \
     -Dtests=false \

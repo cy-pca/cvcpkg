@@ -75,7 +75,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     ${CC} -dynamiclib -o "${shared_real}" \
         -install_name "@rpath/${shared_soname}" \
         -compatibility_version "${LUA_V}" -current_version "${LUA_R}" \
-        ${LDFLAGS:-} "${lib_objs[@]}"
+        ${LDFLAGS:-} ${lib_objs[@]+"${lib_objs[@]}"}
     lua_rpath="-Wl,-rpath,@loader_path/../lib"
 else
     shared_real="liblua.so.${LUA_R}"
@@ -83,7 +83,7 @@ else
     shared_links=("liblua.so.${LUA_V}:${shared_real}" "liblua.so:liblua.so.${LUA_V}")
     # shellcheck disable=SC2086
     ${CC} -shared -o "${shared_real}" -Wl,-soname,"${shared_soname}" \
-        ${LDFLAGS:-} "${lib_objs[@]}" -lm ${dl}
+        ${LDFLAGS:-} ${lib_objs[@]+"${lib_objs[@]}"} -lm ${dl}
     lua_rpath="-Wl,-rpath,\$ORIGIN/../lib"
 fi
 

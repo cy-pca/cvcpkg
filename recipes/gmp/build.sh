@@ -58,7 +58,7 @@ echo "gmp: configure ${fat_flags[*]+${fat_flags[*]}}"
     --enable-cxx \
     --with-pic \
     ${fat_flags[@]+"${fat_flags[@]}"} \
-    "${shared_flags[@]}"
+    ${shared_flags[@]+"${shared_flags[@]}"}
 
 make -j "${CVC_JOBS}"
 make install

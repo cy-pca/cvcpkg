@@ -23,7 +23,7 @@ fi
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir="${CVC_INSTALL_DIR}/lib" \
     --disable-doc \
-    "${shared_flags[@]}"
+    ${shared_flags[@]+"${shared_flags[@]}"}
 
 make -j "${CVC_JOBS}"
 make install

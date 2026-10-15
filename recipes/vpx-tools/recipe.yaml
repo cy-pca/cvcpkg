@@ -24,13 +24,15 @@ patches: []
 
 depends:
   build:
-    - name: libvpx
+    # vpxenc/vpxdec link the static libvpx built from this same tarball, so the
+    # packaged libvpx is neither a build nor a runtime dependency.
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
-    - pkg-config
-  runtime:
-    - name: libvpx
-  host_tools: []
+    - make
+  runtime: []
+  host_tools:
+    # Windows: the MinGW-w64 gcc that libvpx's x86_64-win64-gcc target builds with (as x264).
+    - mingw-w64-gcc
 
 build:
   matrix:

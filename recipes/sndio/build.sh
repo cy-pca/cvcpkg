@@ -38,7 +38,7 @@ cd "${CVC_SOURCE_DIR}"
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --pkgconfdir="${CVC_INSTALL_DIR}/lib/pkgconfig" \
-    "${_link[@]}" "${_extra[@]}"
+    "${_link[@]}" ${_extra[@]+"${_extra[@]}"}
 
 # Build/install ONLY the client library (libsndio) — not the sndiod daemon or
 # the aucat/midicat/sndioctl tools.  Those are not part of this package and on

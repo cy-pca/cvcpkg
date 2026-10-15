@@ -46,7 +46,7 @@ cmake -G Ninja \
     -DQT_BUILD_EXAMPLES=OFF \
     -DQT_BUILD_TESTS=OFF \
     -DQT_BUILD_BENCHMARKS=OFF \
-    "${_backend_flags[@]}"
+    ${_backend_flags[@]+"${_backend_flags[@]}"}
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 

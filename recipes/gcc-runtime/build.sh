@@ -17,9 +17,18 @@ fi
 "${_gfc}" --version | head -n 1
 
 mkdir -p "${CVC_INSTALL_DIR}/lib"
+# libquadmath exists only where GCC builds it, on x86 targets.  aarch64 has no
+# __float128 runtime, so gfortran there has no libquadmath.so.0 (and
+# libgfortran does not need one); linux/arm64 failed with "gfortran has no
+# libquadmath.so.0" until it became optional.
+_copied=()
 for _soname in libgfortran.so.5 libquadmath.so.0 libgomp.so.1; do
     _found=$("${_gfc}" -print-file-name="${_soname}")
     if [[ "${_found}" != /* || ! -e "${_found}" ]]; then
+        if [[ "${_soname}" == libquadmath.so.0 ]]; then
+            echo "gcc-runtime build.sh: no libquadmath on $(uname -m); skipping it"
+            continue
+        fi
         echo "gcc-runtime build.sh: gfortran has no ${_soname} (got '${_found}')" >&2
         exit 1
     fi
@@ -33,6 +42,7 @@ for _soname in libgfortran.so.5 libquadmath.so.0 libgomp.so.1; do
     ln -sf "${_soname}" "${CVC_INSTALL_DIR}/lib/${_soname%%.so.*}.so"
     # libgfortran NEEDs libquadmath: siblings, found through $ORIGIN.
     patchelf --set-rpath '$ORIGIN' "${CVC_INSTALL_DIR}/lib/${_file}"
+    _copied+=("${CVC_INSTALL_DIR}/lib/${_file}")
 done
 
 mkdir -p "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime"
@@ -40,7 +50,7 @@ cp "${CVC_SOURCE_DIR}"/COPYING3 "${CVC_SOURCE_DIR}"/COPYING.RUNTIME \
     "${CVC_SOURCE_DIR}"/COPYING.LIB "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime/"
 
 # Each library must load on its own, from here, with nothing else on the path.
-for _so in "${CVC_INSTALL_DIR}"/lib/lib{gfortran,quadmath,gomp}.so.*.*; do
+for _so in ${_copied[@]+"${_copied[@]}"}; do
     _ldd=$(env -u LD_LIBRARY_PATH ldd "${_so}")
     echo "${_ldd}"
     if grep -q "not found" <<<"${_ldd}"; then

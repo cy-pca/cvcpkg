@@ -30,7 +30,7 @@ cmake -G Ninja \
     -DFEATURE_sql_mysql=OFF \
     -DFEATURE_sql_psql=OFF \
     -DFEATURE_system_pcre2=ON \
-    "${CMAKE_EXTRA[@]}"
+    ${CMAKE_EXTRA[@]+"${CMAKE_EXTRA[@]}"}
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 

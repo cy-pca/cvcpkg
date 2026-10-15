@@ -24,7 +24,7 @@ case "${CVC_PLATFORM}" in
 esac
 
 cd "${CVC_SOURCE_DIR}/CPP/7zip/Bundles/Alone2"
-"$MAKE" -j"${CVC_JOBS:-2}" -f makefile.gcc "${LIB2_OVERRIDE[@]}"
+"$MAKE" -j"${CVC_JOBS:-2}" -f makefile.gcc ${LIB2_OVERRIDE[@]+"${LIB2_OVERRIDE[@]}"}
 
 bin="$(find . -name '7zz' -type f 2>/dev/null | head -1)"
 if [ -z "$bin" ]; then echo "7zz binary not produced" >&2; exit 1; fi
