@@ -989,6 +989,62 @@ def build_all_cmd(
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
     push = server_cache_push and bool(server_cache) and not no_server_cache
 
+    import shutil
+    import tempfile
+
+    from cvcpkg.builder import BuildError, BuildFailure, PackError, RecipeError
+
+    pushed: set[int] = set()
+    all_recipes: dict = {}
+    arch = ""
+
+    def _push_one(ctx) -> None:
+        """Pack one built recipe exactly as pack-all does, publish it, drop its work dir.
+
+        Never the build cache's raw install tree (no manifest, scripts still
+        pointing at the build prefix): a catalog row made from it installs
+        without its dependencies.
+        """
+        pushed.add(id(ctx))
+        try:
+            if not ctx.recipe.redistributable:
+                click.echo(f"cvcpkg: not pushing -- {ctx.recipe.not_redistributable_reason}")
+                return
+            if ctx.install_dir == ctx.prefix:
+                return  # no isolated tree to pack (an unassigned/merged build)
+            ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
+            out = Path(tempfile.mkdtemp(prefix=f"cvcpkg-push-{ctx.recipe.name}-"))
+            try:
+                archive_path, _sha, _size = _pack_built(
+                    ctx,
+                    ctx_plat,
+                    ctx_arch,
+                    config,
+                    link,
+                    out,
+                    all_recipes=all_recipes,
+                    org=server_cache_org,
+                )
+                _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
+            finally:
+                shutil.rmtree(out, ignore_errors=True)
+        finally:
+            if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
+                shutil.rmtree(ctx.work_dir, ignore_errors=True)
+
+    if push:
+        from cvcpkg.builder import list_recipes, load_all_recipes
+        from cvcpkg.platform import detect_arch
+
+        arch = detect_arch()
+        all_recipes.update(
+            (r.name, r)
+            for r in (load_all_recipes(rdirs) if len(rdirs) > 1 else list_recipes(rdirs[0]))
+        )
+
+    # When pushing, each build is packed and published as soon as it finishes
+    # (on_built), so a run cut short keeps what it built, and under --keep-going
+    # one recipe that fails to pack no longer stops the rest being published.
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
@@ -1009,50 +1065,21 @@ def build_all_cmd(
         # built into its own install dir, kept until it is packed.
         per_component=push,
         cleanup_work_dirs=not push,
+        on_built=_push_one if push else None,
     )
+    failures = list(getattr(contexts, "failures", []))
     if push:
-        # Never the build cache's raw install tree (no manifest, scripts
-        # still pointing at the build prefix): a catalog row made from it
-        # installs without its dependencies.  Pack each build exactly as
-        # pack-all does and publish that.
-        import shutil
-        import tempfile
-
-        from cvcpkg.builder import list_recipes, load_all_recipes
-        from cvcpkg.platform import detect_arch
-
-        arch = detect_arch()
-        all_recipes = {
-            r.name: r
-            for r in (load_all_recipes(rdirs) if len(rdirs) > 1 else list_recipes(rdirs[0]))
-        }
+        # Anything build_all returned without handing it to on_built.
         for ctx in contexts:
+            if id(ctx) in pushed:
+                continue
             try:
-                if not ctx.recipe.redistributable:
-                    click.echo(f"cvcpkg: not pushing -- {ctx.recipe.not_redistributable_reason}")
-                    continue
-                if ctx.install_dir == ctx.prefix:
-                    continue  # no isolated tree to pack (an unassigned/merged build)
-                ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
-                out = Path(tempfile.mkdtemp(prefix=f"cvcpkg-push-{ctx.recipe.name}-"))
-                try:
-                    archive_path, _sha, _size = _pack_built(
-                        ctx,
-                        ctx_plat,
-                        ctx_arch,
-                        config,
-                        link,
-                        out,
-                        all_recipes=all_recipes,
-                        org=server_cache_org,
-                    )
-                    _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
-                finally:
-                    shutil.rmtree(out, ignore_errors=True)
-            finally:
-                if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
-                    shutil.rmtree(ctx.work_dir, ignore_errors=True)
-    failures = getattr(contexts, "failures", [])
+                _push_one(ctx)
+            except (BuildError, PackError, RecipeError) as exc:
+                if not keep_going:
+                    raise
+                click.echo(f"cvcpkg: FAILED {ctx.recipe.name} (after building): {exc}")
+                failures.append(BuildFailure(recipe_name=ctx.recipe.name, error=exc))
     if failures:
         raise SystemExit(1)
 
@@ -1378,6 +1405,80 @@ def pack_all_cmd(
             f"artifact: {', '.join(_not_applicable)}"
         )
 
+    push = server_cache_push and bool(server_cache) and not no_server_cache
+    output.mkdir(parents=True, exist_ok=True)
+
+    from cvcpkg.builder import BuildError, BuildFailure, PackError, RecipeError
+
+    packed: set[int] = set()
+
+    def _pack_one(ctx) -> None:
+        """Pack (sign, push) one built recipe, then remove its work dir."""
+        packed.add(id(ctx))
+        try:
+            if not ctx.recipe.redistributable:
+                # Built like any other recipe -- a dependent may need it in the
+                # prefix -- but never packed, so never published.
+                click.echo(f"cvcpkg: not packing -- {ctx.recipe.not_redistributable_reason}")
+                return
+            ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
+            # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
+            # mutable and full_version derives from it, so this flows into both the
+            # manifest and the archive name below.
+            override = _resolve_bump_revision(
+                ctx.recipe,
+                bump=bump,
+                cvc_revision=cvc_revision,
+                bump_scope=bump_scope,
+                server=server,
+                org=org,
+                token=token,
+                platform=ctx_plat,
+                arch=ctx_arch,
+                build_type=config,
+                link=link,
+            )
+            if override is not None:
+                if bump_write:
+                    from cvcpkg.builder import _bump_revision_in_yaml
+
+                    _bump_revision_in_yaml(ctx.recipe.recipe_dir / "recipe.yaml", override)
+                ctx.recipe.cvc_revision = override
+            archive_path, sha256, size = _pack_built(
+                ctx,
+                ctx_plat,
+                ctx_arch,
+                config,
+                link,
+                output,
+                all_recipes=all_recipes,
+                maintainer=maintainer,
+                org=org,
+                strict_globs=strict_globs,
+            )
+            click.echo(f"  {archive_path.name} ({size:,} bytes, sha256={sha256})")
+            if signing_key:
+                from cvcpkg.signing import sign_file, write_signature
+
+                sig = sign_file(archive_path, Path(signing_key))
+                sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
+                write_signature(sig, sig_path)
+                click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
+            if push:
+                _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
+        finally:
+            # Clean up the per-component work directory once the archive is
+            # made, or packing failed (build_all was called with
+            # cleanup_work_dirs=False so the caller manages lifetime).
+            if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
+                shutil.rmtree(ctx.work_dir, ignore_errors=True)
+
+    # Pack (and push) each recipe as soon as it is built rather than after the
+    # whole shard.  Packing at the end lost everything twice over: a macOS shard
+    # that reached the job's time limit had built for hours and packed nothing,
+    # and the first recipe whose packing failed (a strict package.files glob, a
+    # relocatability check) aborted the loop even under --keep-going, so every
+    # recipe after it in the shard went unpacked and unpublished.
     contexts = build_all(
         rdirs if len(rdirs) > 1 else rdirs[0],
         platform=plat,
@@ -1398,72 +1499,21 @@ def pack_all_cmd(
         server_cache_org=server_cache_org,
         work_dir_root=work_dir_root,
         cleanup_work_dirs=False,
+        on_built=_pack_one,
     )
 
-    push = server_cache_push and bool(server_cache) and not no_server_cache
-
-    output.mkdir(parents=True, exist_ok=True)
+    failures = list(getattr(contexts, "failures", []))
+    # Anything build_all returned without handing it to on_built is packed here.
     for ctx in contexts:
-        if not ctx.recipe.redistributable:
-            # Built like any other recipe -- a dependent may need it in the
-            # prefix -- but never packed, so never published.
-            click.echo(f"cvcpkg: not packing -- {ctx.recipe.not_redistributable_reason}")
-            if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
-                shutil.rmtree(ctx.work_dir, ignore_errors=True)
+        if id(ctx) in packed:
             continue
-        ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
-        # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
-        # mutable and full_version derives from it, so this flows into both the
-        # manifest and the archive name below.
-        override = _resolve_bump_revision(
-            ctx.recipe,
-            bump=bump,
-            cvc_revision=cvc_revision,
-            bump_scope=bump_scope,
-            server=server,
-            org=org,
-            token=token,
-            platform=ctx_plat,
-            arch=ctx_arch,
-            build_type=config,
-            link=link,
-        )
-        if override is not None:
-            if bump_write:
-                from cvcpkg.builder import _bump_revision_in_yaml
-
-                _bump_revision_in_yaml(ctx.recipe.recipe_dir / "recipe.yaml", override)
-            ctx.recipe.cvc_revision = override
-        archive_path, sha256, size = _pack_built(
-            ctx,
-            ctx_plat,
-            ctx_arch,
-            config,
-            link,
-            output,
-            all_recipes=all_recipes,
-            maintainer=maintainer,
-            org=org,
-            strict_globs=strict_globs,
-        )
-        click.echo(f"  {archive_path.name} ({size:,} bytes, sha256={sha256})")
-        if signing_key:
-            from cvcpkg.signing import sign_file, write_signature
-
-            sig = sign_file(archive_path, Path(signing_key))
-            sig_path = archive_path.with_suffix(archive_path.suffix + ".sig")
-            write_signature(sig, sig_path)
-            click.echo(f"  Signed: {sig_path.name} (key: {sig.key_fingerprint[:16]}...)")
-        if push:
-            _push_packed(server_cache, server_cache_token, server_cache_org, archive_path)
-
-        # Clean up per-component work directory now that the archive
-        # has been created (build_all was called with
-        # cleanup_work_dirs=False so the caller manages lifetime).
-        if not keep_build_dir and ctx.work_dir != ctx.prefix and ctx.work_dir.is_dir():
-            shutil.rmtree(ctx.work_dir, ignore_errors=True)
-
-    failures = getattr(contexts, "failures", [])
+        try:
+            _pack_one(ctx)
+        except (BuildError, PackError, RecipeError) as exc:
+            if not keep_going:
+                raise
+            click.echo(f"cvcpkg: FAILED {ctx.recipe.name} (after building): {exc}")
+            failures.append(BuildFailure(recipe_name=ctx.recipe.name, error=exc))
     if failures:
         raise SystemExit(1)
 

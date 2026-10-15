@@ -4685,6 +4685,42 @@ def _accept_server_hit(
     return True
 
 
+def _record_manifest_in_prefix(
+    recipe: Recipe,
+    install_dir: Path,
+    prefix: Path,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+) -> None:
+    """Give a recipe build_all merged into *prefix* the manifest a bundle would bring.
+
+    A bundle installed from the catalog leaves
+    ``share/libcvc-deps/<name>/manifest.yaml`` in the prefix; a recipe built and
+    merged by build_all left none.  :func:`_runtime_dep_libraries` then could
+    not tell a later recipe's runtime closure apart in a shared pack-all prefix
+    and counted every library in it: gfortran's ``lib64/libgcc_s.so.1`` failed
+    cmake and greenlet on linux/arm64 ("shipped in lib64/ but no RUNPATH entry
+    reaches it"), neither of which depends on gfortran.  Kept when *install_dir*
+    already has one (a server-cache bundle), skipped for a recipe that is never
+    packed (``redistributable: false``), which keeps the old whole-prefix
+    fallback for its dependents.
+    """
+    if not recipe.redistributable:
+        return
+    rel = Path("share") / "libcvc-deps" / recipe.name / "manifest.yaml"
+    if (install_dir / rel).is_file():
+        return
+    try:
+        manifest = generate_manifest(recipe, install_dir, platform, arch, config, link)
+        (prefix / rel).parent.mkdir(parents=True, exist_ok=True)
+        with open(prefix / rel, "w") as f:
+            yaml.dump(manifest, f, default_flow_style=False, sort_keys=False)
+    except (CvcpkgError, OSError) as exc:
+        print(f"cvcpkg: WARNING: could not record {recipe.name}'s manifest in the prefix: {exc}")
+
+
 def build_all(
     recipes_dir: Path | list[Path],
     *,
@@ -4707,6 +4743,7 @@ def build_all(
     work_dir_root: Path | None = None,
     cleanup_work_dirs: bool = True,
     build_prefix: Path | None = None,
+    on_built: Callable[[BuildContext], None] | None = None,
 ) -> list[BuildContext]:
     """Build every recipe in dependency order into a shared *prefix*.
 
@@ -4774,6 +4811,15 @@ def build_all(
     no manifest, scripts still pointing at the build prefix -- and a catalog
     row made from it installs without its dependencies.  ``pack-all`` and
     ``build-all`` ``--server-cache-push`` pack each build and publish that.
+
+    *on_built*, when given, is called with each assigned recipe's context as
+    soon as that recipe is built, so a caller can pack and publish it while
+    later recipes build: a run cut off by a timeout keeps everything it
+    finished.  A :class:`BuildError`, :class:`PackError` or
+    :class:`RecipeError` it raises is recorded as that recipe's failure when
+    *keep_going* is set (the context is then left out of the result; its
+    files are already in the prefix, so dependents still build), and
+    propagates otherwise.
 
     *no_server_cache* disables server cache lookups.  *server_cache_org*
     scopes cache queries to a specific organization.
@@ -5181,6 +5227,11 @@ def build_all(
                         _merge_tree(install_dir, _dest)
                         _rewrite_pc_prefixes(_dest)
                         _rewrite_script_prefixes(_dest)
+                        # A server-cache bundle brought its manifest; a local
+                        # cache entry is a raw install tree without one.
+                        _record_manifest_in_prefix(
+                            recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                        )
                 else:
                     cache.restore(cached_archive, _dest)
                     _rewrite_pc_prefixes(_dest)
@@ -5235,6 +5286,9 @@ def build_all(
                     _merge_tree(install_dir, _dest)
                     _rewrite_pc_prefixes(_dest)
                     _rewrite_script_prefixes(_dest)
+                    _record_manifest_in_prefix(
+                        recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                    )
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
                     cache.store(
@@ -5262,7 +5316,18 @@ def build_all(
                 )
             # Only include assigned recipes in contexts (for packaging).
             if is_assigned:
-                contexts.append(ctx)
+                if on_built is None:
+                    contexts.append(ctx)
+                else:
+                    try:
+                        on_built(ctx)
+                    except (BuildError, PackError, RecipeError) as exc:
+                        if not keep_going:
+                            raise
+                        print(f"\ncvcpkg: FAILED {recipe.name} (after building): {exc}")
+                        failures.append(BuildFailure(recipe_name=recipe.name, error=exc))
+                    else:
+                        contexts.append(ctx)
         except (BuildError, RecipeError) as exc:
             if not keep_going:
                 raise
