@@ -100,7 +100,7 @@ package:
   # From-source build linking prefix libraries: the payload is lxml/ + its
   # dist-info only (build.sh asserts no statically-vendored *.libs/ exists).
   files:
-    - lib/python3.11/site-packages/lxml/
-    - lib/python3.11/site-packages/lxml-*.dist-info/
-    - Lib/site-packages/lxml/
-    - Lib/site-packages/lxml-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/lxml/", platforms: [linux, macos] }
+    - { glob: "lib/python3.11/site-packages/lxml-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "Lib/site-packages/lxml/", platforms: [windows] }
+    - { glob: "Lib/site-packages/lxml-*.dist-info/", platforms: [windows] }

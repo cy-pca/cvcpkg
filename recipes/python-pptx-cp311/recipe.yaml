@@ -70,7 +70,7 @@ build:
 
 package:
   files:
-    - lib/python3.11/site-packages/pptx/
-    - lib/python3.11/site-packages/python_pptx-*.dist-info/
-    - Lib/site-packages/pptx/
-    - Lib/site-packages/python_pptx-*.dist-info/
+    - { glob: "lib/python3.11/site-packages/pptx/", platforms: [any] }
+    - { glob: "lib/python3.11/site-packages/python_pptx-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/pptx/", platforms: [windows] }
+    - { glob: "Lib/site-packages/python_pptx-*.dist-info/", platforms: [windows] }
