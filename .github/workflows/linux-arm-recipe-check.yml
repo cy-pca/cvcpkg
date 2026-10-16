@@ -29,7 +29,7 @@
 # changes.  It smoke-tests the tools tree and builds a small fixed set of
 # recipes, instead of adding arm64 jobs to every recipe PR.
 
-name: Linux arm64 recipe check
+name: Linux recipe check
 
 on:
   workflow_dispatch:
@@ -63,6 +63,14 @@ on:
         options:
           - catalog
           - source
+      runner:
+        description: "Runner: linux/arm64 (the default), or linux/x86_64 to reproduce a fleet failure on a glibc 2.35 host"
+        required: false
+        default: "ubuntu-22.04-arm"
+        type: choice
+        options:
+          - ubuntu-22.04-arm
+          - ubuntu-22.04
   pull_request:
     paths:
       - ".github/workflows/linux-arm-recipe-check.yml"
@@ -71,7 +79,7 @@ on:
 concurrency:
   # Every input is in the key, so variants of one recipe can run side by side
   # instead of cancelling each other.
-  group: linux-arm-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'pr' }}-${{ inputs.deps || 'catalog' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}
+  group: linux-arm-recipe-check-${{ github.ref }}-${{ inputs.recipe || 'pr' }}-${{ inputs.deps || 'catalog' }}-${{ inputs.link || 'shared' }}-${{ inputs.config || 'release' }}-${{ inputs.runner || 'ubuntu-22.04-arm' }}
   cancel-in-progress: true
 
 permissions:
@@ -122,13 +130,16 @@ jobs:
           echo "matrix=$(cat matrix.json)" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.recipe }} on linux/arm64 (${{ matrix.deps }} deps)
+    name: Build ${{ matrix.recipe }} on linux/${{ (inputs.runner == 'ubuntu-22.04') && 'x86_64' || 'arm64' }} (${{ matrix.deps }} deps)
     needs: plan
     # linux-arm-build.yml's runner: ubuntu-22.04-arm is glibc 2.35, the fleet
     # floor, and its timeout, so a recipe that passes here fits there.
-    runs-on: ubuntu-22.04-arm
+    # ubuntu-22.04 (x86_64, also glibc 2.35) reproduces what the x86_64 fleet
+    # builders see, for a failure the fleet's log does not explain.
+    runs-on: ${{ inputs.runner || 'ubuntu-22.04-arm' }}
     timeout-minutes: 300
     env:
+      CVC_ARCH: ${{ (inputs.runner == 'ubuntu-22.04') && 'x86_64' || 'arm64' }}
       # Every name a build tool on the runner image may answer to. cvcpkg
       # provides each of them, in the tools tree below or as a recipe's
       # depends.build bundle, except texinfo's makeinfo, which nothing may use.
@@ -207,12 +218,12 @@ jobs:
             esac
             # A search that fails (the server is down) fails the step here; only
             # a search that answers without $r records it as missing.
-            found=$(cvcpkg search "$r" --platform linux --arch arm64 --build-type release --link shared --limit 200 --json)
+            found=$(cvcpkg search "$r" --platform linux --arch "$CVC_ARCH" --build-type release --link shared --limit 200 --json)
             if printf '%s' "$found" \
                 | python3 -c 'import json, sys; sys.exit(not any(p["name"] == sys.argv[1] for p in json.load(sys.stdin)["packages"]))' "$r"; then
               recipes="$recipes $r"
             else
-              echo "$r has no linux/arm64 bundle"
+              echo "$r has no linux/$CVC_ARCH bundle"
               echo "$r" >> "$tree/missing"
             fi
           done
@@ -268,7 +279,7 @@ jobs:
           tree="$RUNNER_TEMP/cvcpkg-tools"
           rc=0
           for r in $(cat "$tree/missing"); do
-            echo "::error::cvcpkg has no linux/arm64 $r bundle, so $r cannot come from cvcpkg: publish one (linux-arm-build.yml with recipes=$r)"
+            echo "::error::cvcpkg has no linux/$CVC_ARCH $r bundle, so $r cannot come from cvcpkg: publish one (linux-arm-build.yml with recipes=$r)"
             rc=1
           done
           for t in $(cat "$tree/commands"); do
@@ -335,7 +346,7 @@ jobs:
               libssl*|libcrypto*) recipe=openssl ;;
               *) recipe=$name ;;
             esac
-            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/arm64 needs republishing"
+            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/$CVC_ARCH needs republishing"
             rc=1
           done
           # Not from cvcpkg: the compiler, what runs cvcpkg and the scripts, and
