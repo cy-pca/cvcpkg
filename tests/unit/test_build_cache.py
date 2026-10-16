@@ -7,6 +7,7 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 import yaml
 
 from cvcpkg.build_cache import (
@@ -817,6 +818,123 @@ class TestServerCacheProbe:
             "",
         )
         assert result is None
+
+
+class TestServerCacheVersionFallback:
+    """A chain-hash miss falls back to the published bundle of the same version."""
+
+    def _serve(self, packages):
+        import json
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        paths = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                paths.append(self.path)
+                if self.path.startswith("/v1/cache/status"):
+                    body = {"hit": False}
+                else:
+                    body = {"total": len(packages), "packages": packages}
+                payload = json.dumps(body).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        t = Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        return server, paths
+
+    def _probe(self, server, **kw):
+        from cvcpkg.builder import _server_cache_probe
+
+        port = server.server_address[1]
+        args = dict(platform="linux", arch="arm64", build_type="release", link="shared")
+        args.update(kw)
+        return _server_cache_probe(
+            f"http://127.0.0.1:{port}",
+            "",
+            "curl",
+            "deadbeef",
+            args["platform"],
+            args["arch"],
+            args["build_type"],
+            args["link"],
+            "",
+            version=args.get("version", "8.13.0+cvc.9"),
+        )
+
+    def _row(self, **kw):
+        row = {
+            "name": "curl",
+            "version": "8.13.0+cvc.9",
+            "platform": "linux",
+            "arch": "arm64",
+            "build_type": "release",
+            "link": "shared",
+            "sha256": "b" * 64,
+            "archive_url": "/v1/download/curl-8.13.0+cvc.9-linux-arm64-release-shared.tar.zst",
+            "yanked": False,
+        }
+        row.update(kw)
+        return row
+
+    def test_published_version_is_a_hit(self):
+        server, paths = self._serve([self._row(arch="x86_64"), self._row()])
+        try:
+            got = self._probe(server)
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert got is not None and got["via"] == "version"
+        assert got["archive_url"].endswith("linux-arm64-release-shared.tar.zst")
+        assert got["sha256"] == "b" * 64
+        assert paths[0].startswith("/v1/cache/status") and paths[1] == "/v1/packages/curl"
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"version": "8.13.0+cvc.8"},
+            {"yanked": True},
+            {"arch": "x86_64"},
+            {"link": "static"},
+        ],
+    )
+    def test_anything_else_is_a_miss(self, row):
+        server, _ = self._serve([self._row(**row)])
+        try:
+            assert self._probe(server) is None
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_no_version_no_fallback(self):
+        from cvcpkg.builder import _server_cache_probe
+
+        server, paths = self._serve([self._row()])
+        try:
+            port = server.server_address[1]
+            got = _server_cache_probe(
+                f"http://127.0.0.1:{port}",
+                "",
+                "curl",
+                "deadbeef",
+                "linux",
+                "arm64",
+                "release",
+                "shared",
+                "",
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+        assert got is None and len(paths) == 1
 
 
 class TestServerCacheDownload:

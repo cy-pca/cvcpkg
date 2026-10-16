@@ -4780,11 +4780,23 @@ def _server_cache_probe(
     build_type: str,
     link: str,
     org: str,
+    *,
+    version: str = "",
 ) -> dict[str, Any] | None:
     """Query ``GET /v1/cache/status`` on the remote server.
 
     Returns the decoded JSON dict on cache hit, ``None`` on miss or
     any network error.
+
+    With *version*, a chain-hash miss falls back to the published bundle of
+    exactly that version for the same platform, arch, build type and link
+    (``"via": "version"`` in the result).  A published version is immutable
+    and publishing skips one that exists, so rebuilding it can only waste the
+    build -- and the chain hash covers every ``_common/`` script, so one
+    edited helper made every recipe miss: the 2026-10-16 linux/arm64 shards
+    rebuilt about 330 recipes each, 310-330 of them already published, and
+    since those versions were never pushed again their new chain hashes never
+    reached the cache, so the next run would rebuild them all again.
     """
     import json
     import urllib.error
@@ -4813,6 +4825,66 @@ def _server_cache_probe(
                 return data
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         pass
+    if version:
+        return _server_published_probe(
+            base_url, token, name, version, platform, arch, build_type, link, org
+        )
+    return None
+
+
+def _server_published_probe(
+    base_url: str,
+    token: str,
+    name: str,
+    version: str,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    org: str,
+) -> dict[str, Any] | None:
+    """The non-yanked published bundle of *name* == *version* for this tuple, or None.
+
+    Shaped like a ``/v1/cache/status`` hit (``archive_url``, ``sha256``), with
+    ``"via": "version"``.  See :func:`_server_cache_probe`.
+    """
+    import json
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = f"{base_url.rstrip('/')}/v1/packages/{urllib.parse.quote(name)}"
+    if org:
+        url += "?" + urllib.parse.urlencode({"org": org})
+    req = urllib.request.Request(url, method="GET")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, json.JSONDecodeError):
+        return None
+    rows = data.get("packages", []) if isinstance(data, dict) else []
+    for row in rows:
+        if (
+            isinstance(row, dict)
+            and row.get("name", name) == name
+            and row.get("version") == version
+            and row.get("platform") == platform
+            and row.get("arch") == arch
+            and row.get("build_type", build_type) == build_type
+            and row.get("link", link) == link
+            and not row.get("yanked")
+            and row.get("archive_url")
+        ):
+            return {
+                "hit": True,
+                "via": "version",
+                "name": name,
+                "version": version,
+                "archive_url": row["archive_url"],
+                "sha256": row.get("sha256", ""),
+            }
     return None
 
 
@@ -5189,6 +5261,7 @@ def build_all(
                     config,
                     link,
                     server_cache_org,
+                    version=ht_recipe.full_version,
                 )
                 if probe is not None:
                     dl_url = probe.get("archive_url", "")
@@ -5356,6 +5429,7 @@ def build_all(
                 config,
                 link,
                 server_cache_org,
+                version=recipe.full_version,
             )
             if probe is not None:
                 dl_url = probe.get("archive_url", "")
@@ -5388,7 +5462,10 @@ def build_all(
                     ):
                         cached_archive = result
                         server_hit = True
-                        print(f"  <- server cache hit ({recipe_chain_hash[:12]}...)")
+                        if probe.get("via") == "version":
+                            print(f"  <- published {recipe.name}=={recipe.full_version} (server)")
+                        else:
+                            print(f"  <- server cache hit ({recipe_chain_hash[:12]}...)")
 
         # Build-closure recipes stage into the build prefix; everything else
         # into the deliverable prefix.
