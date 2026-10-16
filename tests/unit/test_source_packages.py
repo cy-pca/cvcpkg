@@ -11,6 +11,7 @@ builder that publishes the noarch source package ever contacts upstream.
 from __future__ import annotations
 
 import importlib.util
+import os
 import textwrap
 from pathlib import Path
 
@@ -64,6 +65,27 @@ class TestFetch:
         # A copy: writing to it leaves the staged tree alone.
         (got / "foo.o").write_text("x")
         assert not (staged / "foo.o").exists()
+
+    def test_the_copy_has_one_mtime_so_autotools_output_is_not_stale(self, tmp_path):
+        # Staged by a plain `cp -R`: configure.ac came out newer than the
+        # aclocal.m4 generated from it, and make tried to rerun aclocal-1.16.
+        r = _recipe(tmp_path, {"type": "package", "package": "libfoo-src"}, ["libfoo-src"])
+        staged = tmp_path / "p" / "src" / "libfoo-src"
+        (staged / "m4").mkdir(parents=True)
+        for rel, t in (("aclocal.m4", 1_000), ("configure", 1_000), ("configure.ac", 2_000)):
+            (staged / rel).write_text("x\n")
+            os.utime(staged / rel, (t, t))
+        (staged / "m4" / "libtool.m4").write_text("x\n")
+        work = tmp_path / "work"
+        work.mkdir()
+
+        got = fetch_source(r, work, source_prefixes=(tmp_path / "p",))
+
+        mtimes = {p.stat().st_mtime for p in got.rglob("*")}
+        assert len(mtimes) == 1, mtimes
+        assert (got / "aclocal.m4").stat().st_mtime >= (got / "configure.ac").stat().st_mtime
+        # The staged tree itself is left as it was.
+        assert (staged / "configure.ac").stat().st_mtime == 2_000
 
     def test_not_staged_is_an_error_naming_where_it_looked(self, tmp_path):
         r = _recipe(tmp_path, {"type": "package", "package": "libfoo-src"}, ["libfoo-src"])

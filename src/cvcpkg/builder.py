@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import zipfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -1110,6 +1111,34 @@ def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str
 SOURCE_PACKAGES_CAPABILITY = "source_packages"
 
 
+def _settle_mtimes(root: Path) -> None:
+    """Give every file, directory and symlink under *root* one modification time.
+
+    A source package's tree reaches a build without upstream's timestamps:
+    staging copied it file by file (``cp -R`` in ``_common/stage-source.sh``
+    before it kept them), so files ended up newer or older than one another in
+    copy order.  An autotools tree then looks out of date -- ``configure.ac``
+    newer than ``aclocal.m4`` -- and ``make`` tries to regenerate it, which
+    needs the exact automake that made the release:
+    ``aclocal-1.16: command not found`` building pthread-stubs from
+    pthread-stubs-src.  With one time throughout, no prerequisite is newer
+    than its target, so the generated files are used as shipped, as they are
+    when the release tarball is unpacked; a recipe patch applied after this
+    still makes its files newer, as it should.
+    """
+    now = time.time()
+    follow = os.utime in os.supports_follow_symlinks
+    for dirpath, dirnames, filenames in os.walk(root):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                if follow:
+                    os.utime(path, (now, now), follow_symlinks=False)
+                continue
+            os.utime(path, (now, now))
+    os.utime(root, (now, now))
+
+
 def _fetch_source_package(source: SourceSpec, dest: Path, prefixes: Sequence[Path | None]) -> Path:
     """Copy the staged tree of the source recipe *source.package* to ``dest/src``.
 
@@ -1134,6 +1163,7 @@ def _fetch_source_package(source: SourceSpec, dest: Path, prefixes: Sequence[Pat
             if source_dir.exists():
                 shutil.rmtree(source_dir)
             shutil.copytree(staged, source_dir, symlinks=True)
+            _settle_mtimes(source_dir)
             return source_dir
     raise RecipeError(
         f"source package {name} is not staged (looked in {', '.join(searched) or 'no prefix'}); "
