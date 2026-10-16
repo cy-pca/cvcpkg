@@ -129,7 +129,9 @@ class TestGenerator:
         rd = recipes / "libxau"
         rd.mkdir(parents=True)
         (rd / "build.sh").write_text("#!/bin/sh\n")
-        (rd / "recipe.yaml").write_text(textwrap.dedent("""\
+        (rd / "recipe.yaml").write_text(
+            textwrap.dedent(
+                """\
                 schema_version: 1
                 recipe:
                   name: libxau
@@ -160,7 +162,9 @@ class TestGenerator:
                 package:
                   files:
                     - lib/libXau*
-                """))
+                """
+            )
+        )
         assert self._load().main(["--recipes-dir", str(recipes), "libxau"]) == 0
 
         new = yaml.safe_load((rd / "recipe.yaml").read_text())
