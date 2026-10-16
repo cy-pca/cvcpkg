@@ -26,7 +26,12 @@ recipe:
   # Bumped 8 -> 9: NUM_THREADS=64 on every platform (build.sh, build.ps1).
   # Unset, OpenBLAS sized its thread limit from the builder's cores: +cvc.8's
   # linux bundle reported MAX_THREADS=4, so no machine got more than 4 threads.
-  cvc_revision: 9
+  # Bumped 9 -> 10: link the macOS x86_64 dylib with -ld_classic (build.sh).
+  # Apple's ld-prime mis-links OpenBLAS's x86_64 assembly: +cvc.9's Intel
+  # dylib segfaulted in the first cblas_dgemm under every kernel, so
+  # numpy-cp3XX died with SIGBUS in its matmul check on Intel Macs. build.sh
+  # now also runs a dgemm through the installed library on macOS.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

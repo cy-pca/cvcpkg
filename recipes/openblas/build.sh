@@ -17,6 +17,25 @@ case "${CVC_PLATFORM}" in
         # clang ships no libomp: -fopenmp is a hard configure failure there, not
         # a slower build. OpenBLAS still threads through its own pthread backend.
         OPENBLAS_EXTRA+=(-DNOFORTRAN=ON -DUSE_OPENMP=OFF -DC_LAPACK=ON)
+        # Intel Macs: link with Apple's classic linker. ld-prime (the default
+        # since Xcode 15) mis-links OpenBLAS's x86_64 assembly kernels: +cvc.9's
+        # Intel dylib segfaulted in its first cblas_dgemm under every
+        # DYNAMIC_ARCH kernel (Haswell, Zen, Sandybridge, Nehalem, Prescott),
+        # and numpy died with SIGBUS in its matmul check. The same build linked
+        # with -ld_classic passes under Haswell, Sandybridge, Nehalem and
+        # Prescott. Apple has deprecated the flag; if a later Xcode drops it,
+        # this links with the default and the dgemm check at the end of this
+        # script fails the build instead of publishing a dylib that crashes.
+        if [ "$(uname -m)" = "x86_64" ]; then
+            _probe="$(mktemp -d)"
+            printf 'int main(void) { return 0; }\n' > "${_probe}/t.c"
+            if "${CC:-cc}" -Wl,-ld_classic -o "${_probe}/t" "${_probe}/t.c" >/dev/null 2>&1; then
+                OPENBLAS_EXTRA+=("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-ld_classic")
+            else
+                echo "openblas build.sh: the linker has no -ld_classic; using its default" >&2
+            fi
+            rm -rf "${_probe}"
+        fi
         ;;
     *)
         # Fortran LAPACK, compiled by cvcpkg's gfortran (a build dependency,
@@ -57,3 +76,26 @@ cvc_cmake_build \
     -DTARGET=GENERIC \
     -DNUM_THREADS=64 \
     ${OPENBLAS_EXTRA[@]+"${OPENBLAS_EXTRA[@]}"}
+
+# macOS: one dgemm through the installed library, the check that caught the
+# Intel mis-link above (a crash, not a wrong answer, so any size shows it).
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+    _t="$(mktemp -d)"
+    cat > "${_t}/t.c" <<'CEOF'
+#include <stdio.h>
+#include <cblas.h>
+int main(void) {
+    static double a[64 * 64], c[64 * 64];
+    double s = 0;
+    for (int i = 0; i < 64 * 64; i++) a[i] = (double)(i % 7);
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans, 64, 64, 64, 1.0, a, 64, a, 64, 0.0, c, 64);
+    for (int i = 0; i < 64 * 64; i++) s += c[i];
+    printf("openblas dgemm check (%s): sum %.0f\n", openblas_get_corename(), s);
+    return s == 2358405.0 ? 0 : 1;
+}
+CEOF
+    "${CC:-cc}" -o "${_t}/t" "${_t}/t.c" -I"${CVC_INSTALL_DIR}/include" -I"${CVC_INSTALL_DIR}/include/openblas" \
+        -L"${CVC_INSTALL_DIR}/lib" -lopenblas -Wl,-rpath,"${CVC_INSTALL_DIR}/lib"
+    "${_t}/t" || { echo "openblas build.sh: cblas_dgemm through the built library failed (rc=$?)" >&2; exit 1; }
+    rm -rf "${_t}"
+fi
