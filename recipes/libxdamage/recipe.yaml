@@ -14,17 +14,15 @@ recipe:
     requires it.
 
 source:
-  # Built from the source package libxdamage-src, which pins the upstream tarball
-  # (https://xorg.freedesktop.org/releases/individual/lib/libXdamage-1.1.6.tar.xz).
-  type: package
-  package: libxdamage-src
+  type: tarball
+  url: https://xorg.freedesktop.org/releases/individual/lib/libXdamage-1.1.6.tar.xz
+  sha256: "52733c1f5262fca35f64e7d5060c6fcd81a880ba8e1e65c9621cf0727afb5d11"
+  strip_components: 1
 
 patches: []
 
 depends:
   build:
-    - name: libxdamage-src
-      version: "==1.1.6"
     - pkg-config
     # damageproto and fixesproto.
     - name: xorgproto
