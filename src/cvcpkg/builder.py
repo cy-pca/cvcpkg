@@ -229,6 +229,8 @@ class MatrixEntry:
     script: str
     env: dict[str, str] = field(default_factory=dict)
     host_platform: str | None = None
+    # Host arches this entry builds on (None: any).  See _arch_reason.
+    arch: list[str] | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> MatrixEntry:
@@ -237,6 +239,7 @@ class MatrixEntry:
             script=d["script"],
             env=d.get("env", {}),
             host_platform=d.get("host_platform"),
+            arch=list(d["arch"]) if d.get("arch") else None,
         )
 
 
@@ -947,10 +950,25 @@ def _not_applicable(recipes: Sequence[Recipe], platform: str, arch: str) -> dict
     pillow-cp311 (x86_64/Windows/macOS-arm64 wheels only) was skipped, and
     weasyprint-cp311, which needs it, built and then failed its own import
     check ("No module named 'PIL'").
+
+    Likewise a recipe whose matrix entries for *platform* all list host
+    arches (``arch: [x86_64]``) none of which is *arch* (:func:`_arch_hosts`):
+    haiku-image builds an x86_64 cross-toolchain and image, and failed on the
+    linux/arm64 runners.
     """
     tag = f"{platform}-{arch}"
-    root = {r.name: r.name for r in recipes if not _artifacts_cover(r, platform, arch)}
-    reasons = {name: f"no {tag} artifact" for name in root}
+    phrase: dict[str, str] = {}
+    reasons: dict[str, str] = {}
+    for r in recipes:
+        if not _artifacts_cover(r, platform, arch):
+            phrase[r.name] = f"has no {tag} artifact"
+            reasons[r.name] = f"no {tag} artifact"
+            continue
+        hosts = _arch_hosts(r, platform, arch)
+        if hosts:
+            phrase[r.name] = f"is built on {hosts} hosts only"
+            reasons[r.name] = f"no {tag} build ({hosts} hosts only)"
+    root = {name: name for name in reasons}
     changed = True
     while changed:
         changed = False
@@ -962,10 +980,25 @@ def _not_applicable(recipes: Sequence[Recipe], platform: str, arch: str) -> dict
                 if dep in root:
                     root[r.name] = root[dep]
                     via = "" if dep == root[dep] else f" (through {dep})"
-                    reasons[r.name] = f"depends on {root[dep]}, which has no {tag} artifact{via}"
+                    reasons[r.name] = f"depends on {root[dep]}, which {phrase[root[dep]]}{via}"
                     changed = True
                     break
     return reasons
+
+
+def _arch_hosts(recipe: Recipe, platform: str, arch: str) -> str:
+    """The host arches *recipe* is limited to on *platform*, when *arch* is not one.
+
+    "" when it can be built here: no host *arch* given, no matrix entry for the
+    platform, or an entry without an ``arch`` list (any host).
+    """
+    entries = [m for m in recipe.build_matrix if m.platform in (platform, "any")]
+    if not arch or not entries or any(not m.arch for m in entries):
+        return ""
+    allowed = {a for m in entries for a in (m.arch or [])}
+    if any(a in allowed for a in _ARCH_ALIASES.get(arch, (arch,))):
+        return ""
+    return "/".join(sorted(allowed))
 
 
 def _resolve_artifact(source: SourceSpec, platform: str, arch: str) -> tuple[str, str, str]:

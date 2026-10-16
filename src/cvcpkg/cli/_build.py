@@ -1432,7 +1432,10 @@ def pack_all_cmd(
     if _direct:
         click.echo(
             f"Skipping {len(_direct)} recipe(s) with no {plat}-{arch} "
-            f"artifact: {', '.join(_direct)}"
+            f"artifact or build: "
+            + ", ".join(
+                n if _skip[n].endswith(" artifact") else f"{n} ({_skip[n]})" for n in _direct
+            )
         )
     if _dependents:
         click.echo(
