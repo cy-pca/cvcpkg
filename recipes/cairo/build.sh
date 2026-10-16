@@ -40,15 +40,15 @@ MESON_OPTS=(
     -Dsymbol-lookup=disabled
 )
 
+# The Xlib surface (cairo-xlib, cairo-xlib-xrender) on Linux and the BSDs,
+# from cvcpkg's libx11/libxext/libxrender: gtk4's X11 backend requires it.
+# No XCB surface: nothing in the catalog needs cairo-xcb.
 case "${CVC_PLATFORM}" in
-    linux)
-        MESON_OPTS+=( -Dxcb=disabled -Dxlib=disabled )
-        ;;
     macos)
         MESON_OPTS+=( -Dquartz=enabled -Dxcb=disabled -Dxlib=disabled )
         ;;
     *)
-        MESON_OPTS+=( -Dxcb=disabled -Dxlib=disabled )
+        MESON_OPTS+=( -Dxcb=disabled -Dxlib=enabled )
         ;;
 esac
 

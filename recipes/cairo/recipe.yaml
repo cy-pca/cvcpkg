@@ -8,7 +8,11 @@ recipe:
   # flagged cairo as having no windows build.  The packaged file set changes
   # (import libs in lib/, runtime DLLs in bin/), so this needs a revision
   # rather than a silent republish at the same one.
-  cvc_revision: 2
+  # cvc.3: the Xlib surface on Linux and the BSDs (-Dxlib=enabled), with
+  # libx11/libxext/libxrender as runtime deps.  gtk4's X11 backend requires
+  # cairo-xlib, and stopped at configure with 'Dependency "cairo-xlib" not
+  # found' once its GStreamer auto-detection was turned off.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -46,6 +50,13 @@ depends:
       version: "^2.80"
     - name: libpng
       version: "^1.6"
+    # The Xlib surface (build.sh: -Dxlib=enabled), which gtk4's X11 backend needs.
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrender
+      platforms: [linux, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:
@@ -92,6 +103,9 @@ package:
     - cairo-ft
     - cairo-pdf
     - cairo-svg
+    # Linux and the BSDs.
+    - cairo-xlib
+    - cairo-xlib-xrender
     # Windows-only backends, enabled automatically by upstream's host check.
     - cairo-win32
     - cairo-win32-font
