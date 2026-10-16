@@ -135,18 +135,14 @@ build:
 
 package:
   files:
+    # GTK 4 has no separate libgdk-4 or gdk-4.pc (GDK is part of libgtk-4), and
+    # build.sh disables introspection, so there are no .typelib or .gir files.
     - lib/libgtk-4*
-    - lib/libgdk-4*
     - lib/pkgconfig/gtk4*.pc
-    - lib/pkgconfig/gdk-4*.pc
     - lib/pkgconfig/gtk4-unix-print*.pc
-    - lib/girepository-1.0/Gtk-4*.typelib
-    - lib/girepository-1.0/Gdk-4*.typelib
     - include/gtk-4.0/
     - share/gtk-4.0/
     - share/glib-2.0/schemas/org.gtk.*.xml
-    - share/gir-1.0/Gtk-4*.gir
-    - share/gir-1.0/Gdk-4*.gir
     - bin/gtk4-*
   cmake_packages: []
   pkg_config:
