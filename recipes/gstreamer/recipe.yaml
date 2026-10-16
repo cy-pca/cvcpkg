@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: gstreamer
   upstream_version: "1.24.13"
-  cvc_revision: 2
+  # cvc.3: the libraries gstreamer links on linux are declared runtime deps
+  # (see depends.runtime); cvc.2 named only glib.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,6 +45,28 @@ depends:
   runtime:
     - name: glib
       version: "^2.80"
+    # What the linux build links (NEEDED in the published linux-x86_64 bundle)
+    # but cvc.2 never declared, so it worked only where a shared prefix happened
+    # to hold them.  Consumers broke without them: gstreamer-allocators-1.0.pc
+    # Requires libdrm, so qtmultimedia's configure did not find GStreamer at all
+    # ("No media backend found"), and linux/arm64's pack gate reported 901
+    # unreachable loader paths.  libxcb comes with libx11.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+    - name: libxfixes
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libdrm
+      platforms: [linux]
+    - name: libpng
+      platforms: [linux]
+    - name: libxml2
+      platforms: [linux]
   host_tools: []
 
 build:
