@@ -9,6 +9,9 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
+  # The Windows build now writes libpng.pc/libpng16.pc (CMake installs none for
+  # MSVC; freetype2.pc requires libpng).  No bump: Windows has no cvc.4 or
+  # cvc.5 bundle, and no other platform's files change.
   cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -92,7 +95,9 @@ package:
     - lib/cmake/PNG/
     - include/png*.h
     - include/libpng16/
-    - bin/libpng*-config
+    # libpng-config is a shell script; MSVC builds do not install it.
+    - glob: bin/libpng*-config
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo]
     # bin/pngfix and bin/png-fix-itxt are not built (PNG_TOOLS is off).
   cmake_packages:
     - { name: PNG, targets: ["PNG::PNG"] }
