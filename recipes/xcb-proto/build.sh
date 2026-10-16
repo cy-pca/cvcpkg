@@ -15,6 +15,12 @@ _link=(--enable-shared --disable-static)
 [[ "${CVC_LINK:-shared}" == "static" ]] && _link=(--disable-shared --enable-static)
 
 cd "${CVC_SOURCE_DIR}"
+# The declared python311, not the first `python` on PATH: AM_PATH_PYTHON
+# derives pythondir (where xcbgen goes, and what xcb-proto.pc tells libxcb)
+# from the interpreter it finds, and an Ubuntu builder's system Python put it
+# under local/lib/python3.10/dist-packages.
+PYTHON="$(command -v python3.11)" || { echo "python3.11 (python311) is required" >&2; exit 1; }
+export PYTHON
 ./configure --prefix="${CVC_INSTALL_DIR}" "${_link[@]}"
 make -j "${CVC_JOBS}"
 make install

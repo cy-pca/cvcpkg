@@ -34,9 +34,9 @@ depends:
 
 package:
   files:
-    - lib/
-    - include/
-    - share/
+    # pthread-stubs 0.5 installs only its pkg-config file (libc provides the
+    # pthread functions it used to stub).
+    - lib/pkgconfig/pthread-stubs.pc
 
 build:
   matrix:

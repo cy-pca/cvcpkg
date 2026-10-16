@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: xcb-proto
   upstream_version: "1.17.0"
-  cvc_revision: 2
+  # cvc.3: xcbgen installs under lib/python3.11/site-packages, from the declared
+  # python311 (build.sh sets PYTHON).  configure's AM_PATH_PYTHON took whatever
+  # `python` came first on PATH, so cvc.2's linux bundle carried it under
+  # local/lib/python3.10/dist-packages (an Ubuntu builder's system Python), and
+  # package.files' lib/ and include/ matched nothing.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -31,9 +36,10 @@ depends:
 
 package:
   files:
-    - lib/
-    - include/
-    - share/
+    # libxcb's code generator, found through xcb-proto.pc's pythondir.
+    - lib/python3.11/site-packages/xcbgen/
+    - share/xcb/
+    - share/pkgconfig/xcb-proto.pc
 
 build:
   matrix:

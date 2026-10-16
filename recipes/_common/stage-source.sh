@@ -45,15 +45,19 @@ cvc_stage_source() {
   rm -rf "${dest}"
   mkdir -p "${dest}"
 
+  # cp -p keeps upstream's timestamps.  Plain cp -R gave every file the time
+  # it was copied, so an autotools tree looked out of date (configure.ac newer
+  # than aclocal.m4) and make tried to regenerate it; the builder now also
+  # gives a source package's copy one time throughout (_settle_mtimes).
   if [ "$#" -eq 0 ]; then
     # Copy the whole tree (contents, not the parent dir itself).
-    cp -R "${CVC_SOURCE_DIR}/." "${dest}/"
+    cp -pR "${CVC_SOURCE_DIR}/." "${dest}/"
   else
     local item
     for item in "$@"; do
       if [ -e "${CVC_SOURCE_DIR}/${item}" ]; then
         mkdir -p "${dest}/$(dirname "${item}")"
-        cp -R "${CVC_SOURCE_DIR}/${item}" "${dest}/${item}"
+        cp -pR "${CVC_SOURCE_DIR}/${item}" "${dest}/${item}"
       else
         echo "cvc_stage_source: warning: '${item}' not found under CVC_SOURCE_DIR" >&2
       fi

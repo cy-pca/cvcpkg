@@ -35,7 +35,6 @@ package:
   files:
     - lib/
     - include/
-    - share/
 
 build:
   matrix:
