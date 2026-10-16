@@ -110,9 +110,10 @@ static void *big(size_t n, const char *what) {
 }
 void *operator new(size_t n) { return big(n, "operator-new"); }
 void *operator new[](size_t n) { return big(n, "operator-new[]"); }
-extern "C" [[noreturn]] void __cxa_throw(void *o, std::type_info *t, void (*d)(void *)) {
-    typedef void (*real_t)(void *, std::type_info *, void (*)(void *));
+extern "C" [[noreturn]] void __cxa_throw(void *o, void *tv, void (*d)(void *)) {
+    typedef void (*real_t)(void *, void *, void (*)(void *));
     static real_t real = (real_t)dlsym(RTLD_NEXT, "__cxa_throw");
+    const std::type_info *t = static_cast<const std::type_info *>(tv);
     if (t && strstr(t->name(), "bad_alloc")) report(t->name(), 0);
     real(o, t, d);
     __builtin_unreachable();
