@@ -72,9 +72,35 @@ for t in soffice libreoffice; do
 done
 rm -rf "${W}/debs" "${W}/root"
 
+# DT_RPATH, not TDF's DT_RUNPATH: a DT_RPATH is searched before
+# LD_LIBRARY_PATH, a DT_RUNPATH after it. LibreOffice bundles libraries that
+# cvcpkg also ships -- above all libpython3.13.so.1.0, for its own Python
+# 3.13.15 -- and cvcpkg's activate script, like its build environment, puts the
+# prefix's lib/ on LD_LIBRARY_PATH. With TDF's RUNPATH, pyuno loaded the
+# prefix's libpython (cvcpkg's python313) into LibreOffice's Python, and every
+# conversion died with std::bad_alloc thrown from pyuno while Writer started
+# (the 2026-10-15 fleet populate and GitHub's x86_64 runners; it converted on
+# catx-03, where no libpython was on LD_LIBRARY_PATH). Each object keeps its
+# own search path, so LibreOffice's bundled libraries always come from its
+# tree; the ones it does not bundle (cairo, the X11 helpers) still come from
+# the prefix, through the entries cvcpkg's pack pass appends (and it keeps a
+# DT_RPATH a DT_RPATH).
+PATCHELF="$(command -v patchelf || true)"
+[ -n "${PATCHELF}" ] || { echo "patchelf is required (depends.build)" >&2; exit 1; }
+n=0
+while IFS= read -r -d '' f; do
+    rp="$("${PATCHELF}" --print-rpath "${f}" 2>/dev/null)" || continue
+    [ -n "${rp}" ] || continue
+    "${PATCHELF}" --force-rpath --set-rpath "${rp}" "${f}"
+    n=$((n + 1))
+done < <(find "${CVC_INSTALL_DIR}/lib/libreoffice" -type f \( -name '*.so*' -o -perm -u=x \) -print0)
+echo "DT_RPATH kept on ${n} objects"
+
 # Prove it: a headless conversion with a throwaway profile. The runtime deps
 # (cairo, the X11 helpers, fontconfig) are in the deps prefix during the build;
-# once installed, cvcpkg's pack pass gives the binaries a RUNPATH to them.
+# once installed, cvcpkg's pack pass gives the binaries a search path to them.
+# The deps prefix also holds cvcpkg's libpython3.13 (python3, a build
+# dependency), so this conversion fails if the DT_RPATH above did not take.
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 T="${W}/smoke"
 rm -rf "${T}" && mkdir -p "${T}"

@@ -1580,6 +1580,21 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
 _ELF_RPATH_PLATFORMS = frozenset({"linux", "freebsd", "netbsd", "haiku"})
 
 
+def _uses_dt_rpath(obj: Path) -> bool:
+    """True when ELF object *obj* has a DT_RPATH (and no DT_RUNPATH).
+
+    ``patchelf --set-rpath`` turns a DT_RPATH into a DT_RUNPATH unless it is
+    given ``--force-rpath``, and the two differ in what wins: DT_RPATH is
+    searched before ``LD_LIBRARY_PATH``, DT_RUNPATH after it.  A prebuilt tree
+    that relies on that order has to keep it: recipes/libreoffice makes its
+    objects DT_RPATH so that LibreOffice's bundled libpython3.13 is not
+    replaced by a prefix's (cvcpkg's activate script puts the prefix's lib/ on
+    ``LD_LIBRARY_PATH``), which made soffice throw std::bad_alloc in pyuno.
+    """
+    link = _linkage.read_linkage(obj)
+    return bool(link is not None and link.format == "elf" and link.dt_rpath)
+
+
 def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
     """Prepend ``$ORIGIN`` to the RPATH of shared libraries in *install_dir*.
 
@@ -1601,7 +1616,8 @@ def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
     link, so the bundled ``libscipy_openblas*.so`` became unreachable and
     ``import numpy`` failed with "cannot open shared object file".  Absolute
     (build-temp) RPATH entries are still dropped — only relocatable
-    ``$ORIGIN``-relative ones are kept.
+    ``$ORIGIN``-relative ones are kept.  A DT_RPATH stays a DT_RPATH
+    (:func:`_uses_dt_rpath`).
     """
     if patchelf is None:
         patchelf = shutil.which("patchelf")
@@ -1622,10 +1638,10 @@ def _patch_elf_rpath(install_dir: Path, patchelf: str | None = None) -> None:
         # (re-added first) and any absolute build-temp paths.
         kept = [e for e in existing.split(":") if e.startswith("$ORIGIN") and e != "$ORIGIN"]
         new_rpath = ":".join(["$ORIGIN", *kept])
-        subprocess.run(
-            [patchelf, "--set-rpath", new_rpath, str(so)],
-            capture_output=True,
-        )
+        cmd = [patchelf, "--set-rpath", new_rpath]
+        if _uses_dt_rpath(so):
+            cmd.append("--force-rpath")
+        subprocess.run([*cmd, str(so)], capture_output=True)
 
 
 def _patch_elf_rpath_absolute(
@@ -1691,10 +1707,10 @@ def _patch_elf_rpath_absolute(
             and e.startswith(prefix_str)
             and Path(e).is_dir()
         ]
-        result = subprocess.run(
-            [patchelf, "--set-rpath", ":".join([*base, *kept]), str(obj)],
-            capture_output=True,
-        )
+        cmd = [patchelf, "--set-rpath", ":".join([*base, *kept])]
+        if _uses_dt_rpath(obj):
+            cmd.append("--force-rpath")
+        result = subprocess.run([*cmd, str(obj)], capture_output=True)
         if result.returncode == 0:
             patched += 1
     return patched
