@@ -65,6 +65,22 @@ if [ -n "${CVC_DEPS_PREFIX:-}" ] && { [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" 
     _link_flags="-L${CVC_DEPS_PREFIX}/lib ${_rpath_flags}"
 fi
 
+# FreeBSD and OpenBSD have no getxattr(2) (FreeBSD's extended attributes are
+# extattr_*), and GLib's xattr option defaults to on: on the OpenBSD builder
+# meson stopped with "No getxattr implementation found in C library or
+# libxattr".  GLib then simply has no xattr support in GFile.
+#
+# FreeBSD defines `environ` in the executable's startup code (crt1.o), not in
+# libc.so, so libglib-2.0.so has to leave it undefined; meson's default
+# b_lundef links shared libraries with --no-undefined and failed with
+# "undefined symbol: environ" (gspawn.c, genviron.c).  FreeBSD's own
+# devel/glib20 port builds with -Db_lundef=false for the same reason.
+_meson_extra=()
+case "${CVC_PLATFORM}" in
+    freebsd) _meson_extra+=(-Dxattr=false -Db_lundef=false) ;;
+    openbsd) _meson_extra+=(-Dxattr=false) ;;
+esac
+
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
@@ -81,7 +97,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dlibmount=disabled \
     -Dintrospection=disabled \
     -Ddtrace=false \
-    -Dsysprof=disabled
+    -Dsysprof=disabled \
+    ${_meson_extra[@]+"${_meson_extra[@]}"}
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
