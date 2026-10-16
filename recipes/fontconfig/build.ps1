@@ -20,15 +20,10 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-# fontconfig generates src/fcobjshash.h with gperf.  There is no gperf cvcpkg
-# recipe and Windows has no system gperf, so when it is missing meson falls
-# back to upstream's subprojects/gperf.wrap — which needs network access at
-# setup time.  Warn rather than throw: a builder that does have gperf on PATH
-# (or a pre-populated subprojects/ tree) builds fine either way.
-if (-not (Get-Command gperf -ErrorAction SilentlyContinue)) {
-    Write-Host "cvcpkg: WARNING - gperf not on PATH; meson will fall back to subprojects/gperf.wrap (needs network)."
-}
-
+# fontconfig generates src/fcobjshash.h with gperf, cvcpkg's gperf recipe
+# (depends.build).  Invoke-CvcMesonBuild's --wrap-mode=nofallback makes a
+# missing gperf fail setup; meson used to fall back to upstream's
+# subprojects/gperf.wrap, a git clone during the build.
 Invoke-CvcMesonBuild @(
     '-Dtests=disabled',
     '-Ddoc=disabled',

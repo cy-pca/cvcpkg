@@ -64,6 +64,7 @@ _default_lib=shared
 #                                              fonts, so no font files are needed
 cd "${CVC_SOURCE_DIR}"
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \

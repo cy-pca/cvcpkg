@@ -23,6 +23,7 @@ export PKG_CONFIG_PATH="${_pc_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 cd "${CVC_SOURCE_DIR}"
 
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --pkg-config-path="$(IFS=,; echo "${_pc_dirs[*]}")" \

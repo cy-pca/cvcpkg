@@ -37,6 +37,7 @@ cd "${CVC_SOURCE_DIR}"
 # core <xkbcommon/xkbcommon.h>.  Turning it off drops the libxml2 requirement
 # rather than adding a package nothing links.
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \

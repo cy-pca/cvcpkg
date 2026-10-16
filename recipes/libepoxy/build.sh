@@ -23,6 +23,7 @@ cd "${CVC_SOURCE_DIR}"
 
 MESON_OPTS=(
     --prefix="${CVC_INSTALL_DIR}"
+    --wrap-mode=nofallback
     --buildtype=release
     --libdir=lib
     --default-library="${_default_lib}"

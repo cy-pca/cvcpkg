@@ -54,11 +54,10 @@ depends:
     # fontconfig runs gperf to generate src/fcobjshash.h. Undeclared, the build
     # silently used whatever gperf the builder happened to have installed — and
     # where there is none it falls back to fetching upstream's
-    # subprojects/gperf.wrap at meson-setup time. Neither is hermetic. No
-    # windows entry: gperf ships only an autotools build (see its recipe), so
-    # Windows still relies on the wrap — tracked in the note below.
-    - name: gperf
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    # subprojects/gperf.wrap at meson-setup time. Neither is hermetic. Windows
+    # too: gperf's build.ps1 compiles it with MSVC, and meson's
+    # --wrap-mode=nofallback (Invoke-CvcMesonBuild) refuses the wrap.
+    - gperf
   runtime:
     - name: freetype
       version: "^2.13"
@@ -90,16 +89,11 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
-      note: >-
-        Upstream generates src/fcobjshash.h with gperf, which cvcpkg does
-        not package and Windows does not ship.  Without it on PATH meson
-        falls back to upstream's subprojects/gperf.wrap, which downloads
-        at setup time — hermetic builders need a gperf host tool.
 
 package:
   files:
     # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
-    - lib/libfontconfig*
+    - { glob: "lib/libfontconfig*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - lib/pkgconfig/fontconfig.pc
     - include/fontconfig/
     - bin/fc-*

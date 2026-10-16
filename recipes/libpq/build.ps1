@@ -77,6 +77,7 @@ Set-Location $env:CVC_SOURCE_DIR
     'setup', $env:CVC_BUILD_DIR,
     "--prefix=$env:CVC_INSTALL_DIR",
     '--buildtype=release',
+    '--wrap-mode=nofallback',
     '-Dssl=openssl',
     '-Dzlib=enabled',
     '-Dreadline=disabled',

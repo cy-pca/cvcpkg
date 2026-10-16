@@ -136,6 +136,7 @@ Write-Output "scipy-cp312: building with -j$jobs (of $cores cores)"
 
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `
     --wheel-dir $wheelhouse `
+    -C setup-args=--wrap-mode=nofallback `
     -C setup-args=-Dblas=openblas `
     -C setup-args=-Dlapack=openblas `
     -C setup-args=-Duse-pythran=true `

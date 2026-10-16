@@ -105,6 +105,7 @@ $jobs = if ($env:CVC_JOBS) { $env:CVC_JOBS } else { [Environment]::ProcessorCoun
 
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `
     --wheel-dir $wheelhouse `
+    -C setup-args=--wrap-mode=nofallback `
     -C setup-args=-Dblas=openblas `
     -C setup-args=-Dlapack=openblas `
     -C setup-args=-Dallow-noblas=false `

@@ -56,6 +56,7 @@ ln -s "${CVC_INSTALL_DIR}" "${_PGPREFIX}"
 # linux/arm64: "The limited API is not currently supported in the
 # free-threaded build").
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${_PGPREFIX}" \
     --libdir=lib \
     --buildtype=release \

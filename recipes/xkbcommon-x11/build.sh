@@ -21,6 +21,7 @@ cd "${CVC_SOURCE_DIR}"
 # wayland/tools/docs/xkbregistry off — we only want the x11 helper; xkbregistry
 # would pull an unpackaged libxml-2.0 (see the base xkbcommon recipe).
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \

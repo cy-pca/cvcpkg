@@ -1227,6 +1227,19 @@ class TestEmitSdistColumn:
         assert '--wheel-dir "${WHEELHOUSE}"' in sh
         assert '"${CVC_SOURCE_DIR}"' in sh
 
+    def test_meson_backend_refuses_subproject_fallback(self, tmp_path):
+        # Like every meson recipe: a dependency meson cannot find fails the
+        # build instead of being downloaded as a subproject.
+        _, sh, d = self._emit(tmp_path, build_requires=["meson-python>=0.15", "meson>=1.2"])
+        flag = "-C setup-args=--wrap-mode=nofallback"
+        assert f"    {flag} \\\n" in sh
+        assert f"    {flag} `\n" in (d / "build.ps1").read_text(encoding="utf-8")
+
+    def test_non_meson_backend_passes_no_meson_args(self, tmp_path):
+        _, sh, d = self._emit(tmp_path)
+        assert "wrap-mode" not in sh
+        assert "wrap-mode" not in (d / "build.ps1").read_text(encoding="utf-8")
+
     def test_build_sh_installs_into_the_staging_prefix(self, tmp_path):
         _, sh, _ = self._emit(tmp_path)
         assert "pip install" in sh and '--prefix "${CVC_INSTALL_DIR}"' in sh

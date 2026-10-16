@@ -18,6 +18,7 @@ $root = if ($env:CVC_BUILD_DIR) { $env:CVC_BUILD_DIR } else { $env:CVC_SOURCE_DI
 $wheelhouse = Join-Path $root 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `
+    -C setup-args=--wrap-mode=nofallback `
     --wheel-dir $wheelhouse $env:CVC_SOURCE_DIR
 if ($LASTEXITCODE -ne 0) { throw "contourpy-cp313: pip wheel failed ($LASTEXITCODE)" }
 

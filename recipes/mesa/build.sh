@@ -69,6 +69,7 @@ _default_lib=shared
 # closure — see cvcpkg hermetic-toolchain policy.
 cd "${CVC_SOURCE_DIR}"
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --native-file "${_native}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
