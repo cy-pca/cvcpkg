@@ -4,7 +4,9 @@ recipe:
   upstream_version: "1.5.10"
   # cvc.2: linux builds against cvcpkg's libglvnd (EGL headers, libEGL) instead
   # of the build host's EGL headers, which the linux/arm64 runners lack.
-  cvc_revision: 2
+  # cvc.3: GLX and X11 on linux (epoxy/glx.h), which GTK's X11 backend needs;
+  # libx11 is a linux runtime dependency (epoxy.pc requires x11).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -34,6 +36,8 @@ depends:
     # epoxy's installed <epoxy/egl.h> includes <EGL/eglplatform.h>, and it
     # dlopens libEGL at run time: both come from libglvnd.
     - name: libglvnd
+      platforms: [linux]
+    - name: libx11
       platforms: [linux]
   host_tools: []
 
