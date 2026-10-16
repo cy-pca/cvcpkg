@@ -1,0 +1,46 @@
+schema_version: 1
+recipe:
+  name: proxy-libintl
+  upstream_version: "0.5"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/frida/proxy-libintl
+  license: LGPL-2.0-or-later
+  tags: [libraries]
+  description: >-
+    proxy-libintl — a stub libintl (gettext, ngettext, bindtextdomain, …)
+    that returns the untranslated string.  GLib requires libintl on every
+    platform; on Windows nothing else in cvcpkg provides one MSVC can link,
+    so GLib's own meson build would otherwise git-clone this library as a
+    subproject during the build.
+
+source:
+  type: tarball
+  url: https://github.com/frida/proxy-libintl/archive/refs/tags/0.5.tar.gz
+  sha256: "f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - ninja
+    - meson
+  runtime: []
+  host_tools: []
+
+build:
+  # Windows only: Linux has gettext in libc, and macOS and the BSDs take
+  # cvcpkg's gettext (see recipes/glib).
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/libintl.h
+    # intl.lib is the DLL's import library (shared) or the static library
+    # (static); bin/intl-8.dll ships with the shared build.
+    - lib/intl.lib

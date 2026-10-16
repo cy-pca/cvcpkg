@@ -53,6 +53,12 @@ depends:
     - name: gettext
       version: "^1.0"
       platforms: [macos, freebsd, openbsd]
+    # Windows has no libintl MSVC can link (gettext's Windows build is MinGW),
+    # so meson git-cloned GLib's proxy-libintl subproject during the build.
+    # cvcpkg's proxy-libintl is that library, pinned; glib-2.0.dll links it.
+    - name: proxy-libintl
+      version: ">=0.5"
+      platforms: [windows]
     - name: libffi
       version: "^3.4"
     - name: pcre2

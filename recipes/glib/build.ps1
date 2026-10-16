@@ -10,6 +10,12 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # GLib's meson build requires the Python 'packaging' module.
 & python -m pip install --quiet packaging 2>$null
 
+# GLib requires libintl, which cvcpkg's proxy-libintl provides here.  Meson's
+# dependency('intl') has no pkg-config method: it looks for libintl.h and
+# intl.lib on the compiler's own search path, so put the deps prefix on it.
+$env:INCLUDE = "$env:CVC_DEPS_PREFIX\include;$env:INCLUDE"
+$env:LIB = "$env:CVC_DEPS_PREFIX\lib;$env:LIB"
+
 Invoke-CvcMesonBuild @(
     '-Dtests=false',
     '-Dglib_debug=disabled',
