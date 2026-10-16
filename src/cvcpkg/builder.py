@@ -1555,13 +1555,6 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
     does not include the build prefix's ``bin`` (only the build *subprocess*
     gets that, via ``_build_env``), so the prefix must be probed explicitly.
 
-    Then ``PATH``, then the BSD package systems' bin directories
-    (``_PATCHELF_FALLBACKS``): a builder started from cron runs with cron's
-    minimal ``PATH``, which leaves out pkgsrc's and ports' ``patchelf`` -- and
-    without one the ``$ORIGIN`` pass silently does nothing, so every bundle
-    with a shared library fails the relocatable check at pack time (readline
-    and sqlite on the NetBSD builders, 2026-10-16).
-
     Returns the resolved patchelf path, or ``None`` when none is available.
     """
     for prefix in prefixes:
@@ -1570,21 +1563,7 @@ def _find_patchelf(*prefixes: Path | None) -> str | None:
         candidate = prefix / "bin" / "patchelf"
         if candidate.is_file():
             return str(candidate)
-    found = shutil.which("patchelf")
-    if found:
-        return found
-    for candidate in _PATCHELF_FALLBACKS:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
-
-
-# Where the BSDs' package systems put patchelf (see _find_patchelf); like
-# _BASH_FALLBACKS, for a builder started with cron's minimal PATH.
-_PATCHELF_FALLBACKS = (
-    "/usr/pkg/bin/patchelf",  # NetBSD (pkgsrc devel/patchelf)
-    "/usr/local/bin/patchelf",  # FreeBSD ports / OpenBSD packages
-)
+    return shutil.which("patchelf")
 
 
 # ELF platforms whose run-time linker expands ``$ORIGIN`` in RPATH, so the
