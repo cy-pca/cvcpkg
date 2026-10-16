@@ -9,14 +9,25 @@ detected" -- not which repository failed.  Every pinned commit fetches fine one
 at a time (checked 2026-10-15), so this loads the script as a module, swaps its
 `multithread` for a serial loop with per-repository retries, and names any
 repository that still fails.
+
+Five DEPS entries are not synced at all.  The fleet builders star-01 and
+rebota could not clone them from googlesource.com on any attempt
+(2026-10-15/16), and this build never reads them: libavif and libjxl are
+codecs behind skia_use_libavif / skia_use_libjxl_decode, vello sits behind
+skia_enable_vello_shaders (all off by default, and build.sh's GN args leave
+them so), oboe is Android-only audio, and unicodetools is Unicode's data
+tooling.
 """
 
 import importlib.machinery
 import importlib.util
+import os
 import sys
 import time
 
 ATTEMPTS = 4
+# third_party/externals/<name> entries this build does not use (see above).
+UNUSED = {"libavif", "libjxl", "oboe", "unicodetools", "vello"}
 
 
 def load(path):
@@ -31,6 +42,9 @@ def serial(function, list_of_arg_lists):
     failed = []
     for args in list_of_arg_lists:
         repo, directory = args[1], args[3]
+        if os.path.basename(os.path.normpath(directory)) in UNUSED:
+            sys.stderr.write(f"skia: not syncing {directory} (unused by this build)\n")
+            continue
         for attempt in range(1, ATTEMPTS + 1):
             try:
                 function(*args)
