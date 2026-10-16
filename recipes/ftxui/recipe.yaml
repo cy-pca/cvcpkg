@@ -58,7 +58,7 @@ package:
     - lib/libftxui-*
     # MSVC: import libs in lib/, DLLs in bin/, both without the "lib" prefix.
     - lib/ftxui-*
-    - bin/ftxui-*
+    - { glob: "bin/ftxui-*", platforms: [windows] }
     - lib/cmake/ftxui/
     - lib/pkgconfig/ftxui*
     - include/ftxui/

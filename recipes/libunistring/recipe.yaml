@@ -70,18 +70,14 @@ package:
     - include/uniname.h
     - include/uninorm.h
     - include/unistdio.h
-    - include/unistr/
     - include/unistring/
     - include/uniwbrk.h
     - include/uniwidth.h
     - include/unilbrk.h
     - include/unicase.h
-    - include/uniwbrk/
-    - include/unilbrk/
-    - include/unictype/
-    - include/uninorm/
-    - include/unicase/
-    - include/unimetadata/
+    # libunistring 1.x installs one header per module (unicase.h, ...) plus
+    # include/unistring/; the per-module directories never existed.
+    - include/unimetadata.h
   cmake_packages: []
 
 abi:

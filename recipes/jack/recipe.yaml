@@ -54,7 +54,7 @@ package:
   files:
     - lib/libjack*
     - lib/libjackserver*
-    - lib/libjacknet*
+    # No libjacknet: the waf build here does not build the net backend.
     - lib/jack/
     - lib/pkgconfig/jack.pc
     - include/jack/

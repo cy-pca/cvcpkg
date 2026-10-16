@@ -75,7 +75,7 @@ package:
     - lib/libyaml*
     - lib/yaml*
     - lib/cmake/yaml/
-    - lib/pkgconfig/yaml*
+    # No lib/pkgconfig/yaml*: libyaml's CMake build installs no .pc file.
     - include/yaml.h
   cmake_packages:
     - { name: yaml, targets: ["yaml"] }

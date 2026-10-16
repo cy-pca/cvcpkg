@@ -37,7 +37,8 @@ package:
   files:
     - lib/
     - include/
-    - share/
+    # No share/: only the amdgpu backend installs share/libdrm/amdgpu.ids, and
+    # it is not built on every arch (linux/arm64 has none).
 
 build:
   matrix:

@@ -88,9 +88,7 @@ package:
     - bin/reindexdb
     - bin/vacuumdb
     - lib/libpq*
-    - lib/*/libpq*
     - lib/pkgconfig/libpq.pc
-    - lib/*/pkgconfig/libpq.pc
     - lib/cmake/PostgreSQL/
     - include/libpq-fe.h
     - include/libpq-events.h

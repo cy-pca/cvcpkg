@@ -37,7 +37,10 @@ fi
 cd "${SRC}"
 
 # --- 2. Sync DEPS. ---
-_retry "git-sync-deps" python3 tools/git-sync-deps
+# Through sync_deps.py: one repository at a time with its own retries, naming any
+# that keeps failing (upstream's runs ~40 clones at once and reports only "Thread
+# failure detected"; five failed on every attempt on the 2026-10-15 fleet run).
+_retry "git-sync-deps" python3 "${SCRIPT_DIR}/sync_deps.py" tools/git-sync-deps
 
 # --- 3. GN args. ---
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then

@@ -69,7 +69,7 @@ package:
   files:
     - lib/libsamplerate*
     - lib/samplerate*
-    - bin/libsamplerate*
+    - { glob: "bin/libsamplerate*", platforms: [windows] }
     - lib/pkgconfig/samplerate.pc
     - lib/cmake/SampleRate/
     - include/samplerate.h

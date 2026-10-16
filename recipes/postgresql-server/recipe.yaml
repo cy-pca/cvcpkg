@@ -94,9 +94,7 @@ package:
     - bin/pg_isready
     - bin/pg_config
     - lib/libpq*
-    - lib/*/libpq*
     - lib/postgresql/
-    - lib/*/postgresql/
     - share/postgresql/
 
 abi:
