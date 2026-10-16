@@ -227,6 +227,11 @@ def load_fleet_config(path: str | Path) -> FleetConfig:
     return parse_fleet_config(data)
 
 
+# Set in every fleet worker's environment: `builder fleet` restarts the worker
+# when it exits, at once when it exits with the self-update code (90).
+FLEET_WORKER_ENV = "CVCPKG_FLEET_WORKER"
+
+
 def worker_env(
     fs: FleetServer,
     servers: list[FleetServer] | tuple[FleetServer, ...],
@@ -246,6 +251,10 @@ def worker_env(
     startup (``/etc/cvcpkg/env`` ...), which may define them again, and drops
     them -- and its own ``CVCPKG_TOKEN`` -- from the environment its build
     scripts inherit (``builder run``).
+
+    And :data:`FLEET_WORKER_ENV`, so the worker knows a supervisor restarts it:
+    a single-file worker that self-updated exits for that instead of
+    re-exec'ing (see ``_registry_self_update``).
     """
     from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env
 
@@ -253,6 +262,7 @@ def worker_env(
     env = dict(base)
     scrub_token_env(env, names=names, secrets=[s.token for s in servers])
     env["CVCPKG_TOKEN"] = fs.token
+    env[FLEET_WORKER_ENV] = "1"
     if names:
         env[SCRUB_NAMES_ENV] = ",".join(names)
     else:

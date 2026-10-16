@@ -102,13 +102,17 @@ build:
   # A frozen executable has no debug/release or shared/static variants worth
   # distinguishing; build once.
   build_type_independent: true
-  # Only the platforms whose whole cp312 closure is published.  The BSDs need
-  # python312 first; until then their installers fall back to the GitHub
-  # release binary.
+  # Only the platforms whose whole cp312 closure builds.  The BSDs are here so
+  # their builders run -- and self-update from -- the registry's own cvcpkg,
+  # like every other platform's.
   matrix:
     - platform: linux
       script: build.sh
     - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh
     - platform: windows
       script: build.ps1
@@ -116,7 +120,7 @@ build:
 package:
   files:
     - glob: bin/cvcpkg
-      platforms: [linux, macos]
+      platforms: [linux, macos, freebsd, netbsd]
     # The executable /install.ps1 looks for in a registry bundle.
     - glob: bin/cvcpkg.exe
       platforms: [windows]

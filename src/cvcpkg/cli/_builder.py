@@ -976,9 +976,20 @@ def _reexec_argv(args: list[str]) -> list[str]:
 
 
 def _reexec_builder(token: str, extra_env: dict[str, str] | None = None) -> None:
-    """Replace this process with a fresh builder (POSIX; same PID)."""
+    """Replace this process with a fresh builder (POSIX; same PID).
+
+    For the single-file binary, the successor's environment drops what this
+    process's PyInstaller bootloader left there (registry_update.probe_env):
+    with it, the new binary would run this process's unpacked -- old -- code.
+    """
+    from cvcpkg.selfexec import is_frozen
+
     argv = _reexec_argv(sys.argv[1:])
     env = dict(os.environ)
+    if is_frozen():
+        from cvcpkg.registry_update import probe_env
+
+        env = probe_env(env)
     env.update(extra_env or {})
     if token:
         env["CVCPKG_TOKEN"] = token
@@ -1073,6 +1084,7 @@ def _self_update_lock(
     *,
     beat: Callable[[], None] | None = None,
     stop: Callable[[], bool] | None = None,
+    lock_path: Path | None = None,
 ) -> Iterator[bool]:
     """Hold *checkout*'s self-update lock (see _UPDATE_LOCK_NAME) for the block.
 
@@ -1081,8 +1093,11 @@ def _self_update_lock(
     update goes ahead unlocked, as it always used to, and says so.  Yields
     False, after logging why, when *stop* turned True or _UPDATE_LOCK_TIMEOUT
     passed while another builder held it.  Heartbeats while it waits.
+
+    *lock_path* overrides where the lock file is: a single-file binary has no
+    git dir, so builders sharing one binary lock a file beside it instead.
     """
-    path = _git_dir(checkout) / _UPDATE_LOCK_NAME
+    path = lock_path if lock_path is not None else _git_dir(checkout) / _UPDATE_LOCK_NAME
     try:
         try:
             fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
@@ -1539,6 +1554,13 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
             if p.poll() is not None:
                 _reap(p)
                 lived = now - started.get(fs.name, now)
+                if p.returncode == _SUPERVISOR_RESTART_CODE:
+                    # It self-updated and asks to be started again, on the
+                    # binary now on disk: at once, and not counted as a crash.
+                    delays.pop(fs.name, None)
+                    respawn_at[fs.name] = now
+                    click.echo(f"worker {fs.name} updated itself; restarting it now")
+                    continue
                 delay = _next_respawn_delay(delays.get(fs.name, 0.0), restart_delay, lived)
                 delays[fs.name] = delay
                 respawn_at[fs.name] = now + delay
@@ -1615,13 +1637,233 @@ def builder_fleet(config_path: str, dry_run: bool, restart_delay: float) -> None
     _supervise_fleet(fleet, restart_delay)
 
 
-def _self_update(
+class _RegistrySource:
+    """Where a single-file builder looks for its update: the server it builds for.
+
+    That server's ``/v1/packages/cvcpkg`` lists the registry's own cvcpkg
+    builds (recipes/cvcpkg), one per platform; *platform*/*arch* are this
+    builder's, which is what the binary has to run on.
+    """
+
+    def __init__(self, base: str, headers: dict[str, str], platform: str, arch: str) -> None:
+        self.base = base.rstrip("/")
+        self.headers = dict(headers)
+        self.platform = platform
+        self.arch = arch
+
+
+# A single-file builder's update lock and download share the binary's own
+# directory; builders sharing one binary (a fleet's workers) lock this file.
+_BINARY_UPDATE_LOCK_NAME = ".cvcpkg-self-update.lock"
+_REGISTRY_TIMEOUT = 30.0
+# The archive is ~20-30 MB; generous for a slow link, bounded all the same.
+_REGISTRY_DOWNLOAD_TIMEOUT = 600.0
+
+
+def _running_binary() -> Path:
+    """The single-file binary this process runs from, symlinks resolved.
+
+    Resolved so the update replaces the file itself, not a symlink to it
+    (``/usr/local/bin/cvcpkg -> /opt/cvcpkg/bin/cvcpkg``).
+    """
+    return Path(sys.executable).resolve()
+
+
+def _resolve_registry_update(
+    source: _RegistrySource,
+    running: str,
+    *,
+    beat: Callable[[], None] | None = None,
+):
+    """The registry ``cvcpkg`` package a single-file builder would update to, or None.
+
+    The newest one built for this builder's platform/arch whose upstream
+    version is newer than *running* (registry_update.pick_candidate); None,
+    after saying why, when there is none -- the registry has not built that
+    release for this platform yet, or it has nothing newer.  Decided before the
+    builder drains, like _resolve_update_source: an update that cannot happen
+    must not stop a busy builder taking work.  Transport errors propagate.
+    """
+    from cvcpkg.registry_update import PACKAGE, pick_candidate
+
+    httpx = require_httpx("builder")
+    if beat is not None:
+        beat()
+    with httpx.Client(timeout=_REGISTRY_TIMEOUT) as client:
+        resp = _get_retrying(client, f"{source.base}/v1/packages/{PACKAGE}", headers=source.headers)
+    if resp.status_code == 404:
+        click.echo(
+            f"  self-update: {source.base} has no '{PACKAGE}' package at all",
+            err=True,
+        )
+        return None
+    if resp.status_code >= 400:
+        click.echo(
+            f"  self-update: {source.base}/v1/packages/{PACKAGE} answered HTTP {resp.status_code}",
+            err=True,
+        )
+        return None
+    rows = resp.json().get("packages", [])
+    cand = pick_candidate(
+        rows,
+        platform=source.platform,
+        arch=source.arch,
+        running=running,
+        is_newer=_is_newer_version,
+        base_url=source.base,
+    )
+    if cand is None:
+        built = sorted(
+            {
+                str(r.get("version"))
+                for r in rows
+                if r.get("platform") == source.platform and r.get("arch") == source.arch
+            },
+            key=version_sort_key,
+        )
+        click.echo(
+            f"  self-update: {source.base} has no cvcpkg package for "
+            f"{source.platform}/{source.arch} newer than {running} "
+            f"(built there: {', '.join(built) if built else 'none'})",
+            err=True,
+        )
+    return cand
+
+
+def _registry_self_update(
+    source: _RegistrySource,
+    *,
     token: str = "",
     beat: Callable[[], None] | None = None,
     extra_env: dict[str, str] | None = None,
     stop: Callable[[], bool] | None = None,
 ) -> None:
+    """Replace this single-file binary with the registry's newer build and restart.
+
+    Under the binary's update lock (builders sharing it go one at a time), it
+    resolves the package again, downloads it, checks its sha256 against the
+    registry, extracts ``bin/cvcpkg`` beside the running binary and runs its
+    ``--version`` -- all before touching the running binary -- then renames
+    it into place (registry_update.swap_in).  A builder that finds the binary
+    on disk already at that version (another one sharing it updated it) only
+    restarts.
+
+    Restart is a re-exec in place on POSIX (same PID; the successor gets past
+    the pidfile guard because its PyInstaller launcher holds that PID).  On
+    Windows a running ``.exe`` cannot be exec'd over: under the supervisor
+    wrapper the builder exits with _SUPERVISOR_RESTART_CODE and is relaunched
+    on the new binary; otherwise the new binary applies at the next start.
+
+    Returns -- the builder keeps running the binary it runs -- when anything
+    fails or *stop* turns True; nothing on disk changes unless the new binary
+    passed every check.
+    """
+    from cvcpkg import __version__ as running
+    from cvcpkg.builder_fleet import FLEET_WORKER_ENV
+    from cvcpkg.registry_update import (
+        RegistryUpdateError,
+        probe_version,
+        stage_binary,
+        swap_in,
+        upstream_version,
+    )
+
+    httpx = require_httpx("builder")
+    binary = _running_binary()
+    staying = f"not updating, staying on {running}"
+    try:
+        with _self_update_lock(
+            binary.parent,
+            beat=beat,
+            stop=stop,
+            lock_path=binary.parent / _BINARY_UPDATE_LOCK_NAME,
+        ) as locked:
+            if not locked or _stop_requested(stop, staying):
+                return
+            cand = _resolve_registry_update(source, running, beat=beat)
+            if cand is None or _stop_requested(stop, staying):
+                return
+            # Another builder sharing this binary may have replaced it already
+            # -- while this one waited for the lock, or earlier.  Never with an
+            # older one, either.
+            on_disk = probe_version(binary)
+            if on_disk is not None and not _is_newer_version(
+                cand.upstream, upstream_version(on_disk)
+            ):
+                click.echo(
+                    f"  self-update: {binary} is already cvcpkg {on_disk} (updated by "
+                    "another builder sharing it?); not replacing it"
+                )
+                installed = upstream_version(on_disk)
+            else:
+                click.echo(
+                    f"  self-update: downloading cvcpkg {cand.version} for "
+                    f"{cand.platform}/{cand.arch} from {source.base}"
+                )
+                if beat is not None:
+                    beat()
+                with httpx.Client(timeout=_REGISTRY_DOWNLOAD_TIMEOUT) as client:
+                    staged = stage_binary(client, cand, binary, headers=source.headers)
+                if beat is not None:
+                    beat()
+                if _stop_requested(stop, staying):
+                    staged.unlink(missing_ok=True)
+                    return
+                old = swap_in(staged, binary)
+                installed = cand.upstream
+                click.echo(
+                    f"  self-update: {binary} is now cvcpkg {cand.version}"
+                    + (f" (previous binary moved to {old})" if old else "")
+                )
+            if not _is_newer_version(installed, running):
+                return
+
+            if sys.platform == "win32":
+                if os.environ.get("CVCPKG_BUILDER_SUPERVISED"):
+                    click.echo(
+                        "  self-update: requesting supervisor restart "
+                        f"(exit {_SUPERVISOR_RESTART_CODE})."
+                    )
+                    raise SystemExit(_SUPERVISOR_RESTART_CODE)
+                click.echo(
+                    f"  self-update: installed {installed}; it applies on the next "
+                    "builder restart (Windows)."
+                )
+                return
+            if _stop_requested(
+                stop, f"{installed} is installed; not restarting into it (the next start runs it)"
+            ):
+                return
+            if os.environ.get(FLEET_WORKER_ENV):
+                # A re-exec cannot replace this binary's PyInstaller launcher,
+                # our parent: it would stay, holding its unpacked copy (~85 MB
+                # in $TMPDIR) until the builder stops -- one more per update.
+                # `builder fleet` restarts a worker that exits, at once for
+                # this code, as a fresh launcher + interpreter pair.
+                click.echo(
+                    f"  self-update: installed {installed}; exiting for the fleet "
+                    f"supervisor to restart this worker (exit {_SUPERVISOR_RESTART_CODE})."
+                )
+                raise SystemExit(_SUPERVISOR_RESTART_CODE)
+            click.echo(f"  self-update: installed {installed}, restarting...")
+            _reexec_builder(token, extra_env)
+    except RegistryUpdateError as exc:
+        click.echo(f"  self-update: {exc}; {staying}", err=True)
+    except Exception as exc:
+        click.echo(f"  self-update failed: {exc}", err=True)
+
+
+def _self_update(
+    token: str = "",
+    beat: Callable[[], None] | None = None,
+    extra_env: dict[str, str] | None = None,
+    stop: Callable[[], bool] | None = None,
+    registry: _RegistrySource | None = None,
+) -> None:
     """Pip-install a newer cvcpkg from its source checkout and re-exec.
+
+    The single-file binary updates from *registry* instead (see
+    _registry_self_update); everything below is the pip install's path.
 
     Returns -- leaving the builder on the code it runs -- when there is
     nothing newer to install, or when any step fails.  *beat* is called while
@@ -1651,21 +1893,21 @@ def _self_update(
         click.echo("  self-update: shutdown requested; not updating")
         return
 
-    # The single-file binary cannot update itself this way: `sys.executable`
-    # is cvcpkg, not Python, so `-m pip` is rejected as a cvcpkg option.  Keep
-    # running on the current version; replacing the binary and restarting is
-    # the update.  Checked before the Windows supervisor hand-off too: that
-    # wrapper updates with pip, so a frozen builder would only be relaunched on
-    # the same version, be asked to update again, and exit again.
+    # The single-file binary cannot pip-install itself (`sys.executable` is
+    # cvcpkg, not Python): it replaces itself with the registry's own cvcpkg
+    # package instead (_registry_self_update).  Checked before the Windows
+    # supervisor hand-off, which is the pip path's.
     from cvcpkg.selfexec import is_frozen
 
     if is_frozen():
-        click.echo(
-            "  self-update: skipped - this is the single-file cvcpkg binary, "
-            "which cannot pip-install itself; replace the binary and restart "
-            "the builder to update.",
-            err=True,
-        )
+        if registry is None:
+            click.echo(
+                "  self-update: skipped - this is the single-file cvcpkg binary and "
+                "no registry to update it from was given",
+                err=True,
+            )
+            return
+        _registry_self_update(registry, token=token, beat=beat, extra_env=extra_env, stop=stop)
         return
 
     # When running under the Windows supervisor wrapper, hand the whole
@@ -2128,6 +2370,8 @@ def builder_run(
 
     base = server.rstrip("/")
     headers = {"Authorization": f"Bearer {token}"}
+    # A single-file builder updates from this server's own cvcpkg package.
+    _registry_source = _RegistrySource(base, headers, platform, arch)
 
     work_root = Path(work_dir) if work_dir else None
     if work_root is not None:
@@ -2203,8 +2447,22 @@ def builder_run(
     # "a ton of cvcpkg processes".  If the pidfile names a still-live builder,
     # refuse to start; a stale pidfile (dead PID, or PID recycled by an
     # unrelated program) is silently reclaimed.
+    from cvcpkg.selfexec import is_frozen
+
+    if is_frozen():
+        # What an earlier registry self-update left: a binary moved aside on
+        # Windows, a download interrupted part-way.
+        from cvcpkg.registry_update import remove_stale_binaries
+
+        remove_stale_binaries(_running_binary())
+
     def _pid_is_live_builder(pid: int) -> bool:
         if pid <= 0 or pid == _os.getpid():
+            return False
+        if is_frozen() and pid == _os.getppid():
+            # Our own PyInstaller launcher.  A single-file builder that
+            # self-updated re-exec'd in place: the PID it wrote is now the new
+            # binary's launcher, and this process its interpreter child.
             return False
         if sys.platform == "win32":
             import subprocess as _sp
@@ -2800,8 +3058,12 @@ def builder_run(
         job_config: str,
         job_link: str,
         log_cb: Callable[[str], None],
+        implicit: tuple[str, ...] = (),
     ) -> None:
         """Download and install runtime dependencies into *prefix*.
+
+        *implicit* names packages the builder itself needs in *prefix*
+        whatever the recipe declares (cvcpkg's patchelf); they install first.
 
         Resolves the full transitive dependency closure, then queries
         the server catalog for each dep, downloads the matching
@@ -2816,6 +3078,7 @@ def builder_run(
         plausibly do without.
         """
         dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
+        dep_names = [n for n in implicit if n not in dep_names] + dep_names
         if not dep_names:
             return
 
@@ -3486,8 +3749,31 @@ def builder_run(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
+            # Packaging's $ORIGIN pass runs patchelf.  It is cvcpkg's own
+            # (recipes/patchelf), installed with the job's deps from this
+            # registry -- never the build host's: the BSD builders have none,
+            # and without one the pass silently did nothing, so every bundle
+            # with a shared library failed the relocatable check at pack time.
+            # Native builds only: patchelf runs on this host.
+            from cvcpkg.builder import SELF_HOSTED_PATCHELF_PLATFORMS
+
+            implicit: tuple[str, ...] = ()
+            if (
+                not host_plat
+                and build_platform in SELF_HOSTED_PATCHELF_PLATFORMS
+                and job_link == "shared"
+                and recipe_name != "patchelf"
+            ):
+                implicit = ("patchelf",)
             _install_deps(
-                recipe_dir, dep_prefix, build_platform, build_arch, job_config, job_link, log_cb
+                recipe_dir,
+                dep_prefix,
+                build_platform,
+                build_arch,
+                job_config,
+                job_link,
+                log_cb,
+                implicit=implicit,
             )
 
             # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
@@ -3666,7 +3952,13 @@ def builder_run(
         # a builder silent for 180 s offline and fails the jobs it dispatched
         # to it meanwhile.
         _heartbeat()
-        _self_update(token=token, beat=_heartbeat, extra_env=_reexec_env, stop=_stopping)
+        _self_update(
+            token=token,
+            beat=_heartbeat,
+            extra_env=_reexec_env,
+            stop=_stopping,
+            registry=_registry_source,
+        )
 
     # -- WebSocket helpers -----------------------------------
 
@@ -3932,15 +4224,51 @@ def builder_run(
                                     f"this builder's {__version__}; update ignored"
                                 )
                             elif is_frozen():
-                                # _self_update() would skip it too (it cannot
-                                # pip-install the single-file binary); decided
-                                # here so the builder does not first stop taking
-                                # work and drain for an update that never runs.
-                                click.echo(
-                                    f"  Server requests update: {__version__} -> "
-                                    f"{server_ver}; ignored (single-file binary)",
-                                    err=True,
-                                )
+                                # The single-file binary updates from the
+                                # registry's own cvcpkg package.  Whether there
+                                # is one to update to is decided now, before the
+                                # builder stops taking work (as for a checkout
+                                # below): this platform's package may not be
+                                # built yet.
+                                try:
+                                    cand = _resolve_registry_update(
+                                        _registry_source, __version__, beat=_heartbeat
+                                    )
+                                    failed = ""
+                                except Exception as exc:
+                                    # Never at the socket's expense.
+                                    cand, failed = (
+                                        None,
+                                        f"{type(exc).__name__}: {_ws_error_text(exc)}",
+                                    )
+                                if shutdown:
+                                    click.echo(
+                                        f"  Server requests update to {server_ver}; "
+                                        "ignored: shutting down"
+                                    )
+                                elif failed:
+                                    click.echo(
+                                        f"  Server requests update to {server_ver}; "
+                                        f"ignored: the registry check failed ({failed})",
+                                        err=True,
+                                    )
+                                elif cand is None:
+                                    # _resolve_registry_update said why.
+                                    click.echo(
+                                        f"  Server requests update: {__version__} -> "
+                                        f"{server_ver}; ignored: no newer cvcpkg package "
+                                        "to update this binary from",
+                                        err=True,
+                                    )
+                                else:
+                                    click.echo(
+                                        f"  Server requests update: {__version__} -> "
+                                        f"{server_ver}; installing the registry's cvcpkg "
+                                        f"{cand.version} once in-flight jobs finish "
+                                        "(taking no new jobs meanwhile)"
+                                    )
+                                    pending_update = server_ver
+                                    _apply_pending_update()
                             elif sys.platform == "win32" and os.environ.get(
                                 "CVCPKG_BUILDER_SUPERVISED"
                             ):

@@ -80,6 +80,7 @@ def _fake_server(job, recipes, packages, posted):
     """*recipes*: name -> recipe bundle; *packages*: name -> (status, rows)."""
     handed_out = {"done": False}
     interp_archive = _tar({"bin/interp": b"#!/bin/sh\n"})
+    patchelf_archive = _tar({"bin/patchelf": b"#!/bin/sh\n"})
 
     class _Client:
         def __init__(self, *a, **k):
@@ -115,6 +116,8 @@ def _fake_server(job, recipes, packages, posted):
                 return _Resp(status, {"packages": rows})
             if url.endswith("/v1/download/interp.tar.gz"):
                 return _Resp(200, content=interp_archive)
+            if url.endswith("/v1/download/patchelf.tar.gz"):
+                return _Resp(200, content=patchelf_archive)
             if url.endswith(("/next-job", "/next-claimable")):
                 if not handed_out["done"]:
                     handed_out["done"] = True
@@ -139,8 +142,11 @@ _INTERP_ROW = {
 }
 
 
-def _run(monkeypatch, tmp_path, recipes, packages, *, build_fails=False):
+def _run(
+    monkeypatch, tmp_path, recipes, packages, *, build_fails=False, job_extra=None, at_pack=None
+):
     job = {"id": 42, "recipe_name": "app", "platform": "linux", "arch": "x86_64"}
+    job.update(job_extra or {})
     posted: dict[str, list[dict]] = {}
     events: list[str] = []
     monkeypatch.setattr(httpx, "Client", _fake_server(job, recipes, packages, posted))
@@ -155,6 +161,8 @@ def _run(monkeypatch, tmp_path, recipes, packages, *, build_fails=False):
 
     def fake_pack(recipe_dir, *, output_dir, prefix, **k):
         events.append("pack with " + ",".join(sorted(p.name for p in Path(prefix).glob("*.built"))))
+        if at_pack is not None:
+            at_pack["patchelf"] = (Path(prefix) / "bin" / "patchelf").is_file()
         out = Path(output_dir) / "app-1.0.0-linux-x86_64.tar.gz"
         out.write_bytes(b"archive")
         return out, "0" * 64, out.stat().st_size
@@ -250,3 +258,37 @@ def test_a_local_build_failure_fails_the_job(monkeypatch, tmp_path):
     assert fail is not None, output
     assert "vendorlib (redistributable: false) failed to build locally" in fail["error_message"]
     assert "vendor download refused" in fail["error_message"]
+
+
+_PATCHELF_ROW = dict(
+    _INTERP_ROW, name="patchelf", version="0.18.0+cvc.1", archive_url="/v1/download/patchelf.tar.gz"
+)
+
+
+def test_the_job_prefix_gets_cvcpkgs_own_patchelf_before_pack(monkeypatch, tmp_path):
+    """Packaging's $ORIGIN pass runs patchelf, found in the job's prefix first.
+    It is cvcpkg's own package from the registry -- never the build host's:
+    the BSD builders have none, and with none the pass silently did nothing,
+    so readline and sqlite failed the relocatable check on NetBSD.  The
+    recipe does not declare it."""
+    recipes = {"app": _recipe("app")}
+    at_pack: dict = {}
+    posted, events, output = _run(
+        monkeypatch, tmp_path, recipes, {"patchelf": (200, [_PATCHELF_ROW])}, at_pack=at_pack
+    )
+    assert at_pack == {"patchelf": True}, output
+    assert posted.get("complete"), output
+
+
+def test_a_static_job_does_not_fetch_patchelf(monkeypatch, tmp_path):
+    recipes = {"app": _recipe("app")}
+    at_pack: dict = {}
+    _run(
+        monkeypatch,
+        tmp_path,
+        recipes,
+        {"patchelf": (200, [dict(_PATCHELF_ROW, link="static")])},
+        job_extra={"link": "static"},
+        at_pack=at_pack,
+    )
+    assert at_pack == {"patchelf": False}

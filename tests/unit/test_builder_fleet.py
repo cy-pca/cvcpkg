@@ -409,7 +409,7 @@ def test_parse_records_which_variable_each_token_came_from(monkeypatch):
 
 
 def test_worker_env_holds_only_the_workers_own_token():
-    from cvcpkg.builder_fleet import FleetServer, worker_env
+    from cvcpkg.builder_fleet import FLEET_WORKER_ENV, FleetServer, worker_env
     from cvcpkg.tokenenv import SCRUB_NAMES_ENV
 
     a = FleetServer(server="https://a", token="tok-a", serve=("",), name="a", token_env="TA")
@@ -429,6 +429,7 @@ def test_worker_env_holds_only_the_workers_own_token():
         "GITHUB_TOKEN": "gh",
         "CVCPKG_TOKEN": "tok-a",
         SCRUB_NAMES_ENV: "TA,TB",
+        FLEET_WORKER_ENV: "1",
     }
     assert base["TB"] == "tok-b"  # the supervisor's own environment is untouched
 
@@ -499,6 +500,61 @@ def test_next_respawn_delay(previous, base, lived, expected):
     from cvcpkg.cli._builder import _next_respawn_delay
 
     assert _next_respawn_delay(previous, base, lived) == expected
+
+
+def test_worker_that_self_updated_is_restarted_at_once(monkeypatch, capsys):
+    """A single-file worker that replaced its binary exits with the update code
+    (90) for the supervisor to start it again.  That is no crash: it restarts
+    at once, every time, with no backoff."""
+    import os
+    import signal
+    import subprocess
+
+    from cvcpkg.builder_fleet import FleetConfig, FleetServer
+    from cvcpkg.cli import _builder
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", "/opt/cvcpkg/cvcpkg")
+    monkeypatch.setattr(_builder, "_FLEET_POLL_SECS", 0.005)
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(os, "killpg", lambda *a: None, raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: None)
+    handlers: dict = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, h: handlers.__setitem__(sig, h))
+    spawns: list = []
+
+    class _Updated:
+        def __init__(self, pid):
+            self.pid, self.returncode = pid, _builder._SUPERVISOR_RESTART_CODE
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _sig):
+            pass
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def terminate(self):
+            pass
+
+    def _popen(argv, env=None, **kw):
+        spawns.append(dict(env or {}))
+        if len(spawns) == 4:
+            handlers[signal.SIGTERM](signal.SIGTERM, None)
+        return _Updated(7000 + len(spawns))
+
+    monkeypatch.setattr(subprocess, "Popen", _popen)
+    fs = FleetServer(server="https://a.example", token="t", serve=("",), name="a")
+    # A 1-hour restart delay: only an immediate restart reaches 4 spawns.
+    _builder._supervise_fleet(FleetConfig(name="f", servers=[fs]), restart_delay=3600.0)
+
+    out = capsys.readouterr().out
+    assert len(spawns) == 4, out
+    assert out.count("updated itself; restarting it now") == 3, out
+    assert "restarting in" not in out
+    assert all(env.get("CVCPKG_FLEET_WORKER") == "1" for env in spawns)
 
 
 def test_frozen_worker_crash_loop_backs_off(monkeypatch, capsys):

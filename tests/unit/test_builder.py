@@ -2187,9 +2187,16 @@ class TestBootstrapHostTools:
         recipes = self._recipes(tmp_path, ["patchelf", "foo"])
         assert _bootstrap_host_tools(recipes, "linux", "static") == []
 
-    def test_none_for_non_linux(self, tmp_path):
+    def test_adds_patchelf_for_freebsd(self, tmp_path):
+        """The FreeBSD builders have no system patchelf; cvcpkg brings its own."""
         recipes = self._recipes(tmp_path, ["patchelf", "foo"])
-        assert _bootstrap_host_tools(recipes, "macos", "shared") == []
+        boot = _bootstrap_host_tools(recipes, "freebsd", "shared")
+        assert [r.name for r in boot] == ["patchelf"]
+
+    @pytest.mark.parametrize("platform", ["macos", "windows", "openbsd", "netbsd", "wasm"])
+    def test_none_where_packaging_does_not_use_it(self, tmp_path, platform):
+        recipes = self._recipes(tmp_path, ["patchelf", "foo"])
+        assert _bootstrap_host_tools(recipes, platform, "shared") == []
 
     def test_none_when_patchelf_recipe_absent(self, tmp_path):
         recipes = self._recipes(tmp_path, ["foo", "bar"])

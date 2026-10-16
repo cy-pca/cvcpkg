@@ -106,9 +106,25 @@ A `builder.update` waits for the builder to be idle: the builder stops taking
 new jobs, lets the in-flight ones finish, and only then updates and restarts
 (a restart kills every job thread, and the server would otherwise keep those
 jobs `running` until the build timeout). Jobs dispatched to it meanwhile stay
-dispatched and are picked up by the restarted builder. The single-file binary
-ignores `builder.update`; replace the binary instead. A builder already at the
-server's version, or ahead of it, ignores it too.
+dispatched and are picked up by the restarted builder. A builder already at the
+server's version, or ahead of it, ignores it.
+
+The **single-file binary** updates from the registry it builds for: the
+server's own `cvcpkg` package (`recipes/cvcpkg`, the package `/install.sh` and
+`/install.ps1` install) for the builder's platform and arch. It picks the
+newest one whose *upstream* version is newer than its own (`2.5.1+cvc.2` is
+2.5.1; a rebuild of the release it runs is not an update), and decides that
+before it stops taking work -- if that platform's package has not been built
+yet, the update is ignored and says so. Once idle it downloads the archive,
+checks it against the registry's sha256, extracts `bin/cvcpkg` next to the
+running binary and runs its `--version`; only a binary that reports the
+release it claims is renamed over the old one. POSIX then re-execs it in place
+(same PID); Windows, which cannot replace a running `.exe`, moves the old one
+aside, and either exits for the supervisor wrapper (exit 90) or applies at the
+next start. The directory holding the binary must be writable by the builder.
+The binary path is the resolved one, so a symlink such as
+`/usr/local/bin/cvcpkg -> /opt/cvcpkg/bin/cvcpkg` keeps pointing at the
+updated file.
 
 A pip-installed builder updates from a cvcpkg **source checkout**, and only
 from one of these: `CVCPKG_SELF_UPDATE_DIR` if set (then nothing else), the

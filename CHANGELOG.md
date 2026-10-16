@@ -48,6 +48,22 @@ of the fixes below.  Notable for builders and populates:
 - Tarball sources can pin per-platform artifacts (#288).
 - Fixes to install (#252, #253, #259), the resolver (#251), publish/pack
   (#168, #210) and builder job reporting (#249, #217, #246).
+- **Single-file builders self-update from the registry** (#303).  A builder
+  running the single-file binary used to ignore `builder.update` -- it cannot
+  pip-install itself -- so it had to be replaced by hand.  It now replaces
+  itself with the registry's own `cvcpkg` package for its platform: the same
+  path on Linux, macOS, Windows and the BSDs.  The download is checked against
+  the registry's sha256 and the new binary must report the release it claims
+  before it is swapped in; builders sharing a binary replace it once, and a
+  fleet worker restarts through `builder fleet`.  See
+  docs/cvcpkg-remote-builders.md.
+- **ELF relocation on the BSDs** (#302, #303).  Without a patchelf the
+  `$ORIGIN` pass did nothing and lib/*.so kept their scratch RPATH (readline
+  and sqlite failed to pack on NetBSD); those now go to the in-place rewrite.
+  Packaging uses cvcpkg's own `patchelf` package on Linux and FreeBSD, never
+  the host's.  On NetBSD no patchelf rewrites an RPATH at all: growing one
+  adds a PT_LOAD, which ld.elf_so refuses ("wrong number of segments").
+- `recipes/cvcpkg` builds for FreeBSD and NetBSD too (#303).
 
 ---
 
