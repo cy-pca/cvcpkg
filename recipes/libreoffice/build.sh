@@ -88,8 +88,8 @@ ls -l "${T}/a" 2>&1 | tail -3
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 echo "== libraries resolved from the deps prefix"
 for f in "${P}/soffice.bin" "${P}/libmergedlo.so" "${P}/libvclplug_genlo.so" "${P}/libvcllo.so"; do
-    [ -f "$f" ] && ldd "$f" | grep -F "${CVC_DEPS_PREFIX}" | sed "s|^|  $(basename "$f"): |"
-done | sort -u
+    if [ -f "$f" ]; then ldd "$f" | grep -F "${CVC_DEPS_PREFIX}" | sed "s|^|  $(basename "$f"): |" || true; fi
+done | sort -u | head -5
 for lib in "${CVC_DEPS_PREFIX}"/lib/lib*.so*; do :; done
 for one in libcairo.so.2 libfontconfig.so.1 libfreetype.so.6 libpixman-1.so.0 libpng16.so.16 libxml2.so.2 libexpat.so.1 libz.so.1 libX11.so.6 libxcb.so.1; do
     [ -e "${CVC_DEPS_PREFIX}/lib/${one}" ] || continue
@@ -102,6 +102,13 @@ for one in libcairo.so.2 libfontconfig.so.1 libfreetype.so.6 libpixman-1.so.0 li
     rm -rf "${T}/b" "${T}/pb"
     mv "${T}/hide/${one}" "${CVC_DEPS_PREFIX}/lib/"
 done
+echo "== soffice --version, and a plain-text conversion"
+HOME="${T}/v" "${CVC_INSTALL_DIR}/bin/soffice" --version 2>&1 | tail -3 || true
+printf 'hello
+' > "${T}/t.txt"
+HOME="${T}/d" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pd"     --convert-to pdf --outdir "${T}/d" "${T}/t.txt" 2>&1 | tail -3 || true
+ls "${T}/d" 2>&1 | tail -2
+echo "== gdb: $(command -v gdb || echo missing)"
 if command -v gdb >/dev/null 2>&1; then
     echo "== gdb backtrace of the bad_alloc"
     HOME="${T}/c" gdb -batch -ex "catch throw std::bad_alloc" -ex run -ex bt \
