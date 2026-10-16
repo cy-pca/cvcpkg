@@ -681,6 +681,39 @@ def _find_update_checkout() -> Path | None:
     return None
 
 
+def _version_label() -> str:
+    """``cvcpkg=<version>[@<commit>]``: the code this builder runs, as a label.
+
+    Sent with the registration, so ``/v1/builders`` (and ``cvcpkg builders
+    list``) shows which builders run what.  Nothing else did: on 2026-10-15
+    a builder still on pre-2.5.0 code (no retries on dependency downloads)
+    failed a job on one dropped connection, and the only way to tell was the
+    shape of its traceback.  The commit is the self-update checkout's HEAD --
+    what self-update installed last -- and is omitted without one (a PyPI or
+    single-file install).
+    """
+    import subprocess
+
+    from cvcpkg import __version__
+
+    label = f"cvcpkg={__version__}"
+    checkout = _find_update_checkout()
+    if checkout is not None:
+        try:
+            head = subprocess.run(
+                ["git", "rev-parse", "--short=10", "HEAD"],
+                cwd=checkout,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return label
+        if head.returncode == 0 and head.stdout.strip():
+            label += "@" + head.stdout.strip()
+    return label
+
+
 def _git_error(stderr: str) -> str:
     """A git step's stderr, short enough for one log line.
 
@@ -2323,7 +2356,10 @@ def builder_run(
             "org_slug": org_slug,
             "served_namespaces": served,
             "max_jobs": max_jobs,
-            "labels": list(labels),
+            "labels": [
+                *labels,
+                *([] if any(lb.startswith("cvcpkg=") for lb in labels) else [_version_label()]),
+            ],
             "capabilities": caps,
         }
         if advertised_disk is not None:
