@@ -18,6 +18,20 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# cvcpkg's flex and bison bake in their own build-time prefix as the location of
+# m4 (and bison of its skeletons); point them at the relocated copies, as libpq
+# does.  On linux/arm64 flex exec'd a dead .../libcvc-deps/prefix/bin/m4.
+for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+    [[ -n "${_root}" ]] || continue
+    if [[ -d "${_root}/share/bison" && -z "${BISON_PKGDATADIR:-}" ]]; then
+        export BISON_PKGDATADIR="${_root}/share/bison"
+    fi
+    if [[ -x "${_root}/bin/m4" && -z "${M4:-}" ]]; then
+        export M4="${_root}/bin/m4"
+    fi
+done
+unset _root
+
 # PostgreSQL's meson appends "postgresql" to its data, plugin and server-header
 # dirs only when the prefix does not already name postgres or pgsql, and
 # CVC_INSTALL_DIR does (.../cvcpkg-postgresql-client-XXXXXXXX/install).  The

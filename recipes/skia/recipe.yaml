@@ -31,7 +31,12 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-  runtime: []
+  runtime:
+    # The GLX backend on Linux: GL/GLX from libglvnd, Xlib from libx11.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
   host_tools:
     - emsdk
 

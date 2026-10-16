@@ -58,13 +58,23 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
+# Linux builds the GLX GL backend: GL/gl.h and GL/glx.h come from cvcpkg's
+# libglvnd and Xlib from libx11 (recipe.yaml), not the build host, which on the
+# linux/arm64 runners has none ("GL/gl.h: No such file or directory").
+GN_CFLAGS='"-fPIC"'
+GN_LDFLAGS=''
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    GN_CFLAGS="${GN_CFLAGS},\"-I${CVC_DEPS_PREFIX}/include\""
+    GN_LDFLAGS="\"-L${CVC_DEPS_PREFIX}/lib\""
+fi
+
 GN_ARGS="is_official_build=true is_component_build=${IS_COMPONENT} \
 skia_use_system_expat=false skia_use_system_freetype2=false \
 skia_use_system_harfbuzz=false skia_use_system_icu=false \
 skia_use_system_libjpeg_turbo=false skia_use_system_libpng=false \
 skia_use_system_libwebp=false skia_use_system_zlib=false \
 skia_enable_tools=false skia_enable_gpu=true \
-target_os=${GN_TARGET_OS} extra_cflags=[\"-fPIC\"]"
+target_os=${GN_TARGET_OS} extra_cflags=[${GN_CFLAGS}] extra_ldflags=[${GN_LDFLAGS}]"
 
 OUT="${CVC_BUILD_DIR}/out"
 bin/gn gen "${OUT}" --args="${GN_ARGS}"
