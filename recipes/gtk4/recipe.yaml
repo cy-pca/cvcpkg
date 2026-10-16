@@ -50,6 +50,15 @@ depends:
     # header-only partial dependency, never linked, so it is not a runtime dep.
     - name: libdrm
       platforms: [linux]
+    # glib's gdbus-codegen (a Python script) generates the AT-SPI accessibility
+    # code on Linux and the BSDs, and imports `packaging`.  Run with the
+    # builder's python3 it failed: "No module named 'packaging'".  build.sh
+    # puts the build prefix first on PATH, so its `#!/usr/bin/env python3`
+    # finds cvcpkg's python313, with packaging-cp313 in its site-packages.
+    - name: python3
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: packaging-cp313
+      platforms: [linux, freebsd, openbsd, netbsd]
   runtime:
     - name: glib
       version: "^2.80"

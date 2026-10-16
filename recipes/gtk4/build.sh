@@ -9,7 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
+# The build prefix first: its python3 (python313, with packaging-cp313) is
+# what glib's gdbus-codegen must run with (recipe.yaml).
+export PATH="${CVC_BUILD_PREFIX:+${CVC_BUILD_PREFIX}/bin:}${CVC_DEPS_PREFIX}/bin:${PATH}"
 # share/pkgconfig too: xorgproto (xproto.pc and kbproto.pc, which x11.pc
 # requires) and wayland-protocols install their .pc files there.
 # libdata/pkgconfig is FreeBSD's.
