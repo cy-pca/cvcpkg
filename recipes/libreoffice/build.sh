@@ -75,10 +75,39 @@ rm -rf "${W}/debs" "${W}/root"
 # Prove it: a headless conversion with a throwaway profile. The runtime deps
 # (cairo, the X11 helpers, fontconfig) are in the deps prefix during the build;
 # once installed, cvcpkg's pack pass gives the binaries a RUNPATH to them.
-export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 T="${W}/smoke"
 rm -rf "${T}" && mkdir -p "${T}"
 printf '<html><body><h1>cvcpkg libreoffice</h1><p>smoke test</p></body></html>\n' > "${T}/smoke.html"
+# DIAGNOSTIC (not for merge): what LibreOffice loads from the deps prefix, and
+# whether the conversion works with only the runner's system libraries.
+P="${CVC_INSTALL_DIR}/lib/libreoffice/program"
+echo "== without the deps prefix on LD_LIBRARY_PATH"
+HOME="${T}/a" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pa" \
+    --convert-to pdf --outdir "${T}/a" "${T}/smoke.html" 2>&1 | tail -5 || true
+ls -l "${T}/a" 2>&1 | tail -3
+export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+echo "== libraries resolved from the deps prefix"
+for f in "${P}/soffice.bin" "${P}/libmergedlo.so" "${P}/libvclplug_genlo.so" "${P}/libvcllo.so"; do
+    [ -f "$f" ] && ldd "$f" | grep -F "${CVC_DEPS_PREFIX}" | sed "s|^|  $(basename "$f"): |"
+done | sort -u
+for lib in "${CVC_DEPS_PREFIX}"/lib/lib*.so*; do :; done
+for one in libcairo.so.2 libfontconfig.so.1 libfreetype.so.6 libpixman-1.so.0 libpng16.so.16 libxml2.so.2 libexpat.so.1 libz.so.1 libX11.so.6 libxcb.so.1; do
+    [ -e "${CVC_DEPS_PREFIX}/lib/${one}" ] || continue
+    mkdir -p "${T}/hide"
+    echo "== hiding ${one} from the deps prefix"
+    mv "${CVC_DEPS_PREFIX}/lib/${one}" "${T}/hide/"
+    HOME="${T}/b" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pb" \
+        --convert-to pdf --outdir "${T}/b" "${T}/smoke.html" 2>&1 | tail -3 || true
+    ls "${T}/b" 2>/dev/null | grep -q smoke.pdf && echo "   -> PDF produced without the deps prefix's ${one}"
+    rm -rf "${T}/b" "${T}/pb"
+    mv "${T}/hide/${one}" "${CVC_DEPS_PREFIX}/lib/"
+done
+if command -v gdb >/dev/null 2>&1; then
+    echo "== gdb backtrace of the bad_alloc"
+    HOME="${T}/c" gdb -batch -ex "catch throw std::bad_alloc" -ex run -ex bt \
+        --args "${P}/soffice.bin" --headless --norestore "-env:UserInstallation=file://${T}/pc" \
+        --convert-to pdf --outdir "${T}/c" "${T}/smoke.html" 2>&1 | grep -E "^#|catch|throw" | head -40 || true
+fi
 # soffice's own output is kept and shown on failure: the fleet's 2026-10-15
 # populate logged only "soffice --convert-to pdf failed".
 if ! HOME="${T}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
