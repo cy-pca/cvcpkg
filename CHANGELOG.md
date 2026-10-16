@@ -28,6 +28,21 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+**Single-file builders self-update from the registry.** A builder running the
+single-file binary used to ignore `builder.update` -- it cannot pip-install
+itself -- so it had to be replaced by hand.  It now replaces itself with the
+registry's own `cvcpkg` package for its platform: the same path on Linux,
+macOS, Windows and the BSDs.  The download is checked against the registry's
+sha256 and the new binary must report the release it claims before it is
+swapped in; builders sharing a binary replace it once.  See
+docs/cvcpkg-remote-builders.md.
+
+- `recipes/cvcpkg` builds for NetBSD too.
+
+---
+
 ## v2.5.1
 
 **A release so the builder fleet updates.** Builders self-update only to a

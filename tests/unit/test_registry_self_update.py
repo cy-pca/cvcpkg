@@ -231,6 +231,7 @@ def frozen_binary(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "executable", str(binary))
     monkeypatch.setattr("cvcpkg.__version__", "2.5.0")
     monkeypatch.delenv("CVCPKG_BUILDER_SUPERVISED", raising=False)
+    monkeypatch.delenv("CVCPKG_FLEET_WORKER", raising=False)
     execs: list[dict] = []
 
     def _exec(token, extra_env=None):
@@ -260,6 +261,26 @@ def test_registry_update_replaces_the_binary_and_restarts(monkeypatch, frozen_bi
     # Nothing left beside it but the lock file.
     leftovers = {p.name for p in binary.parent.iterdir()} - {"cvcpkg"}
     assert leftovers <= {builder_mod._BINARY_UPDATE_LOCK_NAME}, leftovers
+
+
+@posix_only
+def test_a_fleet_worker_exits_for_its_supervisor_instead_of_re_exec(monkeypatch, frozen_binary):
+    """A re-exec keeps the old PyInstaller launcher (our parent) alive with its
+    ~85 MB unpacked copy -- one more per update.  A fleet worker exits with
+    the update code instead; `builder fleet` restarts it on the new binary."""
+    from cvcpkg.builder_fleet import FLEET_WORKER_ENV
+
+    binary, execs = frozen_binary
+    reg = _Registry(_tar_gz({"bin/cvcpkg": _script("2.5.1")}), "2.5.1+cvc.1")
+    monkeypatch.setattr("httpx.Client", reg.client_cls())
+    monkeypatch.setenv(FLEET_WORKER_ENV, "1")
+
+    with pytest.raises(SystemExit) as exc:
+        builder_mod._registry_self_update(_source(), token="tok")
+
+    assert exc.value.code == builder_mod._SUPERVISOR_RESTART_CODE
+    assert b"version 2.5.1" in binary.read_bytes()
+    assert not execs
 
 
 @posix_only

@@ -1554,6 +1554,13 @@ def _supervise_fleet(fleet, restart_delay: float) -> None:
             if p.poll() is not None:
                 _reap(p)
                 lived = now - started.get(fs.name, now)
+                if p.returncode == _SUPERVISOR_RESTART_CODE:
+                    # It self-updated and asks to be started again, on the
+                    # binary now on disk: at once, and not counted as a crash.
+                    delays.pop(fs.name, None)
+                    respawn_at[fs.name] = now
+                    click.echo(f"worker {fs.name} updated itself; restarting it now")
+                    continue
                 delay = _next_respawn_delay(delays.get(fs.name, 0.0), restart_delay, lived)
                 delays[fs.name] = delay
                 respawn_at[fs.name] = now + delay
@@ -1752,6 +1759,7 @@ def _registry_self_update(
     passed every check.
     """
     from cvcpkg import __version__ as running
+    from cvcpkg.builder_fleet import FLEET_WORKER_ENV
     from cvcpkg.registry_update import (
         RegistryUpdateError,
         probe_version,
@@ -1826,6 +1834,17 @@ def _registry_self_update(
                 stop, f"{installed} is installed; not restarting into it (the next start runs it)"
             ):
                 return
+            if os.environ.get(FLEET_WORKER_ENV):
+                # A re-exec cannot replace this binary's PyInstaller launcher,
+                # our parent: it would stay, holding its unpacked copy (~85 MB
+                # in $TMPDIR) until the builder stops -- one more per update.
+                # `builder fleet` restarts a worker that exits, at once for
+                # this code, as a fresh launcher + interpreter pair.
+                click.echo(
+                    f"  self-update: installed {installed}; exiting for the fleet "
+                    f"supervisor to restart this worker (exit {_SUPERVISOR_RESTART_CODE})."
+                )
+                raise SystemExit(_SUPERVISOR_RESTART_CODE)
             click.echo(f"  self-update: installed {installed}, restarting...")
             _reexec_builder(token, extra_env)
     except RegistryUpdateError as exc:

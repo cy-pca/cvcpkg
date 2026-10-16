@@ -73,9 +73,13 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   binary (`packaging/cvcpkg.spec`). Either way the supervisor starts each
   worker with the same cvcpkg it is running itself: `python -m cvcpkg builder
   run ...` from a pip install, `<binary> builder run ...` from the binary
-  (each binary worker unpacks its own copy). A server-pushed self-update only
-  applies to a pip install; to update a binary fleet, replace the binary and
-  restart the unit.
+  (each binary worker unpacks its own copy). A server-pushed self-update works
+  for both: a pip install updates from its source checkout, the binary from
+  the registry's own `cvcpkg` package (see
+  [cvcpkg-remote-builders.md](cvcpkg-remote-builders.md)). Workers sharing one
+  binary replace it once, under a lock beside it; the supervisor itself keeps
+  running the code it started with until the unit restarts, but every worker
+  it (re)starts runs the binary on disk.
 - From the binary, the supervisor and every worker each unpack the binary into
   `$TMPDIR` (about 85 MB apiece for the combined build) and remove it on exit.
   A worker killed with SIGKILL leaves its copy behind, so give the unit a
