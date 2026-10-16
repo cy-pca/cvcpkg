@@ -37,6 +37,7 @@ try {
         '--buildtype=release',
         '--libdir=lib',
         "--default-library=$defaultLib",
+        '--wrap-mode=nofallback',
         '-Dgobject_types=true',
         '-Dintrospection=disabled',
         '-Dtests=false',

@@ -136,6 +136,7 @@ _dump_meson_log() {
 if ! "${PY_NATIVE}" -m pip wheel \
     --no-build-isolation --no-deps --no-index --no-cache-dir \
     --wheel-dir "${WHEELOUT}" \
+    -C setup-args=--wrap-mode=nofallback \
     -C setup-args=--cross-file="${_CROSS}" \
     -C setup-args=-Dallow-noblas=true \
     -C builddir="${CVC_BUILD_DIR}/meson" \

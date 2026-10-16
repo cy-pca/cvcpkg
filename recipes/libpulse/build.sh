@@ -27,6 +27,7 @@ cd "${CVC_SOURCE_DIR}"
 # -lpulse fails with "undefined reference to pa_*" (libpulsecommon symbols).
 
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \

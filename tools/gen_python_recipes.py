@@ -2787,6 +2787,10 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     _write_recipe(d, body, floor=floor)
 
     check = m.get("check") or f"import {_toppkg(base)}"
+    # A meson-backed sdist (meson-python) refuses meson's subproject fallback,
+    # as every meson recipe does: a missing dependency fails the build instead
+    # of being downloaded and built from upstream.
+    meson = "meson" in backends
     sh = _BUILD_SH_SDIST if mode == "sdist" else _BUILD_SH
     (d / "build.sh").write_text(
         sh.format(
@@ -2797,6 +2801,8 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             dist=m["pypi_name"],
             version=m["version"],
             backends=", ".join(backends) or "(none declared)",
+            meson_note=_MESON_NOTE if meson else "",
+            meson_args="    -C setup-args=--wrap-mode=nofallback \\\n" if meson else "",
             # An any-only column (Windows dropped by _windows_gap) is a noarch
             # recipe in the strict sense: it builds once on whichever host claims
             # it, so it must not read CVC_PLATFORM (tests/unit/test_noarch_recipes).
@@ -2812,7 +2818,11 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     if windows and mode == "sdist":
         ps1.write_text(
             _BUILD_PS1_SDIST.format(
-                name=name, check=_ps1_sq(check), dist=m["pypi_name"], version=m["version"]
+                name=name,
+                check=_ps1_sq(check),
+                dist=m["pypi_name"],
+                version=m["version"],
+                meson_args="    -C setup-args=--wrap-mode=nofallback `\n" if meson else "",
             ),
             encoding="utf-8",
             newline="\n",
@@ -2963,6 +2973,9 @@ _SDIST_NOARCH_ENV_BLOCK = """# Noarch column (platform: any only): built once on
 # host claims it, so it sources no platform env script -- a pure-Python build
 # needs no toolchain.
 """
+_MESON_NOTE = """# --wrap-mode=nofallback: a dependency meson cannot find fails the build; it is
+# never downloaded and built from upstream as a subproject.
+"""
 _BUILD_SH_SDIST = """#!/usr/bin/env bash
 # recipes/{name}/build.sh — build {dist} {version} FROM SOURCE (generated).
 #
@@ -3005,14 +3018,14 @@ fi
 # ── 3. Build the wheel from the extracted sdist ─────────────────────────────
 # --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.
 # --no-index: no network resolution — this is what makes air-gapped builds work.
-WHEELHOUSE="${{CVC_BUILD_DIR:-${{CVC_SOURCE_DIR}}}}/wheelhouse"
+{meson_note}WHEELHOUSE="${{CVC_BUILD_DIR:-${{CVC_SOURCE_DIR}}}}/wheelhouse"
 mkdir -p "${{WHEELHOUSE}}"
 "${{PY_EXE}}" -m pip wheel \\
     --no-build-isolation \\
     --no-deps \\
     --no-index \\
     --no-cache-dir \\
-    --wheel-dir "${{WHEELHOUSE}}" \\
+{meson_args}    --wheel-dir "${{WHEELHOUSE}}" \\
     "${{CVC_SOURCE_DIR}}"
 
 # --no-deps means the wheelhouse holds exactly one wheel: ours.  A shell glob,
@@ -3061,7 +3074,7 @@ $root = if ($env:CVC_BUILD_DIR) {{ $env:CVC_BUILD_DIR }} else {{ $env:CVC_SOURCE
 $wheelhouse = Join-Path $root 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `
-    --wheel-dir $wheelhouse $env:CVC_SOURCE_DIR
+{meson_args}    --wheel-dir $wheelhouse $env:CVC_SOURCE_DIR
 if ($LASTEXITCODE -ne 0) {{ throw "{name}: pip wheel failed ($LASTEXITCODE)" }}
 
 $wheel = Get-ChildItem -Path $wheelhouse -Filter '*.whl' -File | Select-Object -First 1

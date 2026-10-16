@@ -103,6 +103,7 @@ _dump_meson_log() {
 if ! "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \
+  -C setup-args=--wrap-mode=nofallback \
   ${BLAS_ARGS[@]+"${BLAS_ARGS[@]}"} \
   -C builddir="${CVC_BUILD_DIR}/meson" \
   -C compile-args=-j"${CVC_JOBS:-4}" \

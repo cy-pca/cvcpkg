@@ -45,6 +45,7 @@ fi
 # Meson build.  Wayland + X11 on Linux; macOS native backend.
 MESON_OPTS=(
     --prefix="${CVC_INSTALL_DIR}"
+    --wrap-mode=nofallback
     --buildtype=release
     --libdir=lib
     --pkg-config-path="$(IFS=,; echo "${_pc_dirs[*]}")"

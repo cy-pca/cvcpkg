@@ -28,6 +28,7 @@ cd "${CVC_SOURCE_DIR}"
 # -Dnls=false: translations need gettext's msgfmt; the XKB data itself is
 # language-neutral and the X server never reads the .mo files.
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     -Dnls=false

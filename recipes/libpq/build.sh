@@ -52,6 +52,7 @@ cd "${CVC_SOURCE_DIR}"
 # psql is not packaged, so it is off.  (Enabled, it failed the build once the
 # readline build dep moved to CVC_BUILD_PREFIX, which this script never searched.)
 meson setup "${CVC_BUILD_DIR}" \
+    --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir=lib \
     --buildtype=release \

@@ -45,6 +45,8 @@ fi
 # ── 3. Build the wheel from the extracted sdist ─────────────────────────────
 # --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.
 # --no-index: no network resolution — this is what makes air-gapped builds work.
+# --wrap-mode=nofallback: a dependency meson cannot find fails the build; it is
+# never downloaded and built from upstream as a subproject.
 WHEELHOUSE="${CVC_BUILD_DIR:-${CVC_SOURCE_DIR}}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
 "${PY_EXE}" -m pip wheel \
@@ -52,6 +54,7 @@ mkdir -p "${WHEELHOUSE}"
     --no-deps \
     --no-index \
     --no-cache-dir \
+    -C setup-args=--wrap-mode=nofallback \
     --wheel-dir "${WHEELHOUSE}" \
     "${CVC_SOURCE_DIR}"
 

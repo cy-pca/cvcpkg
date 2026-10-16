@@ -100,6 +100,7 @@ mkdir -p "${WHEELHOUSE}"
     --no-cache-dir \
     -C setup-args=-Dsystem-freetype=true \
     -C setup-args=-Dsystem-qhull=true \
+    -C setup-args=--wrap-mode=nofallback \
     -C compile-args=-j"${CVC_JOBS:-4}" \
     --wheel-dir "${WHEELHOUSE}" \
     "${CVC_SOURCE_DIR}"

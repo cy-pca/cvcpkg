@@ -595,6 +595,10 @@ function Invoke-CvcMsysHostToolBuild {
 # MinGW/MSYS2 directories are stripped from PATH for the duration of
 # the build to prevent gcc headers from contaminating the MSVC build.
 #
+# --wrap-mode=nofallback: a dependency meson cannot find fails setup.
+# It is never replaced by a subproject that meson downloads from upstream
+# during the build and installs into the prefix (see recipes/pango/build.sh).
+#
 # Usage:
 #   Invoke-CvcMesonBuild [-MesonArgs <string[]>]
 function Invoke-CvcMesonBuild {
@@ -629,7 +633,8 @@ function Invoke-CvcMesonBuild {
             "--prefix=$env:CVC_INSTALL_DIR",
             "--buildtype=$buildtype",
             '--libdir=lib',
-            "--default-library=$defaultLibrary"
+            "--default-library=$defaultLibrary",
+            '--wrap-mode=nofallback'
         )
         if ($pkgConfigPath -and (Test-Path $pkgConfigPath)) {
             $setupArgs += "--pkg-config-path=$pkgConfigPath"

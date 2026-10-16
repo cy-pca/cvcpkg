@@ -8,7 +8,6 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
 Invoke-CvcMesonBuild @(
-    '--wrap-mode=nofallback',
     '-Dbase=enabled',
     '-Dgood=enabled',
     '-Dugly=disabled',
