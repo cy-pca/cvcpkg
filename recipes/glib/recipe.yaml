@@ -31,9 +31,18 @@ depends:
     - ninja
     - meson
     - pkg-config
+    # GLib's meson.build calls find_installation(modules: ['packaging']), which
+    # checks the interpreter meson runs on: cvcpkg's python3 (build.sh puts the
+    # build prefix first on PATH) or, on Windows, python312 (meson.cmd runs the
+    # prefix's python.exe).  packaging comes from its cvcpkg recipe, never from
+    # PyPI at build time.
     - name: python3
       platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: packaging-cp313
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
+      platforms: [windows]
+    - name: packaging-cp312
       platforms: [windows]
   runtime:
     # OpenBSD has no iconv in libc; GLib *links* cvcpkg's GNU libiconv there, so

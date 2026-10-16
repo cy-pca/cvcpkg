@@ -10,22 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1090
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-# Our meson/ninja/pkg-config live in the prefix bin.
-export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
+# Our meson/ninja/pkg-config live in the prefix bin.  The build prefix comes
+# first: its python3 (python313, with packaging-cp313) is what meson's
+# `#!/usr/bin/env python3` runs on, and GLib's meson.build requires
+# `packaging` in that interpreter (find_installation(modules: ['packaging'])).
+export PATH="${CVC_BUILD_PREFIX:+${CVC_BUILD_PREFIX}/bin:}${CVC_DEPS_PREFIX}/bin:${PATH}"
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-
-# GLib's meson build hard-requires the python 'packaging' module
-# (import('python').find_installation(modules: ['packaging'])).  If the
-# builder's python3 lacks it, stage it into a throwaway dir on
-# PYTHONPATH — this touches no system site-packages, so it is safe under
-# PEP 668 (externally-managed environments).
-if ! python3 -c 'import packaging' >/dev/null 2>&1; then
-    _pkg_stage="$(mktemp -d)"
-    python3 -m pip install --quiet --target "${_pkg_stage}" packaging \
-        || pip3 install --quiet --target "${_pkg_stage}" packaging
-    export PYTHONPATH="${_pkg_stage}${PYTHONPATH:+:${PYTHONPATH}}"
-fi
 
 # Embed $ORIGIN RPATH so glib's own libs (and consumers) resolve within
 # whatever prefix they land in.
