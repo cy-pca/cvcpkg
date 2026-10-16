@@ -29,6 +29,13 @@ depends:
   build:
     - cmake
     - ninja
+    # test.sh checks libpcre2-8.pc with cvcpkg's own pkg-config.  On Windows it
+    # used to find Strawberry Perl's pkg-config script, which Git Bash's perl
+    # cannot run ("Can't locate Pod/Usage.pm"), so every Windows build failed its
+    # test.  Scoped to where pkg-config is published; haiku and cosmo keep the
+    # host's.
+    - name: pkg-config
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
   runtime: []
   host_tools: []
 
