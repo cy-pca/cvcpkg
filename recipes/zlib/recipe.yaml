@@ -2,6 +2,9 @@ schema_version: 1
 recipe:
   name: zlib
   upstream_version: "1.3.1"
+  # The Windows build now also installs z.lib (build.ps1), the MSVC spelling of
+  # zlib.pc's -lz that package.files already declared.  No bump: Windows has no
+  # cvc.5 bundle, and no other platform's files change.
   cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
