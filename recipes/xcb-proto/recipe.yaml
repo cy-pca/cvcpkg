@@ -13,15 +13,17 @@ recipe:
     XML-XCB protocol descriptions + the xcbgen Python codegen module that libxcb consumes at build time.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz
-  sha256: "2c1bacd2110f4799f74de6ebb714b94cf6f80fb112316b1219480fd22562148c"
-  strip_components: 1
+  # Built from the source package xcb-proto-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/xcb/xcb-proto-1.17.0.tar.xz).
+  type: package
+  package: xcb-proto-src
 
 patches: []
 
 depends:
   build:
+    - name: xcb-proto-src
+      version: "==1.17.0"
     - pkg-config
     - name: python311
   runtime: []

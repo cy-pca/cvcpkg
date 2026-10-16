@@ -13,15 +13,17 @@ recipe:
     X Transport abstraction — build-time headers/macros shared by X11/ICE servers and libraries.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.6.0.tar.xz
-  sha256: "faafea166bf2451a173d9d593352940ec6404145c5d1da5c213423ce4d359e92"
-  strip_components: 1
+  # Built from the source package xtrans-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/xtrans-1.6.0.tar.xz).
+  type: package
+  package: xtrans-src
 
 patches: []
 
 depends:
   build:
+    - name: xtrans-src
+      version: "==1.6.0"
     - pkg-config
   runtime: []
   host_tools: []

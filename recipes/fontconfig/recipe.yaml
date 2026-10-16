@@ -30,10 +30,10 @@ recipe:
     Windows.
 
 source:
-  type: tarball
-  url: https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz
-  sha256: "63a0658d0e06e0fa886106452b58ef04f21f58202ea02a94c39de0d3335d7c0e"
-  strip_components: 1
+  # Built from the source package fontconfig-src, which pins the upstream tarball
+  # (https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz).
+  type: package
+  package: fontconfig-src
 
 patches:
   # Unix: look for etc/fonts relative to the loaded library (dladdr) before
@@ -42,6 +42,8 @@ patches:
 
 depends:
   build:
+    - name: fontconfig-src
+      version: "==2.15.0"
     - ninja
     - meson
     - pkg-config

@@ -2271,6 +2271,12 @@ def builder_run(
     # advertising all of them; advertising a capability never *reserves* the
     # builder — it only adds eligibility.
     advertised_caps: set[str] = {c.strip() for c in capabilities if c.strip()}
+    # Features of this code, not of the host, so advertised regardless of
+    # --no-auto-capabilities: jobs that need them are routed only to builders
+    # that have them (a builder on older code never gets one it would fail).
+    from cvcpkg.builder import SOURCE_PACKAGES_CAPABILITY
+
+    advertised_caps.add(SOURCE_PACKAGES_CAPABILITY)
     if not no_auto_capabilities:
         from cvcpkg.platform import host_capabilities
 

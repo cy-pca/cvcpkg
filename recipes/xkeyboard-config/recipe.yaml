@@ -15,15 +15,17 @@ recipe:
     libxkbcommon.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/archive/individual/data/xkeyboard-config/xkeyboard-config-2.48.tar.xz
-  sha256: "b77041324f0109f77161ee43743fe04baa485866af8460d31e476ad3f7648fd5"
-  strip_components: 1
+  # Built from the source package xkeyboard-config-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/archive/individual/data/xkeyboard-config/xkeyboard-config-2.48.tar.xz).
+  type: package
+  package: xkeyboard-config-src
 
 patches: []
 
 depends:
   build:
+    - name: xkeyboard-config-src
+      version: "==2.48"
     - meson
     - ninja
     - pkg-config

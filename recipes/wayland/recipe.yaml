@@ -54,10 +54,10 @@ recipe:
     and libwayland-cursor.  Required by GTK 4 on Linux.
 
 source:
-  type: tarball
-  url: https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.23.1/downloads/wayland-1.23.1.tar.xz
-  sha256: "864fb2a8399e2d0ec39d56e9d9b753c093775beadc6022ce81f441929a81e5ed"
-  strip_components: 1
+  # Built from the source package wayland-src, which pins the upstream tarball
+  # (https://gitlab.freedesktop.org/wayland/wayland/-/releases/1.23.1/downloads/wayland-1.23.1.tar.xz).
+  type: package
+  package: wayland-src
 
 patches:
   # NetBSD: epoll-shim + _NETBSD_SOURCE (meson.build), LOCAL_PEEREID peer
@@ -67,6 +67,8 @@ patches:
 
 depends:
   build:
+    - name: wayland-src
+      version: "==1.23.1"
     - ninja
     - meson
     - pkg-config

@@ -13,15 +13,17 @@ recipe:
     X Session Management library (SM), built on libICE.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libSM-1.2.6.tar.xz
-  sha256: "be7c0abdb15cbfd29ac62573c1c82e877f9d4047ad15321e7ea97d1e43d835be"
-  strip_components: 1
+  # Built from the source package libsm-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libSM-1.2.6.tar.xz).
+  type: package
+  package: libsm-src
 
 patches: []
 
 depends:
   build:
+    - name: libsm-src
+      version: "==1.2.6"
     - pkg-config
     - name: xorgproto
     - name: xtrans

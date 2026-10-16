@@ -118,6 +118,10 @@ class SourceSpec:
     # Clone depth; 0 means a full clone (needed by recipes whose build reads
     # git history, e.g. to derive a version).
     depth: int = 1
+    # ── package sources ──
+    # The source recipe whose staged tree (src/<package>/, see
+    # docs/source-recipes.md) this recipe builds from instead of downloading.
+    package: str = ""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SourceSpec:
@@ -137,6 +141,7 @@ class SourceSpec:
             submodules=_normalize_submodules(d.get("submodules")),
             submodule_pins=dict(d.get("submodule_pins", {}) or {}),
             depth=int(d.get("depth", 1)),
+            package=d.get("package", ""),
         )
 
 
@@ -1066,13 +1071,61 @@ def _fetch_python_wheel(source: SourceSpec, dest: Path, platform: str, arch: str
     return source_dir
 
 
-def fetch_source(recipe: Recipe, work_dir: Path, *, platform: str = "", arch: str = "") -> Path:
+#: Builder capability for recipes whose source is a source package
+#: (source.type=package).  Advertised by every builder running this code;
+#: required by the jobs of such recipes (see cli/_builds.py).
+SOURCE_PACKAGES_CAPABILITY = "source_packages"
+
+
+def _fetch_source_package(source: SourceSpec, dest: Path, prefixes: Sequence[Path | None]) -> Path:
+    """Copy the staged tree of the source recipe *source.package* to ``dest/src``.
+
+    A source recipe (docs/source-recipes.md) stages the pristine upstream tree
+    at ``src/<name>/`` of its bundle, and a recipe that builds it declares it
+    in ``depends.build``, so it is installed into the build prefix (or the one
+    shared prefix of a pack-all run) before this recipe builds.  The tree is
+    copied, not used in place: patches and in-tree builds must not modify the
+    shared staged copy another recipe may build from too.
+    """
+    name = source.package
+    if not name:
+        raise RecipeError("source.type=package but no source.package named")
+    searched = []
+    for prefix in prefixes:
+        if prefix is None:
+            continue
+        staged = Path(prefix) / "src" / name
+        searched.append(str(staged))
+        if staged.is_dir():
+            source_dir = dest / "src"
+            if source_dir.exists():
+                shutil.rmtree(source_dir)
+            shutil.copytree(staged, source_dir, symlinks=True)
+            return source_dir
+    raise RecipeError(
+        f"source package {name} is not staged (looked in {', '.join(searched) or 'no prefix'}); "
+        f"declare it in depends.build so it is installed before this recipe builds"
+    )
+
+
+def fetch_source(
+    recipe: Recipe,
+    work_dir: Path,
+    *,
+    platform: str = "",
+    arch: str = "",
+    source_prefixes: Sequence[Path | None] = (),
+) -> Path:
     """Fetch or locate the source tree for a recipe.
 
     *platform*/*arch* select the entry from an ``artifacts`` map; they
     default to the host, which is what a native build wants.
+    *source_prefixes* are where a ``type: package`` source's staged tree is
+    looked for (the build prefix first, then the deps prefix).
     """
     src = recipe.source
+    if src.type == "package":
+        return _fetch_source_package(src, work_dir, source_prefixes)
     if src.type == "tarball":
         if src.artifacts:
             # A prebuilt toolchain differs per host (llvm-mingw ships x86_64 and
@@ -2908,7 +2961,7 @@ def _exported_metadata(root: Path) -> Iterator[tuple[Path, str]]:
     text file: CMake's own find modules and pkgconf's default search path
     legitimately *name* /opt/homebrew as a place to look.
     """
-    for f in sorted(root.rglob("*")):
+    for f in sorted(_prefix_files(root)):
         if f.is_symlink() or not f.is_file():
             continue
         rel = f.relative_to(root).as_posix()
@@ -3240,6 +3293,21 @@ def _merge_tree(src: Path, dst: Path) -> None:
             shutil.copy2(entry, target)
 
 
+def _prefix_files(target_dir: Path) -> Iterator[Path]:
+    """Every path under *target_dir* except its top-level ``src/``.
+
+    ``src/<name>/`` holds source packages' staged upstream trees
+    (docs/source-recipes.md): data a recipe builds from, which the prefix
+    rewrites below must not alter (an upstream .pc file or script there is not
+    an installed one), and which can be large.
+    """
+    for dirpath, dirs, names in os.walk(target_dir):
+        if Path(dirpath) == Path(target_dir) and "src" in dirs:
+            dirs.remove("src")
+        for name in dirs + names:
+            yield Path(dirpath) / name
+
+
 def _rewrite_pc_prefixes(target_dir: Path) -> None:
     """Rewrite ``prefix=`` lines in pkg-config ``.pc`` files under *target_dir*.
 
@@ -3250,7 +3318,7 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
     so that subsequent recipes find valid paths via ``pkg-config``.
     """
     target_str = str(target_dir)
-    for pc_file in target_dir.rglob("*.pc"):
+    for pc_file in (f for f in _prefix_files(target_dir) if f.suffix == ".pc"):
         try:
             text = pc_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -3311,7 +3379,7 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
     """
     bin_dir = target_dir / "bin"
     target_str = str(target_dir)
-    for path in target_dir.rglob("*"):
+    for path in _prefix_files(target_dir):
         if path.parent != bin_dir and path.suffix not in _BAKED_PATH_SUFFIXES:
             continue
         if not path.is_file():
@@ -3781,7 +3849,12 @@ def build_recipe(
             if staged.is_dir():
                 source_dir = staged
         if source_dir is None:
-            source_dir = fetch_source(recipe, work_dir, platform=platform)
+            source_dir = fetch_source(
+                recipe,
+                work_dir,
+                platform=platform,
+                source_prefixes=(build_prefix, prefix, host_tools_prefix),
+            )
             if recipe.patches:
                 apply_patches(recipe, source_dir)
             if incremental:
@@ -5079,7 +5152,7 @@ def build_all(
                 ht_work = _mkworkdir(f"cvcpkg-{ht_recipe.name}-", work_dir_root)
                 try:
                     ht_install = ht_work / "install"
-                    ht_source = fetch_source(ht_recipe, ht_work)
+                    ht_source = fetch_source(ht_recipe, ht_work, source_prefixes=(_bp, prefix))
                     if ht_recipe.patches:
                         apply_patches(ht_recipe, ht_source)
                     ht_ctx = BuildContext(
@@ -5295,7 +5368,7 @@ def build_all(
             elif per_component:
                 work_dir = _mkworkdir(f"cvcpkg-{recipe.name}-", work_dir_root)
                 install_dir = work_dir / "install"
-                source_dir = fetch_source(recipe, work_dir)
+                source_dir = fetch_source(recipe, work_dir, source_prefixes=(_bp, prefix))
                 if recipe.patches:
                     apply_patches(recipe, source_dir)
                 ctx = BuildContext(

@@ -15,15 +15,17 @@ recipe:
     xkeyboard-config package.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/archive/individual/app/xkbcomp-1.5.0.tar.xz
-  sha256: "2ac31f26600776db6d9cd79b3fcd272263faebac7eb85fb2f33c7141b8486060"
-  strip_components: 1
+  # Built from the source package xkbcomp-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/archive/individual/app/xkbcomp-1.5.0.tar.xz).
+  type: package
+  package: xkbcomp-src
 
 patches: []
 
 depends:
   build:
+    - name: xkbcomp-src
+      version: "==1.5.0"
     - pkg-config
     - patchelf
     - name: xorgproto

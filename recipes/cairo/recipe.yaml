@@ -21,15 +21,17 @@ recipe:
     by Pango and GTK 4.
 
 source:
-  type: tarball
-  url: https://cairographics.org/releases/cairo-1.18.2.tar.xz
-  sha256: "a62b9bb42425e844cc3d6ddde043ff39dbabedd1542eba57a2eb79f85889d45a"
-  strip_components: 1
+  # Built from the source package cairo-src, which pins the upstream tarball
+  # (https://cairographics.org/releases/cairo-1.18.2.tar.xz).
+  type: package
+  package: cairo-src
 
 patches: []
 
 depends:
   build:
+    - name: cairo-src
+      version: "==1.18.2"
     - ninja
     - meson
     - pkg-config

@@ -13,15 +13,17 @@ recipe:
     XCB image convenience library (xcb-image).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-image-0.4.1.tar.xz
-  sha256: "ccad8ee5dadb1271fd4727ad14d9bd77a64e505608766c4e98267d9aede40d3d"
-  strip_components: 1
+  # Built from the source package xcb-util-image-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-image-0.4.1.tar.xz).
+  type: package
+  package: xcb-util-image-src
 
 patches: []
 
 depends:
   build:
+    - name: xcb-util-image-src
+      version: "==0.4.1"
     - pkg-config
   runtime:
     - name: libxcb

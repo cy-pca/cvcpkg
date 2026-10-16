@@ -111,6 +111,51 @@ cc -I "$SRC" -o "$CVC_INSTALL_DIR/bin/app" "$CVC_SOURCE_DIR/main.c" "$SRC/impl.c
 `cvc_source_dir_of` resolves against `CVC_BUILD_PREFIX`, falling back to
 `CVC_DEPS_PREFIX` when the build prefix is not separated.
 
+### Building an upstream tarball from its source package (`type: package`)
+
+The common case — a recipe that would otherwise download one upstream tarball —
+needs no build-script change at all.  The recipe names the source package as its
+source, and the builder hands its build script a **copy** of the staged tree as
+`CVC_SOURCE_DIR`, exactly as if it had downloaded and extracted the tarball
+itself (patches are applied to the copy, and an in-tree build cannot touch the
+staged tree another recipe may build from):
+
+```yaml
+# recipes/libxcb/recipe.yaml
+source:
+  type: package
+  package: libxcb-src
+depends:
+  build:
+    - name: libxcb-src        # required: this edge is what installs the tree
+      version: "==1.17.0"     # the upstream version the recipe was written for
+```
+
+The source recipe `libxcb-src` holds what the tarball recipe used to: the URL,
+the sha256, `strip_components`, any mirror.  So the upstream host is contacted
+**once**, by whichever builder publishes the noarch `libxcb-src` bundle; every
+other build — another platform or arch, a builder that cannot reach the upstream
+host, an end user building from source — installs that bundle from cvcpkg.org.
+
+`tools/make_source_package.py NAME...` does the split for an existing tarball
+recipe: it writes `recipes/NAME-src/` and rewrites NAME's `source:` block and
+`depends.build`, keeping the rest of the recipe (comments included) as it was.
+NAME's bundles do not change (same tarball, same patches), so its
+`cvc_revision` stays.  The freedesktop.org/X.org-hosted recipes were the first
+converted: on 2026-10-15 the linux/arm64 runners could not reach
+xorg.freedesktop.org at all.
+
+`cvcpkg recipes --validate` checks that `source.package` is listed in
+`depends.build`.  Fleet jobs of such recipes require the builder capability
+`source_packages`, which every builder running this code advertises, so a
+builder still on older code (which would fail with "Unknown source type") is
+never handed one.
+
+A prefix's or bundle's top-level `src/` is left alone by the relocation and
+packing passes (RUNPATH/install-name rewriting, the relocatability and Homebrew
+audits, `.pc` and script prefix rewriting): it holds upstream trees to build
+from, not installed files.
+
 This gives a clean split: **one authoritative, checksummed source package**
 feeds **many binary variants** — reproducible, mirror-friendly, and built
 without re-fetching upstream for every platform.
