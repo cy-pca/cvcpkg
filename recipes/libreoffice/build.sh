@@ -115,7 +115,7 @@ extern "C" [[noreturn]] void __cxa_throw(void *o, void *tv, void (*d)(void *)) {
     static real_t real = (real_t)dlsym(RTLD_NEXT, "__cxa_throw");
     const std::type_info *t = static_cast<const std::type_info *>(tv);
     if (t && strstr(t->name(), "bad_alloc")) report(t->name(), 0);
-    real(o, t, d);
+    real(o, tv, d);
     __builtin_unreachable();
 }
 SHIM
