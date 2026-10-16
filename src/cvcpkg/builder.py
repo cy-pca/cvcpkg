@@ -5594,6 +5594,14 @@ def build_all(
             if is_assigned:
                 if on_built is None:
                     contexts.append(ctx)
+                elif server_hit:
+                    # Restored from a bundle the server already has: packing it
+                    # again can only be skipped at publish ("already on
+                    # server"), and its pack-time gates judge a bundle an older
+                    # builder made -- linux/arm64's published gstreamer and
+                    # openssh failed them and were marked FAILED, which can
+                    # skip their dependents.
+                    print(f"  {recipe.name} is on the server already; not re-packed")
                 else:
                     try:
                         on_built(ctx)

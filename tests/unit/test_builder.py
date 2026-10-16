@@ -2559,6 +2559,66 @@ class TestBuildAllKeepGoing:
 
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
+    def test_a_server_restore_is_not_handed_to_on_built(self, mock_fetch, mock_build, tmp_path):
+        # A recipe restored from a bundle the server already has is not packed
+        # again: linux/arm64's published gstreamer and openssh, restored by
+        # version, failed the newer pack-time gates and were marked FAILED.
+        from cvcpkg.builder import build_all
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "alpha")
+        self._make_recipe(recipes_dir, "gamma")
+        mock_fetch.side_effect = lambda r, w, **kw: w / "src"
+        mock_build.side_effect = lambda ctx, **kw: ctx.install_dir.mkdir(
+            parents=True, exist_ok=True
+        )
+
+        class FakeCache:
+            def __init__(self, *a, **k):
+                pass
+
+            def lookup(self, *a, **k):
+                return None
+
+            def store(self, *a, **k):
+                return None
+
+            def restore(self, archive, target_dir):
+                Path(target_dir).mkdir(parents=True, exist_ok=True)
+
+        def probe(base, token, name, *a, **k):
+            if name == "alpha":
+                return {"hit": True, "via": "version", "archive_url": "/a.tar.zst", "sha256": ""}
+            return None
+
+        def download(url, token, dest, expected_sha256=""):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(b"x")
+            return dest
+
+        seen: list[str] = []
+        with (
+            patch("cvcpkg.build_cache.BuildCache", FakeCache),
+            patch("cvcpkg.builder._server_cache_probe", side_effect=probe),
+            patch("cvcpkg.builder._server_cache_download", side_effect=download),
+        ):
+            contexts = build_all(
+                recipes_dir,
+                platform="linux",
+                prefix=tmp_path / "prefix",
+                per_component=True,
+                cleanup_work_dirs=False,
+                keep_going=True,
+                server_cache_url="http://cvcpkg.invalid",
+                on_built=lambda ctx: seen.append(ctx.recipe.name),
+            )
+
+        assert seen == ["gamma"]
+        assert not contexts.failures
+        assert mock_build.call_count == 1  # alpha was restored, not built
+
+    @patch("cvcpkg.builder.run_build")
+    @patch("cvcpkg.builder.fetch_source")
     def test_merged_builds_leave_their_manifest_in_the_prefix(
         self, mock_fetch, mock_build, tmp_path
     ):
