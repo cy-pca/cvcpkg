@@ -66,10 +66,29 @@ depends:
     - name: wayland
       version: "^1.23"
       platforms: [linux, freebsd]
-      platforms: [linux, freebsd]
     - name: xkbcommon
       version: "^1.7"
       platforms: [linux, freebsd]
+    # The X11 backend (build.sh: -Dx11-backend=true on Linux and the BSDs)
+    # requires all of these (GTK 4.16 meson.build), and cairo's Xlib surface.
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrender
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxi
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrandr
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxcursor
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxdamage
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxfixes
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxinerama
+      platforms: [linux, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:
