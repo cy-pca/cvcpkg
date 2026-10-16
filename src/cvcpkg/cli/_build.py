@@ -488,7 +488,11 @@ def build(
         # the build prefix ("cvc_python_exe_for: interpreter not found:
         # prefix.build/bin/python3.11").  So a shipped package that a build dep
         # needs at run time is built in order and also mirrored into the build
-        # prefix, where the build dep's CVC_DEPS_PREFIX points.
+        # prefix, where the build dep's CVC_DEPS_PREFIX points.  Likewise one it
+        # needs to BUILD: wayland-protocols (a build dep of gtk4) build-depends
+        # on wayland, which also ships with gtk4, so wayland went into the
+        # deliverable prefix only and wayland-protocols' meson failed with
+        # "Build-time dependency wayland-scanner found: NO".
         from cvcpkg.builder import (
             _dep_names_for_role,
             _merge_tree,
@@ -499,7 +503,12 @@ def build(
         build_only_names = {r.name for r in build_only_recipes}
         mirror: set[str] = set()
         if build_only_recipes and _bp is not None and _bp != prefix_path:
-            queue = [d for r in build_only_recipes for d in _dep_names_for_role(r, "runtime", plat)]
+            queue = [
+                d
+                for r in build_only_recipes
+                for role in ("build", "runtime")
+                for d in _dep_names_for_role(r, role, plat)
+            ]
             while queue:
                 n = queue.pop()
                 if n in mirror or n not in by_name:
@@ -548,7 +557,7 @@ def build(
                 incremental=incremental,
             )
             if r.name in mirror and ctx.install_dir.is_dir() and ctx.install_dir != prefix_path:
-                print(f"cvcpkg: {r.name} is also a build dep's runtime dep -> {_bp}")
+                print(f"cvcpkg: {r.name} is also a build dep's dependency -> {_bp}")
                 _merge_tree(ctx.install_dir, _bp)
                 _rewrite_pc_prefixes(_bp)
                 _rewrite_script_prefixes(_bp)
