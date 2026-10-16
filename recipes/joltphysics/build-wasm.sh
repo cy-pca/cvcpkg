@@ -25,10 +25,11 @@
 #   * The library compiles JobSystemThreadPool unconditionally and links fine
 #     without -pthread, but std::thread's constructor throws
 #     std::system_error("Not supported") at runtime in a non-pthread Emscripten
-#     program, so a consumer of THIS bundle must drive PhysicsSystem::Update
-#     with JobSystemSingleThreaded. A -pthread bundle would need COOP/COEP
-#     hosting (not available on GitHub Pages) and a pthread variant axis the
-#     catalog does not have.
+#     program, so a consumer of the `wasm` bundle must drive
+#     PhysicsSystem::Update with JobSystemSingleThreaded. The `wasm-mt` matrix
+#     entry builds this same script with CVC_WASM_THREADS=1, which env-wasm.sh
+#     turns into -pthread on every object; that bundle runs JobSystemThreadPool
+#     (and needs COOP/COEP hosting, which GitHub Pages cannot give).
 #
 # ENABLE_ALL_WARNINGS=OFF is not cosmetic and must stay: it enables -Werror, and
 # cvc.2 of this recipe exists precisely because upstream's -Werror broke the

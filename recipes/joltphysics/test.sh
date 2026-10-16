@@ -12,8 +12,14 @@ set -euo pipefail
 
 _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../_common" && pwd)"
 SMOKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/smoke" && pwd)"
+# cvc_wasm_run.sh activates emsdk only for CVC_PLATFORM=wasm. wasm-mt runs on the
+# same emcc and node, so source it as wasm and restore the platform (changing
+# _common would re-key every recipe's build cache).
+_cvc_platform="${CVC_PLATFORM:-}"
+[[ "${_cvc_platform}" == "wasm-mt" ]] && CVC_PLATFORM=wasm
 # shellcheck disable=SC1091
 source "${_COMMON_DIR}/cvc_wasm_run.sh"
+CVC_PLATFORM="${_cvc_platform}"
 
 echo "-- joltphysics smoke test (${CVC_PLATFORM:-native}) --"
 
@@ -26,7 +32,7 @@ echo "  OK: headers + CMake package present"
 TMPDIR_T=$(mktemp -d)
 trap 'rm -rf "${TMPDIR_T}"' EXIT
 
-if [[ "${CVC_PLATFORM:-}" == "wasm" ]]; then
+if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasm-mt" ]]; then
     compgen -G "${CVC_INSTALL_DIR}/lib/libJolt.a" >/dev/null \
         || { echo "FAIL: lib/libJolt.a not found"; exit 1; }
     echo "  OK: libJolt.a found"
@@ -34,17 +40,22 @@ if [[ "${CVC_PLATFORM:-}" == "wasm" ]]; then
         echo "  WARN: emsdk/node unavailable, skipping compile+run"
         exit 0
     fi
+    # wasm-mt: the consumer is built with -pthread too and also runs the scene on
+    # a JobSystemThreadPool, which must match the single-threaded run bit for bit.
+    _threads=OFF
+    [[ "${CVC_PLATFORM}" == "wasm-mt" ]] && _threads=ON
     # Same toolchain file env-wasm.sh's cvc_cmake_build used.  Emscripten's
     # toolchain sets CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY, so the install
     # prefix must be given as a find root, not just a prefix path.
     cmake -G Ninja -S "${SMOKE_DIR}" -B "${TMPDIR_T}/b" \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_TOOLCHAIN_FILE="${EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
+        -DCMAKE_TOOLCHAIN_FILE="${EMSDK:-${CVC_EMSDK_DIR}}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake" \
         -DCMAKE_FIND_ROOT_PATH="${CVC_INSTALL_DIR}" \
-        -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}"
+        -DCMAKE_PREFIX_PATH="${CVC_INSTALL_DIR}" \
+        -DJOLT_SMOKE_THREADS="${_threads}"
     cmake --build "${TMPDIR_T}/b"
     cvc_wasm_run "${TMPDIR_T}/b/jolt_smoke.js"
-    echo "  OK: emcmake consumer built + ran under node"
+    echo "  OK: emcmake consumer built + ran under node (threads: ${_threads})"
 elif [[ "${CVC_PLATFORM:-}" == "wasi" || "${CVC_PLATFORM:-}" == "cosmo" ]]; then
     # wasi is not a declared platform; cosmo APEs are not runnable in the
     # builder sandbox by default.  Presence check only.

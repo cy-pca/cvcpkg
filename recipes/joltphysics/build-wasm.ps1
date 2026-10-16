@@ -26,7 +26,18 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $joltSrc = Join-Path $env:CVC_SOURCE_DIR 'Build'
 
-Invoke-CvcWasmCMakeBuild -SourceDir $joltSrc -ExtraArgs @(
+# wasm-mt (the matrix entry sets CVC_WASM_THREADS=1): -pthread on every object,
+# because wasm-ld refuses to link pthread and non-pthread objects together, and
+# the threaded bundle is what lets a consumer run JobSystemThreadPool. The linux
+# script gets the same flags from env-wasm.sh's CVC_WASM_THREADS hook;
+# env-wasm.ps1 has no such hook, so it is added here rather than in _common.
+$threadArgs = @()
+if ($env:CVC_WASM_THREADS -eq '1') {
+    $threadArgs = @('-DCMAKE_C_FLAGS=-pthread', '-DCMAKE_CXX_FLAGS=-pthread')
+    Write-Host '-- CVC_WASM_THREADS=1: building Jolt with -pthread (wasm-mt) --'
+}
+
+Invoke-CvcWasmCMakeBuild -SourceDir $joltSrc -ExtraArgs (@(
     '-DCMAKE_INSTALL_LIBDIR=lib',
     '-DJPH_BUILD_SHARED_LIBS=OFF',
     '-DENABLE_INSTALL=ON',
@@ -54,4 +65,4 @@ Invoke-CvcWasmCMakeBuild -SourceDir $joltSrc -ExtraArgs @(
     '-DUSE_TZCNT=OFF',
     '-DUSE_F16C=OFF',
     '-DUSE_FMADD=OFF'
-)
+) + $threadArgs)
