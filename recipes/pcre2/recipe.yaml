@@ -78,12 +78,18 @@ build:
 
 package:
   files:
-    - lib/libpcre2-8*
-    - lib/libpcre2-16*
+    - { glob: "lib/libpcre2-8*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    - { glob: "lib/libpcre2-16*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
     # libpcre2-32 is not built (PCRE2_BUILD_PCRE2_32=OFF); the POSIX wrapper is
     # libpcre2-posix (with a hyphen).
-    - lib/libpcre2-posix*
-    - lib/cmake/pcre2/
+    - { glob: "lib/libpcre2-posix*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    - { glob: "lib/cmake/pcre2/", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    # MSVC (build.ps1): pcre2-8.lib and pcre2-8-static.lib etc., and the CMake
+    # package in cmake/ at the prefix root, where CMake looks for it on Windows.
+    - { glob: "lib/pcre2-8*.lib", platforms: [windows] }
+    - { glob: "lib/pcre2-16*.lib", platforms: [windows] }
+    - { glob: "lib/pcre2-posix*.lib", platforms: [windows] }
+    - { glob: "cmake/pcre2-config*.cmake", platforms: [windows] }
     - lib/pkgconfig/libpcre2*
     - include/pcre2.h
     - include/pcre2posix.h

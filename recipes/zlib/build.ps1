@@ -67,3 +67,16 @@ if (Test-Path $badStatic) {
 if ($env:CVC_LINK -ne 'static' -and -not (Test-Path (Join-Path $lib 'libz.dll.a'))) {
     throw 'zlib: libz.dll.a was not produced; MinGW consumers cannot link -lz'
 }
+
+# ── z.lib, so MSVC consumers can link -lz ───────────────────────────────────
+#
+# zlib.pc says `-lz`, which MSVC (and meson, for a pkg-config dependency) looks
+# up as z.lib.  glib's link failed with "cannot open input file 'z.lib'".  Both
+# sides here are MSVC, so z.lib is a plain copy of the library this link mode
+# ships: the DLL's import library (shared) or zlibstatic.lib (static).
+$stem = if ($env:CVC_LINK -eq 'static') { 'zlibstatic' } else { 'zlib' }
+$msvcLib = @("$stem.lib", "${stem}d.lib") | ForEach-Object { Join-Path $lib $_ } |
+    Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $msvcLib) { throw "zlib: no $stem.lib to alias as z.lib" }
+Copy-Item -Force $msvcLib (Join-Path $lib 'z.lib')
+Write-Host "zlib: aliased $(Split-Path -Leaf $msvcLib) -> z.lib for MSVC consumers of -lz"
