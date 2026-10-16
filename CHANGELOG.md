@@ -28,6 +28,29 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.5.1
+
+**A release so the builder fleet updates.** Builders self-update only to a
+server version newer than their own, and every prod deploy since v2.5.0 still
+reported 2.5.0, so the fleet kept running v2.5.0 code (or older) through all
+of the fixes below.  Notable for builders and populates:
+
+- Dependency, toolchain and host-tool downloads retry transport errors (#215);
+  a dropped connection to cvcpkg.org failed whole jobs (hatch-vcs-cp311 on
+  2026-10-15).  Source downloads retry too, DNS failures included (#277).
+- pack-all packs and publishes each recipe as soon as it is built, and one
+  recipe failing to pack no longer stops the rest of the shard (#286).
+  Recipes whose dependencies have no artifact or build for the host are
+  skipped with the reason (#290).
+- macOS: recipe scripts run with the OS's /bin/bash 3.2 (#264); bundles that
+  load Homebrew are refused at pack time (#248); dylib compat ids are kept
+  (#284).
+- Tarball sources can pin per-platform artifacts (#288).
+- Fixes to install (#252, #253, #259), the resolver (#251), publish/pack
+  (#168, #210) and builder job reporting (#249, #217, #246).
+
+---
+
 ## v2.5.0
 
 **Recipes whose license forbids publishing them, starting with the NVIDIA
