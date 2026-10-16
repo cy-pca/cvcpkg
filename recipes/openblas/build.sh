@@ -10,7 +10,6 @@ OPENBLAS_EXTRA=()
 case "${CVC_PLATFORM}" in
     *bsd)
         OPENBLAS_EXTRA+=(-DNOFORTRAN=ON -DUSE_OPENMP=OFF -DC_LAPACK=ON)
-        OPENBLAS_EXTRA+=("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-ld_classic")
         ;;
     macos)
         # NOFORTRAN/C_LAPACK: cvcpkg has no Fortran compiler for macOS (the
@@ -18,6 +17,7 @@ case "${CVC_PLATFORM}" in
         # clang ships no libomp: -fopenmp is a hard configure failure there, not
         # a slower build. OpenBLAS still threads through its own pthread backend.
         OPENBLAS_EXTRA+=(-DNOFORTRAN=ON -DUSE_OPENMP=OFF -DC_LAPACK=ON)
+        OPENBLAS_EXTRA+=("-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-ld_classic")
         ;;
     *)
         # Fortran LAPACK, compiled by cvcpkg's gfortran (a build dependency,
