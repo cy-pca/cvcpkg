@@ -23,11 +23,18 @@ fi
 
 cd "${CVC_SOURCE_DIR}"
 
+# --wrap-mode=nofallback: a dependency meson cannot find is an error, never a
+# subproject.  pango's cairo wrap once stood in for cvcpkg's cairo (cvc.3's
+# .pc requires x11, whose xproto.pc was only under share/pkgconfig): meson
+# downloaded cairo 1.18.7, built it without the Xlib surface, and installed it
+# over cvcpkg's, and gtk4 then failed on "Cairo was not compiled with support
+# for the xlib backend".
 meson setup "${CVC_BUILD_DIR}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \
     --default-library="${_default_lib}" \
+    --wrap-mode=nofallback \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dc_link_args="${_rpath_flags}" \
     -Dcpp_link_args="${_rpath_flags}" \
