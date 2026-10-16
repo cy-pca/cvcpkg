@@ -66,6 +66,11 @@ MESON_OPTS+=( -Dprint-cups=disabled -Dprint-cpdb=disabled )
 # auto-detection found a partial one in the fleet's deps prefix and then failed
 # on "Dependency gstreamer-player-1.0 not found" (2026-10-15 populate).
 MESON_OPTS+=( -Dmedia-gstreamer=disabled )
+# No Vulkan renderer: GTK 4.16 enables it by default and then requires the
+# Vulkan loader and glslc, which cvcpkg does not package ('Dependency "vulkan"
+# not found').  GTK renders with its GL renderer (libepoxy over libglvnd) or
+# falls back to cairo.
+MESON_OPTS+=( -Dvulkan=disabled )
 
 case "${CVC_PLATFORM}" in
     linux)
