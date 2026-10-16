@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: flex
   upstream_version: "2.6.4"
-  cvc_revision: 1
+  # cvc.2: m4-beside-flex.patch (finds the relocated m4 beside itself).
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -20,7 +21,13 @@ source:
   sha256: "e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995"
   strip_components: 1
 
-patches: []
+# m4-beside-flex.patch: when neither $M4 nor $PATH finds m4 and the
+# configure-time M4 path does not exist (a relocated install), run the m4 next
+# to this flex -- the same prefix's bin/.  PostgreSQL's pgflex runs flex with an
+# environment of only FLEX_TMP_DIR, so on linux/arm64 flex exec'd the dead
+# .../libcvc-deps/prefix/bin/m4 it was built with.
+patches:
+  - m4-beside-flex.patch
 
 depends:
   build: []
