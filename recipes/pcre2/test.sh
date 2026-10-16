@@ -74,15 +74,18 @@ else
     echo "hello world" | "${CVC_INSTALL_DIR}/bin/pcre2grep" "hello"
 
     echo 'Testing pkg-config...'
-    # Strawberry's pkg-config is a Perl script that uses Perl's $Config{path_sep}
-    # to split PKG_CONFIG_PATH.  When bash's msys Perl (path_sep=':') runs the
-    # script, paths like "C:/foo" are misparsed as "C" and "/foo".  Convert to
-    # msys-style "/c/foo" on Windows so the colon disappears.
-    _pc_path="${CVC_INSTALL_DIR}/lib/pkgconfig"
-    if [[ "${CVC_PLATFORM:-}" == "windows" ]] && command -v cygpath >/dev/null 2>&1; then
-        _pc_path="$(cygpath -u "${_pc_path}")"
-    fi
-    PKG_CONFIG_PATH="${_pc_path}" pkg-config --modversion libpcre2-8
+    # cvcpkg's pkg-config (a build dependency), by path: on Windows a bare
+    # `pkg-config` found Strawberry Perl's script, which Git Bash's perl cannot
+    # run.  Fall back to PATH where the dependency is not declared (haiku, cosmo).
+    _pkg_config=pkg-config
+    for _p in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+        if [[ -n "${_p}" ]] && { [[ -f "${_p}/bin/pkg-config" ]] || [[ -f "${_p}/bin/pkg-config.exe" ]]; }; then
+            _pkg_config="${_p}/bin/pkg-config"
+            break
+        fi
+    done
+    echo "  using ${_pkg_config}"
+    PKG_CONFIG_PATH="${CVC_INSTALL_DIR}/lib/pkgconfig" "${_pkg_config}" --modversion libpcre2-8
 fi
 
 echo '-- pcre2 smoke test passed --'
