@@ -2187,9 +2187,18 @@ class TestBootstrapHostTools:
         recipes = self._recipes(tmp_path, ["patchelf", "foo"])
         assert _bootstrap_host_tools(recipes, "linux", "static") == []
 
-    def test_none_for_non_linux(self, tmp_path):
+    @pytest.mark.parametrize("platform", ["freebsd", "netbsd"])
+    def test_adds_patchelf_for_the_elf_bsds(self, tmp_path, platform):
+        """The BSD builders have no system patchelf: without cvcpkg's own the
+        $ORIGIN pass did nothing and readline/sqlite failed to pack (NetBSD)."""
         recipes = self._recipes(tmp_path, ["patchelf", "foo"])
-        assert _bootstrap_host_tools(recipes, "macos", "shared") == []
+        boot = _bootstrap_host_tools(recipes, platform, "shared")
+        assert [r.name for r in boot] == ["patchelf"]
+
+    @pytest.mark.parametrize("platform", ["macos", "windows", "openbsd", "wasm"])
+    def test_none_where_packaging_does_not_use_it(self, tmp_path, platform):
+        recipes = self._recipes(tmp_path, ["patchelf", "foo"])
+        assert _bootstrap_host_tools(recipes, platform, "shared") == []
 
     def test_none_when_patchelf_recipe_absent(self, tmp_path):
         recipes = self._recipes(tmp_path, ["foo", "bar"])

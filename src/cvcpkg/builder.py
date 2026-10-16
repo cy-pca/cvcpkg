@@ -4566,21 +4566,33 @@ def _bootstrap_host_tools(all_recipes: list[Recipe], platform: str, link: str) -
 
     These are packaging-time tools the builder itself invokes (as opposed to
     tools a recipe declares) and that cvcpkg should self-host rather than take
-    from the build machine.  Currently just ``patchelf`` for linux shared
-    builds: :func:`_patch_linux_rpath` rewrites every installed ``.so`` RPATH to
-    ``$ORIGIN`` so bundles are relocatable, and building patchelf ourselves
-    keeps that step from depending on a system install.
+    from the build machine.  Currently just ``patchelf`` for shared builds on
+    the platforms in ``SELF_HOSTED_PATCHELF_PLATFORMS``: the relocation pass
+    rewrites every installed ``.so`` RPATH to ``$ORIGIN`` so bundles are
+    relocatable, and building patchelf ourselves keeps that step from depending
+    on a system install -- which the BSD builders do not have at all, so there
+    the pass silently did nothing and every bundle with a shared library failed
+    the relocatable check at pack time.
 
     Returned recipes are appended to the host-tool set so they build into the
     build prefix — ahead of the target recipes that get relocated.  Returns an
     empty list when the platform/link needs no bootstrap tool or the recipe is
     unavailable (relocation then falls back to a system patchelf, if any).
     """
-    if platform == "linux" and link == "shared":
+    if platform in SELF_HOSTED_PATCHELF_PLATFORMS and link == "shared":
         patchelf = next((r for r in all_recipes if r.name == "patchelf"), None)
         if patchelf is not None:
             return [patchelf]
     return []
+
+
+# Where packaging uses cvcpkg's own ``patchelf`` (recipes/patchelf, published
+# for each of these) rather than whatever the build host has: the ELF platforms
+# whose bundles get the build-time ``$ORIGIN`` pass (``_ELF_RPATH_PLATFORMS``)
+# that cvcpkg builds patchelf for.  ``build`` bootstraps it as a host tool
+# (_bootstrap_host_tools); a builder job installs it into the job's prefix with
+# the job's dependencies (``builder run``).
+SELF_HOSTED_PATCHELF_PLATFORMS = frozenset({"linux", "freebsd", "netbsd"})
 
 
 def _detect_arch_for_platform(platform: str) -> str:

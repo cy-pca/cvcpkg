@@ -3058,8 +3058,12 @@ def builder_run(
         job_config: str,
         job_link: str,
         log_cb: Callable[[str], None],
+        implicit: tuple[str, ...] = (),
     ) -> None:
         """Download and install runtime dependencies into *prefix*.
+
+        *implicit* names packages the builder itself needs in *prefix*
+        whatever the recipe declares (cvcpkg's patchelf); they install first.
 
         Resolves the full transitive dependency closure, then queries
         the server catalog for each dep, downloads the matching
@@ -3074,6 +3078,7 @@ def builder_run(
         plausibly do without.
         """
         dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
+        dep_names = [n for n in implicit if n not in dep_names] + dep_names
         if not dep_names:
             return
 
@@ -3744,8 +3749,31 @@ def builder_run(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
             log_cb = lambda text, _jid=job_id: _stream_log(_jid, text)  # noqa: E731
+            # Packaging's $ORIGIN pass runs patchelf.  It is cvcpkg's own
+            # (recipes/patchelf), installed with the job's deps from this
+            # registry -- never the build host's: the BSD builders have none,
+            # and without one the pass silently did nothing, so every bundle
+            # with a shared library failed the relocatable check at pack time.
+            # Native builds only: patchelf runs on this host.
+            from cvcpkg.builder import SELF_HOSTED_PATCHELF_PLATFORMS
+
+            implicit: tuple[str, ...] = ()
+            if (
+                not host_plat
+                and build_platform in SELF_HOSTED_PATCHELF_PLATFORMS
+                and job_link == "shared"
+                and recipe_name != "patchelf"
+            ):
+                implicit = ("patchelf",)
             _install_deps(
-                recipe_dir, dep_prefix, build_platform, build_arch, job_config, job_link, log_cb
+                recipe_dir,
+                dep_prefix,
+                build_platform,
+                build_arch,
+                job_config,
+                job_link,
+                log_cb,
+                implicit=implicit,
             )
 
             # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
