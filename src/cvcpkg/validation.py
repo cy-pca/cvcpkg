@@ -261,6 +261,23 @@ def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list
             if not script.exists():
                 errors.append(f"{recipe_file}: build script '{entry.get('script')}' not found")
 
+    # A `type: package` source names a source recipe, which must be a build
+    # dependency: that edge is what installs its staged tree (src/<package>/)
+    # before this recipe builds, and what puts it in the build closure, so a
+    # recipe that omitted it would fail only on a builder, with "not staged".
+    src = doc.get("source") or {}
+    if isinstance(src, dict) and src.get("type") == "package":
+        pkg = src.get("package")
+        build_deps = (doc.get("depends") or {}).get("build") or []
+        names = {d if isinstance(d, str) else (d or {}).get("name") for d in build_deps}
+        if not pkg:
+            errors.append(f"{recipe_file}: source.type=package needs source.package")
+        elif pkg not in names:
+            errors.append(
+                f"{recipe_file}: source.package {pkg!r} is not in depends.build; "
+                "list it there so its staged tree is installed before this recipe builds"
+            )
+
     # Referenced patches must exist.
     for patch in doc.get("patches") or []:
         if not (recipe_dir / patch).exists():

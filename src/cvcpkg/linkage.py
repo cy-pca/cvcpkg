@@ -330,8 +330,16 @@ def _dedupe(items: Iterable[str]) -> tuple[str, ...]:
 
 
 def iter_objects(root: Path) -> Iterator[tuple[Path, Linkage]]:
-    """Every ELF/Mach-O object under *root* (symlinks not followed), sorted."""
+    """Every ELF/Mach-O object under *root* (symlinks not followed), sorted.
+
+    The top-level ``src/`` of a prefix or bundle is skipped: it holds source
+    packages' staged upstream trees (docs/source-recipes.md), which are data to
+    build from -- a prebuilt test fixture in one is not a shipped program, and
+    rewriting or auditing it would alter the source a consumer builds.
+    """
     for dirpath, dirs, names in os.walk(root):
+        if Path(dirpath) == Path(root) and "src" in dirs:
+            dirs.remove("src")
         dirs.sort()
         for name in sorted(names):
             p = Path(dirpath) / name

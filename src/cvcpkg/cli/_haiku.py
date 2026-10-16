@@ -113,6 +113,16 @@ def draft_recipe(
     except (OSError, yaml.YAMLError) as exc:
         raise click.ClickException(f"could not read {recipe_dir / 'recipe.yaml'}: {exc}") from exc
 
+    # A recipe built from a source package names it instead of an upstream URL;
+    # the port's SOURCE_URI is the source recipe's tarball.
+    src = data.get("source") or {}
+    if src.get("type") == "package" and src.get("package"):
+        src_file = recipe_dir.parent / src["package"] / "recipe.yaml"
+        try:
+            data = {**data, "source": (yaml.safe_load(src_file.read_text()) or {}).get("source")}
+        except (OSError, yaml.YAMLError) as exc:
+            raise click.ClickException(f"could not read {src_file}: {exc}") from exc
+
     build_script = None
     script = recipe_dir / "build.sh"
     if script.is_file():

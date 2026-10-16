@@ -1279,8 +1279,17 @@ def builds_submit_dag(
         Propagated onto its build jobs so the scheduler routes them only to
         builders advertising every listed capability.
         """
-        caps = recipe_data.get(name, {}).get("requires_capabilities", []) or []
-        return [c for c in caps if isinstance(c, str)]
+        doc = recipe_data.get(name, {})
+        caps = [c for c in (doc.get("requires_capabilities", []) or []) if isinstance(c, str)]
+        # Building from a source package needs a builder that understands
+        # source.type=package; one still running older code would fail the
+        # job with "Unknown source type", so route it only to builders that
+        # advertise the capability (cvcpkg.builder.SOURCE_PACKAGES_CAPABILITY).
+        if (doc.get("source") or {}).get("type") == "package":
+            from cvcpkg.builder import SOURCE_PACKAGES_CAPABILITY
+
+            caps.append(SOURCE_PACKAGES_CAPABILITY)
+        return caps
 
     def _min_disk(name: str) -> int | None:
         """A recipe's ``build.min_disk_gb`` (e.g. 35 for haiku-image).

@@ -221,6 +221,61 @@ class TestSourceRecipeWorkflow:
         assert out.returncode == 0, out.stderr
         assert out.stdout.strip() == "44"
 
+    def test_package_source_builds_from_a_copy_of_the_staged_tree(self, tmp_path):
+        """``source: {type: package}``: the recipe's CVC_SOURCE_DIR *is* the
+        source package's staged tree -- copied, so an in-tree build cannot
+        alter the staged copy another recipe builds from."""
+        recipes = _make_recipes(tmp_path)
+        plat = detect_platform()
+        _write(
+            recipes / "mathlib" / "recipe.yaml",
+            f"""
+            schema_version: 1
+            recipe:
+              name: mathlib
+              upstream_version: "1.0.0"
+              cvc_revision: 1
+              description: Builds the mathsrc source package's tree in place.
+              tags: [demo]
+            source:
+              type: package
+              package: mathsrc
+            depends:
+              build:
+                - name: mathsrc
+                  version: "==1.0.0"
+            build:
+              matrix:
+                - platform: {plat}
+                  script: build.sh
+            package:
+              files:
+                - lib
+            """,
+        )
+        _write(
+            recipes / "mathlib" / "build.sh",
+            """
+            #!/usr/bin/env bash
+            set -euo pipefail
+            cd "$CVC_SOURCE_DIR"
+            test -f addmul.c || { echo "no addmul.c in $CVC_SOURCE_DIR" >&2; exit 1; }
+            "${CC:-cc}" -c -o addmul.o addmul.c   # an in-tree build
+            mkdir -p "$CVC_INSTALL_DIR/lib"
+            ar rcs "$CVC_INSTALL_DIR/lib/libaddmul.a" addmul.o
+            """,
+        )
+        prefix = tmp_path / "prefix"
+        build_prefix = tmp_path / "prefix.build"
+        contexts = build_all(
+            recipes, platform=plat, prefix=prefix, build_prefix=build_prefix, no_cache=True
+        )
+        assert "mathlib" in {c.recipe.name for c in contexts}
+        assert (prefix / "lib" / "libaddmul.a").is_file()
+        staged = build_prefix / "src" / "mathsrc"
+        assert (staged / "addmul.c").is_file()
+        assert not (staged / "addmul.o").exists(), "the in-tree build wrote into the staged tree"
+
     def test_source_recipe_has_no_build_artifacts(self, tmp_path):
         """A source package is *only* files — no libs/binaries of its own."""
         recipes = _make_recipes(tmp_path)

@@ -245,6 +245,7 @@ $defs:
             prebuilt,
             python_wheel,
             python_sdist,
+            package,
             none,
           ]
         description: >
@@ -253,6 +254,9 @@ $defs:
           staged out-of-band and packed with `cvcpkg pack --from-prefix`;
           the build script is then only a guard that the payload exists.
           Needs no url/sha256/path.
+          package = build from a source recipe's staged tree (named by
+          `package`, a depends.build entry) instead of downloading upstream;
+          the source recipe holds the url/sha256.
       url:
         type: string
         format: uri
@@ -296,6 +300,14 @@ $defs:
           build reproducible; it makes a submodule MOVING show up as a
           reviewable diff in the recipe instead of arriving silently with a
           superproject bump.  A mismatch is a hard error.
+      package:
+        type: string
+        pattern: "^[a-z0-9][a-z0-9._+-]*$"
+        description: >
+          type=package only: the source recipe (docs/source-recipes.md) whose
+          staged tree, src/<package>/, this recipe builds from instead of
+          downloading upstream.  It must also be listed in depends.build, so
+          it is installed before this recipe builds.
       depth:
         type: integer
         minimum: 0
