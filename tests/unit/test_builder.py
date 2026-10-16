@@ -2117,8 +2117,29 @@ class TestFindPatchelf:
             assert _find_patchelf(tmp_path / "absent", None) == "/usr/bin/patchelf"
 
     def test_none_when_nothing_available(self, tmp_path):
-        with patch("cvcpkg.builder.shutil.which", return_value=None):
+        with (
+            patch("cvcpkg.builder.shutil.which", return_value=None),
+            patch("cvcpkg.builder._PATCHELF_FALLBACKS", (str(tmp_path / "nope"),)),
+        ):
             assert _find_patchelf(tmp_path / "absent") is None
+
+    def test_finds_the_package_systems_copy_off_path(self, tmp_path):
+        """A BSD builder started from cron has cron's minimal PATH, without
+        /usr/pkg/bin or /usr/local/bin.  Not finding pkgsrc's patchelf there
+        left the $ORIGIN pass a no-op, and readline/sqlite failed their pack
+        on the NetBSD builders."""
+        pkg_patchelf = tmp_path / "usr" / "pkg" / "bin" / "patchelf"
+        pkg_patchelf.parent.mkdir(parents=True)
+        pkg_patchelf.write_text("#!/bin/sh\n")
+        pkg_patchelf.chmod(0o755)
+        with (
+            patch("cvcpkg.builder.shutil.which", return_value=None),
+            patch(
+                "cvcpkg.builder._PATCHELF_FALLBACKS",
+                (str(tmp_path / "missing"), str(pkg_patchelf)),
+            ),
+        ):
+            assert _find_patchelf(tmp_path / "absent") == str(pkg_patchelf)
 
 
 class TestPatchElfRpath:
