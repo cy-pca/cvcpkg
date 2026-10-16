@@ -93,7 +93,7 @@ build:
 package:
   files:
     # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
-    - lib/libfontconfig*
+    - { glob: "lib/libfontconfig*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - lib/pkgconfig/fontconfig.pc
     - include/fontconfig/
     - bin/fc-*
