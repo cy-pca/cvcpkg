@@ -137,6 +137,48 @@ function Import-CvcMsvcEnv {
 }
 Import-CvcMsvcEnv
 
+# ── MSVC's link.exe ahead of any other ──────────────────────────────
+#
+# Git for Windows' bin\bash.exe puts its usr\bin at the front of PATH, and
+# that directory holds coreutils' link.exe (it makes hard links).  A build
+# started from Git Bash -- every `shell: bash` step on GitHub Actions --
+# inherits that order, and Import-CvcMsvcEnv keeps it when cl.exe is already
+# on PATH (ilammy/msvc-dev-cmd).  meson then stopped in project() with
+#   Found GNU link.exe instead of MSVC link.exe in C:\Program Files\Git\usr\bin\link.EXE
+# and anything else that runs a bare `link` would get the wrong one too.
+# MSVC's link.exe sits next to cl.exe, so move cl.exe's directory just ahead
+# of the first directory holding some other link.exe.  Everything else keeps
+# its place, including the cvcpkg prefixes in front.
+function Move-CvcMsvcLinkerFirst {
+    $cl = Get-Command cl.exe -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $cl) { return }
+    $msvcBin = Split-Path -Parent $cl.Source
+    $msvcKey = $msvcBin.TrimEnd('\')
+    # File.Exists never throws, whatever a PATH entry holds (Join-Path and
+    # Test-Path can, on characters that are illegal in a path).
+    if (-not [System.IO.File]::Exists("$msvcKey\link.exe")) { return }
+
+    $dirs = [System.Collections.Generic.List[string]]::new()
+    $placed = $false
+    foreach ($d in ($env:PATH -split ';')) {
+        if (-not $d) { continue }
+        $key = $d.TrimEnd('\')
+        if ($key -ieq $msvcKey) {
+            if (-not $placed) { $dirs.Add($d); $placed = $true }
+            continue
+        }
+        if (-not $placed -and [System.IO.File]::Exists("$key\link.exe")) {
+            Write-Host "-- env-windows.ps1: $msvcBin moved ahead of $d (its link.exe is not MSVC's)"
+            $dirs.Add($msvcBin)
+            $placed = $true
+        }
+        $dirs.Add($d)
+    }
+    $env:PATH = $dirs -join ';'
+}
+Move-CvcMsvcLinkerFirst
+
 function Invoke-CvcCMakeBuild {
     param([string[]]$ExtraArgs = @())
 
