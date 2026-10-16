@@ -393,6 +393,18 @@ jobs:
                 --server "$CVCPKG_SERVER_URL" \
                 --token "$CVCPKG_TOKEN"
               echo "::endgroup::"
+              # Publish now, not only in the step below: the next recipe's
+              # install-deps resolves from the catalog, so a recipe in this list
+              # that needs one packed earlier in it found nothing there, and a
+              # chain took one run per layer (seen on linux-arm-build.yml).
+              # publish --all skips what the server already has.
+              cvcpkg publish --all \
+                --server "$CVCPKG_SERVER_URL" \
+                --token "$CVCPKG_TOKEN" \
+                --output-dir "${{ github.workspace }}/dist" \
+                --platform macos \
+                --config "${{ inputs.config }}" \
+                --link "${{ inputs.link }}"
             done
           else
             cvcpkg pack-all \
