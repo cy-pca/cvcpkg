@@ -80,7 +80,7 @@ package:
     - lib/libyaml-cpp*
     # MSVC drops the "lib" prefix: yaml-cpp.lib (import lib) + bin/yaml-cpp.dll.
     - lib/yaml-cpp*
-    - bin/yaml-cpp*
+    - { glob: "bin/yaml-cpp*", platforms: [windows] }
     - lib/cmake/yaml-cpp/
     - lib/pkgconfig/yaml-cpp*
     - include/yaml-cpp/

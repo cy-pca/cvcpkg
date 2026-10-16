@@ -1,0 +1,71 @@
+--- a/src/main.c
++++ b/src/main.c
+@@ -211,6 +211,44 @@
+ 
+ /* check_options - check user-specified options */
+ 
++/* cvcpkg: argv[0] as invoked, kept before flexinit() reduces it to a basename. */
++static char *cvc_self_path = NULL;
++
++/* cvcpkg: the m4 next to this flex binary -- the same prefix's bin/, where
++ * cvcpkg installs m4 -- or NULL.  For a caller that runs flex with neither
++ * $M4 nor a $PATH that reaches m4 (PostgreSQL's pgflex passes an environment
++ * of only FLEX_TMP_DIR), when the configure-time M4 path, which names the
++ * machine flex was built on, does not exist here. */
++static char *cvc_m4_beside_flex (void)
++{
++	const char *self = cvc_self_path;
++	const char *slash;
++	struct stat sbuf;
++	size_t  dirlen;
++	char   *cand;
++#ifdef __linux__
++	static char exe[PATH_MAX];
++	ssize_t n = readlink ("/proc/self/exe", exe, sizeof (exe) - 1);
++
++	if (n > 0) {
++		exe[n] = '\0';
++		self = exe;
++	}
++#endif
++	if (self == NULL || (slash = strrchr (self, '/')) == NULL)
++		return NULL;
++	dirlen = (size_t) (slash - self);
++	cand = calloc (dirlen + 4, 1);
++	if (cand == NULL)
++		return NULL;
++	memcpy (cand, self, dirlen);
++	memcpy (cand + dirlen, "/m4", 4);
++	if (stat (cand, &sbuf) == 0 && S_ISREG (sbuf.st_mode) && (sbuf.st_mode & S_IXUSR))
++		return cand;
++	free (cand);
++	return NULL;
++}
++
+ void check_options (void)
+ {
+ 	int     i;
+@@ -379,6 +417,15 @@
+ 				    m4 = M4;
+ 			}
+ 		}
++		/* cvcpkg: the configure-time path is gone (a relocated install):
++		 * use the m4 beside this flex, if there is one. */
++		if (strcmp (m4, M4) == 0) {
++			struct stat sbuf;
++			char *beside;
++
++			if (stat (M4, &sbuf) != 0 && (beside = cvc_m4_beside_flex ()) != NULL)
++				m4 = beside;
++		}
+ 	}
+     filter_create_ext(output_chain, m4, "-P", 0);
+     filter_create_int(output_chain, filter_fix_linedirs, NULL);
+@@ -994,6 +1041,7 @@
+     flex_init_regex();
+ 
+ 	/* Enable C++ if program name ends with '+'. */
++	cvc_self_path = argv[0] ? strdup (argv[0]) : NULL;
+ 	program_name = basename (argv[0]);
+ 
+ 	if (program_name != NULL &&

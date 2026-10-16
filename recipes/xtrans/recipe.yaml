@@ -28,7 +28,7 @@ depends:
 
 package:
   files:
-    - lib/
+    # No lib/: header-only; its .pc file installs under share/pkgconfig.
     - include/
     - share/
 

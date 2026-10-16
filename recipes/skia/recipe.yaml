@@ -31,7 +31,12 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-  runtime: []
+  runtime:
+    # The GLX backend on Linux: GL/GLX from libglvnd, Xlib from libx11.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
   host_tools:
     - emsdk
 
@@ -58,15 +63,16 @@ build:
 
 package:
   files:
-    - lib/libskia.*
-    - lib/libskshaper.*
-    - lib/libskparagraph.*
-    - lib/libskunicode.*
-    - lib/cmake/Skia/
+    # The native libraries; the wasm build is CanvasKit only (build-wasm.sh).
+    - { glob: "lib/libskia.*", platforms: [linux, macos, windows] }
+    - { glob: "lib/libskshaper.*", platforms: [linux, macos, windows] }
+    - { glob: "lib/libskparagraph.*", platforms: [linux, macos, windows] }
+    # m137 builds skunicode as skunicode_core + skunicode_icu.
+    - { glob: "lib/libskunicode*", platforms: [linux, macos, windows] }
+    - { glob: "lib/cmake/Skia/", platforms: [linux, macos, windows] }
     - include/skia/
-    - share/skia/
-    - bin/canvaskit.js
-    - bin/canvaskit.wasm
+    - { glob: "bin/canvaskit.js", platforms: [wasm] }
+    - { glob: "bin/canvaskit.wasm", platforms: [wasm] }
   cmake_packages:
     - { name: Skia, targets: ["Skia::skia", "Skia::skshaper", "Skia::skparagraph"] }
   pkg_config:

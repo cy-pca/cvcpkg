@@ -74,8 +74,8 @@ package:
     - lib/pkgconfig/fftw3*
     - include/fftw3.h
     - include/fftw3.f
-    - include/fftw3l.h
-    - include/fftw3q.h
+    # fftw3.h declares every precision; fftw3l/fftw3q exist only as Fortran
+    # .f03 interfaces, not C headers.
   cmake_packages:
     - { name: FFTW3, targets: ["FFTW3::fftw3"] }
 

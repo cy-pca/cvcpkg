@@ -71,8 +71,7 @@ build:
 
 package:
   files:
-    - lib/libCGAL*
-    - lib/CGAL*
+    # No lib/libCGAL*: CGAL 6 is header-only (strict package.files refused it).
     - lib/cmake/CGAL/
     - include/CGAL/
   cmake_packages:

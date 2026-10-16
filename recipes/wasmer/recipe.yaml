@@ -46,7 +46,7 @@ package:
     - lib/wasmer*
     - lib/cmake/wasmer/
     - include/wasmer.h
-    - include/wasmer.hh
+    # No wasmer.hh: the C API ships wasmer.h, wasm.h and wasm.hh.
     - include/wasm.h
   cmake_packages:
     - { name: wasmer, targets: ["wasmer::wasmer"] }

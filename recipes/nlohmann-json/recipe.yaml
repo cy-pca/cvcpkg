@@ -56,8 +56,8 @@ package:
   # Header-only: no library, just headers + the CMake package config + pkg-config.
   files:
     - include/nlohmann/
-    - lib/cmake/nlohmann_json/
-    - lib/pkgconfig/nlohmann_json*
+    # Header-only: its CMake and pkg-config files install under share/.
+    - share/cmake/nlohmann_json/
     - share/pkgconfig/nlohmann_json*
   cmake_packages:
     - { name: nlohmann_json, targets: ["nlohmann_json::nlohmann_json"] }

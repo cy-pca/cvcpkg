@@ -52,6 +52,7 @@ package:
     - lib/gcc/
     - libexec/gcc/
     - lib64/libgfortran*
-    - lib64/libquadmath*
+    # lib64/libquadmath* is x86 only (GCC builds no libquadmath for aarch64),
+    # and package.files cannot scope an entry by arch.
     - lib64/libgomp*
     - share/licenses/gfortran/

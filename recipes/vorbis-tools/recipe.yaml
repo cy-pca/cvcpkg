@@ -59,7 +59,7 @@ build:
 
 package:
   files:
-    - bin/ogg123*
+    # No ogg123: it needs libao, which is not a dependency, so configure skips it.
     - bin/oggdec*
     - bin/oggenc*
     - bin/ogginfo*

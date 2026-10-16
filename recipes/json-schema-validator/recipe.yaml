@@ -63,7 +63,7 @@ package:
     - lib/libnlohmann_json_schema_validator*
     # MSVC: import lib in lib/, DLL in bin/, both without the "lib" prefix.
     - lib/nlohmann_json_schema_validator*
-    - bin/nlohmann_json_schema_validator*
+    - { glob: "bin/nlohmann_json_schema_validator*", platforms: [windows] }
     - lib/cmake/nlohmann_json_schema_validator/
     - include/nlohmann/json-schema.hpp
   cmake_packages:

@@ -51,12 +51,12 @@ build:
 package:
   files:
     - lib/libslint_cpp*
-    - lib/slint_cpp.*
+    - { glob: "lib/slint_cpp.*", platforms: [windows] }
     - lib/cmake/Slint/
     - include/slint/
-    - bin/slint-viewer*
+    # No bin/slint-viewer or share/slint/: the C++ build installs only
+    # slint-compiler (strict package.files refused both).
     - bin/slint-compiler*
-    - share/slint/
   cmake_packages:
     - { name: Slint, targets: ["Slint::Slint"] }
 

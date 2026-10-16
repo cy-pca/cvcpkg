@@ -54,6 +54,10 @@ MESON_OPTS=(
 # compiled, so we simply disable the optional CUPS/CPDB backends to keep the
 # build lean and dependency-free across platforms.
 MESON_OPTS+=( -Dprint-cups=disabled -Dprint-cpdb=disabled )
+# No GStreamer media backend: the recipe declares no GStreamer, and the default
+# auto-detection found a partial one in the fleet's deps prefix and then failed
+# on "Dependency gstreamer-player-1.0 not found" (2026-10-15 populate).
+MESON_OPTS+=( -Dmedia-gstreamer=disabled )
 
 case "${CVC_PLATFORM}" in
     linux)

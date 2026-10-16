@@ -55,7 +55,7 @@ build:
 package:
   files:
     - lib/libpipewire-0.3*
-    - lib/libspa-0.2*
+    # No lib/libspa-0.2*: SPA is a plugin directory (lib/spa-0.2/), not a library.
     - lib/pipewire-0.3/
     - lib/spa-0.2/
     - lib/pkgconfig/libpipewire*

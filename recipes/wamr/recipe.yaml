@@ -44,15 +44,14 @@ build:
 
 package:
   files:
-    - lib/libvmlib*
     - lib/libiwasm*
-    - lib/vmlib*
+    # No vmlib or bin/iwasm: the build installs the iwasm library only
+    # (libiwasm.a / iwasm.lib), not the product-mini runtime.
     - lib/iwasm*
     - lib/cmake/iwasm/
     - include/wasm_export.h
     - include/wasm_c_api.h
     - include/lib_export.h
-    - bin/iwasm*
   cmake_packages:
     - { name: iwasm, targets: ["iwasm::iwasm"] }
 

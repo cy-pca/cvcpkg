@@ -48,6 +48,8 @@ depends:
     - ninja
     - flex
     - bison
+    # flex and bison run m4 (as libpq declares).
+    - m4
     - pkg-config
 
 build:
@@ -94,9 +96,7 @@ package:
     - bin/pg_isready
     - bin/pg_config
     - lib/libpq*
-    - lib/*/libpq*
     - lib/postgresql/
-    - lib/*/postgresql/
     - share/postgresql/
 
 abi:

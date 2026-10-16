@@ -47,6 +47,8 @@ depends:
     - ninja
     - flex
     - bison
+    # flex and bison run m4 (as libpq declares).
+    - m4
     - pkg-config
 
 build:
@@ -88,9 +90,7 @@ package:
     - bin/reindexdb
     - bin/vacuumdb
     - lib/libpq*
-    - lib/*/libpq*
     - lib/pkgconfig/libpq.pc
-    - lib/*/pkgconfig/libpq.pc
     - lib/cmake/PostgreSQL/
     - include/libpq-fe.h
     - include/libpq-events.h

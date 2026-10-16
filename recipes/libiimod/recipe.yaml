@@ -75,7 +75,7 @@ build:
 
 package:
   files:
-    - lib/liblibiimod*
+    # lib/libiimod* covers both spellings (libiimod.a / libiimod.lib).
     - lib/libiimod*
     - lib/cmake/libiimod/
     - include/libiimod/
