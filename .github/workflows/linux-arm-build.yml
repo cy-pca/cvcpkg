@@ -68,6 +68,14 @@ on:
         required: false
         default: "prod"
         type: string
+      runner:
+        description: "Runner: ubuntu-22.04-arm (linux/arm64) or ubuntu-22.04 (linux/x86_64)"
+        required: false
+        default: "ubuntu-22.04-arm"
+        type: choice
+        options:
+          - ubuntu-22.04-arm
+          - ubuntu-22.04
   workflow_call:
     inputs:
       config:
@@ -91,6 +99,10 @@ on:
         required: false
         type: string
         default: "prod"
+      runner:
+        required: false
+        type: string
+        default: "ubuntu-22.04-arm"
 
 permissions:
   contents: read
@@ -118,16 +130,22 @@ jobs:
           fi
 
   build-shard:
-    name: linux-arm64 shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
+    name: linux-${{ (inputs.runner == 'ubuntu-22.04') && 'x86_64' || 'arm64' }} shard ${{ matrix.shard }}/${{ inputs.shards || '4' }} (${{ inputs.config }}/${{ inputs.link }})
     needs: setup
     # ubuntu-22.04-arm, NOT 24.04: 22.04 is glibc 2.35, which IS the fleet
     # floor. Building on 24.04-arm (glibc 2.39) would emit GLIBC_2.38+
     # references and `cvcpkg pack` would reject them outright (#432) — the same
     # trap the linux CUDA job hits, where the fix was to pin the build
     # environment's glibc rather than the host's.
-    runs-on: ubuntu-22.04-arm
+    #
+    # runner=ubuntu-22.04 (x86_64, also glibc 2.35) publishes linux/x86_64 the
+    # same way, for recipes the x86_64 fleet cannot build: while the fleet runs
+    # a cvcpkg older than 2.5.1 it has no `source_packages` capability, so
+    # nothing built from a source package (source.type: package) reaches it.
+    runs-on: ${{ inputs.runner || 'ubuntu-22.04-arm' }}
     timeout-minutes: 300
     env:
+      CVC_ARCH: ${{ (inputs.runner == 'ubuntu-22.04') && 'x86_64' || 'arm64' }}
       # Every name a build tool on the runner image may answer to. cvcpkg
       # provides each of them, in the tools tree below or as a recipe's
       # depends.build bundle, except texinfo's makeinfo, which nothing may use.
@@ -246,12 +264,12 @@ jobs:
             esac
             # A search that fails (the server is down) fails the step here; only
             # a search that answers without $r records it as missing.
-            found=$(cvcpkg search "$r" --platform linux --arch arm64 --build-type release --link shared --limit 200 --json)
+            found=$(cvcpkg search "$r" --platform linux --arch "$CVC_ARCH" --build-type release --link shared --limit 200 --json)
             if printf '%s' "$found" \
                 | python3 -c 'import json, sys; sys.exit(not any(p["name"] == sys.argv[1] for p in json.load(sys.stdin)["packages"]))' "$r"; then
               recipes="$recipes $r"
             else
-              echo "$r has no linux/arm64 bundle"
+              echo "$r has no linux/$CVC_ARCH bundle"
               echo "$r" >> "$tree/missing"
             fi
           done
@@ -307,7 +325,7 @@ jobs:
           tree="$RUNNER_TEMP/cvcpkg-tools"
           rc=0
           for r in $(cat "$tree/missing"); do
-            echo "::error::cvcpkg has no linux/arm64 $r bundle, so $r cannot come from cvcpkg: publish one (linux-arm-build.yml with recipes=$r)"
+            echo "::error::cvcpkg has no linux/$CVC_ARCH $r bundle, so $r cannot come from cvcpkg: publish one (linux-arm-build.yml with recipes=$r)"
             rc=1
           done
           for t in $(cat "$tree/commands"); do
@@ -374,7 +392,7 @@ jobs:
               libssl*|libcrypto*) recipe=openssl ;;
               *) recipe=$name ;;
             esac
-            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/arm64 needs republishing"
+            echo "::error::$name loads$bad from outside the tree, where only glibc and the compiler runtime may come from (RUNPATH: ${runpath:-none}): the cvcpkg $recipe bundle for linux/$CVC_ARCH needs republishing"
             rc=1
           done
           # Not from cvcpkg: the compiler, what runs cvcpkg and the scripts, and
@@ -403,7 +421,7 @@ jobs:
           mkdir -p "${{ github.workspace }}/dist"
 
           # --arch is intentionally not passed: pack-all detects the host arch,
-          # and this runner IS arm64, which is exactly how macos-build.yml ends
+          # and this runner IS arm64 (or x86_64), which is exactly how macos-build.yml ends
           # up producing macos/arm64 archives.
           RECIPES="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
 
@@ -416,7 +434,7 @@ jobs:
             # used it died before building anything. Only `pack` takes recipe
             # names, so loop it, exactly as windows-build.yml does.
             for r in $RECIPES; do
-              echo "::group::install-deps $r (linux/arm64)"
+              echo "::group::install-deps $r (linux/$CVC_ARCH)"
               # pack does not resolve deps; it builds against --prefix as-is.
               cvcpkg install-deps "recipes/$r" \
                 --platform linux \
@@ -425,7 +443,7 @@ jobs:
                 --prefix "${{ github.workspace }}/prefix" \
                 --recipes-dir recipes
               echo "::endgroup::"
-              echo "::group::pack $r (linux/arm64)"
+              echo "::group::pack $r (linux/$CVC_ARCH)"
               cvcpkg pack "recipes/$r" \
                 --platform linux \
                 --config "${{ inputs.config }}" \
@@ -514,7 +532,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-arm64-manifest-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
+          name: linux-${{ (inputs.runner == 'ubuntu-22.04') && 'x86_64' || 'arm64' }}-manifest-shard${{ matrix.shard }}-${{ inputs.config }}-${{ inputs.link }}
           path: manifest/
           if-no-files-found: warn
           retention-days: 3
