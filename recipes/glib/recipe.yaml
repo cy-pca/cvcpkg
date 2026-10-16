@@ -94,11 +94,19 @@ build:
 
 package:
   files:
-    - lib/libglib-2.0*
-    - lib/libgobject-2.0*
-    - lib/libgmodule-2.0*
-    - lib/libgio-2.0*
-    - lib/libgthread-2.0*
+    - { glob: "lib/libglib-2.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libgobject-2.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libgmodule-2.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libgio-2.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libgthread-2.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC (build.ps1): import libraries in lib/, DLLs in bin/.
+    - { glob: "lib/glib-2.0.lib", platforms: [windows] }
+    - { glob: "lib/gobject-2.0.lib", platforms: [windows] }
+    - { glob: "lib/gmodule-2.0.lib", platforms: [windows] }
+    - { glob: "lib/gio-2.0.lib", platforms: [windows] }
+    - { glob: "lib/gthread-2.0.lib", platforms: [windows] }
+    - { glob: "bin/gmodule-2.0-*.dll", platforms: [windows] }
+    - { glob: "bin/gthread-2.0-*.dll", platforms: [windows] }
     - lib/glib-2.0/
     - lib/gio/
     - lib/pkgconfig/glib-2.0*
@@ -107,7 +115,8 @@ package:
     - lib/pkgconfig/gio-2.0*
     - lib/pkgconfig/gthread-2.0*
     - include/glib-2.0/
-    - include/gio-unix-2.0/
+    - { glob: "include/gio-unix-2.0/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "include/gio-win32-2.0/", platforms: [windows] }
     - bin/glib-*
     - bin/gio*
     - bin/gobject-*

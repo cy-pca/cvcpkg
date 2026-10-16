@@ -94,7 +94,6 @@ package:
     # strict-globs check does not fire on unix, where they never appear.
     - { glob: "lib/zlib*", platforms: [windows] }     # zlib.lib (import)
     - { glob: "lib/z.lib", platforms: [windows] }
-    - { glob: "lib/zlibd.lib", platforms: [windows] }
     - lib/pkgconfig/zlib.pc
     - include/zconf.h
     - include/zlib.h
