@@ -64,9 +64,8 @@ def test_bash_meson_setup_refuses_fallback(script):
             for name in arrays
             for m in re.finditer(rf"^{name}=\((.*?)^\)", text, re.M | re.S)
         ]
-        assert FLAG in cmd or any(FLAG in b for b in bodies), (
-            f"{script.relative_to(REPO_ROOT)}: `meson setup` without {FLAG}"
-        )
+        msg = f"{script.relative_to(REPO_ROOT)}: `meson setup` without {FLAG}"
+        assert FLAG in cmd or any(FLAG in b for b in bodies), msg
 
 
 def test_windows_meson_helper_refuses_fallback():
