@@ -2145,7 +2145,20 @@ def _make_relocatable(ctx: BuildContext) -> None:
         _patch_macos_install_names(ctx.install_dir, (ctx.prefix,), temp_prefixes)
     elif ctx.platform in _ELF_RPATH_PLATFORMS or ctx.platform == "openbsd":
         patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-        lib_pass = shared and ctx.platform in _ELF_RPATH_PLATFORMS
+        # The $ORIGIN pass prepends $ORIGIN with patchelf, which always grows
+        # .dynstr and so adds a PT_LOAD -- and NetBSD's ld.elf_so refuses that
+        # object ("wrong number of segments (3 != 2)": python312 cvc.14's _ssl
+        # on the dev registry, 2026-10-16).  So it runs only where patchelf may
+        # grow objects and one is found; otherwise lib/**/*.so* is left to the
+        # scrub below, which rewrites in place, never grows, and needs no tool
+        # (without that, a NetBSD builder with no patchelf packed readline with
+        # its scratch-prefix RPATH and the pack-time gate failed it).
+        lib_pass = (
+            shared
+            and ctx.platform in _ELF_RPATH_PLATFORMS
+            and ctx.platform != "netbsd"
+            and patchelf is not None
+        )
         if lib_pass:
             _patch_elf_rpath(ctx.install_dir, patchelf)
         lib_dir = ctx.install_dir / "lib"
@@ -4570,9 +4583,7 @@ def _bootstrap_host_tools(all_recipes: list[Recipe], platform: str, link: str) -
     the platforms in ``SELF_HOSTED_PATCHELF_PLATFORMS``: the relocation pass
     rewrites every installed ``.so`` RPATH to ``$ORIGIN`` so bundles are
     relocatable, and building patchelf ourselves keeps that step from depending
-    on a system install -- which the BSD builders do not have at all, so there
-    the pass silently did nothing and every bundle with a shared library failed
-    the relocatable check at pack time.
+    on a system install -- which the BSD builders do not have at all.
 
     Returned recipes are appended to the host-tool set so they build into the
     build prefix — ahead of the target recipes that get relocated.  Returns an
@@ -4591,8 +4602,10 @@ def _bootstrap_host_tools(all_recipes: list[Recipe], platform: str, link: str) -
 # whose bundles get the build-time ``$ORIGIN`` pass (``_ELF_RPATH_PLATFORMS``)
 # that cvcpkg builds patchelf for.  ``build`` bootstraps it as a host tool
 # (_bootstrap_host_tools); a builder job installs it into the job's prefix with
-# the job's dependencies (``builder run``).
-SELF_HOSTED_PATCHELF_PLATFORMS = frozenset({"linux", "freebsd", "netbsd"})
+# the job's dependencies (``builder run``).  Not NetBSD: there patchelf must not
+# rewrite RPATHs at all (see _make_relocatable), and the in-place rewrite that
+# does the job there needs no tool.
+SELF_HOSTED_PATCHELF_PLATFORMS = frozenset({"linux", "freebsd"})
 
 
 def _detect_arch_for_platform(platform: str) -> str:

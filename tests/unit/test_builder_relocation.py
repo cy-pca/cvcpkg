@@ -314,6 +314,52 @@ def test_make_relocatable_scrubs_executables_for_every_link(tmp_path, link):
     assert kwargs["skip"](ctx.install_dir / "bin" / "foo") is False
 
 
+@pytest.mark.parametrize(
+    "platform,patchelf",
+    [("linux", None), ("freebsd", None), ("netbsd", None), ("netbsd", "/x/patchelf")],
+    ids=[
+        "linux-no-patchelf",
+        "freebsd-no-patchelf",
+        "netbsd-no-patchelf",
+        "netbsd-even-with-patchelf",
+    ],
+)
+def test_lib_so_goes_to_the_in_place_scrub_when_patchelf_cannot_be_used(
+    tmp_path, platform, patchelf
+):
+    """The $ORIGIN pass prepends $ORIGIN with patchelf, which grows .dynstr and
+    adds a PT_LOAD.  With no patchelf it cannot run (a BSD builder: readline was
+    packed with its scratch RPATH and failed the pack gate); on NetBSD it must
+    not, because ld.elf_so refuses the result ("wrong number of segments
+    (3 != 2)", python312's _ssl).  Either way lib/**/*.so* goes to the scrub,
+    which rewrites in place and never grows anything."""
+    ctx = _ctx(tmp_path, platform, "shared")
+    with (
+        mock.patch.object(builder, "_find_patchelf", return_value=patchelf),
+        mock.patch.object(builder, "_patch_elf_rpath") as lib_pass,
+        mock.patch.object(builder, "_scrub_elf_rpaths") as scrub,
+        mock.patch.object(builder, "_complete_elf_rpaths"),
+    ):
+        builder._make_relocatable(ctx)
+    assert not lib_pass.called
+    _, kwargs = scrub.call_args
+    assert kwargs["skip"](ctx.install_dir / "lib" / "libreadline.so.8.3") is False
+
+
+def test_freebsd_with_patchelf_keeps_the_origin_pass(tmp_path):
+    ctx = _ctx(tmp_path, "freebsd", "shared")
+    with (
+        mock.patch.object(builder, "_find_patchelf", return_value="/x/patchelf"),
+        mock.patch.object(builder, "_patch_elf_rpath") as lib_pass,
+        mock.patch.object(builder, "_scrub_elf_rpaths") as scrub,
+        mock.patch.object(builder, "_complete_elf_rpaths"),
+    ):
+        builder._make_relocatable(ctx)
+    assert lib_pass.called
+    _, kwargs = scrub.call_args
+    assert kwargs["skip"](ctx.install_dir / "lib" / "libreadline.so.8.3") is True
+
+
 @pytest.mark.parametrize("platform,runs", [("linux", True), ("freebsd", False), ("netbsd", False)])
 def test_make_relocatable_completes_rpaths_on_linux_only(tmp_path, platform, runs):
     ctx = _ctx(tmp_path, platform, "shared", {"build": ["cmake"], "runtime": ["zlib"]})
