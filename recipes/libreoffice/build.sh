@@ -78,65 +78,37 @@ rm -rf "${W}/debs" "${W}/root"
 T="${W}/smoke"
 rm -rf "${T}" && mkdir -p "${T}"
 printf '<html><body><h1>cvcpkg libreoffice</h1><p>smoke test</p></body></html>\n' > "${T}/smoke.html"
-# DIAGNOSTIC (not for merge): where soffice's std::bad_alloc comes from.  A
-# preloaded shim reports every operator new above 2 GiB and every thrown
-# bad_alloc (rtl::OUString throws one itself) with a backtrace.
+# DIAGNOSTIC (not for merge): the bad_alloc is thrown in pyuno (Python UNO
+# loader, during Writer's linguistic setup) and only when LD_LIBRARY_PATH is
+# set: which libpython does libpyuno get, and does putting LibreOffice's own
+# program/ first fix it?
 P="${CVC_INSTALL_DIR}/lib/libreoffice/program"
-echo "== limits"; ulimit -a 2>&1 | sed 's/^/  /'
-echo "== locale: LANG=${LANG:-} LC_ALL=${LC_ALL:-}"; id
-mkdir -p "${T}/shim"
-cat > "${T}/shim/shim.cc" <<'SHIM'
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <dlfcn.h>
-#include <execinfo.h>
-#include <new>
-#include <typeinfo>
-#include <unistd.h>
-static void report(const char *what, size_t n) {
-    char buf[160];
-    int len = snprintf(buf, sizeof buf, "CVCDIAG %s %zu\n", what, n);
-    if (write(2, buf, len) < 0) {}
-    void *bt[64];
-    int k = backtrace(bt, 64);
-    backtrace_symbols_fd(bt, k, 2);
+ORIG_LDP="${LD_LIBRARY_PATH:-}"
+echo "== python env: $(env | grep -E '^PYTHON' | tr '\n' ' ')"
+echo "== LibreOffice's python bits"
+ls "${P}" | grep -i -E 'python|pyuno' | sed 's/^/  /'
+readelf -d "${P}/libpyuno.so" | grep -E 'NEEDED|RUNPATH|RPATH' | sed 's/^/  /'
+echo "== libpython in the runner's LD_LIBRARY_PATH (${ORIG_LDP}) and the deps prefix"
+for d in $(echo "${ORIG_LDP}" | tr ':' ' ') "${CVC_DEPS_PREFIX}/lib"; do ls "$d" 2>/dev/null | grep -E '^libpython' | sed "s|^|  $d/|"; done
+show_ldd() {  # label, LD_LIBRARY_PATH value
+    echo "== ldd libpyuno.so (${1})"
+    LD_LIBRARY_PATH="$2" ldd "${P}/libpyuno.so" | grep -E 'python|not found' | sed 's/^/  /'
 }
-static void *big(size_t n, const char *what) {
-    if (n > (size_t(1) << 31)) report(what, n);
-    void *p = malloc(n ? n : 1);
-    if (!p) throw std::bad_alloc();
-    return p;
-}
-void *operator new(size_t n) { return big(n, "operator-new"); }
-void *operator new[](size_t n) { return big(n, "operator-new[]"); }
-extern "C" [[noreturn]] void __cxa_throw(void *o, void *tv, void (*d)(void *)) {
-    typedef void (*real_t)(void *, void *, void (*)(void *));
-    static real_t real = (real_t)dlsym(RTLD_NEXT, "__cxa_throw");
-    const std::type_info *t = static_cast<const std::type_info *>(tv);
-    if (t && strstr(t->name(), "bad_alloc")) report(t->name(), 0);
-    real(o, tv, d);
-    __builtin_unreachable();
-}
-SHIM
-g++ -shared -fPIC -O1 -o "${T}/shim/shim.so" "${T}/shim/shim.cc" -ldl
-run_lo() {  # label, then env assignments for env(1)
-    local label="$1"; shift
-    local d="${T}/run-${label}"; rm -rf "${d}"; mkdir -p "${d}"
-    echo "== ${label}"
-    env "$@" HOME="${d}" LD_PRELOAD="${T}/shim/shim.so" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
+show_ldd unset ""
+show_ldd runner "${ORIG_LDP}"
+show_ldd deps+runner "${CVC_DEPS_PREFIX}/lib${ORIG_LDP:+:${ORIG_LDP}}"
+run_lo() {  # label, LD_LIBRARY_PATH value
+    local d="${T}/run-$1"; rm -rf "${d}"; mkdir -p "${d}"
+    echo "== convert with LD_LIBRARY_PATH=$2"
+    LD_LIBRARY_PATH="$2" HOME="${d}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
         "-env:UserInstallation=file://${d}/profile" --convert-to pdf --outdir "${d}" "${T}/smoke.html" 2>&1 \
-        | grep -v '^$' | head -60 || true
-    [ -s "${d}/smoke.pdf" ] && echo "   -> PDF produced (${label})"
-    ls "${d}/profile/user" 2>/dev/null | head -5 | sed 's/^/   profile: /' || true
+        | grep -v '^$' | tail -3 || true
+    if [ -s "${d}/smoke.pdf" ]; then echo "   -> PDF produced ($1)"; else echo "   -> no PDF ($1)"; fi
 }
-run_lo bare -u LD_LIBRARY_PATH
-run_lo bare-en -u LD_LIBRARY_PATH LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+run_lo runner "${ORIG_LDP}"
+run_lo deps-only "${CVC_DEPS_PREFIX}/lib"
+run_lo program-first "${P}:${CVC_DEPS_PREFIX}/lib${ORIG_LDP:+:${ORIG_LDP}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-run_lo deps
-echo "== program/*.rdb and share/registry sizes"
-ls -l "${P}"/*.rdb "${P}"/types/*.rdb 2>&1 | awk '{print "  "$5" "$NF}'
-ls -l "${CVC_INSTALL_DIR}/lib/libreoffice/share/registry" 2>&1 | awk '{print "  "$5" "$NF}' | head -20
 # soffice's own output is kept and shown on failure: the fleet's 2026-10-15
 # populate logged only "soffice --convert-to pdf failed".
 if ! HOME="${T}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
