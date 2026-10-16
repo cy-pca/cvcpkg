@@ -7,8 +7,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-# GLib's meson build requires the Python 'packaging' module.
-& python -m pip install --quiet packaging 2>$null
+# GLib's meson build requires the Python 'packaging' module in the interpreter
+# meson runs on.  meson.cmd runs the build prefix's python.exe (python312), and
+# packaging-cp312 (recipe.yaml) installs into its Lib\site-packages.
 
 Invoke-CvcMesonBuild @(
     '-Dtests=false',
