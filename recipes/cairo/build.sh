@@ -7,7 +7,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
-export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# share/pkgconfig too: xorgproto installs xproto.pc and kbproto.pc there, and
+# x11.pc requires both (the Xlib surface below). libdata/pkgconfig is FreeBSD's.
+_pc_dirs=()
+for _p in "${CVC_DEPS_PREFIX}" ${CVC_BUILD_PREFIX:+"${CVC_BUILD_PREFIX}"}; do
+    _pc_dirs+=("${_p}/lib/pkgconfig" "${_p}/libdata/pkgconfig" "${_p}/share/pkgconfig")
+done
+_pc_path="$(IFS=:; echo "${_pc_dirs[*]}")"
+export PKG_CONFIG_PATH="${_pc_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 _default_lib=shared
@@ -28,7 +35,7 @@ MESON_OPTS=(
     --buildtype=release
     --libdir=lib
     --default-library="${_default_lib}"
-    --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig"
+    --pkg-config-path="$(IFS=,; echo "${_pc_dirs[*]}")"
     -Dc_link_args="${_rpath_flags}"
     -Dcpp_link_args="${_rpath_flags}"
     -Dfreetype=enabled
@@ -40,15 +47,15 @@ MESON_OPTS=(
     -Dsymbol-lookup=disabled
 )
 
+# The Xlib surface (cairo-xlib, cairo-xlib-xrender) on Linux and the BSDs,
+# from cvcpkg's libx11/libxext/libxrender: gtk4's X11 backend requires it.
+# No XCB surface: nothing in the catalog needs cairo-xcb.
 case "${CVC_PLATFORM}" in
-    linux)
-        MESON_OPTS+=( -Dxcb=disabled -Dxlib=disabled )
-        ;;
     macos)
         MESON_OPTS+=( -Dquartz=enabled -Dxcb=disabled -Dxlib=disabled )
         ;;
     *)
-        MESON_OPTS+=( -Dxcb=disabled -Dxlib=disabled )
+        MESON_OPTS+=( -Dxcb=disabled -Dxlib=enabled )
         ;;
 esac
 

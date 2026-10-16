@@ -24,4 +24,13 @@ meson setup "${CVC_BUILD_DIR}" \
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
 
+# The .pc files go to lib/pkgconfig, where cvcpkg consumers look (as
+# wayland-protocols does).  meson puts them in share/pkgconfig, an
+# arch-independent package's place, and a consumer searching lib/pkgconfig only
+# could not resolve x11.pc's "Requires: xproto kbproto": pango's meson then fell
+# back to downloading and building its own cairo over cvcpkg's.
+mkdir -p "${CVC_INSTALL_DIR}/lib/pkgconfig"
+mv "${CVC_INSTALL_DIR}"/share/pkgconfig/*.pc "${CVC_INSTALL_DIR}/lib/pkgconfig/"
+rmdir "${CVC_INSTALL_DIR}/share/pkgconfig"
+
 cvc_rewrite_install_paths

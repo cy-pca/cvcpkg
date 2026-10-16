@@ -46,6 +46,19 @@ depends:
     - name: wayland-protocols
       version: "^1.38"
       platforms: [linux, freebsd, openbsd, netbsd]
+    # GTK requires libdrm on Linux for drm_fourcc.h (dmabuf formats) only: a
+    # header-only partial dependency, never linked, so it is not a runtime dep.
+    - name: libdrm
+      platforms: [linux]
+    # glib's gdbus-codegen (a Python script) generates the AT-SPI accessibility
+    # code on Linux and the BSDs, and imports `packaging`.  Run with the
+    # builder's python3 it failed: "No module named 'packaging'".  build.sh
+    # puts the build prefix first on PATH, so its `#!/usr/bin/env python3`
+    # finds cvcpkg's python313, with packaging-cp313 in its site-packages.
+    - name: python3
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: packaging-cp313
+      platforms: [linux, freebsd, openbsd, netbsd]
   runtime:
     - name: glib
       version: "^2.80"
@@ -66,10 +79,29 @@ depends:
     - name: wayland
       version: "^1.23"
       platforms: [linux, freebsd]
-      platforms: [linux, freebsd]
     - name: xkbcommon
       version: "^1.7"
       platforms: [linux, freebsd]
+    # The X11 backend (build.sh: -Dx11-backend=true on Linux and the BSDs)
+    # requires all of these (GTK 4.16 meson.build), and cairo's Xlib surface.
+    - name: libx11
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxext
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrender
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxi
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxrandr
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxcursor
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxdamage
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxfixes
+      platforms: [linux, freebsd, openbsd, netbsd]
+    - name: libxinerama
+      platforms: [linux, freebsd, openbsd, netbsd]
   host_tools: []
 
 build:

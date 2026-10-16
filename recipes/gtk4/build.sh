@@ -9,8 +9,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
-export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
-export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# The build prefix first: its python3 (python313, with packaging-cp313) is
+# what glib's gdbus-codegen must run with (recipe.yaml).
+export PATH="${CVC_BUILD_PREFIX:+${CVC_BUILD_PREFIX}/bin:}${CVC_DEPS_PREFIX}/bin:${PATH}"
+# share/pkgconfig too: xorgproto (xproto.pc and kbproto.pc, which x11.pc
+# requires) and wayland-protocols install their .pc files there.
+# libdata/pkgconfig is FreeBSD's.
+_pc_dirs=()
+for _p in "${CVC_DEPS_PREFIX}" ${CVC_BUILD_PREFIX:+"${CVC_BUILD_PREFIX}"}; do
+    _pc_dirs+=("${_p}/lib/pkgconfig" "${_p}/libdata/pkgconfig" "${_p}/share/pkgconfig")
+done
+_pc_path="$(IFS=:; echo "${_pc_dirs[*]}")"
+export PKG_CONFIG_PATH="${_pc_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 GTK_VERSION="4.16.7"
@@ -37,7 +47,7 @@ MESON_OPTS=(
     --prefix="${CVC_INSTALL_DIR}"
     --buildtype=release
     --libdir=lib
-    --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig"
+    --pkg-config-path="$(IFS=,; echo "${_pc_dirs[*]}")"
     -Dc_link_args="${_rpath_flags}"
     -Dcpp_link_args="${_rpath_flags}"
     -Dbuild-tests=false
@@ -58,6 +68,11 @@ MESON_OPTS+=( -Dprint-cups=disabled -Dprint-cpdb=disabled )
 # auto-detection found a partial one in the fleet's deps prefix and then failed
 # on "Dependency gstreamer-player-1.0 not found" (2026-10-15 populate).
 MESON_OPTS+=( -Dmedia-gstreamer=disabled )
+# No Vulkan renderer: GTK 4.16 enables it by default and then requires the
+# Vulkan loader and glslc, which cvcpkg does not package ('Dependency "vulkan"
+# not found').  GTK renders with its GL renderer (libepoxy over libglvnd) or
+# falls back to cairo.
+MESON_OPTS+=( -Dvulkan=disabled )
 
 case "${CVC_PLATFORM}" in
     linux)
