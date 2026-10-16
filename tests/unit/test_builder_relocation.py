@@ -314,6 +314,23 @@ def test_make_relocatable_scrubs_executables_for_every_link(tmp_path, link):
     assert kwargs["skip"](ctx.install_dir / "bin" / "foo") is False
 
 
+@pytest.mark.parametrize("platform", ["linux", "netbsd"])
+def test_without_patchelf_the_scrub_relocates_lib_too(tmp_path, platform):
+    """No patchelf (a BSD builder: cvcpkg bootstraps it on Linux only): the
+    $ORIGIN pass cannot run, so lib/**/*.so* is left to the in-place scrub."""
+    ctx = _ctx(tmp_path, platform, "shared")
+    with (
+        mock.patch.object(builder, "_find_patchelf", return_value=None),
+        mock.patch.object(builder, "_patch_elf_rpath") as lib_pass,
+        mock.patch.object(builder, "_scrub_elf_rpaths") as scrub,
+        mock.patch.object(builder, "_complete_elf_rpaths"),
+    ):
+        builder._make_relocatable(ctx)
+    assert not lib_pass.called
+    _, kwargs = scrub.call_args
+    assert kwargs["skip"](ctx.install_dir / "lib" / "libreadline.so.8.3") is False
+
+
 @pytest.mark.parametrize("platform,runs", [("linux", True), ("freebsd", False), ("netbsd", False)])
 def test_make_relocatable_completes_rpaths_on_linux_only(tmp_path, platform, runs):
     ctx = _ctx(tmp_path, platform, "shared", {"build": ["cmake"], "runtime": ["zlib"]})
