@@ -18,7 +18,14 @@ trap 'rm -rf "${T}"' EXIT
 export HOME="${T}/home"
 mkdir -p "${HOME}"
 # Runtime deps sit in the deps prefix until cvcpkg installs them beside it.
+# It also holds cvcpkg's libpython3.13 (python3, a build dependency): on
+# LD_LIBRARY_PATH, as cvcpkg's activate script puts it, it must not replace
+# LibreOffice's own (build.sh, DT_RPATH). This runs after the pack pass has
+# rewritten the search paths, so it also checks that the pass kept DT_RPATH.
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+if [ -e "${CVC_DEPS_PREFIX:-/nonexistent}/lib/libpython3.13.so.1.0" ]; then
+    echo "  LD_LIBRARY_PATH has a libpython3.13.so.1.0 (${CVC_DEPS_PREFIX}/lib)"
+fi
 
 convert() {  # $1 = soffice, $2 = input, $3 = format, $4 = outdir
     "$1" --headless --norestore "-env:UserInstallation=file://${T}/profile" \

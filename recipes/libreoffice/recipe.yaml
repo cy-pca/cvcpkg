@@ -50,6 +50,9 @@ depends:
   # extract-debs.py unpacks the .deb files (standard library only).
   build:
     - name: python3
+    # build.sh gives LibreOffice's objects a DT_RPATH (see there).
+    - name: patchelf
+      platforms: [linux]
     # A font for build.sh's headless conversion smoke test: a builder with no
     # system fonts gives LibreOffice nothing to lay text out with.  Users add
     # their own (see the notes); this one is build-time only.
