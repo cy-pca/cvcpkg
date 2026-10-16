@@ -2145,7 +2145,13 @@ def _make_relocatable(ctx: BuildContext) -> None:
         _patch_macos_install_names(ctx.install_dir, (ctx.prefix,), temp_prefixes)
     elif ctx.platform in _ELF_RPATH_PLATFORMS or ctx.platform == "openbsd":
         patchelf = _find_patchelf(ctx.build_prefix, ctx.prefix)
-        lib_pass = shared and ctx.platform in _ELF_RPATH_PLATFORMS
+        # The $ORIGIN pass needs patchelf, which cvcpkg bootstraps on Linux only
+        # (_bootstrap_host_tools); a BSD builder may have none.  Without one it
+        # does nothing, so it must not claim lib/**/*.so* from the scrub below,
+        # which rewrites in place and needs no tool: a NetBSD builder without
+        # patchelf packed readline with its scratch-prefix RPATH left in place,
+        # and the pack-time gate failed it.
+        lib_pass = shared and ctx.platform in _ELF_RPATH_PLATFORMS and patchelf is not None
         if lib_pass:
             _patch_elf_rpath(ctx.install_dir, patchelf)
         lib_dir = ctx.install_dir / "lib"
