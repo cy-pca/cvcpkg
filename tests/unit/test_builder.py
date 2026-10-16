@@ -2375,6 +2375,28 @@ class TestBuildAllKeepGoing:
         # Create a dummy vendored source and build script
         (rd / "build.sh").write_text("#!/bin/sh\ntrue\n")
 
+    def test_a_matrix_limited_to_other_host_arches_is_skipped_with_dependents(self, tmp_path):
+        # haiku-image builds an x86_64 cross-toolchain and image; on the
+        # linux/arm64 runners it failed instead of being skipped.
+        from cvcpkg.builder import _not_applicable, list_recipes
+
+        recipes_dir = tmp_path / "recipes"
+        self._make_recipe(recipes_dir, "haiku-image")
+        self._make_recipe(recipes_dir, "haiku-vm-tests", deps=["haiku-image"])
+        self._make_recipe(recipes_dir, "zlib")
+        y = recipes_dir / "haiku-image" / "recipe.yaml"
+        data = yaml.safe_load(y.read_text())
+        data["build"]["matrix"][0]["arch"] = ["x86_64"]
+        y.write_text(yaml.dump(data))
+
+        rs = list_recipes(recipes_dir)
+        assert _not_applicable(rs, "linux", "arm64") == {
+            "haiku-image": "no linux-arm64 build (x86_64 hosts only)",
+            "haiku-vm-tests": "depends on haiku-image, which is built on x86_64 hosts only",
+        }
+        assert _not_applicable(rs, "linux", "x86_64") == {}
+        assert _not_applicable(rs, "linux", "amd64") == {}  # alias
+
     @patch("cvcpkg.builder.run_build")
     @patch("cvcpkg.builder.fetch_source")
     def test_dependents_of_a_recipe_with_no_artifact_are_skipped(

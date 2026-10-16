@@ -86,6 +86,10 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+      # The Haiku build tools and cross-toolchain it bootstraps are x86_64-host
+      # only; on the linux/arm64 runners the jam build failed on missing
+      # translator headers.  pack-all skips it on other hosts.
+      arch: [x86_64]
       # HAIKU_BUILDER_SSH_PUBKEY is deliberately NOT declared here.  It is
       # supplied from the BUILDER PROCESS's environment (a fleet secret in CI,
       # or an operator's own key for a local build), and build.sh reads it as
