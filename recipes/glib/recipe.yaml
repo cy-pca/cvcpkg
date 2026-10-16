@@ -47,9 +47,12 @@ depends:
       platforms: [openbsd, macos]
     # macOS libc has no gettext; without this GLib builds and links its
     # proxy-libintl subproject, whose libintl.8.dylib it never ships.
+    # FreeBSD's and OpenBSD's libc have none either (NetBSD's does): there
+    # meson tried to `git clone` proxy-libintl from github.com at build time,
+    # and failed on the FreeBSD builder.
     - name: gettext
       version: "^1.0"
-      platforms: [macos]
+      platforms: [macos, freebsd, openbsd]
     - name: libffi
       version: "^3.4"
     - name: pcre2
