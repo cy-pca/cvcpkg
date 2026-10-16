@@ -46,6 +46,10 @@ depends:
     - name: wayland-protocols
       version: "^1.38"
       platforms: [linux, freebsd, openbsd, netbsd]
+    # GTK requires libdrm on Linux for drm_fourcc.h (dmabuf formats) only: a
+    # header-only partial dependency, never linked, so it is not a runtime dep.
+    - name: libdrm
+      platforms: [linux]
   runtime:
     - name: glib
       version: "^2.80"
