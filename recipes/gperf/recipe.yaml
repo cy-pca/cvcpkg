@@ -34,9 +34,9 @@ depends:
 build:
   # Emits one architecture-independent executable; no debug/release split.
   build_type_independent: true
-  # No windows entry: gperf 3.1 ships only an autotools build, which does not
-  # run natively under MSVC. Consumers that need it on Windows currently fall
-  # back to upstream's own subproject wrap (see the note in fontconfig).
+  # gperf 3.1 ships only an autotools build, which does not run under MSVC, so
+  # build.ps1 compiles the sources with cl.exe directly. fontconfig needs it on
+  # Windows; before, meson fell back to fontconfig's subprojects/gperf.wrap.
   matrix:
     - platform: linux
       script: build.sh
@@ -58,6 +58,8 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2"
+    - platform: windows
+      script: build.ps1
 
 package:
   files:
@@ -69,4 +71,4 @@ package:
 toolchain:
   cc:
     min_version: "any"
-    description: "C++98-capable compiler (gcc or clang)"
+    description: "C++98-capable compiler (gcc, clang or MSVC)"
