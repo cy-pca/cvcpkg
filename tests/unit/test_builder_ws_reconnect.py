@@ -628,7 +628,13 @@ def test_builder_update_waits_for_in_flight_jobs(monkeypatch, tmp_path):
     assert server.claims.get(2) == 1, result.output
 
 
-def test_builder_update_is_ignored_by_the_single_file_binary(monkeypatch, tmp_path):
+def test_single_file_binary_ignores_an_update_the_registry_has_no_package_for(
+    monkeypatch, tmp_path
+):
+    """The single-file binary updates from the registry's cvcpkg package.  With
+    none for its platform (the fake server 404s /v1/packages/cvcpkg) there is
+    nothing to install, so it neither drains nor runs the checkout update."""
+
     def on_connect(server, conn, index):
         conn.push({"type": "builder.update", "version": "999.0.0"})
 
@@ -639,7 +645,46 @@ def test_builder_update_is_ignored_by_the_single_file_binary(monkeypatch, tmp_pa
 
     assert result.exit_code == 0, result.output
     assert not execs
-    assert "ignored (single-file binary)" in result.output
+    assert "has no 'cvcpkg' package at all" in result.output
+    assert "no newer cvcpkg package to update this binary from" in result.output
+
+
+def test_single_file_binary_updates_from_the_registry_once_idle(monkeypatch, tmp_path):
+    """With a newer cvcpkg package for its platform, the single-file builder
+    runs the registry update -- after its in-flight job, against the server it
+    builds for, for its own platform/arch -- and never the checkout path."""
+    import cvcpkg.cli._builder as builder_mod
+    from cvcpkg.registry_update import Candidate
+
+    def on_connect(server, conn, index):
+        server.dispatch(1)
+        conn.push({"type": "job.dispatch", "job": server.job(1)})
+        conn.push({"type": "builder.update", "version": "999.0.0"})
+
+    server = _FakeServer(on_connect=on_connect)
+    execs = _record_self_update(monkeypatch, server)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    cand = Candidate("999.0.0+cvc.1", "http://test/v1/download/x", "0" * 64, "linux", "x86_64")
+    monkeypatch.setattr(
+        builder_mod, "_resolve_registry_update", lambda source, running, beat=None: cand
+    )
+    runs: list[tuple] = []
+
+    def _registry_update(source, *, token="", beat=None, extra_env=None, stop=None):
+        with server.lock:
+            runs.append((source.base, source.platform, source.arch, dict(server.jobs)))
+
+    monkeypatch.setattr(builder_mod, "_registry_self_update", _registry_update)
+    result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert not execs, result.output
+    assert "installing the registry's cvcpkg 999.0.0+cvc.1" in result.output
+    assert len(runs) == 1, result.output
+    base, plat, arch, jobs = runs[0]
+    assert (base, plat, arch) == ("http://test", "linux", "x86_64")
+    # Only once idle: job 1 had already finished when the update ran.
+    assert jobs.get(1) in ("failed", "succeeded"), result.output
 
 
 def test_builder_update_from_a_server_not_ahead_is_ignored(monkeypatch, tmp_path):
