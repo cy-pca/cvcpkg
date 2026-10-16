@@ -479,9 +479,36 @@ def build(
             merged_toolchain_env.update(r.cross_toolchain_env)
 
         # Then the rest of the build closure (e.g. source packages, which stage
-        # into <build-prefix>/src/<name>).  Build-time only: never shipped.
-        if build_only_recipes:
-            for r in resolve_build_order(build_only_recipes, plat):
+        # into <build-prefix>/src/<name>) and the deliverable (requested
+        # targets + their runtime closure), in ONE dependency order.  Building
+        # the whole build closure first broke any build dep that needs a
+        # package which also ships: flit-core-cp311 (a build dep) needs
+        # python311 (also a runtime dep of the target), which resolve_dep_closures
+        # keeps only in the runtime closure, so it was neither built yet nor in
+        # the build prefix ("cvc_python_exe_for: interpreter not found:
+        # prefix.build/bin/python3.11").  So a shipped package that a build dep
+        # needs at run time is built in order and also mirrored into the build
+        # prefix, where the build dep's CVC_DEPS_PREFIX points.
+        from cvcpkg.builder import (
+            _dep_names_for_role,
+            _merge_tree,
+            _rewrite_pc_prefixes,
+            _rewrite_script_prefixes,
+        )
+
+        build_only_names = {r.name for r in build_only_recipes}
+        mirror: set[str] = set()
+        if build_only_recipes and _bp is not None and _bp != prefix_path:
+            queue = [d for r in build_only_recipes for d in _dep_names_for_role(r, "runtime", plat)]
+            while queue:
+                n = queue.pop()
+                if n in mirror or n not in by_name:
+                    continue
+                mirror.add(n)
+                queue.extend(_dep_names_for_role(by_name[n], "runtime", plat))
+            mirror -= build_only_names
+        for r in resolve_build_order([*build_only_recipes, *target_recipes], plat):
+            if r.name in build_only_names:
                 # A recipe whose build for this target comes from its `any`
                 # entry is built ONCE, natively -- never for the target
                 # platform.  Building it "for windows" from a WSL host would
@@ -506,12 +533,9 @@ def build(
                     cross_toolchain_env=merged_toolchain_env,
                     build_prefix=build_prefix_path,
                 )
-
-        # Finally the deliverable: requested targets + their runtime closure.
-        ordered = resolve_build_order(target_recipes, plat)
-        for r in ordered:
+                continue
             print(f"\ncvcpkg: ══ {r.name} ({r.full_version}) ══")
-            build_recipe(
+            ctx = build_recipe(
                 r.recipe_dir,
                 platform=plat,
                 config=config,
@@ -523,6 +547,11 @@ def build(
                 build_prefix=build_prefix_path,
                 incremental=incremental,
             )
+            if r.name in mirror and ctx.install_dir.is_dir() and ctx.install_dir != prefix_path:
+                print(f"cvcpkg: {r.name} is also a build dep's runtime dep -> {_bp}")
+                _merge_tree(ctx.install_dir, _bp)
+                _rewrite_pc_prefixes(_bp)
+                _rewrite_script_prefixes(_bp)
 
         # ── Build-prefix separation: record + strip ──
         # When a build closure was built into a separate prefix, record that in

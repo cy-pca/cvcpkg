@@ -630,6 +630,58 @@ class TestBuildWithDeps:
         assert strip.called
         assert "stripped build prefix" in out
 
+    def test_a_shipped_runtime_dep_of_a_build_dep_is_built_first_and_mirrored(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # flit-core-cp311 (a build dep) needs python311, which also ships with
+        # the target: it used to be built after the build closure and only into
+        # the deliverable prefix, so the build dep found no interpreter.
+        build_recipe = self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr("cvcpkg.host_tools.write_host_tools_record", mock.MagicMock())
+        monkeypatch.setattr("cvcpkg.host_tools.strip_host_tools", mock.MagicMock())
+        monkeypatch.setattr(
+            "cvcpkg.builder._dep_names_for_role",
+            lambda r, role, plat="": {"rt"} if (r.name, role) == ("bt", "runtime") else set(),
+        )
+        order = {"rt": 0, "bt": 1, "app": 2}
+        monkeypatch.setattr(
+            "cvcpkg.builder.resolve_build_order",
+            lambda recs, *a, **k: sorted(recs, key=lambda r: order.get(r.name, -1)),
+        )
+        built: list[str] = []
+
+        def fake_build(recipe_dir, **kw):
+            name = Path(recipe_dir).name
+            built.append(name)
+            install = tmp_path / f"install-{name}"
+            (install / "bin").mkdir(parents=True, exist_ok=True)
+            (install / "bin" / name).write_text("x")
+            return types.SimpleNamespace(install_dir=install)
+
+        build_recipe.side_effect = fake_build
+        prefix = tmp_path / "deps"
+        prefix.mkdir()
+        ret = main(
+            [
+                "build",
+                "app",
+                "--with-deps",
+                "--local",
+                "--keep-build-prefix",
+                "--platform",
+                "linux",
+                "--recipes-dir",
+                str(tmp_path),
+                "--no-default-recipes",
+                "--prefix",
+                str(prefix),
+            ]
+        )
+        assert ret == 0, capsys.readouterr()
+        assert built.index("rt") < built.index("bt") < built.index("app")
+        assert (tmp_path / "deps.build" / "bin" / "rt").is_file()
+        assert not (tmp_path / "deps.build" / "bin" / "app").exists()
+
     def test_with_deps_keep_build_prefix(self, tmp_path, monkeypatch, capsys):
         self._setup(tmp_path, monkeypatch)
         monkeypatch.setattr("cvcpkg.host_tools.write_host_tools_record", mock.MagicMock())
