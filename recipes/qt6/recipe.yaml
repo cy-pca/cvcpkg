@@ -131,21 +131,23 @@ package:
     - lib/libQt6*
     - lib/Qt6*
     - lib/cmake/Qt6*/
-    - lib/qt6/
     - lib/pkgconfig/Qt6*
     - include/Qt*/
-    - bin/moc*
-    - bin/rcc*
-    - bin/uic*
+    # Qt 6.8 installs moc/rcc/uic into libexec/ on Unix; Windows keeps its
+    # tools and Qt6*.dll in bin/, and the wasm build copies the host tools
+    # into bin/ (build-wasm.sh).  Unscoped, these failed the strict check on
+    # linux/arm64, as did lib/qt6/ and share/qt6/, which no build produces.
+    - { glob: "libexec/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/moc*", platforms: [windows, wasm] }
+    - { glob: "bin/rcc*", platforms: [windows, wasm] }
+    - { glob: "bin/uic*", platforms: [windows, wasm] }
     - bin/qmake*
-    - bin/Qt6*
+    - { glob: "bin/Qt6*", platforms: [windows] }
     - plugins/
-    - share/qt6/
     - mkspecs/wasm-emscripten/
     # Full host-native Qt install shipped only in wasm bundles so
-    # downstream submodule wasm builds have a QT_HOST_PATH.  On native
-    # platforms this directory does not exist, so the glob is a no-op.
-    - host-qt/
+    # downstream submodule wasm builds have a QT_HOST_PATH.
+    - { glob: "host-qt/", platforms: [wasm] }
   cmake_packages:
     - {
         name: Qt6,

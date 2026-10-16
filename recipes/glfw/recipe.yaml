@@ -84,9 +84,12 @@ build:
 
 package:
   files:
-    - lib/libglfw*
-    - lib/glfw3*
-    - bin/glfw3*
+    - { glob: "lib/libglfw*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC: glfw3.lib (import library) and glfw3.dll.  Unscoped, they failed the
+    # strict check on linux/arm64 (the Unix library is libglfw, a different
+    # stem, so the pair is not grouped).
+    - { glob: "lib/glfw3*", platforms: [windows] }
+    - { glob: "bin/glfw3*", platforms: [windows] }
     - lib/pkgconfig/glfw3.pc
     - lib/cmake/glfw3/
     - include/GLFW/
