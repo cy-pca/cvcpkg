@@ -78,43 +78,64 @@ rm -rf "${W}/debs" "${W}/root"
 T="${W}/smoke"
 rm -rf "${T}" && mkdir -p "${T}"
 printf '<html><body><h1>cvcpkg libreoffice</h1><p>smoke test</p></body></html>\n' > "${T}/smoke.html"
-# DIAGNOSTIC (not for merge): what LibreOffice loads from the deps prefix, and
-# whether the conversion works with only the runner's system libraries.
+# DIAGNOSTIC (not for merge): where soffice's std::bad_alloc comes from.  A
+# preloaded shim reports every operator new above 2 GiB and every thrown
+# bad_alloc (rtl::OUString throws one itself) with a backtrace.
 P="${CVC_INSTALL_DIR}/lib/libreoffice/program"
-echo "== without the deps prefix on LD_LIBRARY_PATH"
-HOME="${T}/a" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pa" \
-    --convert-to pdf --outdir "${T}/a" "${T}/smoke.html" 2>&1 | tail -5 || true
-ls -l "${T}/a" 2>&1 | tail -3
+echo "== limits"; ulimit -a 2>&1 | sed 's/^/  /'
+echo "== locale: LANG=${LANG:-} LC_ALL=${LC_ALL:-}"; id
+mkdir -p "${T}/shim"
+cat > "${T}/shim/shim.cc" <<'SHIM'
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <new>
+#include <typeinfo>
+#include <unistd.h>
+static void report(const char *what, size_t n) {
+    char buf[160];
+    int len = snprintf(buf, sizeof buf, "CVCDIAG %s %zu\n", what, n);
+    if (write(2, buf, len) < 0) {}
+    void *bt[64];
+    int k = backtrace(bt, 64);
+    backtrace_symbols_fd(bt, k, 2);
+}
+static void *big(size_t n, const char *what) {
+    if (n > (size_t(1) << 31)) report(what, n);
+    void *p = malloc(n ? n : 1);
+    if (!p) throw std::bad_alloc();
+    return p;
+}
+void *operator new(size_t n) { return big(n, "operator-new"); }
+void *operator new[](size_t n) { return big(n, "operator-new[]"); }
+extern "C" [[noreturn]] void __cxa_throw(void *o, std::type_info *t, void (*d)(void *)) {
+    typedef void (*real_t)(void *, std::type_info *, void (*)(void *));
+    static real_t real = (real_t)dlsym(RTLD_NEXT, "__cxa_throw");
+    if (t && strstr(t->name(), "bad_alloc")) report(t->name(), 0);
+    real(o, t, d);
+    __builtin_unreachable();
+}
+SHIM
+g++ -shared -fPIC -O1 -o "${T}/shim/shim.so" "${T}/shim/shim.cc" -ldl
+run_lo() {  # label, then env assignments for env(1)
+    local label="$1"; shift
+    local d="${T}/run-${label}"; rm -rf "${d}"; mkdir -p "${d}"
+    echo "== ${label}"
+    env "$@" HOME="${d}" LD_PRELOAD="${T}/shim/shim.so" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
+        "-env:UserInstallation=file://${d}/profile" --convert-to pdf --outdir "${d}" "${T}/smoke.html" 2>&1 \
+        | grep -v '^$' | head -60 || true
+    [ -s "${d}/smoke.pdf" ] && echo "   -> PDF produced (${label})"
+    ls "${d}/profile/user" 2>/dev/null | head -5 | sed 's/^/   profile: /' || true
+}
+run_lo bare -u LD_LIBRARY_PATH
+run_lo bare-en -u LD_LIBRARY_PATH LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX:+${CVC_DEPS_PREFIX}/lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-echo "== libraries resolved from the deps prefix"
-for f in "${P}/soffice.bin" "${P}/libmergedlo.so" "${P}/libvclplug_genlo.so" "${P}/libvcllo.so"; do
-    if [ -f "$f" ]; then ldd "$f" | grep -F "${CVC_DEPS_PREFIX}" | sed "s|^|  $(basename "$f"): |" || true; fi
-done | sort -u | head -5
-for lib in "${CVC_DEPS_PREFIX}"/lib/lib*.so*; do :; done
-for one in libcairo.so.2 libfontconfig.so.1 libfreetype.so.6 libpixman-1.so.0 libpng16.so.16 libxml2.so.2 libexpat.so.1 libz.so.1 libX11.so.6 libxcb.so.1; do
-    [ -e "${CVC_DEPS_PREFIX}/lib/${one}" ] || continue
-    mkdir -p "${T}/hide"
-    echo "== hiding ${one} from the deps prefix"
-    mv "${CVC_DEPS_PREFIX}/lib/${one}" "${T}/hide/"
-    HOME="${T}/b" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pb" \
-        --convert-to pdf --outdir "${T}/b" "${T}/smoke.html" 2>&1 | tail -3 || true
-    ls "${T}/b" 2>/dev/null | grep -q smoke.pdf && echo "   -> PDF produced without the deps prefix's ${one}"
-    rm -rf "${T}/b" "${T}/pb"
-    mv "${T}/hide/${one}" "${CVC_DEPS_PREFIX}/lib/"
-done
-echo "== soffice --version, and a plain-text conversion"
-HOME="${T}/v" "${CVC_INSTALL_DIR}/bin/soffice" --version 2>&1 | tail -3 || true
-printf 'hello
-' > "${T}/t.txt"
-HOME="${T}/d" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore "-env:UserInstallation=file://${T}/pd"     --convert-to pdf --outdir "${T}/d" "${T}/t.txt" 2>&1 | tail -3 || true
-ls "${T}/d" 2>&1 | tail -2
-echo "== gdb: $(command -v gdb || echo missing)"
-if command -v gdb >/dev/null 2>&1; then
-    echo "== gdb backtrace of the bad_alloc"
-    HOME="${T}/c" gdb -batch -ex "catch throw std::bad_alloc" -ex run -ex bt \
-        --args "${P}/soffice.bin" --headless --norestore "-env:UserInstallation=file://${T}/pc" \
-        --convert-to pdf --outdir "${T}/c" "${T}/smoke.html" 2>&1 | grep -E "^#|catch|throw" | head -40 || true
-fi
+run_lo deps
+echo "== program/*.rdb and share/registry sizes"
+ls -l "${P}"/*.rdb "${P}"/types/*.rdb 2>&1 | awk '{print "  "$5" "$NF}'
+ls -l "${CVC_INSTALL_DIR}/lib/libreoffice/share/registry" 2>&1 | awk '{print "  "$5" "$NF}' | head -20
 # soffice's own output is kept and shown on failure: the fleet's 2026-10-15
 # populate logged only "soffice --convert-to pdf failed".
 if ! HOME="${T}" "${CVC_INSTALL_DIR}/bin/soffice" --headless --norestore \
