@@ -13,15 +13,17 @@ recipe:
     XCB utility functions (aux, atom, event) atop libxcb.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-0.4.1.tar.xz
-  sha256: "5abe3bbbd8e54f0fa3ec945291b7e8fa8cfd3cccc43718f8758430f94126e512"
-  strip_components: 1
+  # Built from the source package xcb-util-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-0.4.1.tar.xz).
+  type: package
+  package: xcb-util-src
 
 patches: []
 
 depends:
   build:
+    - name: xcb-util-src
+      version: "==0.4.1"
     - pkg-config
   runtime:
     - name: libxcb

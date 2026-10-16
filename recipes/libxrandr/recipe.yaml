@@ -13,15 +13,17 @@ recipe:
     X Resize, Rotate and Reflect Extension client library (Xrandr).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXrandr-1.5.5.tar.xz
-  sha256: "72b922c2e765434e9e9f0960148070bd4504b288263e2868a4ccce1b7cf2767a"
-  strip_components: 1
+  # Built from the source package libxrandr-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXrandr-1.5.5.tar.xz).
+  type: package
+  package: libxrandr-src
 
 patches: []
 
 depends:
   build:
+    - name: libxrandr-src
+      version: "==1.5.5"
     - pkg-config
     - name: xorgproto
   runtime:

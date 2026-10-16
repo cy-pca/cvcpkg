@@ -13,15 +13,17 @@ recipe:
     Xinerama extension client library (Xinerama).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXinerama-1.1.6.tar.xz
-  sha256: "d00fc1599c303dc5cbc122b8068bdc7405d6fcb19060f4597fc51bd3a8be51d7"
-  strip_components: 1
+  # Built from the source package libxinerama-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXinerama-1.1.6.tar.xz).
+  type: package
+  package: libxinerama-src
 
 patches: []
 
 depends:
   build:
+    - name: libxinerama-src
+      version: "==1.1.6"
     - pkg-config
     - name: xorgproto
   runtime:

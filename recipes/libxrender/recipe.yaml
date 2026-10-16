@@ -13,15 +13,17 @@ recipe:
     X Rendering Extension client library (Xrender).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXrender-0.9.12.tar.xz
-  sha256: "b832128da48b39c8d608224481743403ad1691bf4e554e4be9c174df171d1b97"
-  strip_components: 1
+  # Built from the source package libxrender-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXrender-0.9.12.tar.xz).
+  type: package
+  package: libxrender-src
 
 patches: []
 
 depends:
   build:
+    - name: libxrender-src
+      version: "==0.9.12"
     - pkg-config
     - name: xorgproto
   runtime:

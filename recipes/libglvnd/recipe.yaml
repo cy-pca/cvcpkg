@@ -18,16 +18,18 @@ recipe:
     The GL Vendor-Neutral Dispatch loader — ships libGL/libGLX/libEGL/libOpenGL/libGLdispatch + GL/GLX/EGL/GLES headers. The actual GPU driver ICDs are separate packages (cvcpkg `mesa` for software GL) or system-provided; EGL vendor JSONs are discovered relative to libEGL.so.
 
 source:
-  type: tarball
-  url: https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v1.7.0/libglvnd-v1.7.0.tar.gz
-  sha256: "2b6e15b06aafb4c0b6e2348124808cbd9b291c647299eaaba2e3202f51ff2f3d"
-  strip_components: 1
+  # Built from the source package libglvnd-src, which pins the upstream tarball
+  # (https://gitlab.freedesktop.org/glvnd/libglvnd/-/archive/v1.7.0/libglvnd-v1.7.0.tar.gz).
+  type: package
+  package: libglvnd-src
 
 patches:
   - relocatable-egl-vendor-dir.patch
 
 depends:
   build:
+    - name: libglvnd-src
+      version: "==1.7.0"
     - meson
     - ninja
     - pkg-config

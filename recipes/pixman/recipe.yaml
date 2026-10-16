@@ -15,15 +15,17 @@ recipe:
     Required by Cairo.
 
 source:
-  type: tarball
-  url: https://cairographics.org/releases/pixman-0.44.2.tar.gz
-  sha256: "6349061ce1a338ab6952b92194d1b0377472244208d47ff25bef86fc71973466"
-  strip_components: 1
+  # Built from the source package pixman-src, which pins the upstream tarball
+  # (https://cairographics.org/releases/pixman-0.44.2.tar.gz).
+  type: package
+  package: pixman-src
 
 patches: []
 
 depends:
   build:
+    - name: pixman-src
+      version: "==0.44.2"
     - ninja
     - meson
     - pkg-config

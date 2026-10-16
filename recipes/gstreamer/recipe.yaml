@@ -18,15 +18,17 @@ recipe:
     Multimedia's GStreamer backend links against on Linux and macOS.
 
 source:
-  type: tarball
-  url: https://gitlab.freedesktop.org/gstreamer/gstreamer/-/archive/1.24.13/gstreamer-1.24.13.tar.gz
-  sha256: "0ba48169ca2edb2101ad6204cae3f9f8b69764ffe2f6f592a160603604a48dc4"
-  strip_components: 1
+  # Built from the source package gstreamer-src, which pins the upstream tarball
+  # (https://gitlab.freedesktop.org/gstreamer/gstreamer/-/archive/1.24.13/gstreamer-1.24.13.tar.gz).
+  type: package
+  package: gstreamer-src
 
 patches: []
 
 depends:
   build:
+    - name: gstreamer-src
+      version: "==1.24.13"
     - name: nasm
       platforms: [linux, freebsd, openbsd, netbsd]
     - ninja

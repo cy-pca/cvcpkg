@@ -14,15 +14,17 @@ recipe:
     xkbcomp and the X server.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/archive/individual/lib/libxkbfile-1.2.0.tar.xz
-  sha256: "7f71884e5faf56fb0e823f3848599cf9b5a9afce51c90982baeb64f635233ebf"
-  strip_components: 1
+  # Built from the source package libxkbfile-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/archive/individual/lib/libxkbfile-1.2.0.tar.xz).
+  type: package
+  package: libxkbfile-src
 
 patches: []
 
 depends:
   build:
+    - name: libxkbfile-src
+      version: "==1.2.0"
     - meson
     - ninja
     - pkg-config

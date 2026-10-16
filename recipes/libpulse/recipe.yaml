@@ -25,15 +25,17 @@ recipe:
     Qt FFmpeg media backend there.
 
 source:
-  type: tarball
-  url: https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-17.0.tar.xz
-  sha256: "053794d6671a3e397d849e478a80b82a63cb9d8ca296bd35b73317bb5ceb87b5"
-  strip_components: 1
+  # Built from the source package libpulse-src, which pins the upstream tarball
+  # (https://www.freedesktop.org/software/pulseaudio/releases/pulseaudio-17.0.tar.xz).
+  type: package
+  package: libpulse-src
 
 patches: []
 
 depends:
   build:
+    - name: libpulse-src
+      version: "==17.0"
     - ninja
     - meson
     - pkg-config

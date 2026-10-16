@@ -13,15 +13,17 @@ recipe:
     XCB Render extension convenience library (xcb-render-util).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-renderutil-0.3.10.tar.xz
-  sha256: "3e15d4f0e22d8ddbfbb9f5d77db43eacd7a304029bf25a6166cc63caa96d04ba"
-  strip_components: 1
+  # Built from the source package xcb-util-renderutil-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-renderutil-0.3.10.tar.xz).
+  type: package
+  package: xcb-util-renderutil-src
 
 patches: []
 
 depends:
   build:
+    - name: xcb-util-renderutil-src
+      version: "==0.3.10"
     - pkg-config
   runtime:
     - name: libxcb

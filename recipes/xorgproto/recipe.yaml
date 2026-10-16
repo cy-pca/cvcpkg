@@ -13,15 +13,17 @@ recipe:
     X.Org protocol headers (Xproto, GLproto, XExtproto, …) — build-time headers for the whole X11/GLX stack.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/proto/xorgproto-2025.1.tar.xz
-  sha256: "56898c716c0578df8a2d828c9c3e5c528277705c0484381a81960fe1a67668e8"
-  strip_components: 1
+  # Built from the source package xorgproto-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/proto/xorgproto-2025.1.tar.xz).
+  type: package
+  package: xorgproto-src
 
 patches: []
 
 depends:
   build:
+    - name: xorgproto-src
+      version: "==2025.1"
     - meson
     - ninja
     - pkg-config

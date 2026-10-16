@@ -15,15 +15,17 @@ recipe:
     X11 backend (SDL_X11_XTEST, used for global mouse warp).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXtst-1.2.5.tar.xz
-  sha256: "b50d4c25b97009a744706c1039c598f4d8e64910c9fde381994e1cae235d9242"
-  strip_components: 1
+  # Built from the source package libxtst-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXtst-1.2.5.tar.xz).
+  type: package
+  package: libxtst-src
 
 patches: []
 
 depends:
   build:
+    - name: libxtst-src
+      version: "==1.2.5"
     - pkg-config
     - name: xorgproto
   runtime:

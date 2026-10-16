@@ -13,15 +13,17 @@ recipe:
     X Toolkit Intrinsics (Xt) — required by VTK's X11 render window.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXt-1.3.1.tar.xz
-  sha256: "e0a774b33324f4d4c05b199ea45050f87206586d81655f8bef4dba434d931288"
-  strip_components: 1
+  # Built from the source package libxt-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXt-1.3.1.tar.xz).
+  type: package
+  package: libxt-src
 
 patches: []
 
 depends:
   build:
+    - name: libxt-src
+      version: "==1.3.1"
     - pkg-config
     - name: xorgproto
   runtime:

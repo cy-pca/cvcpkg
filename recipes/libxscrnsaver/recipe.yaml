@@ -16,15 +16,17 @@ recipe:
     (SDL_X11_XSCRNSAVER).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXScrnSaver-1.2.5.tar.xz
-  sha256: "5057365f847253e0e275871441e10ff7846c8322a5d88e1e187d326de1cd8d00"
-  strip_components: 1
+  # Built from the source package libxscrnsaver-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXScrnSaver-1.2.5.tar.xz).
+  type: package
+  package: libxscrnsaver-src
 
 patches: []
 
 depends:
   build:
+    - name: libxscrnsaver-src
+      version: "==1.2.5"
     - pkg-config
     - name: xorgproto
   runtime:

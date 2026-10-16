@@ -13,15 +13,17 @@ recipe:
     XFree86-VidMode extension client library (Xxf86vm).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXxf86vm-1.1.7.tar.xz
-  sha256: "ae50c0f669e0af5a67cc4cd0f54f21d64a64d2660af883e80e95d3fe51b945d8"
-  strip_components: 1
+  # Built from the source package libxxf86vm-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXxf86vm-1.1.7.tar.xz).
+  type: package
+  package: libxxf86vm-src
 
 patches: []
 
 depends:
   build:
+    - name: libxxf86vm-src
+      version: "==1.1.7"
     - pkg-config
     - name: xorgproto
   runtime:

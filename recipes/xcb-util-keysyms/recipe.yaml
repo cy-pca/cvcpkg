@@ -13,15 +13,17 @@ recipe:
     XCB keysym conversion library (xcb-keysyms).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-keysyms-0.4.1.tar.xz
-  sha256: "7c260a5294412aed429df1da2f8afd3bd07b7cba3fec772fba15a613a6d5c638"
-  strip_components: 1
+  # Built from the source package xcb-util-keysyms-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/xcb/xcb-util-keysyms-0.4.1.tar.xz).
+  type: package
+  package: xcb-util-keysyms-src
 
 patches: []
 
 depends:
   build:
+    - name: xcb-util-keysyms-src
+      version: "==0.4.1"
     - pkg-config
   runtime:
     - name: libxcb

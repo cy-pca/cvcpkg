@@ -17,15 +17,17 @@ recipe:
     loader and the software rasterizers link against.
 
 source:
-  type: tarball
-  url: https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz
-  sha256: "ac5e74d157830eb8bee44c6a6bf3ad49774ef0dd2a72bdad74a8f20308b52a95"
-  strip_components: 1
+  # Built from the source package libdrm-src, which pins the upstream tarball
+  # (https://dri.freedesktop.org/libdrm/libdrm-2.4.134.tar.xz).
+  type: package
+  package: libdrm-src
 
 patches: []
 
 depends:
   build:
+    - name: libdrm-src
+      version: "==2.4.134"
     - meson
     - ninja
     - pkg-config

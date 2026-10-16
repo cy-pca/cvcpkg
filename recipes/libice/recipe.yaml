@@ -13,15 +13,17 @@ recipe:
     Inter-Client Exchange library (ICE) — session/protocol substrate for libSM.
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libICE-1.1.2.tar.xz
-  sha256: "974e4ed414225eb3c716985df9709f4da8d22a67a2890066bc6dfc89ad298625"
-  strip_components: 1
+  # Built from the source package libice-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libICE-1.1.2.tar.xz).
+  type: package
+  package: libice-src
 
 patches: []
 
 depends:
   build:
+    - name: libice-src
+      version: "==1.1.2"
     - pkg-config
     - name: xorgproto
     - name: xtrans

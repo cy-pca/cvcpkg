@@ -13,15 +13,17 @@ recipe:
     X Fixes extension client library (Xfixes).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXfixes-6.0.2.tar.xz
-  sha256: "39f115d72d9c5f8111e4684164d3d68cc1fd21f9b27ff2401b08fddfc0f409ba"
-  strip_components: 1
+  # Built from the source package libxfixes-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXfixes-6.0.2.tar.xz).
+  type: package
+  package: libxfixes-src
 
 patches: []
 
 depends:
   build:
+    - name: libxfixes-src
+      version: "==6.0.2"
     - meson
     - ninja
     - pkg-config

@@ -13,15 +13,17 @@ recipe:
     X Input Extension client library (Xi).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXi-1.8.3.tar.xz
-  sha256: "7ad60056f01af4f786cfe93b3a7707447711626fc8da2637bec71a90409babe5"
-  strip_components: 1
+  # Built from the source package libxi-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXi-1.8.3.tar.xz).
+  type: package
+  package: libxi-src
 
 patches: []
 
 depends:
   build:
+    - name: libxi-src
+      version: "==1.8.3"
     - pkg-config
     - name: xorgproto
   runtime:

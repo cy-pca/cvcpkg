@@ -13,15 +13,17 @@ recipe:
     X cursor management library (Xcursor).
 
 source:
-  type: tarball
-  url: https://xorg.freedesktop.org/releases/individual/lib/libXcursor-1.2.3.tar.xz
-  sha256: "fde9402dd4cfe79da71e2d96bb980afc5e6ff4f8a7d74c159e1966afb2b2c2c0"
-  strip_components: 1
+  # Built from the source package libxcursor-src, which pins the upstream tarball
+  # (https://xorg.freedesktop.org/releases/individual/lib/libXcursor-1.2.3.tar.xz).
+  type: package
+  package: libxcursor-src
 
 patches: []
 
 depends:
   build:
+    - name: libxcursor-src
+      version: "==1.2.3"
     - pkg-config
     - name: xorgproto
   runtime:
