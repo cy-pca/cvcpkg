@@ -1,0 +1,29 @@
+diff --git a/PyInstaller/depend/bindepend.py b/PyInstaller/depend/bindepend.py
+index a8b8067..3453723 100644
+--- a/PyInstaller/depend/bindepend.py
++++ b/PyInstaller/depend/bindepend.py
+@@ -393,6 +393,14 @@ def _get_imports_ldd(filename, search_paths):
+         # or
+         #   /tmp/python/install/bin/../lib/libpython3.13.so.1.0 (0x00007b9489c82000)
+         LDD_PATTERN = re.compile(r"^\s*(?:(.*?)\s+=>\s+)?(.*?)\s+\(.*\)")
++    elif compat.is_netbsd:
++        # Match libs of the form
++        #   -lname.major => full-path-to-lib
++        # e.g.
++        #   -lz.1 => /usr/lib/libz.so.1
++        # NetBSD's ldd prints no load address, so the default pattern below (which requires one) matches nothing and
++        # no shared library a binary needs would be collected.
++        LDD_PATTERN = re.compile(r"^\s+(.*?)\s+=>\s+(.*)$")
+     else:
+         LDD_PATTERN = re.compile(r"\s*(.*?)\s+=>\s+(.*?)\s+\(.*\)")
+ 
+@@ -452,6 +460,9 @@ def _get_imports_ldd(filename, search_paths):
+             else:
+                 name, lib = m.group(1), m.group(2)
+                 name = name or os.path.basename(lib)
++                if compat.is_netbsd:
++                    # NetBSD names the dependency `-lz.1`; refer to it by its file name, as the other platforms do.
++                    name = os.path.basename(lib)
+                 if compat.is_linux:
+                     # Skip all ld variants listed https://sourceware.org/glibc/wiki/ABIList
+                     # plus musl's ld-musl-*.so.* and Termux' ld-android.so.
