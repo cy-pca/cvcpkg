@@ -49,7 +49,17 @@ recipe:
   # check_test_suite entry point broke every setup.py using test_suite= (gast-cp311,
   # pyrsistent-cp311).  _common/build-python.sh and build.ps1 now remove ensurepip's
   # setuptools on every platform.
-  cvc_revision: 10
+  # cvc.11: rebuild NetBSD with _common/build-python.sh's NetBSD fixes (python312 cvc.17).
+  # The dev cluster's NetBSD build of cvc.10 used the recipe bundle already on the
+  # server, whose build-python.sh still left env-netbsd.sh's -I/usr/pkg/include in
+  # CFLAGS.  3.11 builds pyexpat with setup.py, where CFLAGS precede
+  # -I./Modules/expat, so pyexpat.c took pkgsrc's expat.h -- without the bundled
+  # copy's PyExpat_ symbol prefixes -- and failed its import check ("Undefined PLT
+  # symbol XML_FreeContentModel"); setup.py renamed it pyexpat_failed and ensurepip
+  # died on "No module named 'pyexpat'".  The current script strips pkgsrc from
+  # CPython's flags and reserves the lib-dynload RPATH room in LDFLAGS_NODIST.
+  # Other platforms unchanged.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -83,9 +83,20 @@ export LUPA_WITH_CYTHON=true
 # ── 4. Build the wheel from the sdist (offline, no build isolation) ─────────
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
-# NetBSD: build against our prefix ahead of pkgsrc, with a long RPATH that the
+# NetBSD: link against our prefix ahead of pkgsrc, with a long RPATH that the
 # patchelf --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
-[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_prefix_first
+# Link flags only: cvc_netbsd_prefix_first also puts -I<prefix>/include in
+# CFLAGS, which setuptools places ahead of each extension's include_dirs, so
+# luajit21 compiled against Lua 5.4's <prefix>/include/lua.h instead of
+# include/luajit-2.1/lua.h and failed to import (Undefined PLT symbol
+# "lua_rotate").  LUPA_EXTERNAL_LUA above names both include dirs already.
+if [ "${CVC_PLATFORM}" = "netbsd" ]; then
+    cvc_netbsd_prefix_first
+    _lupa_inc="-I${CVC_DEPS_PREFIX:-${CVC_INSTALL_DIR}}/include "
+    CFLAGS="${CFLAGS//"${_lupa_inc}"/}"
+    CXXFLAGS="${CXXFLAGS//"${_lupa_inc}"/}"
+    export CFLAGS CXXFLAGS
+fi
 "${PY}" -m pip wheel \
     --no-deps \
     --no-build-isolation \

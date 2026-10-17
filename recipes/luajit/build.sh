@@ -44,19 +44,25 @@ esac
 # LuaJIT unwinds Lua errors through C frames with the external (DWARF) unwinder
 # whenever the toolchain emits unwind tables, which clang does everywhere here.
 # _Unwind_* / __register_frame come from the default runtime (libgcc_s,
-# libSystem) on Linux, macOS, FreeBSD and NetBSD, but on OpenBSD from libc++abi
+# libSystem) on Linux, macOS and FreeBSD, but on OpenBSD from libc++abi
 # (LLVM libunwind is built into it), which a plain C link does not pull in:
 # the dev-cluster OpenBSD build of luajit failed on exactly those symbols.
 # Name it -- the library Rust links on OpenBSD for unwinding -- plus the
 # libpthread it depends on (its rwlocks; OpenBSD's ld rejects the link
 # otherwise with --no-allow-shlib-undefined), and carry both into what static
 # consumers are told to link.
+# NetBSD: the unwinder is base's /usr/lib/libgcc_s.so.1, and pkgsrc's clang
+# links a C program with -lc alone (no libgcc, no libgcc_s), so the luajit link
+# failed on the same symbols (dev cluster, netbsd/x86_64).  Name libgcc_s; it
+# also becomes a DT_NEEDED of libluajit-5.1.so, so a C program or Python
+# extension loading the shared library gets the unwinder with it.
 # Libs.private: upstream's "-Wl,-E -lm -ldl" is Linux-shaped; the BSDs have
 # dlopen in libc and do not need -ldl.
 case "$(uname -s)" in
     Linux)   lj_libs="";                   pc_private="";                                cmake_static_libs='m;${CMAKE_DL_LIBS}' ;;
     Darwin)  lj_libs="";                   pc_private="";                                cmake_static_libs='m' ;;
     OpenBSD) lj_libs="-lc++abi -lpthread"; pc_private="-Wl,-E -lm -lc++abi -lpthread";   cmake_static_libs='m;c++abi;pthread' ;;
+    NetBSD)  lj_libs="-lgcc_s";            pc_private="-Wl,-E -lm -lgcc_s";              cmake_static_libs='m;gcc_s' ;;
     *)       lj_libs="";                   pc_private="-Wl,-E -lm";                      cmake_static_libs='m' ;;
 esac
 

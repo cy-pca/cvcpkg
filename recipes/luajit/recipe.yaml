@@ -7,7 +7,10 @@ recipe:
   # v2.1 branch head c6ffc141a8762b41703f9287d63d93622a13dd8f, committed
   # 2026-09-08T08:43:01Z = 1788856981.
   upstream_version: "2.1.1788856981"
-  cvc_revision: 1
+  # cvc.2: NetBSD links the unwinder (base's libgcc_s) explicitly; pkgsrc's
+  # clang links C with -lc alone, so cvc.1 failed there on _Unwind_* (see
+  # build.sh).  Other platforms unchanged.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
