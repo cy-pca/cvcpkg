@@ -48,6 +48,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -2460,6 +2461,13 @@ def create_app(
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    # Compress large responses -- chiefly /v1/catalog, which every `cvcpkg install` fetches. The
+    # catalog cache + ETag/304 above handle repeat and unchanged-client fetches, but a COLD client
+    # (every fresh CI job) still pulled the full ~6 MB body UNCOMPRESSED; gzip takes that to a few
+    # hundred KB, so each catalog request holds a uvicorn worker far less time (the transfer half of
+    # the 503-under-CI-load fix). minimum_size skips tiny bodies; gzip engages only when the client
+    # sends Accept-Encoding (the cvcpkg client's httpx does).
+    app.add_middleware(GZipMiddleware, minimum_size=512)
 
     # ── Rate limiting state (per-IP, sliding window) ──────
     _rate_buckets: dict[str, list[float]] = {}

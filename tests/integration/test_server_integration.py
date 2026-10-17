@@ -1596,3 +1596,56 @@ class TestDbUserProfileIntegration:
         resp = client.get("/v1/users/by-email/count-email@test.com")
         assert resp.status_code == 200
         assert resp.json()["packages_published"] >= 1
+
+
+class TestCatalogGzip:
+    """/v1/catalog is gzip-compressed for clients that send Accept-Encoding — the transfer half of
+    the 503-under-CI-load fix (the ETag/304 body cache is separate). TestClient (httpx) transparently
+    decompresses and hides Content-Encoding, so drive the ASGI app directly to see the raw gzip."""
+
+    def test_catalog_response_is_gzipped(self, env):
+        import asyncio
+        import gzip
+        import json
+
+        client, _admin, pub_tok, _reader, _tmp = env
+        for i in range(6):  # enough bundles to clear GZipMiddleware's minimum_size
+            _publish(client, pub_tok, f"pkg{i:02d}", "1.0.0+cvc.1")
+
+        captured: dict = {"status": 0, "headers": [], "body": b""}
+
+        async def _drive() -> None:
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/v1/catalog",
+                "raw_path": b"/v1/catalog",
+                "query_string": b"",
+                "root_path": "",
+                "headers": [(b"host", b"testserver"), (b"accept-encoding", b"gzip")],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+            }
+
+            async def receive() -> dict:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: dict) -> None:
+                if message["type"] == "http.response.start":
+                    captured["status"] = message["status"]
+                    captured["headers"] = message["headers"]
+                elif message["type"] == "http.response.body":
+                    captured["body"] += message.get("body", b"")
+
+            await client.app(scope, receive, send)
+
+        asyncio.run(_drive())
+
+        hdrs = {k.decode().lower(): v.decode() for k, v in captured["headers"]}
+        assert captured["status"] == 200
+        assert hdrs.get("content-encoding") == "gzip", f"expected gzip, got {hdrs}"
+        doc = json.loads(gzip.decompress(captured["body"]))
+        assert len(doc["bundles"]) == 6
