@@ -36,8 +36,8 @@ permissions:
 env:
   # One PyInstaller for every column, so all six binaries are built by the same
   # version. NetBSD cannot use the PyPI release (no 'netbsd' in the bootloader
-  # platform tables), so it builds this exact tag from source with
-  # recipes/pyinstaller-cp313/netbsd-platform-tables.patch applied.
+  # platform tables), so it builds this exact tag from source with the NetBSD
+  # patches recipes/pyinstaller-cp313 carries applied (see PYI_PATCHES below).
   PYINSTALLER_VERSION: '6.21.0'
 
 concurrency:
@@ -336,7 +336,15 @@ jobs:
           # dirs). It is applied to the same PyInstaller the other five
           # platforms get from PyPI, so every column ships the same version.
           # Submitted upstream; drop this branch once a release carries it.
-          PYI_PATCH=recipes/pyinstaller-cp313/netbsd-platform-tables.patch
+          # The other two are the recipe's as well, applied in its order (see
+          # recipes/pyinstaller-cp313/recipe.yaml):
+          #   netbsd-ldd-format.patch -- NetBSD's ldd output has no load
+          #     address, so without it PyInstaller bundles no shared library
+          #     and the binary loads the host's libz/libssl instead;
+          #   netbsd-tls-pad.patch -- NetBSD 10's ld.elf_so sends every
+          #     thread-local access of the dlopen()ed libpython down a locked
+          #     slow path, so without it the binary takes ~19 s per run.
+          PYI_PATCHES="netbsd-platform-tables.patch netbsd-ldd-format.patch netbsd-tls-pad.patch"
 
           # The throwaway build environment (see the job comment).  VENV_PY is
           # the only interpreter used from here on; the system ${PYTHON} only
@@ -368,7 +376,8 @@ jobs:
             ssh ${SSH_OPTS} "${VM}" "set -e; \
               git clone --quiet --branch v${{ env.PYINSTALLER_VERSION }} --depth 1 \
                 https://github.com/pyinstaller/pyinstaller ${job_dir}/pyi-src; \
-              cd ${job_dir}/pyi-src && patch -p1 < ${remote_dir}/${PYI_PATCH}; \
+              cd ${job_dir}/pyi-src; \
+              for p in ${PYI_PATCHES}; do patch -p1 < ${remote_dir}/recipes/pyinstaller-cp313/\$p; done; \
               env ${RENV} ${VENV_PY} -m pip install ."
           else
             ssh ${SSH_OPTS} "${VM}" "set -e; \
