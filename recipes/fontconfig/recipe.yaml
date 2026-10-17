@@ -72,6 +72,8 @@ depends:
     # The Windows expat bundle has no expat.pc (expat's CMake build installs
     # none under MSVC), so meson finds expat through its CMake package, which
     # needs cmake.  Undeclared, it worked only where the builder had cmake.
+    # expat 2.6.4+cvc.4 builds expat.pc on Windows; this can go once that is
+    # published there (the catalog has only cvc.3 for Windows).
     - name: cmake
       platforms: [windows]
   runtime:

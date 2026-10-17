@@ -39,6 +39,22 @@ meson setup "${CVC_BUILD_DIR}" \
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
 
+# meson's pkgconfig module installs .pc files to <prefix>/libdata/pkgconfig on
+# FreeBSD (<libdir>/pkgconfig on the other BSDs, Linux and macOS), and
+# fontconfig's meson.build passes no install_dir. Keep every platform's bundle
+# in the lib/pkgconfig layout package.files and consumers expect (as
+# recipes/wayland does). Same depth below the prefix, so
+# cvc_rewrite_install_paths' ${pcfiledir}/../.. anchor still holds.
+if [ -d "${CVC_INSTALL_DIR}/libdata/pkgconfig" ]; then
+    mkdir -p "${CVC_INSTALL_DIR}/lib/pkgconfig"
+    for _pc in "${CVC_INSTALL_DIR}"/libdata/pkgconfig/*.pc; do
+        [ -e "${_pc}" ] || continue
+        mv "${_pc}" "${CVC_INSTALL_DIR}/lib/pkgconfig/"
+    done
+    rmdir "${CVC_INSTALL_DIR}/libdata/pkgconfig"
+    rmdir "${CVC_INSTALL_DIR}/libdata" 2>/dev/null || true
+fi
+
 cvc_rewrite_install_paths
 
 # ── relocatable configuration ─────────────────────────────────────────
