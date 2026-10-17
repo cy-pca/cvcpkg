@@ -60,7 +60,7 @@ patches:
   # sigprocmask() pair and an _lwp_self() on every thread-local access.  The
   # bootloader dlopen()s libpython after everything else, so libpython is that
   # module, and CPython reads its thread state from a thread-local on nearly
-  # every call: the frozen cvcpkg took 19 s for `--version` and over 600 s for
+  # every call: the frozen cvcpkg took 19 s for `--version` and 1,725 s for
   # `validate recipes/zlib` on netbsd-build-2.  The patch builds a one-variable
   # TLS library next to the NetBSD bootloader, collects it beside libpython,
   # and has the bootloader load it right after libpython, which lifts the

@@ -46,8 +46,8 @@ index 0ae1da4..9a8100e 100644
 + * here: it is mapped after every library the bootloader links, and CPython 3.12
 + * reads its thread state from a thread-local variable on almost every call, so
 + * a frozen application runs 20-100x slower than the same code under the
-+ * `python3` executable (which links libpython at start-up, so libc's or
-+ * libpthread's module ends up above it).  Fixed upstream in tls.c 1.34
++ * `python3` executable (which maps libpython at start-up ahead of libc, so
++ * libc's TLS module ends up above it).  Fixed upstream in tls.c 1.34
 + * (`idx <= DTV_MAX_INDEX`), which no NetBSD 10 release carries.
 + *
 + * Mapping any other module with a TLS segment after libpython raises the

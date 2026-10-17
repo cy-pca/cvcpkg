@@ -97,7 +97,7 @@ is a speed fix. NetBSD 10's `ld.elf_so` skips its lock-free
 NetBSD's `tls.c` 1.34, in no NetBSD 10 release). The bootloader `dlopen()`s
 libpython last, so libpython is that module, and CPython touches a
 thread-local on almost every call. Without the patch a frozen `cvcpkg` spent
-19 s on `--version` and over 600 s on `validate recipes/zlib`, nearly all of
+19 s on `--version` and 1,725 s on `validate recipes/zlib`, nearly all of
 it in `sigprocmask()`. The patch has the bootloader load a one-variable TLS
 library right after libpython.
 
