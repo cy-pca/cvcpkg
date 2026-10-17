@@ -70,7 +70,15 @@ recipe:
   # via get_externals), and build.ps1 takes python311's lean-PATH + vcvars64 steps
   # and --no-tkinter; PC/layout gets --preset-default (venv, ensurepip) as in
   # python311. Other platforms are unchanged.
-  cvc_revision: 14
+  # cvc.15: republish NetBSD.  Its cvc.13 and cvc.14 bundles (dev registry) were
+  # packed by a cvcpkg whose library pass prepended $ORIGIN to lib-dynload's
+  # extension RPATHs with patchelf, which grows them a third PT_LOAD -- NetBSD's
+  # ld.elf_so then refuses them ("math.cpython-312.so: wrong number of segments
+  # (3 != 2)").  cvcpkg 2.5.1 never patchelfs a NetBSD RPATH (#303), and a rebuild
+  # there loads.  Both rows are yanked, and a yanked variant cannot be published
+  # again under the same version, hence the bump.  Other platforms rebuild
+  # unchanged.
+  cvc_revision: 15
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

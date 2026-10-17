@@ -48,6 +48,27 @@ export CFLAGS="${CFLAGS:-} -I/usr/pkg/include"
 export CXXFLAGS="${CXXFLAGS:-} -I/usr/pkg/include"
 export LDFLAGS="${LDFLAGS:-} -L/usr/pkg/lib -Wl,-R/usr/pkg/lib"
 
+# cvc_netbsd_reserve_rpath: give the objects the next link produces a long
+# RPATH, so a later `patchelf --set-rpath` rewrites it IN PLACE.
+#
+# NetBSD's ld.elf_so refuses an object with a third PT_LOAD ("wrong number of
+# segments (3 != 2)"), and patchelf adds one whenever the new RPATH is longer
+# than the old string: a Python extension linked with only the -R/usr/pkg/lib
+# above (12 bytes) that is then given $ORIGIN:$ORIGIN/../../.. no longer
+# loads.  Shorter-or-equal, patchelf overwrites the string where it is
+# (checked on netbsd-build-2: 2 PT_LOADs, dlopen OK).  So reserve the room at
+# link time: the install and deps prefixes' lib/ -- long scratch paths, and
+# the job's own prefixes, so whatever patchelf does not rewrite cvcpkg's
+# packager relocates to $ORIGIN-relative entries, in place.  Opt-in (call it
+# before the build): openssl/curl/cmake set their run path at link time
+# through LD_RUN_PATH, which any -R on the link would switch off.
+cvc_netbsd_reserve_rpath() {
+    local _reserve="${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-${CVC_INSTALL_DIR}}/lib"
+    export LDFLAGS="-Wl,-R${_reserve} ${LDFLAGS:-}"
+    # Rust extensions (maturin/cargo) take link flags only through RUSTFLAGS.
+    export RUSTFLAGS="-C link-arg=-Wl,-R${_reserve}${RUSTFLAGS:+ ${RUSTFLAGS}}"
+}
+
 # Ensure pkgsrc tools are on PATH, but AFTER our own deps prefix so that
 # cvcpkg-built host tools (ninja, cmake, ...) win over pkgsrc versions.
 # The pkgsrc ninja on NetBSD has been observed to crash when invoked via

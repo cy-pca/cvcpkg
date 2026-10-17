@@ -105,6 +105,9 @@ _dump_meson_log() {
     echo "-----------------------------------" >&2
 }
 
+# NetBSD: link with a long RPATH so the patchelf --set-rpath below rewrites it
+# in place; growing it adds a PT_LOAD NetBSD's loader refuses (env-netbsd.sh).
+[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_reserve_rpath
 if ! "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \

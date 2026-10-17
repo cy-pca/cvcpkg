@@ -85,6 +85,9 @@ echo "cffi-cp312: libffi $("${PKG_CONFIG}" --modversion libffi) from $("${PKG_CO
 # downloading its own.
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
+# NetBSD: link with a long RPATH so the patchelf --set-rpath below rewrites it
+# in place; growing it adds a PT_LOAD NetBSD's loader refuses (env-netbsd.sh).
+[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_reserve_rpath
 "${PY}" -m pip wheel \
     --no-deps \
     --no-build-isolation \
