@@ -751,6 +751,83 @@ If tampering is detected: `409 Conflict` with `"ok": false`.
 
 ---
 
+## Activity Feed
+
+Every publish, yank, unyank, delete and nuke records one event per bundle
+variant, in the same transaction as the change. The `/activity` page shows them
+and updates live. Unlike the audit trail, the feed is public: anyone may read
+it, except that a private org's events are shown only to its members and
+admins. Cache-GC evictions are deletes with detail `cache GC` (actor: the admin
+who ran the GC); a mirror evicting to fit its budget shows as `mirror-evict`, and
+the yank-retention GC's nukes as `retention-gc`.
+
+### `GET /v1/activity`
+
+Newest first. Auth: none (a token only widens what a private org's member
+sees; on a `require_auth_for_reads` server, a reader token).
+
+| Param | Type | Default | Description |
+|---|---|---|---|
+| `kind` | string, repeatable | all | `publish`, `yank`, `unyank`, `delete`, `nuke` |
+| `name` | string | — | Package name contains (case-insensitive) |
+| `org` | string | — | Only this org's events (`""` = only events with no org) |
+| `platform`, `arch` | string | — | Exact match |
+| `actor` | string | — | Actor name contains (case-insensitive) |
+| `max_id` | int | newest | Only events up to this id |
+| `limit` | int | `50` | Page size (1–200) |
+| `offset` | int | `0` | Offset |
+
+**Response** `200 OK`:
+
+```json
+{
+  "events": [
+    {"id": 9123, "created_at": "2026-10-17T16:53:14Z", "kind": "yank",
+     "name": "python312", "version": "3.12.10+cvc.14", "platform": "netbsd",
+     "arch": "x86_64", "build_type": "release", "link": "shared",
+     "org_slug": "", "actor": "joe", "size_bytes": 81234567, "detail": ""}
+  ],
+  "total": 9123,
+  "max_id": 9123
+}
+```
+
+`max_id` is the newest event the page was cut from. Pass it back with the next
+`offset` to page through a stable snapshot while new events arrive. Events
+created before the feed existed were reconstructed from the catalog and
+tombstones (`detail: "backfilled"`); unyanks and deletes from before then
+left no trace.
+
+### `WS /v1/live/ws`
+
+Pushes new activity events and builder changes to browser pages. The first
+frame the client sends is a hello:
+
+```json
+{"type": "hello", "topics": ["activity", "builders"], "token": "cvctok_..."}
+```
+
+`token` is optional, as for `GET /v1/activity`. It travels in the frame
+rather than the URL so it stays out of access logs. The server answers:
+
+| Message | When |
+|---|---|
+| `{"type": "ready", "topics": [...], "latest_id": N}` | Subscribed. `latest_id` is the newest event; a page that loaded an older snapshot re-fetches |
+| `{"type": "activity", "events": [...]}` | New events the viewer may see (`activity`) |
+| `{"type": "builders", "builders": [...]}` | Every visible builder, once, on subscribe (`builders`) |
+| `{"type": "builder", "builder": {...}}` | One builder changed (a heartbeat, a status change, a dispatch) |
+| `{"type": "builder_removed", "id": N}` | A builder was unregistered |
+| `{"type": "resync"}` | The client fell behind and messages were dropped; reload over REST |
+
+Close codes: `4000` bad hello, `4001` invalid token (or reads require one),
+`4004` no database backend, `1013` too many viewers. The server re-checks the
+token and org membership every `CVCPKG_WS_REAUTH_INTERVAL` seconds (30). It
+polls the database every `CVCPKG_LIVE_POLL_INTERVAL` seconds (2) while anyone
+is connected, so changes made by another worker or process arrive within that
+interval. Changes made in the serving process arrive at once.
+
+---
+
 ## Organizations
 
 ### `POST /v1/orgs`

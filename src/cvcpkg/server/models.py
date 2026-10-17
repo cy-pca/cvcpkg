@@ -455,6 +455,48 @@ class AuditLogResponse(BaseModel):
     total: int
 
 
+# ── Activity feed ───────────────────────────────────────────────
+
+
+class PackageEventKind(str, Enum):
+    """What happened to a bundle variant, as the activity feed shows it."""
+
+    publish = "publish"
+    yank = "yank"
+    unyank = "unyank"
+    delete = "delete"
+    nuke = "nuke"
+
+
+class PackageEvent(BaseModel):
+    """One publish, yank, unyank, delete or nuke of one bundle variant."""
+
+    id: int
+    created_at: datetime.datetime
+    kind: PackageEventKind
+    name: str
+    version: str = ""
+    platform: str = ""
+    arch: str = ""
+    build_type: str = ""
+    link: str = ""
+    org_slug: str = ""
+    actor: str = ""
+    size_bytes: int = 0
+    detail: str = ""
+
+
+class ActivityResponse(BaseModel):
+    events: list[PackageEvent]
+    total: int = Field(description="Events matching the filters, up to max_id.")
+    max_id: int = Field(
+        description=(
+            "The newest event id this page was cut from.  Pass it back as "
+            "``max_id`` to page through a stable snapshot while new events arrive."
+        )
+    )
+
+
 # ── Health ──────────────────────────────────────────────────────
 
 
@@ -723,6 +765,35 @@ class BuilderStatus(str, Enum):
     busy = "busy"
 
 
+class BuilderSystemStats(BaseModel):
+    """CPU, memory and disk figures a builder measures for each heartbeat.
+
+    Every field is optional: a builder reports what its platform lets it
+    measure without extra dependencies (see ``cvcpkg.sysstats``).  Unknown keys
+    are dropped, so the stored blob is bounded by this model.
+    """
+
+    model_config = {"extra": "ignore"}
+
+    cpu_count: int | None = Field(default=None, ge=0, le=65536)
+    cpu_percent: float | None = Field(
+        default=None, ge=0, le=100, description="Host CPU busy since the previous beat."
+    )
+    load_avg: list[float] | None = Field(default=None, max_length=3)
+    mem_total_bytes: int | None = Field(default=None, ge=0)
+    mem_available_bytes: int | None = Field(default=None, ge=0)
+    disk_total_bytes: int | None = Field(
+        default=None, ge=0, description="Size of the volume holding the work dir."
+    )
+    disk_free_bytes: int | None = Field(default=None, ge=0)
+    uptime_seconds: float | None = Field(default=None, ge=0, description="Host uptime.")
+    agent_uptime_seconds: float | None = Field(
+        default=None, ge=0, description="How long this builder process has run."
+    )
+    os: str | None = Field(default=None, max_length=128)
+    python: str | None = Field(default=None, max_length=32)
+
+
 class BuilderInfo(BaseModel):
     """Public representation of a registered builder."""
 
@@ -754,6 +825,17 @@ class BuilderInfo(BaseModel):
     registered_by: str = ""
     created_at: datetime.datetime = Field(
         default_factory=lambda: datetime.datetime.now(datetime.timezone.utc)
+    )
+    version: str | None = Field(
+        default=None,
+        description=(
+            "The cvcpkg the builder runs, from its ``cvcpkg=<version>[@<commit>]`` "
+            "label.  None for an agent too old to label itself."
+        ),
+    )
+    system: BuilderSystemStats | None = Field(
+        default=None,
+        description="Host figures from the latest heartbeat; None until one carries them.",
     )
 
 
@@ -818,6 +900,9 @@ class BuilderRegisterRequest(BaseModel):
             "'unknown' and lets the job through rather than stranding it."
         ),
     )
+    system: BuilderSystemStats | None = Field(
+        default=None, description="Host CPU/memory/disk figures; omitted by older builders."
+    )
 
 
 class BuilderUpdateRequest(BaseModel):
@@ -855,6 +940,13 @@ class BuilderHeartbeatRequest(BaseModel):
             "so the figure the scheduler matches against tracks reality: a "
             "long build, a GC sweep or a co-tenant all move it.  Omitted "
             "leaves the stored value untouched."
+        ),
+    )
+    system: BuilderSystemStats | None = Field(
+        default=None,
+        description=(
+            "Host CPU/memory/disk figures for this beat.  Omitted leaves the "
+            "stored figures untouched."
         ),
     )
 

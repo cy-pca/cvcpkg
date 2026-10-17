@@ -154,6 +154,57 @@ def test_migration_023_backfills_served_namespaces(tmp_path):
     assert served == '["cvc"]', served
 
 
+def test_migration_032_backfills_package_events(tmp_path):
+    """The activity feed has history on day one: migration 032 reconstructs
+    publish, yank and nuke events from ``packages`` and ``package_tombstones``,
+    oldest first, so ids follow time the way live events do."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "events.db"
+    p = _alembic_upgrade(db, "031")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO packages (name, version, platform, arch, sha256, archive_url, "
+        " size_bytes, published_at, published_by, org_slug) "
+        "VALUES ('zlib', '1.3', 'linux', 'x86_64', 'x', 'u', 7, "
+        " '2026-01-01 00:00:00', 'ci', '')"
+    )
+    con.execute(
+        "INSERT INTO packages (name, version, platform, arch, sha256, archive_url, "
+        " published_at, published_by, org_slug, yanked, yanked_at) "
+        "VALUES ('vtk', '9.3', 'macos', 'arm64', 'x', 'u', '2026-02-01 00:00:00', "
+        " 'joe', 'acme', 1, '2026-03-01 00:00:00')"
+    )
+    con.execute(
+        "INSERT INTO package_tombstones (name, version, platform, reason, nuked_by, "
+        " nuked_at, published_at, yanked_at) "
+        "VALUES ('old', '0.1', 'linux', 'retention', 'retention-gc', "
+        " '2026-04-01 00:00:00', '2025-12-01 00:00:00', '2026-01-15 00:00:00')"
+    )
+    con.commit()
+    con.close()
+
+    p = _alembic_upgrade(db, "032")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    rows = con.execute(
+        "SELECT kind, name, org_slug, actor, size_bytes, detail FROM package_events ORDER BY id"
+    ).fetchall()
+    cols = {r[1] for r in con.execute("PRAGMA table_info(builders)")}
+    con.close()
+    assert rows == [
+        ("publish", "old", "", "", 0, "backfilled"),
+        ("publish", "zlib", "", "ci", 7, "backfilled"),
+        ("yank", "old", "", "", 0, "backfilled"),
+        ("publish", "vtk", "acme", "joe", 0, "backfilled"),
+        ("yank", "vtk", "acme", "", 0, "backfilled"),
+        ("nuke", "old", "", "retention-gc", 0, "backfilled"),
+    ]
+    assert "system_stats" in cols
+
+
 @pytest.fixture(scope="module")
 def _sqlite_upgrade_head(tmp_path_factory):
     """Run ``alembic upgrade head`` once against an empty SQLite file.
@@ -212,6 +263,8 @@ def test_migration_029_columns_match_orm(_sqlite_upgrade_head):
     conn = sqlite3.connect(db)
     try:
         for table in (
+            "package_events",
+            "builders",
             "sessions",
             "cli_pairings",
             "cli_auth_codes",

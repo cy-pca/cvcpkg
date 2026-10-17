@@ -2579,6 +2579,19 @@ def builder_run(
 
     advertised_disk = _measure_free_disk()
 
+    # Host CPU, memory and disk figures for the builders page, re-taken for
+    # every heartbeat like free disk.  Display only: the scheduler never reads
+    # them, so a probe that fails just leaves a figure out.
+    from cvcpkg import sysstats as _sysstats
+
+    _cpu_sampler = _sysstats.CpuSampler()
+
+    def _system_stats() -> dict:
+        try:
+            return _sysstats.collect(work_root, _cpu_sampler)
+        except Exception:  # noqa: BLE001 - never let display figures stop a beat
+            return {}
+
     # -- Registration ----------------------------------------
     if cross_entries:
         cross_msg = " [cross: {}]".format(
@@ -2630,6 +2643,9 @@ def builder_run(
             # Omitted rather than sent as null when unknown, so an older
             # server that does not know the field is unaffected.
             register_body["free_disk_gb"] = advertised_disk
+        _sys = _system_stats()
+        if _sys:
+            register_body["system"] = _sys
         if len(served) > 1:
             cross_msg += " [serves: {}]".format(
                 ", ".join(repr(ns) if ns == "" else ns for ns in served)
@@ -2798,6 +2814,9 @@ def builder_run(
         _free = _measure_free_disk()
         if _free is not None:
             payload["free_disk_gb"] = _free
+        _sys = _system_stats()
+        if _sys:
+            payload["system"] = _sys
         try:
             with httpx.Client(timeout=30) as client:
                 resp = client.post(
@@ -2847,6 +2866,9 @@ def builder_run(
         _free = _measure_free_disk()
         if _free is not None:
             payload["free_disk_gb"] = _free
+        _sys = _system_stats()
+        if _sys:
+            payload["system"] = _sys
         try:
             with httpx.Client(timeout=30) as client:
                 resp = client.post(f"{base}/v1/builders/register", headers=headers, json=payload)
@@ -4116,6 +4138,9 @@ def builder_run(
                         _free = _measure_free_disk()
                         if _free is not None:
                             _hb["free_disk_gb"] = _free
+                        _sys = _system_stats()
+                        if _sys:
+                            _hb["system"] = _sys
                         try:
                             ws.send(json.dumps(_hb))
                             last_heartbeat = now

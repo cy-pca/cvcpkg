@@ -419,6 +419,33 @@ a.pkg-link:hover { text-decoration: underline; }
 .navbar-link::after { border-color: #f5f5f5 !important; }
 .navbar-item.is-active:not(.has-dropdown),
 .navbar-link.is-active { color: #3273dc !important; }
+
+/* Live (WebSocket) pages: activity feed, builders */
+.live-badge { display: inline-flex; align-items: center; gap: 0.4em; vertical-align: middle; }
+.live-dot { width: 0.6em; height: 0.6em; border-radius: 50%; background: #7a7a7a; display: inline-block; }
+.live-badge.is-live .live-dot { background: #48c774; animation: live-pulse 2s infinite; }
+.live-badge.is-connecting .live-dot { background: #ffdd57; }
+.live-badge.is-offline .live-dot { background: #f14668; }
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(72, 199, 116, 0.6); }
+  70% { box-shadow: 0 0 0 0.5em rgba(72, 199, 116, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(72, 199, 116, 0); }
+}
+@keyframes row-arrive { from { background-color: rgba(50, 115, 220, 0.35); } to { background-color: transparent; } }
+tr.is-new td { animation: row-arrive 3s ease-out; }
+.kind-btn.is-selected { border-color: #3273dc; background-color: rgba(50, 115, 220, 0.2); color: #fff; }
+.builder-card { cursor: pointer; transition: border-color 0.2s, transform 0.1s; border: 1px solid transparent; }
+.builder-card:hover { border-color: #3273dc; }
+.builder-card:focus-visible { outline: 2px solid #3273dc; }
+.meter { margin-bottom: 0.35rem; }
+.meter-label { display: flex; justify-content: space-between; font-size: 0.75rem; color: #b5b5b5; }
+.meter progress { margin-bottom: 0 !important; height: 0.45rem; }
+.version-tag.is-current { background-color: rgba(72, 199, 116, 0.15); color: #48c774; }
+.version-tag.is-other { background-color: rgba(255, 221, 87, 0.15); color: #ffdd57; }
+.version-tag.is-unknown { background-color: rgba(122, 122, 122, 0.2); color: #b5b5b5; }
+.detail-grid { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; font-size: 0.9rem; }
+.detail-grid dt { color: #b5b5b5; }
+.detail-grid dd { margin: 0; color: #f5f5f5; overflow-wrap: anywhere; }
 """
 
 # ── Shared HTML fragments ────────────────────────────────────────
@@ -498,6 +525,9 @@ def _navbar_html() -> str:
       <div class="navbar-end">
         <a class="navbar-item" href="/search">
           <span class="icon"><i class="fas fa-search"></i></span><span>Search</span>
+        </a>
+        <a class="navbar-item" href="/activity">
+          <span class="icon"><i class="fas fa-bolt"></i></span><span>Activity</span>
         </a>
         <div class="navbar-item has-dropdown is-hoverable">
           <a class="navbar-link">
@@ -3139,6 +3169,357 @@ function authHeaders() {
 }
 """
 
+# The browser side of /v1/live/ws (see cvcpkg.server.live).  Reconnects with
+# backoff; while the socket is down the page's own onState('offline') handler
+# falls back to polling the REST endpoint.
+_LIVE_JS = r"""
+function openLive(topics, handlers) {
+  let ws = null, delay = 1000, stopped = false, anonymous = false;
+  function connect() {
+    handlers.onState('connecting');
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    try { ws = new WebSocket(proto + '//' + location.host + '/v1/live/ws'); }
+    catch (e) { retry(); return; }
+    let sentToken = false;
+    ws.onopen = () => {
+      const hello = { type: 'hello', topics: topics };
+      const t = anonymous ? '' : (localStorage.getItem('cvcpkg_token') || '');
+      if (t) { hello.token = t; sentToken = true; }
+      ws.send(JSON.stringify(hello));
+    };
+    ws.onmessage = ev => {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === 'ready') { delay = 1000; handlers.onState('live'); }
+      handlers.onMessage(msg);
+    };
+    ws.onclose = ev => {
+      ws = null;
+      if (stopped) return;
+      handlers.onState('offline');
+      // 4004: this server has no live updates; polling is all there is.
+      if (ev.code === 4004) { stopped = true; return; }
+      // A stored token the server refuses: watch the public view instead,
+      // as the REST endpoints do.  Refused with no token at all: this server
+      // requires one for reads, and retrying cannot help.
+      if (ev.code === 4001) {
+        if (!sentToken) { stopped = true; return; }
+        anonymous = true; delay = 0;
+      }
+      retry();
+    };
+  }
+  function retry() {
+    setTimeout(connect, delay);
+    delay = Math.min(Math.max(delay, 1000) * 2, 30000);
+  }
+  connect();
+  return { close() { stopped = true; if (ws) ws.close(); } };
+}
+function setLiveBadge(el, state) {
+  if (!el) return;
+  el.classList.remove('is-live', 'is-connecting', 'is-offline');
+  el.classList.add('is-' + state);
+  el.querySelector('.live-label').textContent =
+    { live: 'Live', connecting: 'Connecting\u2026', offline: 'Offline \u2014 polling' }[state] || state;
+}
+"""
+
+
+_BUILDERS_JS = r"""
+const builders = new Map();   // id -> BuilderInfo
+let selectedId = null;
+let pollTimer = null;
+let modalTimer = null;
+
+function saveToken() {
+  const t = document.getElementById('token-input').value.trim();
+  if (t) { localStorage.setItem('cvcpkg_token', t); location.reload(); }
+}
+
+// ── Formatting ──────────────────────────────────────────────
+function fmtBytes(n) {
+  if (n == null) return '—';
+  const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(i >= 3 ? 1 : 0) + ' ' + u[i];
+}
+function fmtUptime(s) {
+  if (s == null) return '—';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? d + 'd ' + h + 'h' : h ? h + 'h ' + m + 'm' : m + 'm';
+}
+function versionTag(b) {
+  if (!b.version) return '<span class="tag is-rounded version-tag is-unknown" title="This builder does not report its version">version ?</span>';
+  const same = b.version.split('@')[0] === SERVER_VERSION;
+  return '<span class="tag is-rounded version-tag ' + (same ? 'is-current' : 'is-other') + '" title="' +
+    (same ? 'Same cvcpkg as this server' : 'This server runs cvcpkg ' + esc(SERVER_VERSION)) + '">' +
+    '<i class="fas fa-code-branch mr-1"></i>' + esc(b.version) + '</span>';
+}
+function statusTag(b) {
+  const cls = { online: 'is-success', busy: 'is-warning' }[b.status] || 'is-danger';
+  return '<span class="tag ' + cls + ' is-rounded"><i class="fas fa-circle mr-1"></i>' + esc(b.status) + '</span>';
+}
+function pctClass(p) { return p >= 90 ? 'is-danger' : p >= 70 ? 'is-warning' : 'is-success'; }
+function meter(label, pct, text) {
+  if (pct == null || isNaN(pct)) return '';
+  pct = Math.max(0, Math.min(100, pct));
+  return '<div class="meter"><div class="meter-label"><span>' + label + '</span><span>' + text + '</span></div>' +
+    '<progress class="progress is-small ' + pctClass(pct) + '" value="' + pct.toFixed(0) + '" max="100">' +
+    pct.toFixed(0) + '%</progress></div>';
+}
+function systemMeters(sys) {
+  if (!sys) return '';
+  let out = '';
+  if (sys.cpu_percent != null) out += meter('CPU', sys.cpu_percent, sys.cpu_percent.toFixed(0) + '%' +
+    (sys.cpu_count ? ' of ' + sys.cpu_count + ' cores' : ''));
+  else if (sys.load_avg && sys.cpu_count) out += meter('Load', 100 * sys.load_avg[0] / sys.cpu_count,
+    sys.load_avg[0].toFixed(2) + ' / ' + sys.cpu_count + ' cores');
+  if (sys.mem_total_bytes && sys.mem_available_bytes != null) {
+    const used = sys.mem_total_bytes - sys.mem_available_bytes;
+    out += meter('Memory', 100 * used / sys.mem_total_bytes, fmtBytes(used) + ' / ' + fmtBytes(sys.mem_total_bytes));
+  }
+  if (sys.disk_total_bytes && sys.disk_free_bytes != null) {
+    const used = sys.disk_total_bytes - sys.disk_free_bytes;
+    out += meter('Disk', 100 * used / sys.disk_total_bytes, fmtBytes(sys.disk_free_bytes) + ' free of ' + fmtBytes(sys.disk_total_bytes));
+  }
+  return out;
+}
+
+// ── Cards ───────────────────────────────────────────────────
+function cardHtml(b) {
+  const hb = b.last_heartbeat ? fmtRelative(b.last_heartbeat) : 'never';
+  const labels = (b.labels || []).filter(l => !l.startsWith('cvcpkg='));
+  const meters = systemMeters(b.system);
+  return '<div class="box has-background-black-ter builder-card" tabindex="0" role="button" ' +
+      'aria-label="Show details for builder ' + esc(b.name) + '" data-id="' + b.id + '">' +
+    '<div class="level is-mobile mb-2"><div class="level-left"><div class="level-item">' +
+    '<h3 class="title is-5 has-text-white mb-0">' +
+    '<span class="icon mr-1"><i class="fas fa-microchip"></i></span>' + esc(b.name) + '</h3>' +
+    '</div></div><div class="level-right"><div class="level-item">' + statusTag(b) + '</div></div></div>' +
+    '<div class="content is-small mb-2">' +
+    '<p class="mb-2">' + platformTag(b.platform) + ' <span class="has-text-grey-light">' + esc(b.arch) + '</span> ' +
+      versionTag(b) + '</p>' +
+    '<p class="mb-1"><strong class="has-text-grey-lighter">Jobs:</strong> ' +
+    '<span class="has-text-white">' + b.current_jobs + '</span> / ' + b.max_jobs +
+    ' &middot; <strong class="has-text-grey-lighter">Heartbeat:</strong> ' +
+    '<span class="has-text-grey-light">' + esc(hb) + '</span></p>' +
+    (b.org_slug ? '<p class="mb-1"><strong class="has-text-grey-lighter">Org:</strong> ' + esc(b.org_slug) + '</p>' : '') +
+    (labels.length ? '<p class="mb-1">' + labels.map(l => '<span class="tag is-dark is-rounded mr-1">' + esc(l) + '</span>').join('') + '</p>' : '') +
+    '</div>' + meters + '</div>';
+}
+function renderSummary(list) {
+  const counts = { online: 0, busy: 0, offline: 0 };
+  for (const b of list) counts[b.status in counts ? b.status : 'offline']++;
+  document.getElementById('builder-summary').textContent = list.length
+    ? list.length + ' builder' + (list.length === 1 ? '' : 's') + ' · ' + counts.online + ' online · ' +
+      counts.busy + ' busy · ' + counts.offline + ' offline'
+    : 'No builders registered.';
+}
+// One builder changed: redraw its card in place, so focus and scroll stay put.
+function renderOne(id) {
+  const card = document.querySelector('.builder-card[data-id="' + id + '"]');
+  if (!card || !builders.has(id)) { render(); return; }
+  const hadFocus = document.activeElement === card;
+  card.parentElement.innerHTML = cardHtml(builders.get(id));
+  if (hadFocus) document.querySelector('.builder-card[data-id="' + id + '"]').focus();
+  renderSummary([...builders.values()]);
+  if (selectedId === id) renderModal(false);
+}
+function render() {
+  const list = [...builders.values()].sort((a, b) => a.id - b.id);
+  const grid = document.getElementById('builders-grid');
+  renderSummary(list);
+  if (!list.length) {
+    grid.innerHTML = '<div class="column"><div class="notification is-dark">No builders registered.</div></div>';
+    return;
+  }
+  grid.innerHTML = list.map(b => '<div class="column is-6-tablet is-4-desktop">' + cardHtml(b) + '</div>').join('');
+  if (selectedId !== null) renderModal(false);
+}
+function onGridClick(ev) {
+  const card = ev.target.closest('.builder-card');
+  if (card) openModal(parseInt(card.dataset.id, 10));
+}
+function onGridKey(ev) {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const card = ev.target.closest('.builder-card');
+  if (card) { ev.preventDefault(); openModal(parseInt(card.dataset.id, 10)); }
+}
+
+// ── Detail modal ────────────────────────────────────────────
+function openModal(id) {
+  if (!builders.has(id)) return;
+  selectedId = id;
+  if (location.hash !== '#builder-' + id) history.replaceState(null, '', '#builder-' + id);
+  document.getElementById('builder-modal').classList.add('is-active');
+  document.documentElement.classList.add('is-clipped');
+  renderModal(true);
+  clearInterval(modalTimer);
+  modalTimer = setInterval(() => loadJobs(selectedId), 15000);
+}
+function closeModal() {
+  selectedId = null;
+  clearInterval(modalTimer);
+  document.getElementById('builder-modal').classList.remove('is-active');
+  document.documentElement.classList.remove('is-clipped');
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+}
+function dl(rows) {
+  return '<dl class="detail-grid">' + rows.filter(r => r[1] !== null && r[1] !== undefined && r[1] !== '')
+    .map(r => '<dt>' + r[0] + '</dt><dd>' + r[1] + '</dd>').join('') + '</dl>';
+}
+function renderModal(withJobs) {
+  const b = builders.get(selectedId);
+  if (!b) { document.getElementById('modal-body').innerHTML = '<p class="has-text-grey">This builder was unregistered.</p>'; return; }
+  document.getElementById('modal-title').innerHTML =
+    '<span class="icon mr-1"><i class="fas fa-microchip"></i></span>' + esc(b.name) + ' ' + statusTag(b);
+  const sys = b.system || {};
+  const caps = Object.entries(b.capabilities || {}).map(([k, v]) =>
+    '<span class="tag is-dark is-rounded mr-1 mb-1">' + esc(v === true ? k : k + ': ' +
+      (Array.isArray(v) ? v.map(x => typeof x === 'object' ? (x.platform || '') + '/' + (x.arch || '') : x).join(', ') : JSON.stringify(v))) +
+    '</span>').join('');
+  const served = (b.served_namespaces || []).map(n => '<span class="tag is-dark is-rounded mr-1">' +
+    (n ? esc(n) : 'public') + '</span>').join('');
+  const labels = (b.labels || []).map(l => '<span class="tag is-dark is-rounded mr-1 mb-1">' + esc(l) + '</span>').join('');
+  const hasSys = b.system && Object.keys(b.system).length;
+  document.getElementById('modal-info').innerHTML =
+    '<div class="columns">' +
+    '<div class="column">' +
+    '<h4 class="title is-6 has-text-grey-lighter mb-2">Builder</h4>' +
+    dl([
+      ['ID', '#' + b.id],
+      ['Version', versionTag(b)],
+      ['Platform', platformTag(b.platform) + ' ' + esc(b.arch)],
+      ['Jobs running', '<span class="has-text-white has-text-weight-semibold">' + b.current_jobs + '</span> of ' + b.max_jobs + ' slots'],
+      ['Heartbeat', b.last_heartbeat ? esc(fmtRelative(b.last_heartbeat)) + ' <span class="has-text-grey is-size-7">(' + fmtDate(b.last_heartbeat) + ')</span>' : 'never'],
+      ['Org', b.org_slug ? esc(b.org_slug) : 'public'],
+      ['Serves', served],
+      ['Affinity', b.prefer_affinity ? 'prefers recipes it built before' : null],
+      ['Registered', fmtDate(b.created_at) + (b.registered_by ? ' by ' + esc(b.registered_by) : '')],
+    ]) +
+    '</div>' +
+    '<div class="column">' +
+    '<h4 class="title is-6 has-text-grey-lighter mb-2">Host</h4>' +
+    (hasSys
+      ? systemMeters(b.system) + dl([
+          ['Load', sys.load_avg ? sys.load_avg.map(x => x.toFixed(2)).join(' ') : null],
+          ['Cores', sys.cpu_count],
+          ['Memory free', sys.mem_available_bytes != null ? fmtBytes(sys.mem_available_bytes) : null],
+          ['Work disk', sys.disk_total_bytes ? fmtBytes(sys.disk_free_bytes) + ' free of ' + fmtBytes(sys.disk_total_bytes) : null],
+          ['OS', sys.os ? esc(sys.os) : null],
+          ['Python', sys.python ? esc(sys.python) : null],
+          ['Host up', sys.uptime_seconds != null ? fmtUptime(sys.uptime_seconds) : null],
+          ['Agent up', sys.agent_uptime_seconds != null ? fmtUptime(sys.agent_uptime_seconds) : null],
+        ])
+      : '<p class="has-text-grey is-size-7">This builder does not report host figures; ' +
+        (b.free_disk_gb != null ? 'free disk at its last heartbeat: ' + b.free_disk_gb + ' GiB. ' : '') +
+        'Upgrade it to cvcpkg ' + esc(SERVER_VERSION) + ' or newer to see CPU, memory and disk here.</p>') +
+    '</div></div>' +
+    (labels ? '<h4 class="title is-6 has-text-grey-lighter mb-2 mt-2">Labels</h4><p>' + labels + '</p>' : '') +
+    (caps ? '<h4 class="title is-6 has-text-grey-lighter mb-2 mt-3">Capabilities</h4><p>' + caps + '</p>' : '');
+  document.getElementById('modal-builds-link').href = '/builds?builder_id=' + b.id;
+  if (withJobs) loadJobs(b.id);
+}
+function jobRow(j) {
+  const dur = j.started_at ? fmtDuration(j.started_at, j.finished_at || new Date().toISOString()) : '—';
+  return '<tr><td><a href="/build/' + j.id + '" class="has-text-link">#' + j.id + '</a></td>' +
+    '<td><span class="tag ' + statusCls(j.status) + ' is-rounded">' + esc(j.status) + '</span></td>' +
+    '<td class="has-text-white">' + esc(j.recipe_name) + ' <span class="has-text-grey is-size-7">' + esc(j.recipe_version || '') + '</span></td>' +
+    '<td class="is-size-7">' + esc(dur) + '</td>' +
+    '<td class="is-size-7 has-text-grey-light">' + esc(fmtRelative(j.submitted_at)) + '</td></tr>';
+}
+async function fetchJobs(id, extra) {
+  const resp = await fetch('/v1/builds?builder_id=' + id + extra, { headers: authHeaders() });
+  if (resp.status === 401 || resp.status === 403) return null;
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
+  return (await resp.json()).jobs || [];
+}
+const NO_JOBS_ACCESS = '<p class="has-text-grey is-size-7">Save a publisher or admin token on the ' +
+  '<a href="/builds">Build Jobs</a> page to see this builder’s jobs.</p>';
+async function loadJobs(id) {
+  const el = document.getElementById('modal-jobs');
+  if (id === null || id === undefined) return;
+  // /v1/builds needs a publisher token; don't ask without one.
+  if (!localStorage.getItem('cvcpkg_token')) { el.innerHTML = NO_JOBS_ACCESS; return; }
+  try {
+    const [running, dispatched, recent] = await Promise.all([
+      fetchJobs(id, '&status=running&limit=50'),
+      fetchJobs(id, '&status=dispatched&limit=50'),
+      fetchJobs(id, '&limit=10'),
+    ]);
+    if (id !== selectedId) return;
+    if (running === null) { el.innerHTML = NO_JOBS_ACCESS; return; }
+    const active = dispatched.concat(running).sort((a, b) => b.id - a.id);
+    const table = rows => '<div class="table-container"><table class="table is-fullwidth is-narrow is-dark is-size-7">' +
+      '<thead><tr><th>#</th><th>Status</th><th>Recipe</th><th>Duration</th><th>Submitted</th></tr></thead><tbody>' +
+      rows.map(jobRow).join('') + '</tbody></table></div>';
+    el.innerHTML =
+      '<h4 class="title is-6 has-text-grey-lighter mb-2">Active jobs (' + active.length + ')</h4>' +
+      (active.length ? table(active) : '<p class="has-text-grey is-size-7 mb-3">Idle.</p>') +
+      '<h4 class="title is-6 has-text-grey-lighter mb-2 mt-3">Recent jobs</h4>' +
+      (recent.length ? table(recent) : '<p class="has-text-grey is-size-7">No jobs yet.</p>');
+  } catch (e) {
+    if (id === selectedId) el.innerHTML = '<p class="has-text-danger is-size-7">Could not load jobs: ' + esc(e.message) + '</p>';
+  }
+}
+
+// ── Data: REST load + live socket ───────────────────────────
+async function loadBuilders() {
+  try {
+    const resp = await fetch('/v1/builders', { headers: authHeaders() });
+    if (resp.status === 401 || resp.status === 403) {
+      document.getElementById('auth-prompt').style.display = '';
+      document.getElementById('builder-summary').textContent = 'Authentication required';
+      return;
+    }
+    if (!resp.ok) { document.getElementById('builder-summary').textContent = 'Error loading builders'; return; }
+    const data = await resp.json();
+    builders.clear();
+    for (const b of data.builders || []) builders.set(b.id, b);
+    render();
+  } catch (e) {
+    document.getElementById('builder-summary').textContent = 'Error: ' + e.message;
+  }
+}
+function onLive(msg) {
+  if (msg.type === 'builders') {
+    builders.clear();
+    for (const b of msg.builders) builders.set(b.id, b);
+    render();
+  } else if (msg.type === 'builder') {
+    builders.set(msg.builder.id, msg.builder);
+    renderOne(msg.builder.id);
+  } else if (msg.type === 'builder_removed') {
+    builders.delete(msg.id);
+    render();
+  } else if (msg.type === 'resync') {
+    loadBuilders();
+  }
+}
+function onLiveState(state) {
+  setLiveBadge(document.getElementById('live-badge'), state);
+  clearInterval(pollTimer);
+  pollTimer = null;
+  if (state === 'offline') pollTimer = setInterval(loadBuilders, 30000);
+}
+
+async function init() {
+  const grid = document.getElementById('builders-grid');
+  grid.addEventListener('click', onGridClick);
+  grid.addEventListener('keydown', onGridKey);
+  document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && selectedId !== null) closeModal(); });
+  await loadBuilders();
+  const m = /^#builder-(\d+)$/.exec(location.hash);
+  if (m) openModal(parseInt(m[1], 10));
+  openLive(['builders'], { onMessage: onLive, onState: onLiveState });
+  // Relative heartbeat times age between pushes.
+  setInterval(render, 30000);
+}
+document.addEventListener('DOMContentLoaded', init);
+"""
+
 
 def builders_html() -> str:
     """Return HTML for the Builders Dashboard page."""
@@ -3163,10 +3544,19 @@ def builders_html() -> str:
 
 <section class="section pt-2 has-background-black-bis">
   <div class="container">
-    <h1 class="title has-text-white">
-      <span class="icon mr-2"><i class="fas fa-server"></i></span> Builders
-    </h1>
-    <p class="subtitle has-text-grey-light" id="builder-summary">Loading&hellip;</p>
+    <div class="level mb-2">
+      <div class="level-left">
+        <h1 class="title has-text-white mb-0">
+          <span class="icon mr-2"><i class="fas fa-server"></i></span> Builders
+        </h1>
+      </div>
+      <div class="level-right">
+        <span id="live-badge" class="live-badge is-connecting is-size-7 has-text-grey-light">
+          <span class="live-dot"></span><span class="live-label">Connecting&hellip;</span>
+        </span>
+      </div>
+    </div>
+    <p class="subtitle is-6 has-text-grey-light mt-1" id="builder-summary">Loading&hellip;</p>
 
     <div class="notification is-dark" id="auth-prompt" style="display:none">
       <p>Enter your API token to view builders.</p>
@@ -3184,75 +3574,35 @@ def builders_html() -> str:
   </div>
 </section>
 
+<div class="modal" id="builder-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-background" onclick="closeModal()"></div>
+  <div class="modal-card" style="width:min(960px, calc(100vw - 32px))">
+    <header class="modal-card-head has-background-black-ter">
+      <p class="modal-card-title has-text-white" id="modal-title"></p>
+      <button class="delete" aria-label="close" onclick="closeModal()"></button>
+    </header>
+    <section class="modal-card-body has-background-black-bis has-text-light" id="modal-body">
+      <div id="modal-info"></div>
+      <hr class="has-background-grey-darker my-4">
+      <div id="modal-jobs"><p class="has-text-grey is-size-7">Loading jobs&hellip;</p></div>
+    </section>
+    <footer class="modal-card-foot has-background-black-ter">
+      <a class="button is-small is-dark" id="modal-builds-link" href="/builds">
+        <span class="icon is-small"><i class="fas fa-list"></i></span><span>All builds on this builder</span>
+      </a>
+    </footer>
+  </div>
+</div>
+
 {_footer_html()}
 
 <script>
+const SERVER_VERSION = {_json.dumps(__version__)};
 {_NAVBAR_JS}
 {_HELPERS_JS}
 {_BUILD_HELPERS_JS}
-
-function saveToken() {{
-  const t = document.getElementById('token-input').value.trim();
-  if (t) {{ localStorage.setItem('cvcpkg_token', t); location.reload(); }}
-}}
-
-async function loadBuilders() {{
-  try {{
-    const resp = await fetch('/v1/builders', {{ headers: authHeaders() }});
-    if (resp.status === 401 || resp.status === 403) {{
-      document.getElementById('auth-prompt').style.display = '';
-      document.getElementById('builder-summary').textContent = 'Authentication required';
-      return;
-    }}
-    if (!resp.ok) {{ document.getElementById('builder-summary').textContent = 'Error loading builders'; return; }}
-    const data = await resp.json();
-    const builders = data.builders || [];
-    document.getElementById('builder-summary').textContent =
-      builders.length + ' builder(s) registered';
-
-    const grid = document.getElementById('builders-grid');
-    if (builders.length === 0) {{
-      grid.innerHTML = '<div class="column"><div class="notification is-dark">No builders registered.</div></div>';
-      return;
-    }}
-
-    grid.innerHTML = builders.map(b => {{
-      const online = b.status === 'online';
-      const statusIcon = online
-        ? '<span class="tag is-success is-rounded"><i class="fas fa-circle mr-1"></i>Online</span>'
-        : '<span class="tag is-danger is-rounded"><i class="fas fa-circle mr-1"></i>' + esc(b.status) + '</span>';
-      const hb = b.last_heartbeat ? fmtRelative(b.last_heartbeat) : 'never';
-      return '<div class="column is-6-tablet is-4-desktop">' +
-        '<div class="box has-background-black-ter">' +
-        '<div class="level mb-2"><div class="level-left"><div class="level-item">' +
-        '<h3 class="title is-5 has-text-white mb-0">' +
-        '<span class="icon mr-1"><i class="fas fa-microchip"></i></span>' + esc(b.name) + '</h3>' +
-        '</div></div><div class="level-right"><div class="level-item">' + statusIcon + '</div></div></div>' +
-        '<div class="content is-small">' +
-        '<p>' + platformTag(b.platform) + ' <span class="has-text-grey-light">' + esc(b.arch) + '</span></p>' +
-        '<p><strong class="has-text-grey-lighter">Jobs:</strong> ' +
-        '<span class="has-text-white">' + b.current_jobs + '</span> / ' + b.max_jobs + '</p>' +
-        '<p><strong class="has-text-grey-lighter">Heartbeat:</strong> ' +
-        '<span class="has-text-grey-light">' + esc(hb) + '</span></p>' +
-        '<p><strong class="has-text-grey-lighter">Registered:</strong> ' +
-        '<span class="has-text-grey-light">' + fmtDate(b.created_at) + '</span></p>' +
-        (b.labels && b.labels.length
-          ? '<p>' + b.labels.map(l => '<span class="tag is-dark is-rounded mr-1">' + esc(l) + '</span>').join('') + '</p>'
-          : '') +
-        '<p class="mt-2"><a href="/builds?builder_id=' + b.id + '" class="button is-small is-dark is-outlined">' +
-        '<span class="icon is-small"><i class="fas fa-list"></i></span><span>View builds</span></a></p>' +
-        '</div></div></div>';
-    }}).join('');
-  }} catch (e) {{
-    document.getElementById('builder-summary').textContent = 'Error: ' + e.message;
-  }}
-}}
-
-async function init() {{
-  await loadBuilders();
-  setInterval(loadBuilders, 30000);
-}}
-document.addEventListener('DOMContentLoaded', init);
+{_LIVE_JS}
+{_BUILDERS_JS}
 </script>
 </body>
 </html>"""
@@ -3891,6 +4241,477 @@ async function init() {{
   await loadLog(isLive);
 }}
 document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>"""
+
+
+_ACTIVITY_JS = r"""
+const KINDS = {
+  publish: { label: 'Published', cls: 'is-success', icon: 'fa-upload' },
+  yank:    { label: 'Yanked',    cls: 'is-warning', icon: 'fa-ban' },
+  unyank:  { label: 'Unyanked',  cls: 'is-info',    icon: 'fa-undo' },
+  delete:  { label: 'Deleted',   cls: 'is-danger is-light', icon: 'fa-trash' },
+  nuke:    { label: 'Nuked',     cls: 'is-danger',  icon: 'fa-radiation' },
+};
+const TEXT_FILTERS = ['name', 'platform', 'arch', 'org', 'actor'];
+
+const st = {
+  kinds: new Set(), name: '', platform: '', arch: '', org: '', actor: '',
+  offset: 0, limit: 50, maxId: null, total: 0, rows: [], ids: new Set(),
+  paused: false, pending: 0, live: false, pollTimer: null, loading: false, seq: 0,
+};
+
+// ── URL <-> filter state ─────────────────────────────────────
+function readUrl() {
+  const q = new URLSearchParams(location.search);
+  st.kinds = new Set(q.getAll('kind').filter(k => KINDS[k]));
+  for (const f of TEXT_FILTERS) st[f] = q.get(f) || '';
+  const lim = parseInt(q.get('limit') || '50', 10);
+  st.limit = [25, 50, 100, 200].includes(lim) ? lim : 50;
+  st.offset = Math.max(0, parseInt(q.get('offset') || '0', 10) || 0);
+}
+function writeUrl() {
+  const q = new URLSearchParams();
+  for (const k of st.kinds) q.append('kind', k);
+  for (const f of TEXT_FILTERS) if (st[f]) q.set(f, st[f]);
+  if (st.limit !== 50) q.set('limit', st.limit);
+  if (st.offset) q.set('offset', st.offset);
+  const qs = q.toString();
+  history.replaceState(null, '', location.pathname + (qs ? '?' + qs : ''));
+}
+function syncControls() {
+  document.querySelectorAll('.kind-btn').forEach(b => {
+    b.classList.toggle('is-selected', st.kinds.has(b.dataset.kind));
+    b.setAttribute('aria-pressed', st.kinds.has(b.dataset.kind) ? 'true' : 'false');
+  });
+  for (const f of TEXT_FILTERS) document.getElementById('f-' + f).value = st[f];
+  document.getElementById('f-limit').value = String(st.limit);
+}
+
+// ── Fetching ────────────────────────────────────────────────
+function apiUrl() {
+  const q = new URLSearchParams();
+  for (const k of st.kinds) q.append('kind', k);
+  for (const f of ['name', 'platform', 'arch', 'actor']) if (st[f]) q.set(f, st[f]);
+  if (st.org) q.set('org', st.org);
+  q.set('limit', st.limit);
+  q.set('offset', st.offset);
+  if (st.maxId !== null) q.set('max_id', st.maxId);
+  return '/v1/activity?' + q.toString();
+}
+async function load(opts) {
+  opts = opts || {};
+  if (opts.fresh) { st.maxId = null; st.pending = 0; }
+  // Filters and pages change faster than responses arrive: only the newest
+  // request may draw, or a slow stale one overwrites the page it replaced.
+  const seq = ++st.seq;
+  st.loading = true;
+  try {
+    const resp = await fetch(apiUrl(), { headers: authHeaders() });
+    if (seq !== st.seq) return;
+    if (resp.status === 401) {
+      document.getElementById('auth-prompt').style.display = '';
+      setSummary('Authentication required');
+      return;
+    }
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      setSummary('Error loading activity: ' + (body.detail || resp.status));
+      return;
+    }
+    const data = await resp.json();
+    if (seq !== st.seq) return;
+    st.maxId = data.max_id;
+    st.total = data.total;
+    st.rows = data.events;
+    st.ids = new Set(st.rows.map(e => e.id));
+    if (st.offset > 0 && st.offset >= st.total && st.total > 0) {
+      st.offset = Math.floor((st.total - 1) / st.limit) * st.limit;
+      return load();
+    }
+    render();
+  } catch (e) {
+    if (seq === st.seq) setSummary('Error: ' + e.message);
+  } finally {
+    if (seq === st.seq) st.loading = false;
+  }
+}
+
+// ── Live updates ────────────────────────────────────────────
+function matches(e) {
+  if (st.kinds.size && !st.kinds.has(e.kind)) return false;
+  if (st.name && !e.name.toLowerCase().includes(st.name.toLowerCase())) return false;
+  if (st.platform && e.platform !== st.platform) return false;
+  if (st.arch && e.arch !== st.arch) return false;
+  if (st.org && e.org_slug !== st.org) return false;
+  if (st.actor && !(e.actor || '').toLowerCase().includes(st.actor.toLowerCase())) return false;
+  return true;
+}
+function atHead() { return st.offset === 0 && !st.paused; }
+function onLive(msg) {
+  if (msg.type === 'ready') {
+    // Events may have landed between the page load and the socket opening.
+    if (st.maxId !== null && msg.latest_id > st.maxId) {
+      if (atHead()) load({ fresh: true }); else showPending(true);
+    }
+    return;
+  }
+  if (msg.type === 'resync') { if (atHead()) load({ fresh: true }); else showPending(true); return; }
+  if (msg.type !== 'activity') return;
+  const fresh = msg.events.filter(e => matches(e) && !st.ids.has(e.id) && e.id > (st.maxId || 0));
+  if (!fresh.length) return;
+  if (!atHead()) { st.pending += fresh.length; showPending(); return; }
+  fresh.sort((a, b) => b.id - a.id);
+  for (const e of fresh) { st.ids.add(e.id); e._new = true; }
+  st.rows = fresh.concat(st.rows).slice(0, st.limit);
+  st.total += fresh.length;
+  st.maxId = Math.max(st.maxId || 0, fresh[0].id);
+  render();
+}
+function onLiveState(state) {
+  st.live = state === 'live';
+  setLiveBadge(document.getElementById('live-badge'), state);
+  clearInterval(st.pollTimer);
+  st.pollTimer = null;
+  if (state === 'offline') {
+    st.pollTimer = setInterval(() => { if (atHead() && !st.loading) load({ fresh: true }); }, 15000);
+  }
+}
+function showPending(unknownCount) {
+  const el = document.getElementById('pending');
+  el.style.display = '';
+  document.getElementById('pending-text').textContent = unknownCount && !st.pending
+    ? 'New events have arrived.'
+    : st.pending + ' new event' + (st.pending === 1 ? '' : 's') + ' since this page was loaded.';
+}
+function showLatest() {
+  st.offset = 0;
+  st.paused = false;
+  syncPause();
+  document.getElementById('pending').style.display = 'none';
+  writeUrl();
+  load({ fresh: true });
+}
+function togglePause() {
+  st.paused = !st.paused;
+  syncPause();
+  if (!st.paused && st.offset === 0 && st.pending) showLatest();
+}
+function syncPause() {
+  const b = document.getElementById('btn-pause');
+  b.querySelector('i').className = 'fas ' + (st.paused ? 'fa-play' : 'fa-pause');
+  b.querySelector('.label').textContent = st.paused ? 'Resume' : 'Pause';
+  b.title = st.paused ? 'Resume live updates' : 'Hold the list still; new events are counted';
+}
+
+// ── Rendering ───────────────────────────────────────────────
+function setSummary(text) { document.getElementById('summary').textContent = text; }
+function pkgHref(e) {
+  return e.org_slug
+    ? '/package/' + encodeURIComponent(e.org_slug) + '/' + encodeURIComponent(e.name)
+    : '/package/' + encodeURIComponent(e.name);
+}
+function kindTag(kind) {
+  const k = KINDS[kind] || { label: kind, cls: 'is-light', icon: 'fa-circle' };
+  return '<span class="tag is-rounded ' + k.cls + '"><i class="fas ' + k.icon + ' mr-1"></i>' +
+    esc(k.label) + '</span>';
+}
+function render() {
+  const body = document.getElementById('events-body');
+  if (!st.rows.length) {
+    const filtered = st.kinds.size || TEXT_FILTERS.some(f => st[f]);
+    body.innerHTML = '<tr><td colspan="7" class="has-text-centered has-text-grey py-5">' +
+      (filtered ? 'No events match these filters.' : 'No activity yet.') + '</td></tr>';
+  } else {
+    body.innerHTML = st.rows.map(e => {
+      const variant = [e.build_type, e.link].filter(Boolean).join(' / ');
+      const actor = e.actor
+        ? '<span class="has-text-light">' + esc(e.actor) + '</span>'
+        : '<span class="has-text-grey">&mdash;</span>';
+      const detail = e.detail
+        ? '<br><span class="is-size-7 has-text-grey">' + esc(e.detail) + '</span>' : '';
+      const org = e.org_slug
+        ? '<a href="/org/' + encodeURIComponent(e.org_slug) + '" class="has-text-link">' + esc(e.org_slug) + '</a>'
+        : '<span class="has-text-grey">&mdash;</span>';
+      const row = '<tr' + (e._new ? ' class="is-new"' : '') + '>' +
+        '<td class="is-size-7"><span class="rel-time" data-ts="' + esc(e.created_at) + '" title="' +
+          esc(new Date(e.created_at).toString()) + '">' + esc(fmtRelative(e.created_at)) + '</span></td>' +
+        '<td>' + kindTag(e.kind) + '</td>' +
+        '<td><a href="' + pkgHref(e) + '" class="has-text-white has-text-weight-semibold">' + esc(e.name) +
+          '</a> <code class="is-size-7">' + esc(e.version) + '</code></td>' +
+        '<td>' + platformTag(e.platform) + ' <span class="has-text-grey-light is-size-7">' + esc(e.arch) +
+          '</span>' + (variant ? '<br><span class="is-size-7 has-text-grey">' + esc(variant) + '</span>' : '') + '</td>' +
+        '<td>' + org + '</td>' +
+        '<td class="is-size-7">' + actor + detail + '</td>' +
+        '<td class="is-size-7 has-text-right">' + (e.kind === 'publish' ? fmtSize(e.size_bytes) : '') + '</td>' +
+        '</tr>';
+      delete e._new;
+      return row;
+    }).join('');
+  }
+  const from = st.total ? st.offset + 1 : 0;
+  const to = Math.min(st.offset + st.rows.length, st.total);
+  setSummary(st.total.toLocaleString() + ' event' + (st.total === 1 ? '' : 's') +
+    (st.kinds.size || TEXT_FILTERS.some(f => st[f]) ? ' match these filters' : ''));
+  document.getElementById('page-info').textContent =
+    st.total ? 'Showing ' + from.toLocaleString() + '–' + to.toLocaleString() + ' of ' + st.total.toLocaleString() : '';
+  document.getElementById('btn-prev').disabled = st.offset === 0;
+  document.getElementById('btn-next').disabled = st.offset + st.limit >= st.total;
+  renderPages();
+}
+function renderPages() {
+  const pages = Math.max(1, Math.ceil(st.total / st.limit));
+  const cur = Math.floor(st.offset / st.limit) + 1;
+  const want = new Set([1, pages, cur - 1, cur, cur + 1].filter(p => p >= 1 && p <= pages));
+  const list = [...want].sort((a, b) => a - b);
+  let html = '', prev = 0;
+  for (const p of list) {
+    if (p - prev > 1) html += '<li><span class="pagination-ellipsis has-text-grey">&hellip;</span></li>';
+    html += '<li><a class="pagination-link' + (p === cur ? ' is-current' : '') + '" aria-label="Page ' + p +
+      '"' + (p === cur ? ' aria-current="page"' : '') + ' onclick="goPage(' + p + ')">' + p + '</a></li>';
+    prev = p;
+  }
+  document.getElementById('page-list').innerHTML = pages > 1 ? html : '';
+}
+function goPage(p) {
+  st.offset = (p - 1) * st.limit;
+  writeUrl();
+  if (st.offset === 0) { document.getElementById('pending').style.display = 'none'; load({ fresh: true }); }
+  else load();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+function prevPage() { if (st.offset > 0) goPage(Math.floor(st.offset / st.limit)); }
+function nextPage() { if (st.offset + st.limit < st.total) goPage(Math.floor(st.offset / st.limit) + 2); }
+function refreshTimes() {
+  document.querySelectorAll('.rel-time').forEach(el => { el.textContent = fmtRelative(el.dataset.ts); });
+}
+
+// ── Filter controls ─────────────────────────────────────────
+function applyFilters() {
+  st.offset = 0;
+  writeUrl();
+  document.getElementById('pending').style.display = 'none';
+  load({ fresh: true });
+}
+let _debounce = null;
+function onTextFilter(f, value) {
+  st[f] = value.trim();
+  clearTimeout(_debounce);
+  _debounce = setTimeout(applyFilters, 300);
+}
+function toggleKind(k) {
+  if (st.kinds.has(k)) st.kinds.delete(k); else st.kinds.add(k);
+  syncControls();
+  applyFilters();
+}
+function clearFilters() {
+  st.kinds.clear();
+  for (const f of TEXT_FILTERS) st[f] = '';
+  syncControls();
+  applyFilters();
+}
+function setLimit(v) { st.limit = parseInt(v, 10) || 50; applyFilters(); }
+function saveToken() {
+  const t = document.getElementById('token-input').value.trim();
+  if (t) { localStorage.setItem('cvcpkg_token', t); location.reload(); }
+}
+
+async function init() {
+  readUrl();
+  syncControls();
+  syncPause();
+  await load({ fresh: true });
+  openLive(['activity'], { onMessage: onLive, onState: onLiveState });
+  setInterval(refreshTimes, 30000);
+}
+document.addEventListener('DOMContentLoaded', init);
+"""
+
+_ACTIVITY_PLATFORMS = (
+    ("linux", "Linux"),
+    ("macos", "macOS"),
+    ("windows", "Windows"),
+    ("freebsd", "FreeBSD"),
+    ("netbsd", "NetBSD"),
+    ("openbsd", "OpenBSD"),
+    ("haiku", "Haiku"),
+    ("wasm", "WASM"),
+    ("wasm-mt", "WASM (threads)"),
+    ("wasi", "WASI"),
+    ("cosmo", "Cosmo"),
+    ("any", "Any"),
+)
+_ACTIVITY_ARCHES = ("x86_64", "aarch64", "arm64", "riscv64", "wasm32", "fat", "noarch")
+
+
+def activity_html() -> str:
+    """The activity page: recent publishes, yanks and removals, updated live."""
+    kind_buttons = "".join(
+        f'<button class="button is-small is-dark kind-btn mr-1 mb-1" data-kind="{k}" '
+        f'onclick="toggleKind(\'{k}\')" aria-pressed="false">'
+        f'<span class="icon"><i class="fas {icon}"></i></span><span>{label}</span></button>'
+        for k, label, icon in (
+            ("publish", "Published", "fa-upload"),
+            ("yank", "Yanked", "fa-ban"),
+            ("unyank", "Unyanked", "fa-undo"),
+            ("delete", "Deleted", "fa-trash"),
+            ("nuke", "Nuked", "fa-radiation"),
+        )
+    )
+    platform_opts = "".join(
+        f'<option value="{v}">{label}</option>' for v, label in _ACTIVITY_PLATFORMS
+    )
+    arch_opts = "".join(f'<option value="{a}">{a}</option>' for a in _ACTIVITY_ARCHES)
+    return f"""\
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" class="has-background-black-bis">
+{_head_html("Activity &mdash; cvcpkg", canonical="/activity")}
+<body class="has-background-black-bis has-text-light">
+
+{_navbar_html()}
+
+<section class="section pt-4 pb-2 has-background-black-bis">
+  <div class="container">
+    <nav class="breadcrumb" aria-label="breadcrumbs">
+      <ul>
+        <li><a href="/" class="has-text-grey-light">Home</a></li>
+        <li class="is-active"><a href="#" class="has-text-light">Activity</a></li>
+      </ul>
+    </nav>
+  </div>
+</section>
+
+<section class="section pt-2 has-background-black-bis">
+  <div class="container">
+    <div class="level mb-2">
+      <div class="level-left">
+        <h1 class="title has-text-white mb-0">
+          <span class="icon mr-2"><i class="fas fa-bolt"></i></span> Activity
+        </h1>
+      </div>
+      <div class="level-right">
+        <span id="live-badge" class="live-badge is-connecting is-size-7 has-text-grey-light mr-3">
+          <span class="live-dot"></span><span class="live-label">Connecting&hellip;</span>
+        </span>
+        <button class="button is-small is-dark" id="btn-pause" onclick="togglePause()">
+          <span class="icon"><i class="fas fa-pause"></i></span><span class="label">Pause</span>
+        </button>
+      </div>
+    </div>
+    <p class="subtitle is-6 has-text-grey-light mt-1">
+      Publishes, yanks and removals across the registry, one row per bundle variant.
+      <span id="summary" class="has-text-grey"></span>
+    </p>
+
+    <div class="notification is-dark" id="auth-prompt" style="display:none">
+      <p>This server requires a token to read. Enter your API token.</p>
+      <div class="field has-addons mt-2">
+        <div class="control is-expanded">
+          <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
+        </div>
+        <div class="control">
+          <button class="button is-link" onclick="saveToken()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="box has-background-black-ter mb-4" id="filters">
+      <div class="mb-2" role="group" aria-label="Actions">{kind_buttons}</div>
+      <div class="columns is-mobile is-multiline is-variable is-2 mb-0">
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-name">Package</label>
+          <input class="input is-small is-dark" id="f-name" placeholder="name contains&hellip;"
+                 oninput="onTextFilter('name', this.value)">
+        </div>
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-platform">Platform</label>
+          <div class="select is-small is-dark">
+            <select id="f-platform" onchange="onTextFilter('platform', this.value)">
+              <option value="">All</option>{platform_opts}
+            </select>
+          </div>
+        </div>
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-arch">Arch</label>
+          <div class="select is-small is-dark">
+            <select id="f-arch" onchange="onTextFilter('arch', this.value)">
+              <option value="">All</option>{arch_opts}
+            </select>
+          </div>
+        </div>
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-org">Org</label>
+          <input class="input is-small is-dark" id="f-org" placeholder="org slug" style="width:9em"
+                 oninput="onTextFilter('org', this.value)">
+        </div>
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-actor">By</label>
+          <input class="input is-small is-dark" id="f-actor" placeholder="who contains&hellip;" style="width:10em"
+                 oninput="onTextFilter('actor', this.value)">
+        </div>
+        <div class="column is-narrow">
+          <label class="label has-text-grey-lighter is-small" for="f-limit">Per page</label>
+          <div class="select is-small is-dark">
+            <select id="f-limit" onchange="setLimit(this.value)">
+              <option value="25">25</option><option value="50">50</option>
+              <option value="100">100</option><option value="200">200</option>
+            </select>
+          </div>
+        </div>
+        <div class="column is-narrow" style="align-self:flex-end">
+          <button class="button is-small is-dark" onclick="clearFilters()">
+            <span class="icon"><i class="fas fa-times"></i></span><span>Clear</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="notification is-link is-light py-2 px-4" id="pending" style="display:none">
+      <span id="pending-text"></span>
+      <a class="ml-2 has-text-weight-semibold" onclick="showLatest()">Show the latest</a>
+    </div>
+
+    <div class="table-container">
+      <table class="table is-fullwidth is-hoverable is-dark">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Package</th>
+            <th>Variant</th>
+            <th>Org</th>
+            <th>By</th>
+            <th class="has-text-right">Size</th>
+          </tr>
+        </thead>
+        <tbody id="events-body">
+          <tr><td colspan="7" class="has-text-centered has-text-grey py-5">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <nav class="pagination is-small is-centered" role="navigation" aria-label="pagination">
+      <button class="pagination-previous button is-dark is-small" id="btn-prev" onclick="prevPage()">
+        <span class="icon"><i class="fas fa-chevron-left"></i></span><span>Newer</span>
+      </button>
+      <button class="pagination-next button is-dark is-small" id="btn-next" onclick="nextPage()">
+        <span>Older</span><span class="icon"><i class="fas fa-chevron-right"></i></span>
+      </button>
+      <ul class="pagination-list" id="page-list"></ul>
+    </nav>
+    <p class="has-text-centered is-size-7 has-text-grey" id="page-info"></p>
+  </div>
+</section>
+
+{_footer_html()}
+
+<script>
+{_NAVBAR_JS}
+{_HELPERS_JS}
+{_BUILD_HELPERS_JS}
+{_LIVE_JS}
+{_ACTIVITY_JS}
 </script>
 </body>
 </html>"""
