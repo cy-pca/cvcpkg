@@ -347,11 +347,16 @@ from cvcpkg.cli._publish import (  # noqa: E402, F401
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Entry point for programmatic invocation and tests.
+    """Entry point: the ``cvcpkg`` console script, ``python -m cvcpkg``, tests.
 
     Wraps the Click CLI group so callers get a clean integer return
-    code instead of SystemExit.  All CvcpkgError and ClickException
-    errors are caught, printed, and mapped to exit code 1.
+    code instead of SystemExit.  A CvcpkgError is printed as one
+    ``cvcpkg: ERROR:`` line with exit code 1; a ClickException is shown
+    with its own exit code (2 for a usage error), as standalone Click does.
+    The console script used to be ``cvcpkg.cli:cli`` itself, so a pip-installed
+    cvcpkg printed a Python traceback for every CvcpkgError (a ResolveError
+    from ``install``, say) while the frozen binary, which comes through here,
+    printed the one line.
 
     Args:
         argv: Command-line arguments, e.g. ``["install", "--from", "req.yaml"]``.
@@ -369,6 +374,10 @@ def main(argv: list[str] | None = None) -> int:
         return e.code if isinstance(e.code, int) else 1
     except click.ClickException as e:
         e.show()
+        return e.exit_code
+    except click.exceptions.Abort:
+        # Ctrl-C / EOF at a prompt: what standalone Click prints.
+        click.echo("Aborted!", err=True)
         return 1
     except CvcpkgError as e:
         click.echo(f"cvcpkg: ERROR: {e}", err=True)

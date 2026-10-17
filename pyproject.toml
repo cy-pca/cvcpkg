@@ -243,7 +243,7 @@ alembic = ">=1.13"
 moto = { version = ">=5.0", extras = ["s3"] }
 
 [tool.poetry.scripts]
-cvcpkg = "cvcpkg.cli:cli"
+cvcpkg = "cvcpkg.cli:main"
 cvcpkg-server = "cvcpkg.server.cli:server_cli"
 
 [build-system]
