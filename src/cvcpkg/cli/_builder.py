@@ -150,6 +150,31 @@ def _pick_dep_variant(
     return None
 
 
+def _settle_dep_prefix(prefix: Path, platform: str) -> None:
+    """Finish a job's dep prefix after its archives are unpacked, as
+    ``cvcpkg install`` would have left it.
+
+    On Windows that first means moving the noarch python packages out of their
+    Unix layout, ``lib/pythonX.Y/site-packages``, into the ``Lib/site-packages``
+    a python.org-layout python.exe searches (see
+    installer._relocate_windows_site_packages).  The builder used to skip it,
+    so a Windows job saw only the Windows-built packages: recipes/cvcpkg's
+    build.ps1 could not import poetry-core (prod job #20190, "BackendUnavailable:
+    Cannot import 'cvcpkg_build_backend'"), though a local build passed.
+
+    Then the prefix rewrites (_rewrite_pc_prefixes, _rewrite_script_prefixes)
+    that build_all() also runs.  All three steps are idempotent.
+    """
+    from cvcpkg.builder import _rewrite_pc_prefixes, _rewrite_script_prefixes
+
+    if platform == "windows":
+        from cvcpkg.installer import _relocate_windows_site_packages
+
+        _relocate_windows_site_packages(prefix)
+    _rewrite_pc_prefixes(prefix)
+    _rewrite_script_prefixes(prefix)
+
+
 def _newest_first(pkg: dict) -> tuple:
     """Newest-first ordering key for a catalog entry (a dict with "version").
 
@@ -2333,8 +2358,6 @@ def builder_run(
 
     from cvcpkg.builder import (
         Recipe,
-        _rewrite_pc_prefixes,
-        _rewrite_script_prefixes,
         build_recipe,
         pack_recipe,
     )
@@ -3186,8 +3209,7 @@ def builder_run(
         # reuse the same helpers so the builder agrees with local builds.
         # Rewriting once after the loop (not per dep) keeps this O(prefix), and
         # both helpers are idempotent.
-        _rewrite_pc_prefixes(prefix)
-        _rewrite_script_prefixes(prefix)
+        _settle_dep_prefix(prefix, job_platform)
 
         if not local:
             return
@@ -3211,8 +3233,7 @@ def builder_run(
                     f"dep {dep_name} (redistributable: false) failed to build locally: {exc}"
                 ) from exc
         # The local builds merged trees installed under their own work dirs.
-        _rewrite_pc_prefixes(prefix)
-        _rewrite_script_prefixes(prefix)
+        _settle_dep_prefix(prefix, job_platform)
 
     def _install_cross_toolchains(
         target_platform: str,
