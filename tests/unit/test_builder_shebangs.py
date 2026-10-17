@@ -172,6 +172,15 @@ def test_genuine_sh_polyglot_untouched(tmp_path):
     assert script.read_bytes() == before
 
 
+def _symlink_or_skip(link, target):
+    # Windows needs SeCreateSymbolicLinkPrivilege (elevation or Developer
+    # Mode) and raises WinError 1314 without it. CI runners have it.
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symlinks on this host")
+
+
 def test_binaries_and_symlinks_skipped(tmp_path):
     elf = tmp_path / "bin" / "native-tool"
     elf.parent.mkdir(parents=True)
@@ -180,7 +189,7 @@ def test_binaries_and_symlinks_skipped(tmp_path):
     exe.write_bytes(b"MZ\x90\x00" + f"#!{JOB_PREFIX}\\python.exe".encode())
     real = _script(tmp_path, "bin/real", f"{JOB_PREFIX}/bin/python3.11")
     alias = tmp_path / "bin" / "alias"
-    alias.symlink_to(real.name)
+    _symlink_or_skip(alias, real.name)
 
     _rewrite_shebangs(tmp_path)
 
