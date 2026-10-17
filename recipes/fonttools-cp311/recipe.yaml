@@ -2,12 +2,6 @@ schema_version: 1
 recipe:
   name: fonttools-cp311
   upstream_version: "4.63.0"
-  # cvc.4: republish.  The published noarch cvc.3 bundle's console scripts
-  # (fonttools, pyftmerge, pyftsubset, ttx) carry the build machine's interpreter as their shebang (the old
-  # libcvc-deps macOS CI prefix), so they cannot run anywhere; packing today
-  # rewrites it to /usr/bin/env.
-  # cvc.5: FONTTOOLS_WITH_CYTHON=0, so the noarch bundle never carries the
-  # claiming builder's compiled speedups (fonttools-cp312 4.63.0+cvc.3's had darwin .so files).
   cvc_revision: 5
 
   maintainer: "cvcpkg group"

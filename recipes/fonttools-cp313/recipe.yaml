@@ -2,13 +2,6 @@ schema_version: 1
 recipe:
   name: fonttools-cp313
   upstream_version: "4.63.0"
-  # cvc.4 (freethreaded-leak republish): the published cvc.3 any/noarch bundle
-  # installs to lib/python3.13t/site-packages -- a python313t (before its cvc.7) shadowed
-  # python3.13 when it was built -- so python3.13 cannot import it and cp313 builds that
-  # depend on it fail (aiokafka-cp313 on async-timeout-cp313, 2026-10-13).  Rebuilding
-  # lays it under lib/python3.13/.  Found by auditing every published cp313 bundle.
-  # cvc.5: FONTTOOLS_WITH_CYTHON=0, so the noarch bundle never carries the
-  # claiming builder's compiled speedups (fonttools-cp312 4.63.0+cvc.3's had darwin .so files).
   cvc_revision: 5
 
   maintainer: "cvcpkg group"
