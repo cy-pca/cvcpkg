@@ -107,8 +107,8 @@ class CatalogBody:
         """The body with each relative archive_url made absolute under *base_url*.
 
         Done per request, because the base depends on how the client reached
-        the server (Host, proxy headers).  One ``bytes.replace`` costs a few
-        ms against the 6 MB body; re-encoding it cost over a second.
+        the server (Host, proxy headers).  One ``bytes.replace`` over a 7 MB
+        body takes ~8 ms; encoding the body again would take ~100 ms.
         """
         base = json.dumps(base_url.rstrip("/"), ensure_ascii=False)[1:-1].encode("utf-8")
         if not base:
