@@ -33,7 +33,18 @@ foreach ($p in @($bld, $deps)) {
     }
 }
 if (-not $py) { throw "cvcpkg: python $pyVer not found under $bld or $deps" }
-$site = @($bld, $deps) | Select-Object -Unique | ForEach-Object { Join-Path $_ 'Lib\site-packages' }
+# Two site dirs per prefix.  Lib\site-packages is where python.exe looks, and
+# where the Windows-built bundles (cffi, cryptography, pyyaml, PyInstaller)
+# put their packages.  The noarch bundles (poetry-core, click, httpx, ...)
+# use the Unix layout, lib\python3.12\site-packages: `cvcpkg install` moves
+# them into Lib\site-packages, but a fleet builder unpacks a job's deps as
+# they are and leaves them there.  Without that dir, pip cannot import
+# poetry-core, and the in-tree backend fails as "BackendUnavailable: Cannot
+# import 'cvcpkg_build_backend'" (prod job #20190).
+$site = @($bld, $deps) | Select-Object -Unique | ForEach-Object {
+    Join-Path $_ 'Lib\site-packages'
+    Join-Path $_ "lib\python$pyVer\site-packages"
+} | Where-Object { Test-Path $_ }
 
 # PyInstaller freezes whatever the interpreter can import, and a user site
 # (%APPDATA%\Python\Python312\site-packages) would leak the builder account's
