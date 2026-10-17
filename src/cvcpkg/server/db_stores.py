@@ -907,6 +907,14 @@ NUKE_REASON_RETENTION = "retention"  # fell off the yank-retention schedule
 # destroy data across every mirror at once, and an air-gapped edge may hold the
 # last copy in existence.
 NUKE_REASON_UPSTREAM = "upstream"
+# An admin's DELETE /v1/packages/{name}/{version}, DELETE
+# /v1/packages/by-link/{platform}/{link}, or the /admin UI's delete button.
+NUKE_REASON_DELETED = "deleted"
+# Evicted by the cache GC (POST /v1/cache/gc, DELETE /v1/cache).
+NUKE_REASON_GC = "gc"
+
+# Rows per DELETE ... WHERE id IN (...), well under SQLite's bound-variable cap.
+_DELETE_CHUNK = 500
 
 
 def _tombstone_dict(r) -> dict:
@@ -962,6 +970,112 @@ def _record_tombstones(
         )
         for r in rows
     )
+
+
+def _archive_filename(r) -> str:
+    return (r.archive_url or "").rsplit("/", 1)[-1]
+
+
+def _archive_url_like(filename: str):
+    """``archive_url LIKE '%/<filename>'``, with *filename*'s LIKE wildcards escaped.
+
+    Unescaped, the ``_`` that every sanitised archive name is full of matches
+    any character, so ``a_b.tar.zst`` would also match ``a-b.tar.zst``.
+    """
+    esc = filename.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return PackageRow.archive_url.like(f"%/{esc}", escape="\\")
+
+
+def _removed_dict(r) -> dict:
+    """What the delete and GC paths report for each bundle they remove.
+
+    ``name``/``version``/``size_bytes``/``org_slug`` feed the org storage
+    counters; ``archive_deleted`` says whether the bytes went too.
+    """
+    return {
+        "name": r.name,
+        "version": r.version,
+        "platform": r.platform,
+        "arch": r.arch,
+        "build_type": r.build_type,
+        "link": r.link,
+        "size_bytes": r.size_bytes,
+        "org_slug": r.org_slug,
+        "archive_deleted": False,
+    }
+
+
+def _newest_per_coordinate(rows) -> set[int]:
+    """Ids of the newest row (by ``version_sort_key``) of each coordinate.
+
+    A coordinate is everything that identifies a bundle except its version:
+    name, platform, arch, build type, link and org.  Its newest row is the one
+    a consumer resolves, and often its only build.
+    """
+    newest: dict[tuple, tuple[tuple, int]] = {}
+    for r in rows:
+        coord = (r.name, r.platform, r.arch, r.build_type, r.link, r.org_slug)
+        key = version_sort_key(r.version)
+        cur = newest.get(coord)
+        if cur is None or key > cur[0]:
+            newest[coord] = (key, r.id)
+    return {rid for _, rid in newest.values()}
+
+
+async def _remove_bundles(
+    session,
+    rows,
+    *,
+    reason: str,
+    removed_by: str,
+    storage_uri: str,
+    tombstone: bool = True,
+) -> list[bool]:
+    """Remove *rows* from the catalog for good: tombstone, row, then archive.
+
+    Every path that deletes package rows goes through here, so none can again
+    drop the row and leave its archive on disk (unaccounted, and still
+    downloadable, since download_archive serves any file that exists and has
+    no tombstone).  The tombstone is written in the same transaction as the
+    row delete, and the download then answers 410 with *reason*.
+
+    Rows go first, archive bytes second: an archive that fails to delete
+    (``archive_store.delete`` logs and returns False) leaves a tombstoned
+    bundle whose bytes linger, which the orphan sweep finds, rather than a
+    rolled-back row whose archive is gone.  An archive is deleted only when no
+    surviving row still references its filename.  An empty *storage_uri*
+    leaves archives alone, for a caller that deletes them itself.
+
+    Returns, per row, whether its archive was deleted.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    if not rows:
+        return []
+    if tombstone:
+        _record_tombstones(session, rows, reason=reason, nuked_by=removed_by)
+    ids = [r.id for r in rows]
+    for i in range(0, len(ids), _DELETE_CHUNK):
+        await session.execute(
+            sa_delete(PackageRow).where(PackageRow.id.in_(ids[i : i + _DELETE_CHUNK]))
+        )
+    await session.flush()
+
+    deleted = [False] * len(rows)
+    if not storage_uri:
+        return deleted
+    from cvcpkg.server import archive_store
+
+    for i, r in enumerate(rows):
+        fname = _archive_filename(r)
+        if not fname:
+            continue
+        still = (
+            await session.execute(select(PackageRow.id).where(_archive_url_like(fname)).limit(1))
+        ).first()
+        if not still:
+            deleted[i] = archive_store.delete(storage_uri, fname)
+    return deleted
 
 
 class DbPackageIndex:
@@ -1847,19 +1961,42 @@ class DbPackageIndex:
         *,
         platform: str | None = None,
         link: str | None = None,
-    ) -> int:
-        from sqlalchemy import delete as sa_delete
+        storage_uri: str,
+        deleted_by: str = "",
+        tombstone: bool = True,
+    ) -> list[dict]:
+        """Delete every bundle of *name*==*version* (narrowed by platform/link).
 
+        Rows, archives and tombstones go together (see ``_remove_bundles``).
+        *storage_uri* is required so no caller can again forget the archives;
+        pass ``""`` only when deleting them yourself.  ``tombstone=False`` is
+        for the mirror budget eviction, whose bundles re-populate from
+        upstream and so must not answer 410.
+
+        Returns one ``_removed_dict`` per deleted bundle.
+        """
         async with get_session() as session:
-            stmt = sa_delete(PackageRow).where(
-                PackageRow.name == name, PackageRow.version == version
-            )
+            sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
             if platform is not None:
-                stmt = stmt.where(PackageRow.platform == platform)
+                sel = sel.where(PackageRow.platform == platform)
             if link is not None:
-                stmt = stmt.where(PackageRow.link == link)
-            result = await session.execute(stmt)
-            return result.rowcount
+                sel = sel.where(PackageRow.link == link)
+            rows = (await session.execute(sel)).scalars().all()
+            return await self._remove(
+                session,
+                rows,
+                reason=NUKE_REASON_DELETED,
+                removed_by=deleted_by,
+                storage_uri=storage_uri,
+                tombstone=tombstone,
+            )
+
+    @staticmethod
+    async def _remove(session, rows, **kw) -> list[dict]:
+        recs = [_removed_dict(r) for r in rows]
+        for rec, gone in zip(recs, await _remove_bundles(session, rows, **kw), strict=True):
+            rec["archive_deleted"] = gone
+        return recs
 
     async def nuke_bundles(
         self,
@@ -1893,8 +2030,6 @@ class DbPackageIndex:
         An archive is unlinked only when no surviving row still references its
         filename.
         """
-        from sqlalchemy import delete as sa_delete
-
         async with get_session() as session:
             sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
             if platform is not None:
@@ -1935,32 +2070,15 @@ class DbPackageIndex:
                 }
                 for r in rows
             ]
-            # Tombstone each variant BEFORE deleting the row, in the same
-            # transaction, so the record and the deletion commit atomically --
-            # a nuked bundle can never be gone without a tombstone explaining it.
-            _record_tombstones(session, rows, reason=reason, nuked_by=nuked_by)
-            ids = [r.id for r in rows]
-            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
-            await session.flush()
-
+            # Tombstone each variant in the same transaction as its row delete,
+            # so a nuked bundle can never be gone without a tombstone
+            # explaining it.
+            gone = await _remove_bundles(
+                session, rows, reason=reason, removed_by=nuked_by, storage_uri=storage_uri
+            )
             if storage_uri:
-                from cvcpkg.server import archive_store
-
-                for rec in nuked:
-                    fname = (rec.get("archive_url") or "").rsplit("/", 1)[-1]
-                    if not fname:
-                        continue
-                    # Unlink only when no surviving row references the file.
-                    still = (
-                        await session.execute(
-                            select(PackageRow.id)
-                            .where(PackageRow.archive_url.like(f"%/{fname}"))
-                            .limit(1)
-                        )
-                    ).first()
-                    rec["archive_deleted"] = (
-                        False if still else archive_store.delete(storage_uri, fname)
-                    )
+                for rec, g in zip(nuked, gone, strict=True):
+                    rec["archive_deleted"] = g
 
             return {"nuked": nuked, "count": len(nuked)}
 
@@ -2014,6 +2132,32 @@ class DbPackageIndex:
             ).scalar_one_or_none()
             return _tombstone_dict(r) if r is not None else None
 
+    async def archive_filename_states(self, filenames: Collection[str]) -> dict[str, str]:
+        """Classify archive *filenames* found in storage: "row" or "tombstone".
+
+        "row" when some package row (any yank state) references the file,
+        else "tombstone" when a tombstone names it.  Files with neither are
+        left out: those are the orphans, bytes nothing in the catalog accounts
+        for (DELETE once removed rows only and left them; see
+        ``_remove_bundles``).
+        """
+        wanted = set(filenames)
+        if not wanted:
+            return {}
+        async with get_session() as session:
+            urls = (await session.execute(select(PackageRow.archive_url))).scalars().all()
+            tombstoned = (
+                (await session.execute(select(distinct(PackageTombstoneRow.filename))))
+                .scalars()
+                .all()
+            )
+        states = {f: "tombstone" for f in tombstoned if f in wanted}
+        for url in urls:
+            f = (url or "").rsplit("/", 1)[-1]
+            if f in wanted:
+                states[f] = "row"
+        return states
+
     async def get_release_tags(self) -> list[dict]:
         """Distinct release tags with variant counts, most-populated first.
 
@@ -2031,18 +2175,39 @@ class DbPackageIndex:
             rows = (await session.execute(q)).all()
         return [{"tag": r.release_tag or "", "count": r.count} for r in rows]
 
-    async def delete_by_link(self, platform: str, link: str) -> int:
-        """Delete all bundles matching a platform and link mode."""
-        from sqlalchemy import delete as sa_delete
+    async def delete_by_link(
+        self,
+        platform: str,
+        link: str,
+        *,
+        storage_uri: str,
+        deleted_by: str = "",
+    ) -> list[dict]:
+        """Delete all bundles matching a platform and link mode.
 
+        Rows, archives and tombstones together, like ``delete``.  Returns one
+        ``_removed_dict`` per deleted bundle.
+        """
         async with get_session() as session:
-            result = await session.execute(
-                sa_delete(PackageRow).where(
-                    PackageRow.platform == platform,
-                    PackageRow.link == link,
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageRow).where(
+                            PackageRow.platform == platform,
+                            PackageRow.link == link,
+                        )
+                    )
                 )
+                .scalars()
+                .all()
             )
-            return result.rowcount
+            return await self._remove(
+                session,
+                rows,
+                reason=NUKE_REASON_DELETED,
+                removed_by=deleted_by,
+                storage_uri=storage_uri,
+            )
 
     async def total_storage_bytes(self) -> int:
         """Return the total size_bytes across all non-yanked packages."""
@@ -2084,45 +2249,24 @@ class DbPackageIndex:
                 "orgs": orgs,
             }
 
-    async def gc_by_age(self, max_age_seconds: float) -> list[dict]:
-        """Delete non-yanked packages older than *max_age_seconds*.
+    async def gc_by_age(
+        self,
+        max_age_seconds: float,
+        *,
+        storage_uri: str,
+        dry_run: bool = False,
+        removed_by: str = "cache-gc",
+    ) -> list[dict]:
+        """Delete non-yanked, non-release packages older than *max_age_seconds*.
 
-        Returns a list of dicts with ``name``, ``version``, ``size_bytes``,
-        ``org_slug`` for each deleted package.
+        See ``gc``.
         """
-        import datetime as _dt
-
-        from sqlalchemy import delete as sa_delete
-
-        cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=max_age_seconds)
-        async with get_session() as session:
-            # Fetch rows to delete (for the return value).
-            rows = (
-                (
-                    await session.execute(
-                        select(PackageRow).where(
-                            PackageRow.published_at < cutoff,
-                            PackageRow.yanked.is_(False),
-                            PackageRow.release_tag == "",
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            deleted = [
-                {
-                    "name": r.name,
-                    "version": r.version,
-                    "size_bytes": r.size_bytes,
-                    "org_slug": r.org_slug,
-                }
-                for r in rows
-            ]
-            if rows:
-                ids = [r.id for r in rows]
-                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
-            return deleted
+        return await self.gc(
+            max_age_seconds=max_age_seconds,
+            storage_uri=storage_uri,
+            dry_run=dry_run,
+            removed_by=removed_by,
+        )
 
     async def purge_yanked(
         self,
@@ -2134,13 +2278,13 @@ class DbPackageIndex:
     ) -> list[dict]:
         """Permanently remove bundles yanked longer ago than *older_than_days*.
 
-        Unlike every other GC here this deletes the ARCHIVE as well as the row
-        -- a yank-retention sweep that dropped only rows would leak the bytes
-        forever and leave them downloadable (download_archive gates on the file
-        existing, never on the row).
+        Deletes the ARCHIVE as well as the row, like every path through
+        ``_remove_bundles`` -- a sweep that dropped only rows would leak the
+        bytes forever and leave them downloadable (download_archive gates on
+        the file existing and on tombstones, never on the row).
 
-        Returns ``gc_by_age``'s dict shape plus ``archive_deleted``, so callers
-        can feed the org storage counters unchanged.
+        Returns ``gc_by_age``'s dict shape plus ``yanked_at``, so callers can
+        feed the org storage counters unchanged.
 
         Never purges:
           * ``yanked_at IS NULL`` -- either never yanked, or yanked before the
@@ -2153,12 +2297,11 @@ class DbPackageIndex:
 
         *older_than_days* <= 0 means DISABLED and returns nothing.  It does not
         mean "purge everything" -- unlike gc_by_storage(0), where 0 legitimately
-        means evict-all.  Overloading 0 here would turn a misread config into
-        total destruction of every yanked bundle.
+        means evict everything but each coordinate's newest bundle.
+        Overloading 0 here would turn a misread config into total destruction
+        of every yanked bundle.
         """
         import datetime as _dt
-
-        from sqlalchemy import delete as sa_delete
 
         if older_than_days <= 0:
             return []
@@ -2179,134 +2322,163 @@ class DbPackageIndex:
                 .scalars()
                 .all()
             )
-            purged: list[dict] = []
-            for r in rows:
-                purged.append(
-                    {
-                        "name": r.name,
-                        "version": r.version,
-                        "size_bytes": r.size_bytes,
-                        "org_slug": r.org_slug,
-                        "platform": r.platform,
-                        "arch": r.arch,
-                        "build_type": r.build_type,
-                        "link": r.link,
-                        "yanked_at": r.yanked_at,
-                        "archive_deleted": False,
-                    }
-                )
+            purged = [{**_removed_dict(r), "yanked_at": r.yanked_at} for r in rows]
             if dry_run or not rows:
                 return purged
 
-            # Tombstone with reason="retention" before deleting -- a package that
-            # fell off the schedule is effectively nuked, and a consumer that
-            # pinned it should learn it was retired on a schedule, not that it
-            # never existed.
-            _record_tombstones(session, rows, reason=NUKE_REASON_RETENTION, nuked_by=nuked_by)
-            ids = [r.id for r in rows]
-            await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
-
-            # Rows go first: if the archive delete fails we would rather serve
-            # 404 for a purged bundle than keep a row whose bytes are gone.
-            if storage_uri:
-                from cvcpkg.server import archive_store
-
-                for r, rec in zip(rows, purged, strict=True):
-                    fname = (r.archive_url or "").rsplit("/", 1)[-1]
-                    if fname:
-                        rec["archive_deleted"] = archive_store.delete(storage_uri, fname)
+            # Tombstone with reason="retention" -- a package that fell off the
+            # schedule is effectively nuked, and a consumer that pinned it
+            # should learn it was retired on a schedule, not that it never
+            # existed.
+            gone = await _remove_bundles(
+                session,
+                rows,
+                reason=NUKE_REASON_RETENTION,
+                removed_by=nuked_by,
+                storage_uri=storage_uri,
+            )
+            for rec, g in zip(purged, gone, strict=True):
+                rec["archive_deleted"] = g
             return purged
 
-    async def gc_by_storage(self, max_bytes: int) -> list[dict]:
-        """Evict oldest non-release packages until total storage <= *max_bytes*.
+    async def gc_by_storage(
+        self,
+        max_bytes: int,
+        *,
+        storage_uri: str,
+        dry_run: bool = False,
+        removed_by: str = "cache-gc",
+    ) -> list[dict]:
+        """Evict the oldest non-release packages until storage <= *max_bytes*.
 
-        Returns list of deleted package info dicts.
+        Never evicts the newest bundle of a coordinate.  See ``gc``.
         """
-        from sqlalchemy import delete as sa_delete
+        return await self.gc(
+            max_storage_bytes=max_bytes,
+            storage_uri=storage_uri,
+            dry_run=dry_run,
+            removed_by=removed_by,
+        )
+
+    async def gc_by_staleness(
+        self,
+        valid_chain_hashes: Collection[str],
+        *,
+        storage_uri: str,
+        dry_run: bool = False,
+        removed_by: str = "cache-gc",
+    ) -> list[dict]:
+        """Delete non-release packages whose recipe_version is not in *valid_chain_hashes*.
+
+        See ``gc``.
+        """
+        return await self.gc(
+            valid_chain_hashes=valid_chain_hashes,
+            storage_uri=storage_uri,
+            dry_run=dry_run,
+            removed_by=removed_by,
+        )
+
+    async def gc(
+        self,
+        *,
+        storage_uri: str,
+        max_age_seconds: float | None = None,
+        max_storage_bytes: int | None = None,
+        valid_chain_hashes: Collection[str] | None = None,
+        dry_run: bool = False,
+        removed_by: str = "cache-gc",
+    ) -> list[dict]:
+        """The cache GC: evict non-yanked, non-release packages by rule.
+
+        Each rule given selects more bundles, in this order:
+
+        * ``max_age_seconds`` -- published longer ago than this;
+        * ``valid_chain_hashes`` -- a ``recipe_version`` not in the set;
+        * ``max_storage_bytes`` -- oldest published first, until what is
+          left (non-yanked, release-tagged included) fits.  This rule never
+          takes the newest bundle (by ``version_sort_key``) left in a
+          coordinate: with no release tags in use every row is "non-release",
+          so without it the oldest bundles would go first even when they are
+          a package's only build.
+
+        Storage runs last so it counts the bytes the other rules already
+        freed.  The selection happens in one transaction, so a *dry_run*
+        returns exactly what a real run would remove, and removes nothing.
+        A real run removes each selected bundle's row, archive and tombstone
+        (reason ``gc``) together, like ``delete``.
+
+        Returns one ``_removed_dict`` per selected bundle.
+        """
+        import datetime as _dt
 
         async with get_session() as session:
-            total_q = await session.execute(
-                select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0)).where(
-                    PackageRow.yanked.is_(False)
-                )
-            )
-            current = int(total_q.scalar_one())
-            if current <= max_bytes:
-                return []
-
-            # Fetch non-release packages ordered by oldest first.
-            candidates = (
+            live = (
                 (
                     await session.execute(
                         select(PackageRow)
-                        .where(
-                            PackageRow.yanked.is_(False),
-                            PackageRow.release_tag == "",
-                        )
-                        .order_by(PackageRow.published_at.asc())
+                        .where(PackageRow.yanked.is_(False))
+                        .order_by(PackageRow.published_at.asc(), PackageRow.id.asc())
                     )
                 )
                 .scalars()
                 .all()
             )
+            selected: dict[int, PackageRow] = {}
 
-            to_delete: list[dict] = []
-            ids_to_delete: list[int] = []
-            for row in candidates:
-                if current <= max_bytes:
-                    break
-                current -= row.size_bytes
-                to_delete.append(
-                    {
-                        "name": row.name,
-                        "version": row.version,
-                        "size_bytes": row.size_bytes,
-                        "org_slug": row.org_slug,
-                    }
-                )
-                ids_to_delete.append(row.id)
-
-            if ids_to_delete:
-                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids_to_delete)))
-            return to_delete
-
-    async def gc_by_staleness(self, valid_chain_hashes: set[str]) -> list[dict]:
-        """Delete non-release packages whose recipe_version is not in *valid_chain_hashes*.
-
-        Returns list of deleted package info dicts.
-        """
-        from sqlalchemy import delete as sa_delete
-
-        async with get_session() as session:
-            # Fetch non-release, non-yanked packages.
-            rows = (
-                (
-                    await session.execute(
-                        select(PackageRow).where(
-                            PackageRow.yanked.is_(False),
-                            PackageRow.release_tag == "",
-                            PackageRow.recipe_version != "",
+            if max_age_seconds is not None:
+                cutoff = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(seconds=max_age_seconds)
+                # Compare in SQL: SQLite hands datetimes back naive.
+                old_ids = set(
+                    (
+                        await session.execute(
+                            select(PackageRow.id).where(
+                                PackageRow.published_at < cutoff,
+                                PackageRow.yanked.is_(False),
+                                PackageRow.release_tag == "",
+                            )
                         )
                     )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
-            )
+                for r in live:
+                    if r.id in old_ids:
+                        selected[r.id] = r
 
-            stale = [r for r in rows if r.recipe_version not in valid_chain_hashes]
-            deleted = [
-                {
-                    "name": r.name,
-                    "version": r.version,
-                    "size_bytes": r.size_bytes,
-                    "org_slug": r.org_slug,
-                }
-                for r in stale
-            ]
-            if stale:
-                ids = [r.id for r in stale]
-                await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
-            return deleted
+            if valid_chain_hashes is not None:
+                valid = set(valid_chain_hashes)
+                for r in live:
+                    if (
+                        not r.release_tag
+                        and r.recipe_version
+                        and r.recipe_version not in valid
+                        and r.id not in selected
+                    ):
+                        selected[r.id] = r
+
+            if max_storage_bytes is not None:
+                left = [r for r in live if r.id not in selected]
+                current = sum(r.size_bytes for r in left)
+                keep = _newest_per_coordinate(left)
+                for r in left:
+                    if current <= max_storage_bytes:
+                        break
+                    if r.release_tag or r.id in keep:
+                        continue
+                    selected[r.id] = r
+                    current -= r.size_bytes
+
+            rows = list(selected.values())
+            if dry_run:
+                return [_removed_dict(r) for r in rows]
+            return await self._remove(
+                session,
+                rows,
+                reason=NUKE_REASON_GC,
+                removed_by=removed_by,
+                storage_uri=storage_uri,
+            )
 
 
 # ── DB Organization Store ───────────────────────────────────────

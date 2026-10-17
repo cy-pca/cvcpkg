@@ -12,6 +12,7 @@ socket, or cache directory is ever touched.
 
 from __future__ import annotations
 
+import json
 import urllib.error
 from unittest import mock
 
@@ -528,6 +529,39 @@ def test_cache_server_gc_max_size():
     assert res.exit_code == 0
     assert "GC removed 0 package(s)." in res.output
     assert b"max_storage_bytes" in captured["body"]
+    assert b"dry_run" not in captured["body"]
+
+
+def test_cache_server_gc_dry_run():
+    payload = {
+        "dry_run": True,
+        "deleted_count": 1,
+        "deleted_bytes": 2048,
+        "deleted": [{"name": "zlib", "version": "1.3.1+cvc.1", "size_bytes": 2048}],
+    }
+    captured = {}
+
+    def _fake(req, timeout=0):
+        captured["body"] = json.loads(req.data)
+        return _Resp(payload)
+
+    with mock.patch("urllib.request.urlopen", side_effect=_fake):
+        res = CliRunner().invoke(
+            cli,
+            [
+                "cache",
+                "server-gc",
+                "--server",
+                "https://srv.example",
+                "--max-size",
+                "0",
+                "--dry-run",
+            ],
+        )
+    assert res.exit_code == 0, res.output
+    assert captured["body"] == {"max_storage_bytes": 0, "dry_run": True}
+    assert "GC would remove 1 package(s), 2.0 KB (dry run)." in res.output
+    assert "zlib==1.3.1+cvc.1 (2048 bytes)" in res.output
 
 
 def test_cache_server_gc_no_options_errors():

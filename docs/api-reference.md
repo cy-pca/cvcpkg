@@ -460,14 +460,40 @@ POST /v1/admin/gc/yanked?older_than_days=365&dry_run=true
 
 Retention purges are audited under the `nuke` action with actor `retention-gc`.
 
+### Orphan archives
+
+An orphan is an archive file in storage that no package row references (in any
+yank state). Find them, admin only and dry-run by default:
+
+```
+POST /v1/admin/gc/orphans?dry_run=true&min_age_seconds=3600
+```
+
+Each orphan carries `filename`, `size_bytes` and `tombstoned`: `true` when a
+tombstone names it (its bundle was removed but the archive delete failed, so
+downloads already answer `410`), `false` when nothing accounts for it (left by
+`DELETE` before it removed archives; still downloadable until deleted).
+`dry_run=false` deletes them and writes no tombstone. Files modified within
+`min_age_seconds` (default 3600) are skipped, since populate moves an archive
+into place before inserting its row; only `*.tar.zst` names are considered. A
+mirror lists its orphans but refuses to delete them (`409`): its archive
+directory also caches proxied downloads that have no row.
+
 ### Nuked-package tombstones
 
 A nuked bundle's catalog row is hard-deleted (freeing the slot for republish),
 so a lightweight **tombstone** records that it existed and why it went away.
-Every nuke — manual or retention — writes one, carrying `reason` (`manual` = an
-admin's `cvcpkg nuke`, `retention` = fell off the schedule), `nuked_by`,
+Every path that removes a row for good writes one, carrying `reason`, `nuked_by`,
 `nuked_at`, and forensic context (sha256, sizes, the original `published_at` and
-`yanked_at`).
+`yanked_at`). The reasons:
+
+| `reason` | Written by |
+|---|---|
+| `manual` | an admin's `cvcpkg nuke` |
+| `retention` | the yank-retention purge |
+| `deleted` | `DELETE /v1/packages/{name}/{version}`, `DELETE /v1/packages/by-link/{platform}/{link}`, the `/admin` UI's delete |
+| `gc` | the cache GC (`POST /v1/cache/gc`, `DELETE /v1/cache`) |
+| `upstream` | a mirror following its upstream's nuke (the row stays, yanked) |
 
 `GET /v1/packages/{name}/tombstones` — records for `name`, newest first;
 narrow with the same scope query params. Private-org tombstones are visible only
@@ -481,9 +507,17 @@ still `404`.
 
 ### `DELETE /v1/packages/{name}/{version}`
 
-Delete a package's catalog row. Auth: `admin` only. **Legacy** — it accepts only
-`platform`/`link` scope (not `arch`/`build_type`) and does not delete the
-archive bytes. Prefer `nuke`, which has full scope and removes the archive.
+Delete a package's bundles: each catalog row, its archive bytes, and a
+tombstone (`reason: deleted`), so the download answers `410`. Auth: `admin`
+only. **Legacy scope** — it accepts only `platform`/`link` (not
+`arch`/`build_type`), and unlike `nuke` it does not require the bundle to be
+yanked first. Prefer `nuke`. Returns `removed` and `archives_deleted`; an
+archive another remaining row still references is kept.
+
+### `DELETE /v1/packages/by-link/{platform}/{link}`
+
+Delete every bundle with this platform and link mode, the same way: rows,
+archives and tombstones. Auth: `admin` only. `404` if nothing matches.
 
 ---
 
@@ -518,7 +552,9 @@ Bulk-purge non-release cache entries. Auth: `admin`.
 
 **Query Parameters**: `older_than` — only delete entries older than this
 duration (e.g. `14d`).  **Without it, every non-release package is
-removed.**  Returns `deleted_count` and the deleted rows.
+removed except the newest bundle of each coordinate** (the same rule as
+`max_storage_bytes: 0` below).  Archives and tombstones go with the rows.
+Returns `deleted_count` and the deleted rows.
 
 ### `GET /v1/cache/stats`
 
@@ -531,10 +567,26 @@ in the breakdown.
 Run garbage collection on cached packages. Auth: `admin`.
 
 **Body**: JSON with one or more of `max_age_seconds` (delete non-release
-packages older than this), `max_storage_bytes` (evict oldest to fit
-under the cap), `valid_chain_hashes` (list of current chain hashes —
-entries whose `recipe_version` is not in the set are stale and removed).
-`422` if none are given.
+packages older than this), `valid_chain_hashes` (list of current chain
+hashes — entries whose `recipe_version` is not in the set are stale and
+removed), `max_storage_bytes` (evict the oldest-published to fit under the
+cap). `422` if none are given; every rule is validated before anything is
+deleted. Rules apply in that order, so the storage rule counts the bytes the
+others already freed.
+
+`max_storage_bytes` **never evicts the newest bundle of a coordinate** (name,
+platform, arch, build type, link and org; newest by version, `+cvc.N`
+included). "Non-release" means an empty `release_tag`, which on a registry
+that does not use release tags is every row, so without this rule the oldest
+bundles would go first even when they are a package's only build.
+
+Each evicted bundle loses its row and its archive, and gets a tombstone
+(`reason: gc`), so its download answers `410`.
+
+Pass `"dry_run": true` to get the same list without deleting anything.
+Returns `dry_run`, `deleted_count`, `deleted_bytes`, and `deleted` (one entry
+per bundle with its coordinates, `size_bytes`, `org_slug` and
+`archive_deleted`).
 
 ---
 

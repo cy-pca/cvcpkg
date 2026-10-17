@@ -170,7 +170,15 @@ def cache_remove_cmd(chain_hash_val: str, platform: str, config: str, link: str)
     type=int,
     help="Remove entries not used within this many days.",
 )
-@click.option("--all", "purge_all", is_flag=True, help="Remove all cache entries.")
+@click.option(
+    "--all",
+    "purge_all",
+    is_flag=True,
+    help=(
+        "Remove all cache entries (on a --server, all but the newest of each "
+        "package/platform/arch/config/link/org)."
+    ),
+)
 @click.option(
     "--stale",
     is_flag=True,
@@ -198,7 +206,8 @@ def cache_purge_cmd(
         import urllib.request
 
         if purge_all:
-            # DELETE /v1/cache with no filters removes everything
+            # DELETE /v1/cache with no filters removes every non-release
+            # package but the newest of each coordinate
             url = f"{server.rstrip('/')}/v1/cache"
             req = urllib.request.Request(url, method="DELETE")
         elif stale:
@@ -323,15 +332,27 @@ def cache_server_stats_cmd(server: str, token: str) -> None:
 @click.option(
     "--max-size",
     default=None,
-    help="Maximum total storage (e.g. 10G). Evicts oldest non-release packages.",
+    help=(
+        "Maximum total storage (e.g. 10G). Evicts oldest non-release packages, "
+        "never the newest of a package/platform/arch/config/link/org."
+    ),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="List what would be removed without removing anything.",
 )
 def cache_server_gc_cmd(
     server: str,
     token: str,
     max_age_days: int | None,
     max_size: str | None,
+    dry_run: bool,
 ) -> None:
-    """Run garbage collection on the remote cache server (admin-only)."""
+    """Run garbage collection on the remote cache server (admin-only).
+
+    Removed packages lose their archive too, and their downloads answer 410.
+    """
     import urllib.error
     import urllib.request
 
@@ -344,6 +365,8 @@ def cache_server_gc_cmd(
         body["max_age_seconds"] = max_age_days * 86400.0
     if max_size is not None:
         body["max_storage_bytes"] = _parse_size(max_size)
+    if dry_run:
+        body["dry_run"] = True
 
     url = f"{server.rstrip('/')}/v1/cache/gc"
     payload = json.dumps(body).encode()
@@ -362,7 +385,11 @@ def cache_server_gc_cmd(
         raise SystemExit(1) from e
 
     count = data.get("deleted_count", 0)
-    click.echo(f"GC removed {count} package(s).")
+    if dry_run:
+        size = _human_size(data.get("deleted_bytes", 0))
+        click.echo(f"GC would remove {count} package(s), {size} (dry run).")
+    else:
+        click.echo(f"GC removed {count} package(s).")
     for d in data.get("deleted", []):
         click.echo(f"  {d['name']}=={d['version']} ({d['size_bytes']} bytes)")
 

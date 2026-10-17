@@ -45,6 +45,8 @@ logger = logging.getLogger("cvcpkg.server")
 # storage root where archives live.
 ARCHIVES_SUBDIR = "archives"
 STORAGE_CONFIG_FILE = "storage.yaml"
+# Every archive the server stores is named <name>-<version>-...-<link>.tar.zst.
+ARCHIVE_SUFFIX = ".tar.zst"
 
 _READ_CHUNK = 1 << 16  # 64 KiB
 
@@ -175,7 +177,14 @@ def delete(storage_uri: str, filename: str) -> bool:
     lp = local_path(storage_uri, filename)
     if lp is not None:
         existed = lp.is_file()
-        lp.unlink(missing_ok=True)
+        try:
+            lp.unlink(missing_ok=True)
+        except OSError:
+            # Callers delete the row first and the archive inside the same
+            # transaction; raising here would roll the rows back after earlier
+            # archives in the batch were already unlinked.
+            logger.exception("archive_store.delete: failed to delete %s", lp)
+            return False
         return existed
 
     backend = get_backend(storage_uri)
@@ -197,6 +206,33 @@ def delete(storage_uri: str, filename: str) -> bool:
             filename,
         )
         return False
+
+
+def list_archives(storage_uri: str) -> list[tuple[str, int, float | None]]:
+    """Every stored archive as ``(filename, size, mtime)``, sorted by name.
+
+    Only ``*.tar.zst`` names count: the publish, populate and mirror paths
+    stage under other suffixes (``.upload``, ``.populate``, ``.mirror`` ...)
+    in the same directory.  *mtime* is known only for a local backend
+    (None otherwise).  Raises if a remote backend cannot list.
+    """
+    root = local_root(storage_uri)
+    if root is not None:
+        out: list[tuple[str, int, float | None]] = []
+        if not root.is_dir():
+            return out
+        for p in sorted(root.iterdir()):
+            if not p.name.endswith(ARCHIVE_SUFFIX):
+                continue
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            if p.is_file():
+                out.append((p.name, st.st_size, st.st_mtime))
+        return out
+    names = get_backend(storage_uri).list(archive_uri(storage_uri, ""))
+    return [(n, size(storage_uri, n), None) for n in sorted(names) if n.endswith(ARCHIVE_SUFFIX)]
 
 
 def size(storage_uri: str, filename: str) -> int:

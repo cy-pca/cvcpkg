@@ -208,10 +208,13 @@ class PackageTombstoneRow(Base):
     """Record that a bundle variant was nuked, and why.
 
     A nuked ``packages`` row is hard-deleted (freeing the slot for republish),
-    so this is the only lasting per-package trace.  ``reason`` distinguishes a
-    manual ``cvcpkg nuke`` ("manual") from a retention-schedule expiry
-    ("retention"); ``nuked_by`` is the admin token name or "retention-gc".  It
-    drives the 410 Gone a pinned consumer gets instead of a bare 404.
+    so this is the only lasting per-package trace.  ``reason`` says which path
+    removed it: "manual" (``cvcpkg nuke``), "retention" (the yank-retention
+    schedule), "deleted" (the DELETE endpoints), "gc" (the cache GC) or
+    "upstream" (a mirror following its upstream); see the ``NUKE_REASON_*``
+    constants in db_stores.  ``nuked_by`` is the actor, e.g. the admin token
+    name or "retention-gc".  It drives the 410 Gone a pinned consumer gets
+    instead of a bare 404.
     """
 
     __tablename__ = "package_tombstones"
