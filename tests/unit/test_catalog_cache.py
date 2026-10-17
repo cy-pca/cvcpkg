@@ -15,6 +15,7 @@ that /healthz no longer builds the catalog at all.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import inspect
 import io
 import json
@@ -29,7 +30,7 @@ from fastapi.testclient import TestClient
 
 from cvcpkg.server import catalog_cache
 from cvcpkg.server.app import create_app
-from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, etag_matches
+from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, accepts_gzip, etag_matches
 from cvcpkg.server.models import TokenRole
 
 # ── Fixtures / helpers ──────────────────────────────────────────
@@ -313,6 +314,68 @@ class TestResponse:
             "/v1/catalog", headers={**_h(tok["pub"]), "If-None-Match": anon.headers["etag"]}
         )
         assert r.status_code == 200 and {b["name"] for b in r.json()["bundles"]} == {"secret"}
+
+
+class TestGzip:
+    """The cached body is gzipped once, not by GZipMiddleware on every request."""
+
+    def test_gzip_and_identity_carry_the_same_catalog(self, server):
+        client, tok = server
+        for i in range(8):  # past GZipMiddleware's minimum_size either way
+            _publish(client, tok["pub"], f"pkg{i}")
+        gz = client.get("/v1/catalog", headers={"Accept-Encoding": "gzip"})
+        plain = client.get("/v1/catalog", headers={"Accept-Encoding": "identity"})
+        assert gz.headers["content-encoding"] == "gzip"
+        assert "content-encoding" not in plain.headers
+        # httpx decodes once; a body gzipped twice would not parse.
+        assert gz.json() == plain.json()
+        assert "Accept-Encoding" in gz.headers["vary"]
+        assert gz.headers["etag"] == plain.headers["etag"][:-1] + '-gzip"'
+
+    def test_either_tag_revalidates(self, server):
+        client, tok = server
+        _publish(client, tok["pub"], "zlib")
+        plain_tag = client.get("/v1/catalog", headers={"Accept-Encoding": "identity"}).headers[
+            "etag"
+        ]
+        gz_tag = client.get("/v1/catalog", headers={"Accept-Encoding": "gzip"}).headers["etag"]
+        for accept in ("gzip", "identity"):
+            for tag in (plain_tag, gz_tag):
+                r = client.get(
+                    "/v1/catalog", headers={"Accept-Encoding": accept, "If-None-Match": tag}
+                )
+                assert r.status_code == 304, (accept, tag)
+
+    def test_compressed_once_per_base(self):
+        body = _body()
+
+        async def run():
+            first = await body.render_gzip("http://a")
+            assert await body.render_gzip("http://a/") is first
+            for base in ("http://b", "http://c", "http://d", "http://e"):
+                await body.render_gzip(base)
+            return first
+
+        first = asyncio.run(run())
+        assert json.loads(gzip.decompress(first)) == json.loads(body.render("http://a"))
+        assert len(body._gzipped) == 4 and "http://a" not in body._gzipped
+
+    @pytest.mark.parametrize(
+        "header, expected",
+        [
+            ("gzip", True),
+            ("gzip, deflate, br", True),
+            ("br;q=1.0, gzip;q=0.5", True),
+            ("*", True),
+            ("x-gzip", True),
+            ("gzip;q=0", False),
+            ("identity", False),
+            ("", False),
+            ("deflate, br", False),
+        ],
+    )
+    def test_accepts_gzip(self, header, expected):
+        assert accepts_gzip(header) is expected
 
 
 class TestHealthz:

@@ -6,6 +6,11 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
+import json
+import os
+import zlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -22,8 +27,36 @@ GITHUB_CATALOG_URL = "https://transfix.github.io/libcvc-deps/catalog/latest.yaml
 _MAX_CATALOG_BYTES = 50 * 1024 * 1024  # 50 MB safety limit
 
 
-def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
-    """Fetch a URL and return the raw bytes.
+@dataclass(frozen=True)
+class _Fetched:
+    """One catalog response.  A 304 has no body: the caller's copy is current."""
+
+    status: int
+    body: bytes
+    etag: str = ""
+    content_type: str = ""
+
+
+def _gunzip(data: bytes, url: str, max_bytes: int) -> bytes:
+    """Decompress a gzip body, holding the result to *max_bytes*."""
+    d = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    try:
+        out = d.decompress(data, max_bytes + 1)
+    except zlib.error as e:
+        raise CatalogError(f"catalog at {url} is not valid gzip: {e}") from e
+    if len(out) > max_bytes or d.unconsumed_tail:
+        raise CatalogError(f"catalog at {url} exceeds {max_bytes} byte limit")
+    if not d.eof:
+        # A gzip stream cut short is a transport fault, like a body short of its
+        # Content-Length, so it is retried rather than parsed.
+        raise http.client.IncompleteRead(out)
+    return out
+
+
+def _fetch_url(
+    url: str, *, max_bytes: int = _MAX_CATALOG_BYTES, if_none_match: str = ""
+) -> _Fetched:
+    """Fetch a catalog URL.
 
     Raises :class:`CatalogError` if the response exceeds *max_bytes*.
 
@@ -31,6 +64,10 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
     servers, CDNs, and API gateways answer HEAD with 403/405/501 even
     when GET works.  If HEAD fails or is refused, we skip the pre-check
     and rely on the streaming byte cap below.
+
+    Over HTTP(S) the request asks for gzip (the registry's catalog is ~7 MB
+    of JSON and ~0.5 MB compressed) and, given *if_none_match*, revalidates:
+    the result's status is then 304 when that ETag is still current.
     """
     from cvcpkg.config import authorize_request
     from cvcpkg.storage import get_backend
@@ -40,6 +77,11 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
     # Pages fallback and any other host, this leaves the URL unchanged and sends
     # no header, so the token never leaves our origin.
     url, auth = authorize_request(url)
+    headers = dict(auth)
+    if url.startswith(("https://", "http://")):
+        headers["Accept-Encoding"] = "gzip"
+        if if_none_match:
+            headers["If-None-Match"] = if_none_match
 
     try:
         backend = get_backend(url)
@@ -53,7 +95,12 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
             raise CatalogError(f"catalog at {url} is {info.size} bytes, exceeds {max_bytes} limit")
         chunks: list[bytes] = []
         total = 0
-        with backend.open(url, headers=auth) if auth else backend.open(url) as stream:
+        with backend.open(url, headers=headers) if headers else backend.open(url) as stream:
+            status = getattr(stream, "status", None) or 200
+            resp_headers = getattr(stream, "headers", None) or {}
+            etag = resp_headers.get("ETag") or ""
+            if status == 304:
+                return _Fetched(304, b"", etag or if_none_match)
             while True:
                 chunk = stream.read(1 << 16)  # 64 KB
                 if not chunk:
@@ -62,11 +109,76 @@ def _fetch_url(url: str, *, max_bytes: int = _MAX_CATALOG_BYTES) -> bytes:
                 if total > max_bytes:
                     raise CatalogError(f"catalog at {url} exceeds {max_bytes} byte limit")
                 chunks.append(chunk)
-        return b"".join(chunks)
+        body = b"".join(chunks)
+        if (resp_headers.get("Content-Encoding") or "").strip().lower() == "gzip":
+            body = _gunzip(body, url, max_bytes)
+        return _Fetched(200, body, etag, resp_headers.get("Content-Type") or "")
     except CatalogError:
         raise
     except Exception as e:
         raise CatalogError(f"failed to fetch {url}: {e}") from e
+
+
+def _parse_catalog(data: bytes, content_type: str = "") -> dict:
+    """Parse a catalog body: JSON from the registry, YAML from static hosts.
+
+    The registry's /v1/catalog is ~7 MB of JSON.  ``yaml.safe_load`` reads
+    JSON too, but took 19 s on it where ``json.loads`` takes 60 ms.
+    """
+    if "json" in content_type.lower() or data.lstrip()[:1] == b"{":
+        try:
+            return json.loads(data)
+        except ValueError:
+            pass  # a YAML flow mapping also starts with "{"
+    return yaml.safe_load(data)
+
+
+class _CatalogCache:
+    """The last catalog fetched from each URL, by credential, with its ETag.
+
+    Kept flat in ``<cache_dir>/catalog/`` as ``<key>.body`` and
+    ``<key>.json``.  The key hashes the URL with the Authorization header
+    the request carries, so a body fetched with one token (one set of
+    private orgs) is never revalidated or reused with another.
+    """
+
+    def __init__(self, cache_dir: Path, url: str) -> None:
+        from cvcpkg.config import authorize_request
+
+        url, auth = authorize_request(url)
+        key = hashlib.sha256(f"{url}\0{auth.get('Authorization', '')}".encode()).hexdigest()
+        self._dir = cache_dir / "catalog"
+        self._body = self._dir / f"{key[:32]}.body"
+        self._meta = self._dir / f"{key[:32]}.json"
+
+    def load(self) -> tuple[str, bytes, str] | None:
+        """(etag, body, content_type) when an intact copy with an ETag is cached."""
+        try:
+            meta = json.loads(self._meta.read_text())
+            body = self._body.read_bytes()
+        except (OSError, ValueError):
+            return None
+        etag = meta.get("etag") or ""
+        if not etag or hashlib.sha256(body).hexdigest() != meta.get("sha256"):
+            return None
+        return etag, body, meta.get("content_type") or ""
+
+    def store(self, etag: str, body: bytes, content_type: str) -> None:
+        meta = {
+            "etag": etag,
+            "sha256": hashlib.sha256(body).hexdigest(),
+            "content_type": content_type,
+        }
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+            # Write-then-rename, body first: a concurrent cvcpkg either sees the
+            # old pair or one whose sha256 check fails and refetches.
+            for path, data in ((self._body, body), (self._meta, json.dumps(meta).encode())):
+                tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+                tmp.write_bytes(data)
+                os.replace(tmp, path)
+        except OSError:
+            pass  # a read-only or full cache only costs the next full download
 
 
 def fetch_catalog(
@@ -76,11 +188,13 @@ def fetch_catalog(
     expected_sha256: str = "",
     fallback_urls: list[str] | None = None,
 ) -> dict:
-    """Fetch a catalog YAML and return it as a dict.
+    """Fetch a catalog (JSON or YAML) and return it as a dict.
 
     Tries *url* first, then each URL in *fallback_urls* in order.
-    If *cache_dir* is given, cache the raw bytes under
-    ``<cache_dir>/catalog/<sha256>.yaml``.
+    If *cache_dir* is given, the body is kept under ``<cache_dir>/catalog/``
+    with its ETag, and the next fetch of the same URL with the same
+    credentials sends ``If-None-Match``: a 304 reuses the kept copy instead
+    of downloading the catalog again.
     """
     url = url or default_catalog_url()
 
@@ -88,11 +202,20 @@ def fetch_catalog(
     last_error: Exception | None = None
 
     for try_url in urls_to_try:
+        cache = _CatalogCache(cache_dir, try_url) if cache_dir else None
+        cached = cache.load() if cache else None
         try:
             # Retry the whole body, not only connection setup: a catalog cut
             # off mid-transfer (the server restarting under a deploy) raises a
             # transient TruncatedBody from the https backend.
-            data = with_retry(lambda u=try_url: _fetch_url(u), what=f"fetch catalog {try_url}")
+            fetched = with_retry(
+                lambda u=try_url, tag=(cached[0] if cached else ""): _fetch_url(
+                    u, if_none_match=tag
+                ),
+                what=f"fetch catalog {try_url}",
+            )
+            if fetched.status == 304 and not cached:
+                raise CatalogError(f"{try_url} answered 304 to a request with no ETag")
         except CatalogError as e:
             last_error = e
             if len(urls_to_try) > 1:
@@ -102,6 +225,11 @@ def fetch_catalog(
                 print("cvcpkg: trying next catalog source...", file=sys.stderr)
             continue
 
+        if fetched.status == 304:
+            _, data, content_type = cached
+        else:
+            data, content_type = fetched.body, fetched.content_type
+
         actual_sha = hashlib.sha256(data).hexdigest()
 
         if expected_sha256 and actual_sha != expected_sha256:
@@ -109,12 +237,10 @@ def fetch_catalog(
                 f"catalog sha256 mismatch: expected {expected_sha256}, got {actual_sha}"
             )
 
-        if cache_dir:
-            cat_cache = cache_dir / "catalog"
-            cat_cache.mkdir(parents=True, exist_ok=True)
-            (cat_cache / f"{actual_sha}.yaml").write_bytes(data)
+        if cache and fetched.status != 304 and fetched.etag:
+            cache.store(fetched.etag, data, content_type)
 
-        return yaml.safe_load(data)
+        return _parse_catalog(data, content_type)
 
     raise CatalogError(f"all catalog sources failed; last error: {last_error}")
 

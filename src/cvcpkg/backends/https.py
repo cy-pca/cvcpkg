@@ -151,7 +151,16 @@ class HttpsBackend(StorageBackend):
 
         def _once() -> BinaryIO:
             req = urllib.request.Request(uri, headers=hdrs)
-            resp = urllib.request.urlopen(req, timeout=120)  # noqa: S310
+            try:
+                resp = urllib.request.urlopen(req, timeout=120)  # noqa: S310
+            except urllib.error.HTTPError as exc:
+                # A 304 answers a conditional request (If-None-Match): the
+                # caller's copy is current.  urllib raises it like an error;
+                # hand it back instead, with its status and headers, and no
+                # body to read.  Only a caller that sent a validator gets one.
+                if exc.code != 304:
+                    raise
+                resp = exc
             return _CheckedBody(resp)  # type: ignore[return-value]
 
         try:
