@@ -93,6 +93,24 @@ case "${CVC_PLATFORM}" in
         export CXXFLAGS="${CXXFLAGS//-I\/usr\/local\/include/}"
         ;;
 esac
+# NetBSD: the same for pkgsrc's /usr/pkg, and for the link too.  CPython bakes
+# its build flags into sysconfig (CFLAGS, LDFLAGS, LDSHARED), and setuptools
+# puts those FIRST on every extension's command line, ahead of the extension's
+# own -I/-L and of the environment's flags.  With env-netbsd.sh's
+# -I/usr/pkg/include -L/usr/pkg/lib -Wl,-R/usr/pkg/lib in them, every C
+# extension later built against this interpreter took pkgsrc's headers and
+# libraries over cvcpkg's: cffi-cp312 linked pkgsrc's libffi.so.8 instead of
+# cvcpkg's libffi.so.12 and could not load, and pyyaml-cp312 came out without
+# libyaml (dev cluster, python312 cvc.15).  CPython needs nothing from pkgsrc
+# -- its deps are all in CVC_DEPS_PREFIX -- so it also stops picking up an
+# optional pkgsrc library (gdbm, ...) that happens to be installed.
+if [ "${CVC_PLATFORM}" = "netbsd" ]; then
+    export CFLAGS="${CFLAGS//-I\/usr\/pkg\/include/}"
+    export CXXFLAGS="${CXXFLAGS//-I\/usr\/pkg\/include/}"
+    export CPPFLAGS="${CPPFLAGS//-I\/usr\/pkg\/include/}"
+    LDFLAGS="${LDFLAGS//-Wl,-R\/usr\/pkg\/lib/}"
+    export LDFLAGS="${LDFLAGS//-L\/usr\/pkg\/lib/}"
+fi
 
 # On macOS ensure the deployment target is propagated.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then

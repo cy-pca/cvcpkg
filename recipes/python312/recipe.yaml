@@ -78,7 +78,12 @@ recipe:
   # there loads.  Both rows are yanked, and a yanked variant cannot be published
   # again under the same version, hence the bump.  Other platforms rebuild
   # unchanged.
-  cvc_revision: 15
+  # cvc.16: NetBSD's sysconfig no longer carries pkgsrc's -I/usr/pkg/include
+  # -L/usr/pkg/lib -Wl,-R/usr/pkg/lib (_common/build-python.sh).  setuptools puts
+  # those first on every C extension's line, so cvc.15's NetBSD interpreter made
+  # cffi-cp312 link pkgsrc's libffi.so.8 and pyyaml-cp312 lose libyaml; cvc.15's
+  # NetBSD bundle is on the dev registry and cannot be replaced in place.
+  cvc_revision: 16
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
