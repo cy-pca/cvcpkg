@@ -28,6 +28,22 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **Webhooks for the whole package lifecycle.** `package.yanked`,
+  `package.unyanked`, `package.deleted` and `package.nuked` join
+  `package.published`. Each fires once per package version and org, lists the
+  variants that changed, and names the actor; delete and nuke add a `reason`
+  (`deleted`, `gc`, `mirror-evict`, `manual`, `retention`). They come from the
+  API, the `/admin` buttons, the cache GC, mirror eviction and the
+  yank-retention GC.
+- **Fix:** a chunked-upload publish fired `package.published` to the *global*
+  webhooks even for an org's package (a private org's included), and never to
+  the org's own webhooks. It is now scoped to the org, like a single-shot
+  publish.
+
+---
+
 ## v2.5.1
 
 **A release so the builder fleet updates.** Builders self-update only to a
