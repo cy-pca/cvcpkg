@@ -67,6 +67,11 @@ on:
         required: false
         default: true
         type: boolean
+      deps:
+        description: "Also build dependencies whose recipe revision is not published (off: build only the named recipes)"
+        required: false
+        default: true
+        type: boolean
 
 concurrency:
   group: populate-server
@@ -158,6 +163,16 @@ jobs:
             SKIP_EXISTING=(--no-skip-existing)
           fi
 
+          # Auto-deps add every dependency whose exact recipe revision is not
+          # published, so a leaf-only republish (pyrsistent) would also rebuild
+          # any interpreter master has bumped.  deps=false submits the named
+          # recipes alone; their deps come from the catalog as published.
+          if [[ "${{ inputs.deps }}" == "true" ]]; then
+            DEPS=(--deps)
+          else
+            DEPS=(--no-deps)
+          fi
+
           # Tee the submit output so the follow step can tell "nothing needed
           # building" apart from "jobs were staged and then went missing".
           # Without that distinction a run that stages work and observes none
@@ -170,6 +185,7 @@ jobs:
             --dag-id "$DAG_ID" \
             --recipes-dir recipes \
             ${SKIP_EXISTING[@]+"${SKIP_EXISTING[@]}"} \
+            "${DEPS[@]}" \
             "${RECIPES[@]}" | tee /tmp/submit.log
 
           # Sum "Staged N job(s) for <tuple>" and "Staged N noarch job(s) for
