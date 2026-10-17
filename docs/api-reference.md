@@ -1026,10 +1026,43 @@ Deliveries are JSON bodies of the form
 `X-CvcPkg-Event`, `X-CvcPkg-Delivery` (unique id), and
 `X-CvcPkg-Signature: sha256=<hex>` — an HMAC-SHA256 of the body keyed by
 the webhook's secret.  Failed deliveries are retried with backoff.
-Events include `package.published`, the `build.*` lifecycle
-(`build.started`, `build.completed`, `build.succeeded`, `build.failed`,
-`build.cancelled`, `build.timed_out`, `build.unschedulable`), and
-`builder.online` / `builder.offline`.
+Events include the package lifecycle (`package.published`,
+`package.yanked`, `package.unyanked`, `package.deleted`, `package.nuked`),
+the `build.*` lifecycle (`build.started`, `build.completed`,
+`build.succeeded`, `build.failed`, `build.cancelled`, `build.timed_out`,
+`build.unschedulable`), and `builder.online` / `builder.offline`.  Subscribe
+to `*` for every event.
+
+A webhook with an `org_slug` receives only that org's package events, and a
+global webhook (empty `org_slug`) only packages with no org, so a private org's
+packages never reach another org's or a global endpoint.
+
+`package.published` names one bundle (`name`, `version`, `platform`, `arch`,
+`org`).  The other package events fire once per package version and org that
+changed, and list the bundles that changed:
+
+```json
+{"event": "package.yanked", "timestamp": "2026-10-17T18:02:11Z",
+ "data": {"name": "python312", "version": "3.12.10+cvc.14", "org": "",
+          "variants": [{"platform": "netbsd", "arch": "x86_64",
+                        "build_type": "release", "link": "shared"}],
+          "count": 1, "actor": "joe"}}
+```
+
+A yank or unyank lists only the bundles whose state it changed; re-yanking an
+already-yanked bundle fires nothing.  `package.deleted` and `package.nuked`
+add `reason`:
+
+| Event | `reason` | Fired by |
+|---|---|---|
+| `package.deleted` | `deleted` | `DELETE /v1/packages/{name}/{version}`, `DELETE /v1/packages/by-link/...`, the `/admin` delete button (actor `admin-ui`) |
+| `package.deleted` | `gc` | `POST /v1/cache/gc`, `DELETE /v1/cache` |
+| `package.deleted` | `mirror-evict` | a mirror evicting bundles to fit its storage budget |
+| `package.nuked` | `manual` | `POST /v1/packages/{name}/{version}/nuke` |
+| `package.nuked` | `retention` | the yank-retention GC (actor `retention-gc`) and `POST /v1/admin/gc/yanked` |
+
+A mirror or edge following its upstream's yanks and nukes during a populate
+sync does not fire these events.
 
 ### `POST /v1/webhooks`
 

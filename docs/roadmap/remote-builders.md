@@ -237,6 +237,9 @@ stays in `pending` until all prerequisite jobs reach `succeeded`.
 | Event | Trigger | Payload |
 |-------|---------|---------|
 | `package.published` | New package version published | Package metadata (name, version, platform, arch, org) |
+| `package.yanked` / `package.unyanked` | Bundles yanked or unyanked | name, version, org, the changed variants, actor |
+| `package.deleted` | Bundles deleted (API, admin UI, cache GC, mirror eviction) | name, version, org, variants, actor, reason |
+| `package.nuked` | Bundles nuked (manual or yank retention) | name, version, org, variants, actor, reason |
 | `build.started` | Builder claims a job | Job ID, recipe, platform, builder name |
 | `build.completed` | Job finishes successfully | Job ID, recipe, platform, archive URL, duration |
 | `build.failed` | Job fails | Job ID, recipe, platform, error message |
