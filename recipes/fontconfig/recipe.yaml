@@ -17,7 +17,15 @@ recipe:
   # dladdr (Windows' DllMain already does this). fonts.conf drops the staging
   # <cachedir> and gains <dir prefix="relative">../../share/fonts</dir>, so fonts
   # installed into the prefix are found (build.sh, build.ps1).
-  cvc_revision: 4
+  # cvc.5: relocatable on Windows too. "Windows' DllMain already does this" was
+  # wrong for this build: fccfg.c compiles DllMain only with PIC or DLL_EXPORT,
+  # which meson never defines, so cvc.4's DLL (the first Windows bundle) logged
+  # the same "Cannot load default config file" and ignored etc\fonts.  build.ps1
+  # now passes -DDLL_EXPORT.  windows-realpath.patch fixes the fonts.conf
+  # <dir prefix="relative">../../share/fonts</dir> on Windows: with MSVC's
+  # 128-byte FC_PATH_MAX, a fonts.conf more than 128 characters deep resolved
+  # that dir against the current directory.  Unix code is unchanged.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -39,6 +47,9 @@ patches:
   # Unix: look for etc/fonts relative to the loaded library (dladdr) before
   # the compiled-in path. Guarded by a meson dladdr check and !_WIN32.
   - unix-relocatable-config.patch
+  # Windows: FcStrRealPath's GetFullPathNameA got a 128-byte buffer (MSVC has
+  # no PATH_MAX) and ignored a too-small result. Touches only the _WIN32 branch.
+  - windows-realpath.patch
 
 depends:
   build:
@@ -58,6 +69,11 @@ depends:
     # too: gperf's build.ps1 compiles it with MSVC, and meson's
     # --wrap-mode=nofallback (Invoke-CvcMesonBuild) refuses the wrap.
     - gperf
+    # The Windows expat bundle has no expat.pc (expat's CMake build installs
+    # none under MSVC), so meson finds expat through its CMake package, which
+    # needs cmake.  Undeclared, it worked only where the builder had cmake.
+    - name: cmake
+      platforms: [windows]
   runtime:
     - name: freetype
       version: "^2.13"
