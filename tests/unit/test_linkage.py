@@ -267,7 +267,11 @@ def _openssl_cvc6(root):
 
 def test_library_index_and_origin_dirs(tmp_path):
     _openssl_cvc6(tmp_path)
-    (tmp_path / "lib" / "libssl.so").symlink_to("libssl.so.3")
+    try:
+        (tmp_path / "lib" / "libssl.so").symlink_to("libssl.so.3")
+    except (OSError, NotImplementedError):
+        # Windows without SeCreateSymbolicLinkPrivilege (WinError 1314).
+        pytest.skip("cannot create symlinks on this host")
     index = library_index([tmp_path])
     assert index["libssl.so.3"] == {"lib"} and index["libssl.so"] == {"lib"}
     assert index["padlock.so"] == {"lib/engines-3"}

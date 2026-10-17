@@ -18,6 +18,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from cvcpkg.cli._builder import (
     _TC_CACHE_MARKER,
     _publish_toolchain_cache,
@@ -65,6 +67,15 @@ def test_symlink_merge_publishes_top_level_files(tmp_path: Path) -> None:
     prefix = tmp_path / "prefix"
     (prefix / "bin").mkdir(parents=True)  # a dependency already installed here
     (prefix / "bin" / "cmake").write_text("#!/bin/sh\n")
+
+    # _symlink_merge_into links; on Windows that needs
+    # SeCreateSymbolicLinkPrivilege (WinError 1314 without it). CI runners have it.
+    probe = tmp_path / ".symlink-probe"
+    try:
+        probe.symlink_to("probe-target")
+    except (OSError, NotImplementedError):
+        pytest.skip("cannot create symlinks on this host")
+    probe.unlink()
 
     _symlink_merge_into(cache, prefix)
 
