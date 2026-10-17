@@ -10,6 +10,7 @@ library it did not contain, and packing said nothing.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -100,6 +101,45 @@ def test_genuinely_missing_artifact_is_reported(tmp_path: Path) -> None:
     prefix = _tree(tmp_path, ("include/foo.h",))
     assert check_declared_files(prefix, ["lib/libfoo*", "include/foo.h"], "linux") == [
         "lib/libfoo*"
+    ]
+
+
+def test_dangling_symlink_counts_as_shipped(tmp_path: Path) -> None:
+    """The python3 meta-recipe ships links whose targets are in python313.
+
+    bin/python3 -> python3.13 dangles in python3's own staged tree. On Python
+    <= 3.11 pathlib's glob missed it, so python3 failed to pack on the BSD
+    builders while Linux and macOS (newer Python) packed it fine.
+    """
+    (tmp_path / "bin").mkdir()
+    try:
+        for link, target in (
+            ("python3", "python3.13"),
+            ("python3-config", "python3.13-config"),
+            ("pip3", "pip3.13"),
+        ):
+            os.symlink(target, tmp_path / "bin" / link)
+    except OSError:
+        pytest.skip("creating symlinks is not permitted here")
+    declared = ["bin/python3", "bin/python3-config", "bin/pip3"]
+    assert check_declared_files(tmp_path, declared, "freebsd") == []
+
+
+def test_literal_entry_falls_back_to_lexists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Simulate Python <= 3.11's glob, which skips a dangling link; no symlink rights needed."""
+    prefix = _tree(tmp_path, ("bin/other",))
+    link = prefix / "bin" / "python3"
+    real_lexists = os.path.lexists
+    monkeypatch.setattr(Path, "glob", lambda self, pattern: iter(()))
+    monkeypatch.setattr(os.path, "lexists", lambda p: Path(p) == link or real_lexists(p))
+    assert check_declared_files(prefix, ["bin/python3"], "freebsd") == []
+    # Still reported: a literal path that is not there at all, and a wildcard
+    # entry (pathlib lists the directory for those, so lexists is not consulted).
+    assert check_declared_files(prefix, ["bin/pip3", "bin/python3*"], "freebsd") == [
+        "bin/pip3",
+        "bin/python3*",
     ]
 
 

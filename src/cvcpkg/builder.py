@@ -2808,6 +2808,9 @@ def generate_manifest(
 # ── Staging & archiving ─────────────────────────────────────────
 
 
+# pathlib's glob metacharacters: an entry without them names one literal path.
+_GLOB_MAGIC = re.compile(r"[*?[]")
+
 # Extensions that only ever exist on one platform. An entry naming one of
 # these is not REQUIRED to match when packing for a different platform -- see
 # check_declared_files. Measured against the catalog: 84 declared entries in
@@ -2926,6 +2929,16 @@ def check_declared_files(
             except (NotImplementedError, ValueError):
                 # A pattern pathlib cannot compile is a recipe bug, but it is
                 # not evidence of a missing artifact -- do not fail the build.
+                satisfied = True
+                break
+            # A symlink whose target ships in another package still ships: the
+            # python3 meta-recipe's bin/python3 -> python3.13 points into
+            # python313.  Before Python 3.12, pathlib's glob tests a literal
+            # path component with exists(), which follows the link, so on the
+            # BSD builders (Python 3.11) that dangling link matched nothing and
+            # python3 failed to pack.  Wildcard components list the directory
+            # and already see it; only a literal entry needs lexists().
+            if not _GLOB_MAGIC.search(entry) and os.path.lexists(install_dir / entry):
                 satisfied = True
                 break
         if not satisfied:
