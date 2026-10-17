@@ -38,10 +38,22 @@ function Invoke-GrpcFetchArchive {
     if ($Url -like '*.zip') {
         Expand-Archive -Path $archivePath -DestinationPath $extractDir
     } else {
-        # Windows ships bsdtar (libarchive) as tar.exe; it does not accept the
-        # GNU-only --force-local flag but already handles drive-letter paths
-        # correctly when they are passed with forward slashes.
-        tar -xzf ($archivePath -replace '\\','/') -C ($extractDir -replace '\\','/')
+        # `tar` on the windows-2022 runner resolves to Git's GNU tar, which
+        # reads any argument with a drive-letter colon (C:\... or C:/...) as a
+        # remote "host:path" spec and aborts with "Cannot connect to C:" --
+        # forward slashes don't help, only --force-local does, and the bsdtar
+        # on other images rejects that flag. Sidestep both tar flavors: run from
+        # $tmp with relative names, so no argument contains a colon. ($archivePath
+        # and $extractDir are both direct children of $tmp.)
+        Push-Location $tmp
+        try {
+            tar -xzf 'archive' -C 'extract'
+            if ($LASTEXITCODE -ne 0) {
+                throw "tar extraction of $Url failed (exit $LASTEXITCODE)"
+            }
+        } finally {
+            Pop-Location
+        }
     }
     $parentDir = Split-Path -Parent $Dest
     if (-not (Test-Path $parentDir)) {
