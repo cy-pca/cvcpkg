@@ -74,6 +74,12 @@ services:
             CVCPKG_SERVER_REQUIRE_AUTH_READS: ${REQUIRE_AUTH_READS:-}
             CVCPKG_MAX_UPLOAD_BYTES: ${CVCPKG_MAX_UPLOAD_BYTES:-4294967296}
             CVCPKG_RATE_LIMIT_RPM: ${CVCPKG_RATE_LIMIT_RPM:-300}
+            # Storage caps (bytes, or "250GB") and yank retention.  Empty keeps
+            # the server's defaults: 100 GiB global, 10 GiB per org, retention off.
+            CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES: ${CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES:-}
+            CVCPKG_ORG_STORAGE_LIMIT_BYTES: ${CVCPKG_ORG_STORAGE_LIMIT_BYTES:-}
+            CVCPKG_YANK_RETENTION_DAYS: ${CVCPKG_YANK_RETENTION_DAYS:-}
+            CVCPKG_YANK_GC_INTERVAL: ${CVCPKG_YANK_GC_INTERVAL:-}
             CVCPKG_CORS_ORIGINS: ${CVCPKG_CORS_ORIGINS:-}
             CVCPKG_LOG_JSON: ${CVCPKG_LOG_JSON:-}
             # ── Sign in with tx.wtf (OIDC) ─────────────────────

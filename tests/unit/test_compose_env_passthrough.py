@@ -31,6 +31,12 @@ _REQUIRED = [
     "CVCPKG_AUTH_GC_INTERVAL",
     # /v1/catalog cache lifetime.
     "CVCPKG_CATALOG_CACHE_TTL",
+    # Storage caps and yank retention.  On 2026-10-17 cvcpkg.org hit the
+    # 100 GiB global cap, and setting the var in .env.production did nothing.
+    "CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES",
+    "CVCPKG_ORG_STORAGE_LIMIT_BYTES",
+    "CVCPKG_YANK_RETENTION_DAYS",
+    "CVCPKG_YANK_GC_INTERVAL",
     # Multi-issuer SSO: the display label for the bare provider and the JSON
     # array of additional providers.
     "CVCPKG_OIDC_DISPLAY_NAME",
@@ -54,3 +60,37 @@ def test_example_documents_var(var):
     if not example.is_file():
         pytest.skip(".env.production.example not present")
     assert f"{var}=" in example.read_text(), f"{var} is undocumented in .env.production.example"
+
+
+def test_empty_passthrough_keeps_server_defaults():
+    """``${VAR:-}`` injects an empty string; the server must still import.
+
+    int("") raised at import for these before, so passing them through compose
+    would have stopped the backend booting on any deployment that left them unset.
+    """
+    import os
+    import subprocess
+    import sys
+
+    pytest.importorskip("fastapi", reason="server extras not installed")
+    env = dict(os.environ)
+    for var in (
+        "CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES",
+        "CVCPKG_ORG_STORAGE_LIMIT_BYTES",
+        "CVCPKG_YANK_RETENTION_DAYS",
+        "CVCPKG_YANK_GC_INTERVAL",
+    ):
+        env[var] = ""
+    code = (
+        "import cvcpkg.server.app as a;"
+        "print(a.GLOBAL_CACHE_STORAGE_LIMIT_BYTES, a.ORG_STORAGE_LIMIT_BYTES,"
+        " a._YANK_RETENTION_DAYS, a._YANK_GC_INTERVAL)"
+    )
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split() == [str(100 * 1024**3), str(10 * 1024**3), "0", "21600"]
+
+    env["CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES"] = "250GB"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.split()[0] == str(250 * 1024**3)
