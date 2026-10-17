@@ -587,6 +587,7 @@ _READS = {
         "check_duplicate",
         "mirrored_keys",
         "stranded_upstreams",
+        "variants",
         "get_tombstones",
         "get_tombstone_by_filename",
         "archive_filename_states",

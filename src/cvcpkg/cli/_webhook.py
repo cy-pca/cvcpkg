@@ -26,7 +26,11 @@ def webhook_group() -> None:
     "events",
     multiple=True,
     required=True,
-    help="Event(s) to subscribe to (can be repeated).",
+    help=(
+        "Event(s) to subscribe to (can be repeated), e.g. package.published, "
+        "package.yanked, package.unyanked, package.deleted, package.nuked, "
+        "build.failed, builder.offline, or * for all."
+    ),
 )
 @click.option(
     "--server",
