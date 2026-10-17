@@ -640,6 +640,7 @@ _WRITES_OUTSIDE_THE_CATALOG = {"add_member", "remove_member", "update_storage_us
 _READS = {
     "DbPackageIndex": {
         "get_archive_org",
+        "get_archive_coords",
         "get_archive_is_yanked",
         "get_bundles",
         "get_search_facets",

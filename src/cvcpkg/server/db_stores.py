@@ -1143,6 +1143,33 @@ class DbPackageIndex:
                 )
             ).scalar()
 
+    async def get_archive_coords(self, archive_name: str) -> dict[str, str] | None:
+        """``name``/``version``/``platform``/``arch`` of the package whose archive
+        is *archive_name* (any yank state), or None when no row has it.
+
+        Download analytics key on these.  A live row wins if a yanked one shares
+        the file name (a variant republished after its yank).
+        """
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(
+                        PackageRow.name, PackageRow.version, PackageRow.platform, PackageRow.arch
+                    )
+                    .where(_archive_url_like(archive_name))
+                    .order_by(PackageRow.yanked.asc(), PackageRow.id.desc())
+                    .limit(1)
+                )
+            ).first()
+        if row is None:
+            return None
+        return {
+            "name": row.name,
+            "version": row.version,
+            "platform": row.platform,
+            "arch": row.arch or "",
+        }
+
     async def get_archive_is_yanked(self, archive_name: str) -> bool | None:
         """Yank state of the package owning *archive_name*, None if no row.
 

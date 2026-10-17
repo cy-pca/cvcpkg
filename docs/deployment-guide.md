@@ -54,6 +54,10 @@ curl http://localhost:8420/healthz
 | `TIMEZONE` | `UTC` | Container timezone |
 | `CVCPKG_MAX_UPLOAD_BYTES` | `4294967296` | Max bundle upload size (4 GiB). Accepts `8GB`/`512MB`; same as `cvcpkg-server run --max-upload-bytes`. |
 | `CVCPKG_RATE_LIMIT_RPM` | `300` | Rate limit: requests/min per client IP on write endpoints (publish, upload, register, telemetry); `0` disables. `docker-compose.production.yml` passes the same `300` default. |
+| `CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES` | `100GiB` | Cap on the total size of all non-yanked bundles; a publish past it gets 413. `0` = unlimited. Accepts `250GB`. Yanked bundles still use disk until nuked, so size the disk above the cap. |
+| `CVCPKG_ORG_STORAGE_LIMIT_BYTES` | `10GiB` | Storage quota given to each new organization. Accepts `50GB`. |
+| `CVCPKG_YANK_RETENTION_DAYS` | `0` | Purge a yanked bundle's row and archive this many days after its yank; `0` never purges. Goes by yank age, not by use. |
+| `CVCPKG_YANK_GC_INTERVAL` | `21600` | Seconds between yank-retention GC runs. |
 | `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
 | `CVCPKG_LOG_JSON` | *(empty)* | Set `1` for structured JSON logs |
 | `CVCPKG_OIDC_ISSUER` | *(empty)* | OIDC provider, e.g. `https://tx.wtf`. **All four of ISSUER/CLIENT_ID/CLIENT_SECRET/REDIRECT_URL must be set together**; with any missing, `/admin/oidc/login` answers 404 and the dashboard keeps bearer-token login. |
