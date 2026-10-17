@@ -39,7 +39,11 @@ recipe:
   # python3-embed.pc, libpython3.so, pydoc3/pydoc3.13 and idle3/idle3.13.  In a
   # shared prefix they replaced python313's, and numpy-cp313 compiled against
   # the free-threaded headers (undefined _Py_DecRefShared).
-  cvc_revision: 9
+  # cvc.10: republish NetBSD -- its NetBSD cvc.9 bundle (dev registry) was built before
+  # _common/build-python.sh stopped baking pkgsrc's -I/usr/pkg/include -L/usr/pkg/lib
+  # into sysconfig, which made every C extension built against it prefer pkgsrc's
+  # libraries (python312 cvc.16/cvc.17).
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
