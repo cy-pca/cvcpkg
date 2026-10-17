@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import datetime
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
 from cvcpkg.optional import require_sqlalchemy
@@ -936,7 +936,16 @@ class BuildJobDepRow(Base):
         primary_key=True,
     )
 
-    __table_args__ = (UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),)
+    # Both lookups need their own index: the scheduler walks edges from a job
+    # to what it depends on AND from a job to its dependents.  Migration 010
+    # created these only on databases where it also created the table, so a
+    # table that create_all made first had neither (cvcpkg.org's, which
+    # postgres had scanned in full 1.7M times); migration 031 adds them.
+    __table_args__ = (
+        UniqueConstraint("job_id", "depends_on_job_id", name="uq_build_job_dep"),
+        Index("ix_build_job_deps_job_id", "job_id"),
+        Index("ix_build_job_deps_depends_on", "depends_on_job_id"),
+    )
 
 
 # ── Engine / session management ─────────────────────────────────
@@ -1186,11 +1195,33 @@ async def atomic_session() -> AsyncGenerator[AsyncSession, None]:
             raise
         finally:
             _current_session.reset(token)
+        for fn in session.info.pop(_AFTER_COMMIT_KEY, ()):
+            fn()
 
 
 def in_atomic_session() -> bool:
     """True when an ambient unit-of-work session is active."""
     return _current_session.get() is not None
+
+
+_AFTER_COMMIT_KEY = "cvcpkg_after_commit"
+
+
+def run_after_commit(fn: Callable[[], None]) -> None:
+    """Call *fn* once the caller's writes are visible to other sessions.
+
+    Outside ``atomic_session`` every ``get_session()`` block has committed by
+    the time the store method that opened it returns, so *fn* runs now.
+    Inside one, nothing is committed until the block ends: *fn* runs after
+    that commit, and not at all if the block rolls back.  Anything another
+    request may read in the meantime (a cache, say) must not be told about a
+    change before then, or it would reread the old rows and keep them.
+    """
+    ambient = _current_session.get()
+    if ambient is None:
+        fn()
+    else:
+        ambient.info.setdefault(_AFTER_COMMIT_KEY, []).append(fn)
 
 
 # ── Audit-append serialization ─────────────────────────────────
