@@ -23,7 +23,15 @@ $jobs       = if ($env:CVC_JOBS) { [int]$env:CVC_JOBS } else { 4 }
 if ($jobs -le 0) { $jobs = 4 }
 
 $env:MSYSTEM          = 'MINGW64'
-$env:MSYS_NO_PATHCONV = '1'
+# Leave MSYS2's argument path conversion ON (no MSYS_NO_PATHCONV), as
+# Invoke-CvcMsysAutotoolsBuild does.  libtool converts paths for the native
+# toolchain with `cmd //c echo <path>`, which relies on MSYS turning `//c` into
+# `/c`.  With conversion off, cmd.exe got a literal `//c`, started an
+# interactive shell and waited on stdin: on the dev Windows builder every
+# libtool link hung there (libmp3lame #17744, libogg #17745), holding the
+# builder's only job slot for days.  Conversion also hands the native gcc
+# -IC:/... for an MSYS -I/c/... argument, which it can open.
+Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
 $env:CHERE_INVOKING   = '1'
 
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |

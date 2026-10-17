@@ -2,7 +2,10 @@ schema_version: 1
 recipe:
   name: lame
   upstream_version: "3.100"
-  cvc_revision: 1
+  # cvc.2: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
+  # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
+  # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
