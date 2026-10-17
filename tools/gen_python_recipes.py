@@ -1902,6 +1902,15 @@ _PURE_BUILD_ENV: dict[str, dict[str, str]] = {
     # setup.py: BUILD_EXTENSION=no drops websockets.speedups (frame masking in C;
     # the pure-Python fallback is the same API).
     "websockets": {"BUILD_EXTENSION": "no"},
+    # setup.py: PYRSISTENT_SKIP_EXTENSION (any value) drops pvectorc, the C
+    # PVector; pyrsistent/_pvector.py falls back to the pure-Python one.  Without
+    # it the dev `any` bundle shipped pvectorc.cpython-312-darwin.so.
+    "pyrsistent": {"PYRSISTENT_SKIP_EXTENSION": "1"},
+    # setup.py: FONTTOOLS_WITH_CYTHON unset means "compile the Cython speedups
+    # if Cython happens to be importable", so the noarch column depended on the
+    # claiming builder's prefix: dev's 4.63.0+cvc.3 `any` bundle carries six
+    # cpython-312-darwin.so modules.  "0" pins the pure-Python modules.
+    "fonttools": {"FONTTOOLS_WITH_CYTHON": "0"},
 }
 
 
