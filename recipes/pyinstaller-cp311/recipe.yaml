@@ -9,7 +9,9 @@ recipe:
   # "No module named 'pathspec'". Build-env only; the artifact is unchanged.
   # Bumped 2 -> 3: netbsd-ldd-format.patch (see patches:); NetBSD bundles collect their
   # shared libraries.  Other platforms' artifacts are unchanged.
-  cvc_revision: 3
+  # Bumped 3 -> 4: netbsd-tls-pad.patch (see patches:); NetBSD frozen programs
+  # no longer run 10-100x slow.  Other platforms' artifacts are unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -53,6 +55,19 @@ patches:
   # are bundled and a frozen script runs under env -i.  Worth upstreaming next to
   # pyinstaller/pyinstaller#9496.
   - netbsd-ldd-format.patch
+  # NetBSD 10's ld.elf_so takes the lock-free path of __tls_get_addr() only for
+  # `idx < DTV_MAX_INDEX`, so the module with the highest TLS index pays a
+  # sigprocmask() pair and an _lwp_self() on every thread-local access.  The
+  # bootloader dlopen()s libpython after everything else, so libpython is that
+  # module, and CPython reads its thread state from a thread-local on nearly
+  # every call: the frozen cvcpkg took 19 s for `--version` and 1,725 s for
+  # `validate recipes/zlib` on netbsd-build-2.  The patch builds a one-variable
+  # TLS library next to the NetBSD bootloader, collects it beside libpython,
+  # and has the bootloader load it right after libpython, which lifts the
+  # maximum index past libpython's.  Measured there: 1.5 s and 14.6 s.  Fixed in
+  # NetBSD's own tls.c 1.34 (`<=`, 2026-07), which no NetBSD 10 release
+  # carries; drop this once the BSD builders run a release that does.
+  - netbsd-tls-pad.patch
 
 depends:
   build:

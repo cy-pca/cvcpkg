@@ -1902,6 +1902,10 @@ _PURE_BUILD_ENV: dict[str, dict[str, str]] = {
     # setup.py: BUILD_EXTENSION=no drops websockets.speedups (frame masking in C;
     # the pure-Python fallback is the same API).
     "websockets": {"BUILD_EXTENSION": "no"},
+    # setup.py: PYRSISTENT_SKIP_EXTENSION (any value) drops pvectorc, the C
+    # PVector; pyrsistent falls back to its Python one.  Without it the cp312
+    # column went out as any/noarch holding pvectorc.cpython-312-darwin.so.
+    "pyrsistent": {"PYRSISTENT_SKIP_EXTENSION": "1"},
 }
 
 

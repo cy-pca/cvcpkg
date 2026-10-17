@@ -90,6 +90,20 @@ so the NetBSD binary is built from a PyInstaller source tree with
 applied (submitted upstream). The other five platforms use the same
 PyInstaller version from PyPI.
 
+Two more NetBSD patches go on top.
+[`netbsd-ldd-format.patch`](../recipes/pyinstaller-cp313/netbsd-ldd-format.patch)
+teaches PyInstaller NetBSD's `ldd` output, which has no load address; without it
+the binary bundles no shared library and loads the host's libz and libssl.
+[`netbsd-tls-pad.patch`](../recipes/pyinstaller-cp313/netbsd-tls-pad.patch)
+is a speed fix. NetBSD 10's `ld.elf_so` skips its lock-free
+`__tls_get_addr()` path for the module with the highest TLS index (fixed in
+NetBSD's `tls.c` 1.34, in no NetBSD 10 release). The bootloader `dlopen()`s
+libpython last, so libpython is that module, and CPython touches a
+thread-local on almost every call. Without the patch a frozen `cvcpkg` spent
+19 s on `--version` and 1,725 s on `validate recipes/zlib`, nearly all of
+it in `sigprocmask()`. The patch has the bootloader load a one-variable TLS
+library right after libpython.
+
 ### Related: the jsonschema pin
 
 `jsonschema` is likewise no longer core — it moved behind the `[validate]`

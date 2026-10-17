@@ -900,3 +900,32 @@ class TestSubmitDagDiskPropagation:
         assert len(jobs) == 1
         assert jobs[0]["min_disk_gb"] == 35
         assert "cuda" in jobs[0]["required_capabilities"]
+
+    def test_space_and_glibc_floor_must_come_from_the_same_builder(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """The linux glibc floor rides along with the disk check too.
+
+        The 2.35 host is too small and the roomy host runs 2.39, so neither
+        can claim a 35 GiB job carrying the 2.35 floor.
+        """
+        monkeypatch.setenv("CVCPKG_GLIBC_FLOOR", "2.35")
+        _write_disk_recipe(tmp_path, "haiku-image", min_disk=35)
+        small_235 = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"glibc2.35": True, "glibc2.39": True},
+            "free_disk_gb": 26,
+        }
+        roomy_239 = {
+            "platform": "linux",
+            "arch": "x86_64",
+            "capabilities": {"glibc2.39": True},
+            "free_disk_gb": 500,
+        }
+        posted: list = []
+        assert (
+            _submit_dag(tmp_path, monkeypatch, posted, [small_235, roomy_239], "haiku-image") == 0
+        )
+        assert [j for b in posted for j in b["jobs"]] == []
+        assert "no registered builder has enough free disk" in capsys.readouterr().out

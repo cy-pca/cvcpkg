@@ -1163,6 +1163,7 @@ def _pack_built(
     from cvcpkg.builder import (
         create_archive,
         enforce_declared_files,
+        enforce_noarch_wheels,
         generate_manifest,
         stage_bundle,
     )
@@ -1172,6 +1173,7 @@ def _pack_built(
     enforce_declared_files(
         ctx.install_dir, ctx.recipe.package_files, plat, ctx.recipe.name, strict=strict_globs
     )
+    enforce_noarch_wheels(ctx.install_dir, plat, ctx.recipe.name)
     manifest = generate_manifest(
         ctx.recipe,
         ctx.install_dir,

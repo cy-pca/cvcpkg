@@ -95,6 +95,13 @@ for mod in websockets.sync.client httpx cryptography.hazmat.primitives.asymmetri
     grep -Eq "^[[:space:]]*${mod//./\\.}\$" "${CVC_BUILD_DIR}/archive.txt" \
         || { echo "cvcpkg: ${mod} is not bundled in ${BIN}" >&2; exit 1; }
 done
+# NetBSD: the TLS pad the bootloader loads after libpython (pyinstaller-cp312's
+# netbsd-tls-pad.patch).  Without it the binary still passes every check above,
+# only 10-100x slower: 19 s for --version.
+if [ "${CVC_PLATFORM}" = netbsd ]; then
+    grep -Eq '^[[:space:]]*libpyi_tlspad\.so$' "${CVC_BUILD_DIR}/archive.txt" \
+        || { echo "cvcpkg: libpyi_tlspad.so is not bundled in ${BIN} (pyinstaller-cp312 too old?)" >&2; exit 1; }
+fi
 
 # ── 4. Stage ─────────────────────────────────────────────────────────────────
 mkdir -p "${CVC_INSTALL_DIR}/bin"
