@@ -241,7 +241,7 @@ def install(
         load_catalog_from_file,
         newer_revision_available,
     )
-    from cvcpkg.errors import InstallError, IntegrityError, SchemaError
+    from cvcpkg.errors import InstallError, IntegrityError, ResolveError, SchemaError
     from cvcpkg.installer import (
         build_from_source_fallback,
         install_entry,
@@ -365,6 +365,9 @@ def install(
     #   github → GitHub Pages only, no fallback
     catalog_url = catalog or ""
     catalog_failed = False
+    # Set on the default (root-authoritative) path when the root is a different
+    # server: appended to the "nothing resolved" errors below.
+    root_hint = ""
     if skip_catalog:
         catalog_failed = True
         cat = {"bundles": []}
@@ -382,6 +385,7 @@ def install(
                 # fallback to the local mirror.  No-op when root == server.
                 from cvcpkg.catalog import fetch_authoritative_catalog
 
+                root_hint = _root_resolution_hint()
                 cat = fetch_authoritative_catalog(cache_dir=default_cache_dir())
         except Exception as exc:
             if not fallback_to_source:
@@ -462,7 +466,9 @@ def install(
             candidates.setdefault(e.name, []).append(e)
 
         if not entries and not fallback_to_source:
-            raise click.ClickException("no bundles found in catalog for this platform tuple.")
+            raise click.ClickException(
+                "no bundles found in catalog for this platform tuple." + root_hint
+            )
 
         if entries:
             from cvcpkg.resolver import resolve
@@ -510,7 +516,12 @@ def install(
                 or _local_only(c.name) is not None
             ]
             if resolvable:
-                result = resolve(resolvable, candidates, local_only=_local_only)
+                try:
+                    result = resolve(resolvable, candidates, local_only=_local_only)
+                except ResolveError as exc:
+                    if not root_hint:
+                        raise
+                    raise ResolveError(f"{exc}{root_hint}") from exc
                 picked = result.picked
                 local_built = result.local
             if tool_picked:
@@ -615,7 +626,9 @@ def install(
             + ", ".join(source_only)
         )
     if not picked and not source_only:
-        raise click.ClickException("no bundles found in catalog for this platform tuple.")
+        raise click.ClickException(
+            "no bundles found in catalog for this platform tuple." + root_hint
+        )
 
     # Every explicitly requested (non-excluded) component must have landed in
     # either `picked` or `source_only` — otherwise it was silently dropped
@@ -898,6 +911,33 @@ def install(
     from cvcpkg.cli._telemetry import maybe_send_telemetry
 
     maybe_send_telemetry(os.environ.get("CVCPKG_SERVER_URL", ""))
+
+
+def _root_resolution_hint() -> str:
+    """Explain root-authoritative resolution when the root is another server.
+
+    With ``CVCPKG_SERVER_URL`` set and ``CVCPKG_ROOT_URL`` left at its default,
+    every PUBLIC bundle comes from cvcpkg.org and the configured server's own
+    public bundles are ignored (docs/clusters-and-federation.md).  Pointing the
+    client at a standalone registry -- a dev server, say -- then fails on
+    packages that registry has and the root lacks, with nothing saying where the
+    catalog came from.  Empty when there is no separate root.
+    """
+    from cvcpkg.config import (
+        default_catalog_url,
+        default_root_catalog_url,
+        default_root_url,
+        default_server_url,
+    )
+
+    if default_root_catalog_url() == default_catalog_url():
+        return ""
+    server, root = default_server_url(), default_root_url()
+    return (
+        f"\nPublic packages resolve from the root registry {root} (CVCPKG_ROOT_URL); "
+        f"{server} supplies only organization packages.  To install {server}'s own "
+        f"public packages, set CVCPKG_ROOT_URL={server}."
+    )
 
 
 def _activation_hint(plat: str, prefix: Path) -> str:

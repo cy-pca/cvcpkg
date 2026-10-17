@@ -117,3 +117,87 @@ class TestFetchAuthoritative:
                 server_catalog_url="https://edge/v1/catalog",
                 root_catalog_url="https://root/v1/catalog",
             )
+
+
+def _plat(name, platform, version="1.0.0+cvc.1", **kw):
+    return {
+        "name": name,
+        "version": version,
+        "org": "",
+        "platform": platform,
+        "arch": "x86_64",
+        "build_type": "release",
+        "link": "shared",
+        **kw,
+    }
+
+
+class TestInstallNamesTheRoot:
+    """A server's own public bundles are ignored while the root is another
+    server (test_root_public_only_no_local_public_leaks), so pointing
+    CVCPKG_SERVER_URL at a standalone registry fails on what only it has.  The
+    error has to say where the public catalog came from, or it reads as "the
+    server has no such bundle" (netbsd-build-2 against the dev registry)."""
+
+    def _install(self, monkeypatch, tmp_path, root_bundles, server_bundles, *names, root=""):
+        from click.testing import CliRunner
+
+        from cvcpkg.cli import cli
+
+        def fake_fetch(url, **kw):
+            return _cat(*(server_bundles if "edge.invalid" in url else root_bundles))
+
+        monkeypatch.setattr(catalog_mod, "fetch_catalog", fake_fetch)
+        for var in ("CVCPKG_CATALOG_URL", "CVCPKG_ROOT_CATALOG_URL"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("CVCPKG_SERVER_URL", "http://edge.invalid:8420")
+        if root:
+            monkeypatch.setenv("CVCPKG_ROOT_URL", root)
+        else:
+            monkeypatch.delenv("CVCPKG_ROOT_URL", raising=False)
+        argv = [
+            "install",
+            *names,
+            "--prefix",
+            str(tmp_path / "px"),
+            "--platform",
+            "netbsd",
+            "--arch",
+            "x86_64",
+        ]
+        return CliRunner().invoke(cli, argv)
+
+    def test_nothing_for_the_tuple_names_the_root(self, monkeypatch, tmp_path):
+        result = self._install(
+            monkeypatch, tmp_path, [_plat("zlib", "linux")], [_plat("zlib", "netbsd")], "zlib"
+        )
+        assert result.exit_code != 0
+        assert "no bundles found in catalog for this platform tuple." in result.output
+        assert "Public packages resolve from the root registry https://cvcpkg.org" in result.output
+        assert "CVCPKG_ROOT_URL=http://edge.invalid:8420" in result.output
+
+    def test_unsatisfiable_dependency_names_the_root(self, monkeypatch, tmp_path):
+        from cvcpkg.errors import ResolveError
+
+        root = [
+            _plat("attrs-cp312", "any", arch="noarch", required_deps=[{"name": "python312"}]),
+            _plat("python312", "linux"),
+        ]
+        result = self._install(
+            monkeypatch, tmp_path, root, [_plat("python312", "netbsd")], "attrs-cp312"
+        )
+        assert isinstance(result.exception, ResolveError), result.output
+        assert "python312" in str(result.exception)
+        assert "CVCPKG_ROOT_URL=http://edge.invalid:8420" in str(result.exception)
+
+    def test_no_hint_when_the_server_is_the_root(self, monkeypatch, tmp_path):
+        result = self._install(
+            monkeypatch,
+            tmp_path,
+            [],
+            [_plat("zlib", "linux")],
+            "zlib",
+            root="http://edge.invalid:8420",
+        )
+        assert "no bundles found in catalog for this platform tuple." in result.output
+        assert "CVCPKG_ROOT_URL" not in result.output
