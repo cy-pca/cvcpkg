@@ -9,7 +9,10 @@ recipe:
   # bootloader loads a TLS pad after libpython (netbsd-tls-pad.patch there).
   # 2.5.1+cvc.1 for NetBSD took 19 s per invocation, even `--version`; the
   # other platforms' binaries are unchanged.
-  cvc_revision: 2
+  # Bumped 2 -> 3: build.ps1 also looks in lib\python3.12\site-packages, where
+  # a fleet builder leaves the noarch deps (prod job #20190 failed without
+  # it), so the Windows column builds on the fleet.  Other platforms unchanged.
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
