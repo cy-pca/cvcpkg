@@ -201,7 +201,10 @@ def _recipes(tmp_path):
     return rdir
 
 
-def _install_deps_calls(tmp_path, *extra):
+def _install_deps_calls(tmp_path, *extra, host="windows"):
+    """install-deps for windows; *host* is pinned, so a native build is native
+    whatever OS runs the test (on a Linux runner --platform windows alone is a
+    cross build, which installs host tools in a pass of their own)."""
     rdir = _recipes(tmp_path)
     with mock.patch("cvcpkg.cli._install.install") as inst:
         main(
@@ -213,6 +216,8 @@ def _install_deps_calls(tmp_path, *extra):
                 "--no-default-recipes",
                 "--platform",
                 "windows",
+                "--host-platform",
+                host,
                 "--link",
                 "static",
                 *extra,
@@ -231,3 +236,11 @@ def test_install_deps_marks_included_host_tools(tmp_path):
     (call,) = _install_deps_calls(tmp_path, "--include-host-tools")
     assert "ninja" in call["components"]
     assert set(call["build_tools"]) == {"pkg-config", "cmake", "ninja"}
+
+
+def test_cross_build_marks_tools_in_both_passes(tmp_path):
+    host, target = _install_deps_calls(tmp_path, "--include-host-tools", host="linux")
+    assert (host["platform"], set(host["components"])) == ("linux", {"ninja"})
+    assert set(host["build_tools"]) == {"ninja"}
+    assert target["platform"] == "windows"
+    assert set(target["build_tools"]) == {"pkg-config", "cmake"}
