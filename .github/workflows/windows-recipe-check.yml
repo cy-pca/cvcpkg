@@ -15,8 +15,10 @@
 # Usage:
 #   gh workflow run windows-recipe-check -f recipe=gsl
 #   gh workflow run windows-recipe-check -f recipe=vtk -f platform=wasm
-# (wasm/wasm-mt sets up the emsdk and builds the dep closure from source, so it
-#  proves a recipe's build-wasm.ps1 actually cross-compiles on a Windows host.)
+# (wasm/wasm-mt sets up the emsdk, installs the recipe's declared wasm deps from
+#  the catalog and builds the recipe itself from source, so it proves a recipe's
+#  build-wasm.ps1 actually cross-compiles on a Windows host -- including a
+#  recipe that has never been published.)
 #   gh workflow run windows-recipe-check -f recipe=openmp -f runner=windows-2022 -f deps=catalog
 #   gh workflow run windows-recipe-check --ref <branch> -f recipe=msvc -f accept_license=true
 #   gh workflow run windows-recipe-check --ref <branch> -f recipe=zlib -f msvc=cvcpkg -f accept_license=true
@@ -295,22 +297,26 @@ jobs:
           prefix="${{ github.workspace }}/prefix"
           if [[ "$platform" == wasm* ]]; then
             export CVC_EMSDK_DIR="$EMSDK"
-            # Populate the prefix with the target's PREBUILT runtime dep closure
-            # from the catalog, then build ONLY the target from source via its
+            # Populate the prefix with the target's PREBUILT dep closure from the
+            # catalog, then build ONLY the target from source via its
             # build-wasm.ps1 (--host-platform windows selects the windows-host
             # matrix entry -- the script this check exists to exercise).
             #
-            # `cvcpkg install <recipe>` (not install-deps, not --with-deps) is the
-            # right populate step here: it fetches the recipe's RUNTIME closure
-            # only -- never the cmake/ninja build tools (recipes declare those
-            # under depends.build; they come from the cvcpkg build-tools step above) -- and it
-            # runs no tests. --with-deps rebuilds the whole closure and runs each
-            # dep's wasm node-smoke test, which fails on a hosted Windows runner;
-            # install-deps additionally tries to resolve cmake/ninja for wasm and
-            # dies. Installing the recipe's own (stale) bundle is harmless: the
-            # build below overwrites it. Recipe-agnostic (no hardcoded dep list).
-            cvcpkg install "$recipe" --platform "$platform" --arch wasm32 \
-              --config "$config" --link static --prefix "$prefix" --no-fallback-to-source
+            # `cvcpkg install-deps recipes/<recipe>` (not --with-deps) is the
+            # populate step: it installs the deps THIS checkout's recipe declares
+            # for the target, and runs no tests. Cross-compiling, it treats
+            # depends.build entries with no wasm build (cmake/ninja) as host tools
+            # and leaves them out -- they come from the cvcpkg build-tools step
+            # above -- and a recipe with no wasm deps installs nothing. --with-deps
+            # rebuilds the whole closure and runs each dep's wasm node-smoke test,
+            # which fails on a hosted Windows runner. `cvcpkg install <recipe>`
+            # (the old step) installs the recipe's own published bundle, so it
+            # failed outright for a recipe not yet in the catalog ("no bundles
+            # found in catalog") -- the one a recipe PR most needs to check.
+            # Recipe-agnostic (no hardcoded dep list).
+            cvcpkg install-deps "recipes/$recipe" --platform "$platform" --arch wasm32 \
+              --config "$config" --link static --prefix "$prefix" --recipes-dir recipes \
+              --host-platform windows
             echo "cvcpkg build $recipe --platform $platform --link static --no-deps --host-platform windows"
             cvcpkg build "$recipe" --local --recipes-dir recipes --config "$config" \
               --prefix "$prefix" --platform "$platform" --link static \
