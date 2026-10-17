@@ -68,6 +68,7 @@ from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
 from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, etag_matches
 from cvcpkg.server.models import (
+    ActivityResponse,
     AuditAction,
     AuditLogResponse,
     BackfillDepsRequest,
@@ -78,6 +79,7 @@ from cvcpkg.server.models import (
     BuilderInfo,
     BuilderListResponse,
     BuilderRegisterRequest,
+    BuilderSystemStats,
     BuilderUpdateRequest,
     BuildJobAlreadyClaimedError,
     BuildJobClaimRequest,
@@ -105,6 +107,7 @@ from cvcpkg.server.models import (
     OrgListResponse,
     OrgRole,
     OrgUpdateRequest,
+    PackageEventKind,
     PackageInfo,
     PackageListResponse,
     ProfileUpdateRequest,
@@ -508,6 +511,18 @@ _db_builders = None  # DbBuilderStore when using DB backend
 _db_build_jobs = None  # DbBuildJobStore when using DB backend
 _db_recipes = None  # DbRecipeStore when using DB backend
 _db_webhooks = None  # DbWebhookStore when using DB backend
+_db_events = None  # DbPackageEventStore when using DB backend (activity feed)
+_live_hub = None  # live.LiveHub when using DB backend (/v1/live/ws)
+
+
+#: Audit actions that change what the activity feed or the builders page shows.
+_LIVE_ACTIVITY_ACTIONS = frozenset({"publish", "yank", "unyank", "delete", "nuke"})
+
+
+def _live_poke(topic: str | None = None) -> None:
+    """Tell live pages that *topic* changed (a no-op with nobody watching)."""
+    if _live_hub is not None:
+        _live_hub.poke(topic)
 
 
 def _get_state() -> ServerState:
@@ -604,6 +619,11 @@ async def _audit_txn(
                 if not ctx.skip:
                     await _db_audit.record(action, actor, ctx.target, ctx.detail)
             # atomic_session commits here, still holding the append lock.
+        # Committed: live pages may read it now.
+        if action.value in _LIVE_ACTIVITY_ACTIONS:
+            _live_poke("activity")
+        elif action.value.startswith("builder_"):
+            _live_poke("builders")
     else:
         yield ctx
         if not ctx.skip:
@@ -1051,6 +1071,20 @@ async def emit_webhook_event(
 _ws_builders: dict[int, WebSocket] = {}
 
 
+def _ws_system_stats(raw) -> BuilderSystemStats | None:
+    """A heartbeat frame's ``system`` figures, or None when absent or malformed.
+
+    The REST heartbeat validates them through its request model; the socket
+    reads raw JSON, and a bad figure must cost the figures, not the beat.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return BuilderSystemStats.model_validate(raw)
+    except ValueError:
+        return None
+
+
 def _ws_forget(builder_id: int, ws: WebSocket) -> None:
     """Drop *ws* from the registry -- only if it is still the registered one.
 
@@ -1072,6 +1106,10 @@ def _ws_forget(builder_id: int, ws: WebSocket) -> None:
 # job-plane access until the builder happens to disconnect.  Re-checking on this
 # cadence bounds that exposure without hitting the token store on every frame.
 _WS_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_WS_REAUTH_INTERVAL", "30"))
+
+# How often (seconds) the live hub polls for changes nobody told it about while
+# a page watches /v1/live/ws: another worker's publish, the reaper, a CLI GC.
+_LIVE_POLL_INTERVAL = float(os.environ.get("CVCPKG_LIVE_POLL_INTERVAL", "2"))
 
 
 def _ws_reauth_rejection(actor: TokenRecord | None) -> tuple[int, str] | None:
@@ -1447,6 +1485,8 @@ async def _build_scheduler_loop() -> None:
             #    on any other builder that inherited the DAG is blocked
             #    until the (long) build timeout kicks in.
             reaped_builders = await _db_builders.reap_stale(max_age_seconds=180)
+            if reaped_builders:
+                _live_poke("builders")
             for builder in reaped_builders:
                 orphaned = await _db_build_jobs.list_active_by_builder(builder.id)
                 for job in orphaned:
@@ -1596,6 +1636,7 @@ async def _build_scheduler_loop() -> None:
                     status="busy" if chosen.current_jobs + 1 >= chosen.max_jobs else "online",
                     current_jobs=chosen.current_jobs + 1,
                 )
+                _live_poke("builders")
                 chosen.current_jobs += 1  # update in-memory for this loop iteration
                 _debit_disk(chosen, job)
 
@@ -2245,7 +2286,13 @@ async def _enforce_mirror_budget() -> int:
         # next sync and must not answer 410 meanwhile.  The archives are
         # unlinked just below.
         await _db_packages.delete(
-            name, version, platform=platform, link=link, storage_uri="", tombstone=False
+            name,
+            version,
+            platform=platform,
+            link=link,
+            storage_uri="",
+            tombstone=False,
+            deleted_by="mirror-evict",
         )
         for fname in groups[cand.key]["archives"]:
             (state.archives_dir() / fname).unlink(missing_ok=True)
@@ -2335,6 +2382,7 @@ def create_app(
         global _db_build_jobs
         global _db_recipes
         global _db_webhooks
+        global _db_events, _live_hub
         _START_TIME = time.monotonic()
         sd = state_dir or Path(os.environ.get("CVCPKG_SERVER_STATE_DIR", "/var/lib/cvcpkg-server"))
 
@@ -2360,6 +2408,7 @@ def create_app(
                 DbDownloadStore,
                 DbMirrorStore,
                 DbOrgStore,
+                DbPackageEventStore,
                 DbPackageIndex,
                 DbRecipeStore,
                 DbTagStore,
@@ -2392,6 +2441,19 @@ def create_app(
             _db_build_jobs = DbBuildJobStore()
             _db_recipes = DbRecipeStore()
             _db_webhooks = DbWebhookStore()
+            _db_events = DbPackageEventStore()
+            from cvcpkg.server.live import LiveHub
+
+            async def _live_private_orgs():
+                return await _db_orgs.private_slugs()
+
+            _live_hub = LiveHub(
+                fetch_events=_db_events.since,
+                fetch_latest_id=_db_events.latest_id,
+                fetch_builders=_db_builders.list_builders,
+                fetch_private_orgs=_live_private_orgs,
+                poll_interval=_LIVE_POLL_INTERVAL,
+            )
             _use_db = True
             # Still need ServerState for archives dir and storage_uri
             _state = ServerState(
@@ -2431,6 +2493,9 @@ def create_app(
                 except asyncio.CancelledError:
                     pass
 
+            if _live_hub is not None:
+                await _live_hub.close()
+                _live_hub = None
             logger.info("shutting down — disposing database engine")
             await dispose_engine()
             _use_db = False
@@ -5203,7 +5268,13 @@ def create_app(
         async with _audit_txn(AuditAction.yank, actor.name, target):
             if _use_db:
                 n = await _db_packages.yank(
-                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    link=link,
+                    build_type=build_type,
+                    actor=actor.name,
                 )
             else:
                 state = _get_state()
@@ -5251,7 +5322,13 @@ def create_app(
         async with _audit_txn(AuditAction.unyank, actor.name, target):
             if _use_db:
                 n = await _db_packages.unyank(
-                    name, version, platform=platform, arch=arch, link=link, build_type=build_type
+                    name,
+                    version,
+                    platform=platform,
+                    arch=arch,
+                    link=link,
+                    build_type=build_type,
+                    actor=actor.name,
                 )
             else:
                 state = _get_state()
@@ -6114,6 +6191,153 @@ def create_app(
             ):
                 raise HTTPException(409, "request already resolved")
         return {"message": f"denied token request {request_id}"}
+
+    # ── Activity feed (publishes, yanks, ...) ──────────────
+
+    def _require_db_events() -> None:
+        if not _use_db or _db_events is None:
+            raise HTTPException(503, "the activity feed requires the database backend")
+
+    async def _hidden_orgs(caller: TokenRecord | None) -> set[str]:
+        """Private orgs whose events and builders *caller* may not see."""
+        if _db_orgs is None or (caller is not None and caller.role == TokenRole.admin):
+            return set()
+        hidden = await _db_orgs.private_slugs()
+        if hidden and caller is not None:
+            hidden -= await _db_orgs.member_org_slugs(caller.name)
+        return hidden
+
+    @app.get("/v1/activity", response_model=ActivityResponse, tags=["activity"])
+    async def get_activity(
+        kind: list[PackageEventKind] = Query(
+            default=[], description="Only these kinds (repeatable); none = all"
+        ),
+        name: str = Query("", max_length=255, description="Package name contains"),
+        org: str | None = Query(None, max_length=255, description="Only this org ('' = none)"),
+        platform: str = Query("", max_length=64),
+        arch: str = Query("", max_length=64),
+        actor: str = Query("", max_length=255, description="Actor name contains"),
+        max_id: int | None = Query(
+            None, ge=0, description="Page through events up to this id (a stable snapshot)"
+        ),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+        caller: TokenRecord | None = Depends(optional_token),
+    ):
+        """Recent publishes, yanks, unyanks, deletes and nukes, newest first.
+
+        One event per bundle variant.  Events of a private org are shown only
+        to its members and admins; everything else is public.  ``/v1/live/ws``
+        pushes new events as they happen.
+        """
+        _require_db_events()
+        events, total, snapshot = await _db_events.list_events(
+            kinds=[k.value for k in kind],
+            name=name.strip(),
+            org_slug=org,
+            platform=platform.strip(),
+            arch=arch.strip(),
+            actor=actor.strip(),
+            exclude_orgs=await _hidden_orgs(caller),
+            max_id=max_id,
+            limit=limit,
+            offset=offset,
+        )
+        return ActivityResponse(events=events, total=total, max_id=snapshot)
+
+    @app.websocket("/v1/live/ws")
+    async def live_ws(websocket: WebSocket):
+        """Push activity-feed events and builder changes to a browser page.
+
+        The page's first frame is ``{"type": "hello", "topics": [...],
+        "token": "..."}`` (topics: ``activity``, ``builders``; the token is
+        optional and only widens what a private org's member sees).  The token
+        rides in a frame rather than the URL so it stays out of access logs.
+        See :mod:`cvcpkg.server.live` for the messages.
+        """
+        from cvcpkg.server import live as _live
+
+        await websocket.accept()
+        if not _use_db or _live_hub is None:
+            await websocket.close(code=4004, reason="live updates require the database backend")
+            return
+        try:
+            hello = await asyncio.wait_for(websocket.receive_json(), timeout=10)
+        except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, KeyError):
+            await websocket.close(code=4000, reason="expected a hello frame")
+            return
+        if not isinstance(hello, dict) or hello.get("type") != "hello":
+            await websocket.close(code=4000, reason="expected a hello frame")
+            return
+        token = str(hello.get("token") or "")
+        caller: TokenRecord | None = None
+        if token:
+            caller = await _authenticate_token(token)
+            if caller is None:
+                await websocket.close(code=4001, reason="invalid or expired token")
+                return
+        elif _get_state().require_auth_for_reads:
+            await websocket.close(code=4001, reason="this server requires authentication for reads")
+            return
+        topics = {t for t in (hello.get("topics") or []) if t in _live.TOPICS}
+        if not topics:
+            await websocket.close(code=4000, reason="no known topics")
+            return
+
+        sub = _live.Subscriber(topics=frozenset(topics))
+
+        async def _see_as(who: TokenRecord | None) -> None:
+            sub.is_admin = who is not None and who.role == TokenRole.admin
+            sub.member_orgs = frozenset(
+                await _db_orgs.member_org_slugs(who.name)
+                if who is not None and _db_orgs is not None
+                else ()
+            )
+
+        await _see_as(caller)
+        try:
+            await _live_hub.subscribe(sub)
+        except _live.HubFullError:
+            await websocket.close(code=1013, reason="too many live viewers; try again later")
+            return
+
+        async def _pump() -> None:
+            while True:
+                await websocket.send_json(await sub.queue.get())
+
+        async def _drain() -> None:
+            # Nothing a page sends after hello matters; read only to see it go.
+            while True:
+                if (await websocket.receive())["type"] == "websocket.disconnect":
+                    return
+
+        async def _reauth() -> None:
+            # Membership and tokens change under a long-lived page: re-check on
+            # the builder socket's cadence, and drop a token that stopped working.
+            while True:
+                await asyncio.sleep(_WS_REAUTH_INTERVAL_SECONDS)
+                if not token:
+                    continue
+                who = await _authenticate_token(token)
+                if who is None:
+                    await websocket.close(code=4001, reason="invalid or expired token")
+                    return
+                await _see_as(who)
+
+        tasks = [asyncio.create_task(c()) for c in (_pump, _drain, _reauth)]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            _live_hub.unsubscribe(sub)
+            for t in tasks:
+                t.cancel()
+            for t in tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, WebSocketDisconnect, RuntimeError):
+                    pass
+                except Exception:  # noqa: BLE001 - a closed socket's send
+                    logger.debug("live socket task ended", exc_info=True)
 
     # ── Audit trail (admin) ─────────────────────────────────
 
@@ -7207,9 +7431,9 @@ def create_app(
             f"{platform}/{arch}/{build_type}/{link} via /admin",
         ):
             if action == "yank":
-                await _db_packages.yank(name, version, **kwargs)
+                await _db_packages.yank(name, version, actor="admin-ui", **kwargs)
             elif action == "unyank":
-                await _db_packages.unyank(name, version, **kwargs)
+                await _db_packages.unyank(name, version, actor="admin-ui", **kwargs)
             else:
                 # delete() narrows by platform/link only (matches /v1 delete API).
                 deleted = await _db_packages.delete(
@@ -8718,6 +8942,12 @@ def create_app(
 
     # ── Builder / Build / Recipe HTML pages ─────────────────
 
+    @app.get("/activity", response_class=HTMLResponse, include_in_schema=False)
+    async def activity_page():
+        from cvcpkg.server.landing import activity_html
+
+        return HTMLResponse(activity_html())
+
     @app.get("/builders", response_class=HTMLResponse, include_in_schema=False)
     async def builders_page():
         from cvcpkg.server.landing import builders_html
@@ -9110,6 +9340,7 @@ def create_app(
                 max_jobs=body.max_jobs,
                 prefer_affinity=body.prefer_affinity,
                 free_disk_gb=body.free_disk_gb,
+                system=body.system,
             )
         await emit_webhook_event(
             "builder.online",
@@ -9242,9 +9473,11 @@ def create_app(
             current_jobs=body.current_jobs,
             reconcile=True,
             free_disk_gb=body.free_disk_gb,
+            system=body.system,
         )
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
+        _live_poke("builders")
         return info
 
     @app.delete("/v1/builders/{builder_id}", tags=["builders"])
@@ -10214,6 +10447,7 @@ def create_app(
                         # Absent from an older agent's frame -> None -> the
                         # stored figure is left alone (never zeroed).
                         free_disk_gb=data.get("free_disk_gb"),
+                        system=_ws_system_stats(data.get("system")),
                     )
                     if beat is None:
                         # The row is gone (unregistered, or the database was
@@ -10226,6 +10460,7 @@ def create_app(
                         )
                         await websocket.close(code=4004, reason="builder not found")
                         break
+                    _live_poke("builders")
                     await websocket.send_json({"type": "heartbeat_ack"})
 
                 elif msg_type in _WS_HTTP_ONLY_JOB_FRAMES:

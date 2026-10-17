@@ -28,6 +28,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **Activity feed.** Every publish, yank, unyank, delete and nuke is recorded
+  per bundle variant (`package_events`, migration 032, backfilled from the
+  catalog and tombstones). The new `/activity` page lists them with filters
+  (action, package, platform, arch, org, actor) and pagination, and updates live
+  over a WebSocket (`/v1/live/ws`). The data comes from `GET /v1/activity`. The
+  feed is public except for a private org's events, which only its members and
+  admins see.
+- **Builders page.** Each builder card shows the builder's cvcpkg version and
+  its host's CPU, memory and disk figures. Builders send the figures with each
+  heartbeat (new `system` field, `builders.system_stats`). Clicking a card
+  opens the builder's details: host, labels, capabilities, and its running and
+  recent jobs. The page updates over the same WebSocket instead of reloading
+  every 30 s.
+
+---
+
 ## v2.5.1
 
 **A release so the builder fleet updates.** Builders self-update only to a
