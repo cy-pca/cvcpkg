@@ -83,7 +83,12 @@ recipe:
   # those first on every C extension's line, so cvc.15's NetBSD interpreter made
   # cffi-cp312 link pkgsrc's libffi.so.8 and pyyaml-cp312 lose libyaml; cvc.15's
   # NetBSD bundle is on the dev registry and cannot be replaced in place.
-  cvc_revision: 16
+  # cvc.17: NetBSD again.  Dropping -R/usr/pkg/lib also dropped the room the
+  # RPATH post-fixup rewrote into: cvc.16's lib-dynload modules came out of
+  # patchelf one byte longer, with a third PT_LOAD ld.elf_so refuses ("math.
+  # cpython-312.so: wrong number of segments (3 != 2)").  build-python.sh now
+  # reserves that room in LDFLAGS_NODIST, which stays out of sysconfig.
+  cvc_revision: 17
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
