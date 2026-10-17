@@ -196,7 +196,16 @@ class TestAdminGc:
 
 
 class TestAdminSettingsUpdate:
-    def test_update_and_validation(self, env):
+    def test_update_and_validation(self, env, monkeypatch):
+        from cvcpkg.server import app as app_module
+
+        # The endpoint rebinds these module globals, and every app in this
+        # process reads them.  Re-set each to its own value so monkeypatch
+        # restores it at teardown: left at 1024, the cap made every later
+        # test's publish fail with 413 "global cache storage limit exceeded".
+        for name in ("GLOBAL_CACHE_STORAGE_LIMIT_BYTES", "ORG_STORAGE_LIMIT_BYTES"):
+            monkeypatch.setattr(app_module, name, getattr(app_module, name))
+
         c, admin = env["client"], env["admin"]
         ok = c.patch(
             "/v1/admin/settings",
@@ -205,6 +214,7 @@ class TestAdminSettingsUpdate:
         )
         assert ok.status_code == 200
         assert ok.json()["updated"]["global_cache_storage_limit_bytes"] == 1024
+        assert app_module.GLOBAL_CACHE_STORAGE_LIMIT_BYTES == 1024
         # Negative and empty bodies are both rejected.
         assert (
             c.patch(
