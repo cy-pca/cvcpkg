@@ -32,6 +32,15 @@ command -v gmake >/dev/null 2>&1 && MAKE=gmake
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
 
+# Strip libtool archives (.la), as recipes/libx11 does: they record this job's
+# scratch prefix (libdir; OpenBSD libraries have no DT_SONAME), which is gone once
+# cvcpkg relocates the bundle, and a downstream libtool link follows them:
+# on OpenBSD, gettext linked libiconv.so.8.1 through it by full path, and with no
+# soname that scratch path became the binaries' NEEDED entry, which the pack
+# gate refuses.
+# The shared library and the pkg-config .pc carry the real link information.
+find "${CVC_INSTALL_DIR}" -name '*.la' -delete
+
 if command -v cvc_rewrite_install_paths >/dev/null 2>&1; then
     cvc_rewrite_install_paths
 fi

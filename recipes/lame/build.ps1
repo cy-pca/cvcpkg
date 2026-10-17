@@ -29,7 +29,17 @@ $depsFlag = if ($msysDeps) {
     "PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig' CPPFLAGS='-I$msysDeps/include' LDFLAGS='-L$msysDeps/lib' PATH='$msysDeps/bin:'`$PATH "
 } else { '' }
 
-$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --enable-frontend --enable-static --disable-shared --disable-nls --disable-dependency-tracking && make -j $jobs && mkdir -p '$msysPrefix/bin' && install -m 755 frontend/lame.exe '$msysPrefix/bin/lame.exe'"
+# am_cv_func_iconv=no: with iconv found (the builder's ambient MinGW has a
+# libiconv), frontend/parse.c includes <langinfo.h> under HAVE_ICONV, and
+# MinGW has no langinfo.h ("fatal error: langinfo.h: No such file or
+# directory").  iconv only converts ID3 tag text in the frontend; it is not
+# a declared dependency here, so the build should not pick it up anyway.
+# No termcap/curses either: configure found the ambient MinGW ncurses headers,
+# but console.o then failed to link (undefined __imp_tgetent/tgetstr/tgetnum).
+# Without HAVE_TERMCAP the frontend uses its plain Windows console path.
+$noTermcap = 'ac_cv_header_termcap_h=no ac_cv_header_ncurses_termcap_h=no ' +
+             'ac_cv_lib_termcap_initscr=no ac_cv_lib_curses_initscr=no ac_cv_lib_ncurses_initscr=no'
+$cmd = "$depsFlag cd '$msysSource' && ./configure --prefix='$msysPrefix' --host=x86_64-w64-mingw32 --enable-frontend --enable-static --disable-shared --disable-nls --disable-dependency-tracking am_cv_func_iconv=no $noTermcap && make -j $jobs && mkdir -p '$msysPrefix/bin' && install -m 755 frontend/lame.exe '$msysPrefix/bin/lame.exe'"
 Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
 if ($LASTEXITCODE -ne 0) { throw 'lame build failed' }

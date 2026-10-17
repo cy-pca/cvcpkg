@@ -25,4 +25,11 @@ fi
 make -j "${CVC_JOBS}"
 make install
 
+# Strip libtool archives (.la), as recipes/libx11 does: they record this job's
+# scratch prefix (libdir), which is gone once
+# cvcpkg relocates the bundle, and a downstream libtool link follows them:
+# libvorbis's own .la pointed at libogg.la the same way.
+# The shared library and the pkg-config .pc carry the real link information.
+find "${CVC_INSTALL_DIR}" -name '*.la' -delete
+
 cvc_rewrite_install_paths

@@ -10,16 +10,38 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $bash    = Get-CvcGitBash
 $srcMsys = ConvertTo-CvcMsysPath $env:CVC_SOURCE_DIR
+# Drive-letter prefix, not /c/...: `make install` runs the NATIVE ranlib on
+# lib/libintl.a, which cannot open an MSYS path (see recipes/x264).
+$winPrefix = ($env:CVC_INSTALL_DIR -replace '\\', '/')
 
 # Build only gettext-runtime to avoid libtextstyle's iconv issues.
 $env:MSYSTEM         = 'MINGW64'
-$env:MSYS_NO_PATHCONV = '1'
+# Leave MSYS2's argument path conversion ON (no MSYS_NO_PATHCONV), as
+# Invoke-CvcMsysAutotoolsBuild does.  libtool converts paths for the native
+# toolchain with `cmd //c echo <path>`, which relies on MSYS turning `//c` into
+# `/c`.  With conversion off, cmd.exe got a literal `//c`, started an
+# interactive shell and waited on stdin: on the dev Windows builder every
+# libtool link hung there (libmp3lame #17744, libogg #17745), holding the
+# builder's only job slot for days.  Conversion also hands the native gcc
+# -IC:/... for an MSYS -I/c/... argument, which it can open.
+Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
+$env:CHERE_INVOKING  = '1'
+
+# env-windows.ps1 sets CC=cl / CXX=cl for the MSVC helpers; autoconf takes $CC
+# at face value, so configure died with "C compiler cannot create executables".
+# Clear them (as Invoke-CvcMsysAutotoolsBuild does) so it finds MinGW gcc.
+'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
+    ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
 $cmd  = "cd '$srcMsys/gettext-runtime' && "
-$cmd += "./configure --prefix='$(ConvertTo-CvcMsysPath $env:CVC_INSTALL_DIR)' "
+$cmd += "./configure --prefix='$winPrefix' "
 $cmd += "--host=x86_64-w64-mingw32 --disable-java --disable-csharp "
 $cmd += "--without-emacs --without-git --without-bzip2 --without-xz "
-$cmd += "--disable-nls --disable-dependency-tracking && "
+# NLS stays on: --disable-nls drops gettext-runtime's intl/, so the Windows
+# bundle had no libintl at all, the one library this build is for.
+# am_cv_func_iconv=no keeps the builder's ambient MinGW libiconv (not a
+# declared dependency) out of libintl; it then does no charset conversion.
+$cmd += "--disable-dependency-tracking am_cv_func_iconv=no && "
 $cmd += "make -j $env:CVC_JOBS && make install"
 
 & $bash -lc $cmd

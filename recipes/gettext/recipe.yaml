@@ -5,7 +5,13 @@ recipe:
   # cvc.2: macOS builds the full tree (msgfmt, xgettext, msgmerge, libtextstyle)
   # against cvcpkg's GNU libiconv instead of gettext-runtime alone, so nothing
   # needs Homebrew's msgfmt.
-  cvc_revision: 2
+  # cvc.3: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
+  # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
+  # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
+  # cvc.4: Windows: CC=cl cleared, NLS on so libintl is built, no ambient
+  # iconv, drive-letter prefix; package.files scoped to what the runtime-only
+  # Windows build installs.  Other platforms unchanged.
+  cvc_revision: 4
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -66,26 +72,29 @@ package:
     # libintl only where libc lacks it: glibc provides it, so the Linux build
     # installs no libintl (strict package.files refused cvc.2 on linux/x86_64).
     - { glob: "lib/libintl*", platforms: [macos, freebsd, openbsd, netbsd, windows] }
+    # Windows builds gettext-runtime only (build.ps1): libintl, libasprintf and
+    # the gettext/ngettext/envsubst tools; the gettext-tools entries below are
+    # scoped off it.  No share/locale there either: no msgfmt at configure time.
     - lib/libasprintf*
-    - lib/libgettextlib*
-    - lib/libgettextpo*
-    - lib/libtextstyle*
+    - { glob: "lib/libgettextlib*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libgettextpo*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libtextstyle*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - { glob: "include/libintl.h", platforms: [macos, freebsd, openbsd, netbsd, windows] }
     - include/autosprintf.h
-    - include/gettext-po.h
-    - include/textstyle.h
-    - include/textstyle/
+    - { glob: "include/gettext-po.h", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "include/textstyle.h", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "include/textstyle/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     # gettext's own message catalogs are compiled with a msgfmt found at configure
     # time, before this build's msgfmt exists.  Linux and the BSDs find the build
     # host's; macOS (no Homebrew) has none, so its bundle ships the tools but no
     # catalogs.  Compiling them with the freshly built msgfmt is a follow-up.
-    - { glob: "share/locale/", platforms: [linux, freebsd, openbsd, netbsd, windows] }
-    - bin/gettext
-    - bin/ngettext
-    - bin/envsubst
-    - bin/msgfmt
-    - bin/msgmerge
-    - bin/xgettext
+    - { glob: "share/locale/", platforms: [linux, freebsd, openbsd, netbsd] }
+    - bin/gettext*        # gettext.exe on Windows
+    - bin/ngettext*
+    - bin/envsubst*
+    - { glob: "bin/msgfmt", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/msgmerge", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/xgettext", platforms: [linux, macos, freebsd, openbsd, netbsd] }
   cmake_packages: []
 
 abi:

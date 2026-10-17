@@ -1,0 +1,18 @@
+cvcpkg: declare utf8_decode() in ogginfo/codec_skeleton.c.
+
+codec_skeleton.c calls utf8_decode() but never includes "utf8.h", which
+declares it (metadata.c, next to it, does).  GCC 14 and later make an
+implicit function declaration an error, so ogginfo failed to build with
+MinGW gcc on Windows:
+  codec_skeleton.c:119:9: error: implicit declaration of function 'utf8_decode'
+
+--- a/ogginfo/codec_skeleton.c
++++ b/ogginfo/codec_skeleton.c
+@@ -24,6 +24,7 @@
+ 
+ #include <ogg/ogg.h>
+ 
++#include "utf8.h"
+ #include "i18n.h"
+ 
+ #include "private.h"
