@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import gzip
 import hashlib
 import json
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Hashable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 _generation = 0
 
@@ -91,6 +92,11 @@ class CatalogBody:
     body: bytes
     digest: str
     bundle_count: int
+    # render(base) gzipped, by base: compressed once per body instead of per
+    # request (GZipMiddleware's level 9 cost ~130 ms of event loop on 7.8 MB).
+    _gzipped: OrderedDict[str, bytes] = field(
+        default_factory=OrderedDict, compare=False, repr=False
+    )
 
     @classmethod
     def encode(cls, revision: int, bundles: list[dict]) -> CatalogBody:
@@ -115,10 +121,45 @@ class CatalogBody:
             return self.body
         return self.body.replace(_RELATIVE_ARCHIVE_URL, b'"archive_url":"' + base + b"/")
 
-    def etag(self, base_url: str) -> str:
-        """A strong ETag for :meth:`render` of *base_url*."""
+    async def render_gzip(self, base_url: str) -> bytes:
+        """:meth:`render` gzipped, compressed off the event loop on first use."""
+        base = base_url.rstrip("/")
+        gz = self._gzipped.get(base)
+        if gz is None:
+            # Level 6 is half level 9's time for a 4% larger body (0.54 MB
+            # against 0.52 MB); mtime=0 keeps the bytes the same every time.
+            gz = await asyncio.to_thread(gzip.compress, self.render(base), 6, mtime=0)
+            self._gzipped[base] = gz
+            # Bases come from the Host header; keep a few, not one per value.
+            while len(self._gzipped) > 4:
+                self._gzipped.popitem(last=False)
+        return gz
+
+    def etag(self, base_url: str, *, gzipped: bool = False) -> str:
+        """A strong ETag for :meth:`render` (or :meth:`render_gzip`) of *base_url*.
+
+        The gzip encoding gets its own tag, as a strong validator must, by
+        the ``-gzip`` suffix Apache's mod_deflate also uses.
+        """
         tag = hashlib.sha256(f"{self.digest}\0{base_url.rstrip('/')}".encode()).hexdigest()
-        return f'"{tag[:32]}"'
+        return f'"{tag[:32]}-gzip"' if gzipped else f'"{tag[:32]}"'
+
+
+def accepts_gzip(accept_encoding: str) -> bool:
+    """Whether an ``Accept-Encoding`` header admits gzip (honouring ``q=0``)."""
+    for part in accept_encoding.split(","):
+        coding, _, params = part.partition(";")
+        if coding.strip().lower() not in ("gzip", "x-gzip", "*"):
+            continue
+        q = params.strip().lower()
+        if q.startswith("q="):
+            try:
+                if float(q[2:]) == 0:
+                    continue
+            except ValueError:
+                continue
+        return True
+    return False
 
 
 def etag_matches(if_none_match: str, etag: str) -> bool:
