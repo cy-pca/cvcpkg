@@ -174,14 +174,17 @@ UPLOAD_SESSION_TTL = int(os.environ.get("CVCPKG_UPLOAD_SESSION_TTL", "3600"))
 # Rate limiting: requests per minute for write endpoints
 RATE_LIMIT_RPM = int(os.environ.get("CVCPKG_RATE_LIMIT_RPM", "300"))
 
-# Default storage limit per organization in bytes (default 10 GiB)
-ORG_STORAGE_LIMIT_BYTES = int(
-    os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", str(10 * 1024 * 1024 * 1024))
+# Default storage limit per organization in bytes (default 10 GiB).  Parsed like
+# CVCPKG_MAX_UPLOAD_BYTES ("250GB" works), and an empty value -- what the
+# compose ``${VAR:-}`` passthrough injects when the operator sets nothing --
+# keeps the default instead of crashing int("") at import.
+ORG_STORAGE_LIMIT_BYTES = parse_size(
+    os.environ.get("CVCPKG_ORG_STORAGE_LIMIT_BYTES", ""), default=10 * 1024 * 1024 * 1024
 )
 
 # Global cache storage limit in bytes across all namespaces (default 100 GiB, 0 = unlimited)
-GLOBAL_CACHE_STORAGE_LIMIT_BYTES = int(
-    os.environ.get("CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES", str(100 * 1024 * 1024 * 1024))
+GLOBAL_CACHE_STORAGE_LIMIT_BYTES = parse_size(
+    os.environ.get("CVCPKG_GLOBAL_CACHE_STORAGE_LIMIT_BYTES", ""), default=100 * 1024 * 1024 * 1024
 )
 
 # CORS allowed origins (comma-separated, empty = deny all cross-origin)
@@ -1281,9 +1284,9 @@ _LOG_GC_INTERVAL = int(os.environ.get("CVCPKG_LOG_GC_INTERVAL", "3600"))
 # ARTIFACTS rather than logs, and cvcpkg's other retention GCs also ship
 # disabled; 365 is the documented, recommended value, to be made the default in
 # a later release once the audit trail has been observed on a real deployment.
-_YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS", "0"))
+_YANK_RETENTION_DAYS = int(os.environ.get("CVCPKG_YANK_RETENTION_DAYS") or "0")
 # How often the yank retention GC runs (seconds, default 6 hours)
-_YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
+_YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL") or "21600")
 # How often expired auth sessions + CLI-login rows are reaped (default 1 hour).
 # ``or "3600"`` (not a get() default) because the docker-compose ``${VAR:-}``
 # passthrough injects this key as an EMPTY string when the operator has not set
@@ -1862,6 +1865,31 @@ def _safe_archive_filename(
         c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
         for c in fname
     )
+
+
+_ARCHIVE_NAME_VERSION = _re.compile(r"(?P<name>.+?)-(?P<version>\d.*)")
+
+
+def _archive_coords_from_name(filename: str) -> dict[str, str]:
+    """Best-effort name/version/platform/arch read back from an archive filename.
+
+    Only for a file no package row claims.  The four trailing fields
+    (platform, arch, build_type, link) come off the right; a name may itself
+    contain hyphens (``torch-cp311-cuda``), so the version starts at the first
+    ``-<digit>``.  Anything that does not fit is recorded as the bare stem.
+    """
+    stem = filename.removesuffix(".tar.zst")
+    parts = stem.rsplit("-", 4)
+    if len(parts) == 5:
+        m = _ARCHIVE_NAME_VERSION.fullmatch(parts[0])
+        if m:
+            return {
+                "name": m["name"],
+                "version": m["version"],
+                "platform": parts[1],
+                "arch": parts[2],
+            }
+    return {"name": stem, "version": "", "platform": "", "arch": ""}
 
 
 async def _populate_sync_once() -> int:
@@ -4344,25 +4372,20 @@ def create_app(
 
         # Record download event for analytics
         if _use_db and _db_downloads is not None:
-            # Parse package name/version/platform from filename
-            # Format: {name}-{version}-{platform}-{arch}-{build_type}[-{link}].tar.zst
-            parts = safe_name.rsplit(".", 2)  # strip .tar.zst or similar
-            stem = parts[0] if parts else safe_name
-            # Best-effort extraction — look up in DB for exact match
-            pkg_name = stem.split("-")[0] if "-" in stem else stem
-            pkg_version = ""
-            pkg_platform = ""
-            pkg_arch = ""
+            # Resolve the file to its package row by exact archive name, yanked
+            # rows included.  This used to scan the first 1,000 live rows of
+            # get_bundles, which recorded every yanked bundle (and every live one
+            # past row 1,000) with no version: 80% of cvcpkg.org's events in
+            # Oct 2026.  The filename is parsed only when no row has the file.
+            coords = None
             if _db_packages is not None:
-                # Try to find the package by archive_url for accurate metadata
-                pkgs, _ = await _db_packages.get_bundles(limit=1000)
-                for p in pkgs:
-                    if p.archive_url.endswith(f"/{safe_name}"):
-                        pkg_name = p.name
-                        pkg_version = p.version
-                        pkg_platform = p.platform
-                        pkg_arch = getattr(p, "arch", "") or ""
-                        break
+                coords = await _db_packages.get_archive_coords(safe_name)
+            if coords is None:
+                coords = _archive_coords_from_name(safe_name)
+            pkg_name = coords["name"]
+            pkg_version = coords["version"]
+            pkg_platform = coords["platform"]
+            pkg_arch = coords["arch"]
 
             # Privacy: store a salted hash of the client address — never the
             # plain IP.  Salt = the server's token HMAC key (stable across
