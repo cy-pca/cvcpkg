@@ -126,10 +126,16 @@ no registered builder for linux/x86_64 with capability cuda
 The check is *joint*: one builder must cover the job's platform/arch **and**
 advertise every required capability — a CUDA builder on a different platform
 does not make a job schedulable. `submit-dag` runs the same check up front
-against `/v1/builders` and skips doomed combos with a
-"no registered builder advertises the required capability" message; pass
-`--allow-unschedulable` to submit them anyway and let the server's reaper
-decide.
+against `/v1/builders`, over everything the job will carry: the recipe's own
+capabilities, `source_packages` for a source-package recipe, and the glibc floor
+of a linux (or linux-built noarch) job. It skips doomed combos with a
+"no registered builder advertises every required capability" message that lists
+them, e.g. `fontconfig (glibc2.35, source_packages)` on a fleet whose 2.35 hosts
+run code too old for source packages. A builder that advertises no glibc
+capability at all (an agent older than glibc reporting, or one run with
+`--no-auto-capabilities`) is taken to meet the floor, since its glibc is unknown
+rather than wrong. Pass `--allow-unschedulable` to submit anyway and let the
+server's reaper decide.
 
 One related-but-different key: an image recipe's `vm_test` block has its *own*
 `requires_capabilities` (typically `[incus]`). That gates only the in-VM test —
