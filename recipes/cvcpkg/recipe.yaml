@@ -5,7 +5,11 @@ recipe:
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
   upstream_version: "2.5.1"
-  cvc_revision: 1
+  # Bumped 1 -> 2: refreeze with pyinstaller-cp312 cvc.4, whose NetBSD
+  # bootloader loads a TLS pad after libpython (netbsd-tls-pad.patch there).
+  # 2.5.1+cvc.1 for NetBSD took 19 s per invocation, even `--version`; the
+  # other platforms' binaries are unchanged.
+  cvc_revision: 2
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

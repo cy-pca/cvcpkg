@@ -69,6 +69,7 @@ build_one() {
       git clone --quiet --branch v${PYINSTALLER_VERSION} --depth 1 \
         https://github.com/pyinstaller/pyinstaller /tmp/pyi-src; \
       cd /tmp/pyi-src && patch -p1 < ${rd}/recipes/pyinstaller-cp313/netbsd-platform-tables.patch; \
+      patch -p1 < ${rd}/recipes/pyinstaller-cp313/netbsd-tls-pad.patch; \
       TMPDIR=/usr/local/tmp ${python} -m pip install --break-system-packages . 2>/dev/null || ${python} -m pip install ."
   else
     ssh $SSH_OPTS "$vm" "set -e; \

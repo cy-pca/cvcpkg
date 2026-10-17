@@ -55,7 +55,7 @@ echo "pyinstaller-cp313: built $(basename "${WHEEL}")"
 # Fail loudly if the bootloader for THIS platform is missing from the wheel:
 # without it `pyinstaller --onefile` cannot produce an executable, and a wheel
 # that merely imports would sail through the check below.
-"${PY_EXE}" - "${WHEEL}" <<'PYBL'
+"${PY_EXE}" - "${WHEEL}" "${CVC_PLATFORM}" <<'PYBL'
 import sys, zipfile
 names = zipfile.ZipFile(sys.argv[1]).namelist()
 # "images" is a non-platform subdir of bootloader/ — excluding it keeps this an
@@ -66,6 +66,10 @@ boot = sorted({n.split("/")[2] for n in names
 print("bootloader dirs in wheel:", ", ".join(boot) or "(none)")
 if not boot:
     sys.exit("no bootloader in the built wheel")
+# netbsd-tls-pad.patch: without the pad a NetBSD frozen program still works,
+# only 10-100x slower, so nothing downstream would notice it missing.
+if sys.argv[2] == "netbsd" and not any(n.endswith("/libpyi_tlspad.so") for n in names):
+    sys.exit("no libpyi_tlspad.so (netbsd-tls-pad.patch) next to the NetBSD bootloader in the built wheel")
 PYBL
 
 "${PY_EXE}" -m pip install \

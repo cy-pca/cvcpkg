@@ -1,0 +1,134 @@
+diff --git a/PyInstaller/building/build_main.py b/PyInstaller/building/build_main.py
+index bceb964..ff9fb0c 100644
+--- a/PyInstaller/building/build_main.py
++++ b/PyInstaller/building/build_main.py
+@@ -23,7 +23,7 @@
+ import re
+ import sys
+ 
+-from PyInstaller import DEFAULT_DISTPATH, DEFAULT_WORKPATH, HOMEPATH, compat
++from PyInstaller import DEFAULT_DISTPATH, DEFAULT_WORKPATH, HOMEPATH, PLATFORM, compat
+ from PyInstaller import log as logging
+ from PyInstaller.building.api import COLLECT, EXE, MERGE, PYZ
+ from PyInstaller.building.datastruct import (
+@@ -698,6 +698,15 @@ def assemble(self):
+         else:
+             self.binaries.append((os.path.basename(python_lib), python_lib, 'BINARY'))
+ 
++        # NetBSD: the bootloader loads this thread-local-storage pad right after the Python shared library, so that
++        # NetBSD 10's ld.elf_so takes its __tls_get_addr() fast path for libpython (see pyi_dylib_python.c).
++        if compat.is_netbsd:
++            tls_pad = os.path.join(HOMEPATH, 'PyInstaller', 'bootloader', PLATFORM, 'libpyi_tlspad.so')
++            if os.path.isfile(tls_pad):
++                self.binaries.append(('libpyi_tlspad.so', tls_pad, 'BINARY'))
++            else:
++                logger.warning("NetBSD TLS pad library %s not found; the frozen application will run slowly.", tls_pad)
++
+         # -- Module graph. --
+         #
+         # Construct the module graph of import relationships between modules required by this user's application. For
+diff --git a/bootloader/src/pyi_dylib_python.c b/bootloader/src/pyi_dylib_python.c
+index 0ae1da4..9a8100e 100644
+--- a/bootloader/src/pyi_dylib_python.c
++++ b/bootloader/src/pyi_dylib_python.c
+@@ -121,6 +121,43 @@ static int _pyi_dylib_python_load_library(
+ #endif /* defined(_WIN32) */
+ 
+ 
++#if defined(__NetBSD__)
++
++/*
++ * NetBSD 10's ld.elf_so takes the fast path of __tls_get_addr() only for
++ * `idx < DTV_MAX_INDEX(dtv)`, so the module with the HIGHEST TLS index
++ * (`idx == DTV_MAX_INDEX`) goes through _rtld_tls_get_addr() on every access:
++ * a sigprocmask() pair and an _lwp_self() under the loader's exclusive lock.
++ * The Python shared library is that module whenever it is dlopen()ed, as it is
++ * here: it is mapped after every library the bootloader links, and CPython 3.12
++ * reads its thread state from a thread-local variable on almost every call, so
++ * a frozen application runs 20-100x slower than the same code under the
++ * `python3` executable (which links libpython at start-up, so libc's or
++ * libpthread's module ends up above it).  Fixed upstream in tls.c 1.34
++ * (`idx <= DTV_MAX_INDEX`), which no NetBSD 10 release carries.
++ *
++ * Mapping any other module with a TLS segment after libpython raises the
++ * maximum index past it, so libpython's own accesses take the fast path again;
++ * libpyi_tlspad.so (bootloader/tlspad/) is such a module, collected next to
++ * libpython by Analysis.  A missing pad only costs speed.
++ */
++static void _pyi_dylib_python_netbsd_tls_pad(const char *root_directory)
++{
++    char pad_fullpath[PYI_PATH_MAX];
++
++    if (snprintf(pad_fullpath, PYI_PATH_MAX, "%s/%s", root_directory, "libpyi_tlspad.so") >= PYI_PATH_MAX) {
++        return;
++    }
++    if (dlopen(pad_fullpath, RTLD_NOW | RTLD_LOCAL) == NULL) {
++        PYI_DEBUG("DYLIB: could not load TLS pad library %s: %s\n", pad_fullpath, dlerror());
++        return;
++    }
++    PYI_DEBUG("DYLIB: loaded TLS pad library %s\n", pad_fullpath);
++}
++
++#endif /* defined(__NetBSD__) */
++
++
+ /* Import symbols from the loaded shared library */
+ static int _pyi_dylib_python_import_symbols(struct DYLIB_PYTHON *dylib)
+ {
+@@ -252,6 +289,10 @@ struct DYLIB_PYTHON *pyi_dylib_python_load(const char *root_directory, const cha
+     }
+     PYI_DEBUG("DYLIB: loaded Python shared library.\n");
+ 
++#if defined(__NetBSD__)
++    _pyi_dylib_python_netbsd_tls_pad(root_directory);
++#endif
++
+     /* Import functions/symbols */
+     ret = _pyi_dylib_python_import_symbols(dylib);
+     if (ret != 0) {
+diff --git a/bootloader/tlspad/pyi_tlspad.c b/bootloader/tlspad/pyi_tlspad.c
+new file mode 100644
+index 0000000..77cc4a5
+--- /dev/null
++++ b/bootloader/tlspad/pyi_tlspad.c
+@@ -0,0 +1,20 @@
++/*
++ * ****************************************************************************
++ * Copyright (c) 2026, PyInstaller Development Team.
++ *
++ * Distributed under the terms of the GNU General Public License (version 2
++ * or later) with exception for distributing the bootloader.
++ *
++ * The full license is in the file COPYING.txt, distributed with this software.
++ *
++ * SPDX-License-Identifier: (GPL-2.0-or-later WITH Bootloader-exception)
++ * ****************************************************************************
++ */
++
++/*
++ * A shared library whose only content is one thread-local variable.  The
++ * NetBSD bootloader dlopen()s it right after the Python shared library; see
++ * _pyi_dylib_python_netbsd_tls_pad() in src/pyi_dylib_python.c for why.
++ */
++
++__thread int pyi_tlspad;
+diff --git a/bootloader/wscript b/bootloader/wscript
+index 9cecbf1..d78d35e 100644
+--- a/bootloader/wscript
++++ b/bootloader/wscript
+@@ -925,6 +925,15 @@ def build(ctx):
+             features=features
+         )
+ 
++    # NetBSD: the thread-local-storage pad the bootloader loads after the Python shared library (see
++    # _pyi_dylib_python_netbsd_tls_pad() in src/pyi_dylib_python.c). One copy serves every variant.
++    if ctx.env.DEST_OS == 'netbsd' and ctx.variant == 'release':
++        ctx.shlib(
++            source='tlspad/pyi_tlspad.c',
++            target='pyi_tlspad',
++            install_path=install_path,
++        )
++
+     # This warning is deliberately at the end of the build, in the hopes that it will be more visible amongst all the
+     # other stuff written to stdout.
+     if ctx.env.PYI_MACHINE and ctx.env.PYI_MACHINE == "unknown":
