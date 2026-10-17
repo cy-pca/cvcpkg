@@ -1,0 +1,34 @@
+cvcpkg: give FcStrRealPath a full-size buffer on Windows and check
+GetFullPathNameA's result.  With MSVC's 128-byte FC_PATH_MAX a config
+file deeper than 128 characters made <dir prefix="relative"> resolve
+against the current directory.  Windows-only code; Unix is unchanged.
+
+--- a/src/fcstr.c
++++ b/src/fcstr.c
+@@ -1094,7 +1094,16 @@
+ FcChar8 *
+ FcStrRealPath (const FcChar8 *path)
+ {
++#ifndef _WIN32
+     char	resolved_name[FC_PATH_MAX+1];
++#else
++    /* cvcpkg: MSVC defines no PATH_MAX, so FC_PATH_MAX is 128 there.  For a
++     * longer path GetFullPathNameA returns the size it needs without filling
++     * the buffer, and the garbage that followed made <dir prefix="relative">
++     * resolve against the current directory instead of the config file. */
++    char	resolved_name[FC_MAX_FILE_LEN+1];
++    DWORD	len;
++#endif
+     char	*resolved_ret;
+ 
+     if (!path)
+@@ -1103,7 +1112,8 @@
+ #ifndef _WIN32
+     resolved_ret = realpath((const char *) path, resolved_name);
+ #else
+-    if (GetFullPathNameA ((LPCSTR) path, FC_PATH_MAX, resolved_name, NULL) == 0)
++    len = GetFullPathNameA ((LPCSTR) path, sizeof (resolved_name), resolved_name, NULL);
++    if (len == 0 || len >= sizeof (resolved_name))
+     {
+         fprintf (stderr, "Fontconfig warning: GetFullPathNameA failed.\n");
+         return NULL;
