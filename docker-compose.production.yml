@@ -103,6 +103,7 @@ services:
             CVCPKG_CLI_PAIRING_TTL_SECONDS: ${CVCPKG_CLI_PAIRING_TTL_SECONDS:-}
             CVCPKG_CLI_POLL_INTERVAL: ${CVCPKG_CLI_POLL_INTERVAL:-}
             CVCPKG_AUTH_GC_INTERVAL: ${CVCPKG_AUTH_GC_INTERVAL:-}
+            CVCPKG_CATALOG_CACHE_TTL: ${CVCPKG_CATALOG_CACHE_TTL:-}
             # ── Mirror mode (optional) ─────────────────────────
             # Set CVCPKG_MIRROR_MODE=1 + CVCPKG_MIRROR_UPSTREAM=<url>
             # in .env.production to run this instance as a read-only

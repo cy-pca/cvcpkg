@@ -259,6 +259,63 @@ def test_sqlite_chain_builds_the_recipe_unique_constraint(_sqlite_upgrade_head):
         conn.close()
 
 
+def _build_job_deps_indexes(db: Path) -> set[str]:
+    conn = sqlite3.connect(db)
+    try:
+        return {r[1] for r in conn.execute("PRAGMA index_list(build_job_deps)")}
+    finally:
+        conn.close()
+
+
+_BUILD_JOB_DEPS_INDEXES = {"ix_build_job_deps_job_id", "ix_build_job_deps_depends_on"}
+
+
+def test_sqlite_chain_builds_the_build_job_deps_indexes(_sqlite_upgrade_head):
+    proc, db = _sqlite_upgrade_head
+    assert proc.returncode == 0, "upgrade failed; see test_alembic_upgrade_head_on_sqlite"
+    assert _BUILD_JOB_DEPS_INDEXES.issubset(_build_job_deps_indexes(db))
+
+
+def test_migration_031_creates_missing_build_job_deps_indexes(tmp_path):
+    """A build_job_deps without its indexes (cvcpkg.org's) gets them from 031.
+
+    Migration 010 skipped both indexes wherever the table already existed, so
+    the scheduler's dependents lookups scanned the whole table.
+    """
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "repair.db"
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+
+    def alembic(*args: str) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "alembic", *args],
+            cwd=_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"alembic {' '.join(args)}\n{proc.stdout}\n{proc.stderr}"
+
+    alembic("upgrade", "030")
+    conn = sqlite3.connect(db)
+    for name in _BUILD_JOB_DEPS_INDEXES:
+        conn.execute(f"DROP INDEX {name}")
+    conn.commit()
+    conn.close()
+    assert not _BUILD_JOB_DEPS_INDEXES & _build_job_deps_indexes(db)
+
+    alembic("upgrade", "head")
+    assert _BUILD_JOB_DEPS_INDEXES.issubset(_build_job_deps_indexes(db))
+    # The unique constraint is untouched, and downgrading 031 keeps 010's indexes.
+    assert any(n.startswith("sqlite_autoindex") for n in _build_job_deps_indexes(db))
+    alembic("downgrade", "030")
+    assert _BUILD_JOB_DEPS_INDEXES.issubset(_build_job_deps_indexes(db))
+
+
 def test_lockfile_reads_legacy_v1_schema(tmp_path):
     """A pre-2.0 lockfile (schema_version 1, no config fields) still loads."""
     import yaml

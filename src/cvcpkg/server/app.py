@@ -66,6 +66,7 @@ from cvcpkg.server.limits import (
 )
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
+from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, etag_matches
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
@@ -1287,6 +1288,11 @@ _YANK_GC_INTERVAL = int(os.environ.get("CVCPKG_YANK_GC_INTERVAL", "21600"))
 # passthrough injects this key as an EMPTY string when the operator has not set
 # it — and int("") raises, which would crash the server on import.
 _AUTH_GC_INTERVAL = int(os.environ.get("CVCPKG_AUTH_GC_INTERVAL") or "3600")
+# Longest a cached /v1/catalog body is served (seconds; 0 disables the cache).
+# Writes made through this process invalidate it at once, so this only bounds
+# how long a write by another process (a second --workers process, SQL run by
+# hand) can go unseen.  See cvcpkg.server.catalog_cache.
+_CATALOG_CACHE_TTL = float(os.environ.get("CVCPKG_CATALOG_CACHE_TTL") or "60")
 
 
 def _satisfies_capabilities(builder, job) -> bool:
@@ -2610,9 +2616,9 @@ def create_app(
             # Mirror sync populates state.index; DB isn't used for catalog rows.
             pkg_count = len(state.index.get("bundles", []))
         elif _use_db:
-            pkgs, _ = await _db_packages.get_bundles(limit=0, offset=0)
-            cat = await _db_packages.get_catalog_dict()
-            pkg_count = len(cat.get("bundles", []))
+            # The Docker healthcheck calls this every 30 s: a COUNT, never the
+            # catalog build, which used to hold the event loop for seconds.
+            pkg_count = await _db_packages.count_catalog_bundles()
         else:
             pkg_count = len(state.index.get("bundles", []))
         return HealthResponse(
@@ -2693,7 +2699,7 @@ def create_app(
         if _use_db and not MIRROR_MODE:
             from cvcpkg.server.db import database_backend
 
-            cat = await _db_packages.get_catalog_dict()
+            packages_count = await _db_packages.count_catalog_bundles()
             _, audit_total = await _db_audit.entries(limit=0, offset=0)
             _, jobs_total = await _db_build_jobs.list_jobs(limit=0, offset=0)
             builders = await _db_builders.list_builders()
@@ -2701,7 +2707,7 @@ def create_app(
             stats.update(
                 {
                     "database_backend": database_backend(),
-                    "packages_count": len(cat.get("bundles", [])),
+                    "packages_count": packages_count,
                     "total_storage_bytes": await _db_packages.total_storage_bytes(),
                     "orgs_count": orgs_total,
                     "builders_count": len(builders),
@@ -2805,8 +2811,7 @@ def create_app(
         if MIRROR_MODE:
             pkg_count = len(state.index.get("bundles", []))
         elif _use_db:
-            cat = await _db_packages.get_catalog_dict()
-            pkg_count = len(cat.get("bundles", []))
+            pkg_count = await _db_packages.count_catalog_bundles()
         else:
             pkg_count = len(state.index.get("bundles", []))
 
@@ -2840,6 +2845,12 @@ def create_app(
             "# HELP cvcpkg_bytes_uploaded_total Total bytes uploaded.",
             "# TYPE cvcpkg_bytes_uploaded_total counter",
             f"cvcpkg_bytes_uploaded_total {_metrics['bytes_uploaded_total']}",
+            "# HELP cvcpkg_catalog_cache_hits_total /v1/catalog bodies served from the cache.",
+            "# TYPE cvcpkg_catalog_cache_hits_total counter",
+            f"cvcpkg_catalog_cache_hits_total {_catalog_cache.hits}",
+            "# HELP cvcpkg_catalog_cache_misses_total /v1/catalog bodies built from the database.",
+            "# TYPE cvcpkg_catalog_cache_misses_total counter",
+            f"cvcpkg_catalog_cache_misses_total {_catalog_cache.misses}",
         ]
         return PlainTextResponse(
             "\n".join(lines) + "\n",
@@ -2853,6 +2864,18 @@ def create_app(
         """Support HEAD requests (used by storage backends for size check)."""
         return Response(status_code=200)
 
+    _catalog_cache = CatalogCache(_CATALOG_CACHE_TTL)
+
+    async def _build_catalog_body(
+        scope: frozenset[str] | None, include_yanked: bool
+    ) -> CatalogBody:
+        revision, rows = await _db_packages.catalog_rows(scope, include_yanked=include_yanked)
+        # Sorting and encoding several MB is CPU work; in a thread the event
+        # loop can keep answering other requests in between.
+        return await asyncio.to_thread(
+            lambda: CatalogBody.encode(revision, _db_packages.catalog_bundles(rows))
+        )
+
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
         request: Request,
@@ -2865,32 +2888,42 @@ def create_app(
         ``include_yanked`` is for downstream mirrors: they need to tell a
         deliberate upstream yank apart from a bundle that merely vanished, and
         the default (filtered) view makes those two indistinguishable.
-        """
-        if MIRROR_MODE:
-            # Mirror sync loop writes the upstream catalog into state.index;
-            # bypass the (empty) DB read path so /v1/catalog serves the mirror.
-            state = _get_state()
-            revision = state.index.get("revision", 0)
-            bundles = list(state.index.get("bundles", []))
-        elif _use_db:
-            caller = _auth or _caller
-            cat = await _db_packages.get_catalog_dict(
-                caller_token_name=caller.name if caller else "",
-                is_admin=caller is not None and caller.role == TokenRole.admin,
-                include_yanked=include_yanked,
-            )
-            revision = cat.get("revision", 0)
-            bundles = cat.get("bundles", [])
-        else:
-            state = _get_state()
-            revision = state.index.get("revision", 0)
-            bundles = list(state.index.get("bundles", []))
 
+        The database-backed catalog is cached until the next write that changes
+        it, and carries an ``ETag``: a client that sends it back in
+        ``If-None-Match`` gets a bodiless 304 while nothing has changed.
+        """
         # Resolve relative archive_url paths (e.g. "/v1/download/…")
         # to absolute URLs so clients can download without knowing
         # the server origin separately.
-        # NOTE: copy each dict to avoid mutating in-memory state.
         base = str(request.base_url).rstrip("/")
+        if _use_db and not MIRROR_MODE:
+            caller = _auth or _caller
+            scope = await _db_packages.catalog_scope(
+                caller_token_name=caller.name if caller else "",
+                is_admin=caller is not None and caller.role == TokenRole.admin,
+            )
+            body = await _catalog_cache.get(
+                (scope, include_yanked), lambda: _build_catalog_body(scope, include_yanked)
+            )
+            etag = body.etag(base)
+            headers = {
+                "ETag": etag,
+                # Revalidate every time (the ETag makes that cheap), and keep a
+                # caller's private-org packages out of shared caches.
+                "Cache-Control": "private, no-cache" if caller else "no-cache",
+            }
+            if etag_matches(request.headers.get("if-none-match", ""), etag):
+                return Response(status_code=304, headers=headers)
+            return Response(body.render(base), media_type="application/json", headers=headers)
+
+        # Mirror sync loop writes the upstream catalog into state.index (in
+        # mirror mode the DB isn't used for catalog rows), as does the YAML
+        # backend.
+        state = _get_state()
+        revision = state.index.get("revision", 0)
+        bundles = list(state.index.get("bundles", []))
+        # NOTE: copy each dict to avoid mutating in-memory state.
         resolved = []
         for b in bundles:
             url = b.get("archive_url", "")
