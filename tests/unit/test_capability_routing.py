@@ -505,8 +505,14 @@ class TestFleetCapabilities:
 # style, matching the other submit-dag tests (tests/unit/test_populate.py).
 
 
-def _write_cap_recipe(tmp_path, name, caps=(), platforms=("linux",), prebuilt=False):
-    """A minimal recipe, optionally declaring requires_capabilities."""
+def _write_cap_recipe(
+    tmp_path, name, caps=(), platforms=("linux",), prebuilt=False, source_package=False
+):
+    """A minimal recipe, optionally declaring requires_capabilities.
+
+    *source_package* builds it from a source package (``source.type: package``),
+    which makes its jobs require the ``source_packages`` capability.
+    """
     rdir = tmp_path / "recipes" / name
     rdir.mkdir(parents=True)
     caps_line = (
@@ -514,6 +520,8 @@ def _write_cap_recipe(tmp_path, name, caps=(), platforms=("linux",), prebuilt=Fa
     )
     if prebuilt:
         caps_line += "prebuilt_payload: true\n"
+    if source_package:
+        caps_line += f"source:\n  type: package\n  package: {name}-src\n"
     matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
     (rdir / "recipe.yaml").write_text(
         f"""schema_version: 1
@@ -658,12 +666,12 @@ class TestSubmitDagCapabilityPropagation:
         assert _submit_dag(tmp_path, monkeypatch, posted, [cuda_239], "torch-cp311-cuda") == 0
         assert [j for b in posted for j in b["jobs"]] != []
 
-    def test_without_prebuilt_payload_the_job_carries_the_unsatisfiable_pair(
-        self, tmp_path, monkeypatch
+    def test_without_prebuilt_payload_the_unsatisfiable_pair_is_skipped_up_front(
+        self, tmp_path, monkeypatch, capsys
     ):
-        # The counterpart: absent the flag the job demands cuda AND the floor.
-        # No single builder offers both, so the server reaps it as
-        # `unschedulable` — the state this flag exists to avoid.
+        # The counterpart: absent the flag the job would demand cuda AND the
+        # floor.  No single builder offers both, so the server would reap it
+        # as `unschedulable` — submit-dag now says so instead of submitting.
         from cvcpkg.glibc import capability_name, target_floor
 
         cuda_239 = {
@@ -674,11 +682,10 @@ class TestSubmitDagCapabilityPropagation:
         _write_cap_recipe(tmp_path, "torch-cp311-cuda", caps=("cuda",))
         posted: list = []
         assert _submit_dag(tmp_path, monkeypatch, posted, [cuda_239], "torch-cp311-cuda") == 0
-        jobs = [j for b in posted for j in b["jobs"]]
-        assert len(jobs) == 1
-        required = set(jobs[0]["required_capabilities"])
-        assert required == {"cuda", capability_name(target_floor())}
-        assert not required <= set(cuda_239["capabilities"])
+        assert [j for b in posted for j in b["jobs"]] == []
+        out = capsys.readouterr().out
+        assert "no registered builder advertises every required capability" in out
+        assert f"torch-cp311-cuda (cuda, {capability_name(target_floor())})" in out
 
     def test_non_linux_job_carries_no_requirement(self, tmp_path, monkeypatch):
         # Absent (not empty-list) so an OLD server ignoring the field behaves
@@ -721,6 +728,137 @@ class TestSubmitDagCapabilityPropagation:
         )
         names = {j["recipe_name"] for b in posted for j in b["jobs"]}
         assert names == {"zlib"}
+
+
+# ── submit-dag: the glibc floor is part of the joint capability check ──
+#
+# A linux job carries the recipe's own capabilities AND the glibc floor, and
+# the server's reaper needs ONE builder that covers the target and advertises
+# all of them.  submit-dag's up-front check weighs the same set, so a job no
+# builder can claim is skipped with a message instead of being reaped after
+# CVCPKG_UNSCHEDULABLE_TTL (cy-pca/cvcpkg#329: fontconfig, a source-package
+# recipe, on a dev cluster whose source-package builders all ran glibc 2.39).
+
+
+def _linux_builder(**caps):
+    return {"platform": "linux", "arch": "x86_64", "capabilities": dict(caps)}
+
+
+# glibc 2.35 host on code that predates source packages.
+_FLOOR_ONLY = _linux_builder(**{"glibc2.35": True, "glibc2.39": True, "glibc2.41": True})
+# glibc 2.39 host on current code: source packages, but not the 2.35 floor.
+_SRC_PKG_239 = _linux_builder(**{"source_packages": True, "glibc2.39": True, "glibc2.41": True})
+# glibc 2.35 host on current code.
+_SRC_PKG_235 = _linux_builder(
+    **{"source_packages": True, "glibc2.35": True, "glibc2.39": True, "glibc2.41": True}
+)
+
+
+class TestSubmitDagJointFloorCheck:
+    @pytest.fixture(autouse=True)
+    def _floor_235(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_GLIBC_FLOOR", "2.35")
+        monkeypatch.delenv("CVCPKG_NOARCH_BUILD_PLATFORM", raising=False)
+        monkeypatch.delenv("CVCPKG_NOARCH_BUILD_ARCH", raising=False)
+
+    def _jobs(self, posted):
+        return [j for b in posted for j in b["jobs"]]
+
+    def test_source_package_needs_floor_and_capability_on_one_builder(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # The #329 fleet: each half is advertised, by two different builders.
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True)
+        posted: list = []
+        builders = [_FLOOR_ONLY, _SRC_PKG_239]
+        assert _submit_dag(tmp_path, monkeypatch, posted, builders, "fontconfig") == 0
+        assert self._jobs(posted) == []
+        out = capsys.readouterr().out
+        assert "Skipping 1 recipe(s) for linux/x86_64" in out
+        assert "no registered builder advertises every required capability" in out
+        assert "fontconfig (glibc2.35, source_packages)" in out
+
+    def test_source_package_submits_when_one_builder_has_both(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True)
+        posted: list = []
+        builders = [_FLOOR_ONLY, _SRC_PKG_239, _SRC_PKG_235]
+        assert _submit_dag(tmp_path, monkeypatch, posted, builders, "fontconfig") == 0
+        jobs = self._jobs(posted)
+        assert len(jobs) == 1
+        assert jobs[0]["required_capabilities"] == ["glibc2.35", "source_packages"]
+
+    def test_floor_without_source_packages_is_not_enough(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True)
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_FLOOR_ONLY], "fontconfig") == 0
+        assert self._jobs(posted) == []
+
+    def test_wrong_floor_alone_skips_a_plain_recipe(self, tmp_path, monkeypatch, capsys):
+        # Only 2.39 hosts: even a recipe that asks for nothing carries the
+        # 2.35 floor, which none of them can produce.
+        _write_cap_recipe(tmp_path, "zlib")
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_SRC_PKG_239], "zlib") == 0
+        assert self._jobs(posted) == []
+        assert "zlib (glibc2.35)" in capsys.readouterr().out
+
+    def test_plain_recipe_submits_on_a_floor_builder(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "zlib")
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_FLOOR_ONLY], "zlib") == 0
+        assert len(self._jobs(posted)) == 1
+
+    def test_builder_reporting_no_glibc_fails_open_on_the_floor(self, tmp_path, monkeypatch):
+        # An agent older than glibc capability reporting (or one run with
+        # --no-auto-capabilities) advertises no glibc capability at all: its
+        # glibc is unknown, so the floor must not rule it out.
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True)
+        legacy = _linux_builder(source_packages=True)
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [legacy], "fontconfig") == 0
+        jobs = self._jobs(posted)
+        assert len(jobs) == 1
+        assert jobs[0]["required_capabilities"] == ["glibc2.35", "source_packages"]
+
+    def test_fail_open_covers_only_the_floor(self, tmp_path, monkeypatch):
+        # Unknown glibc excuses the floor, never a real capability.
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True)
+        legacy = _linux_builder()
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [legacy], "fontconfig") == 0
+        assert self._jobs(posted) == []
+
+    def test_non_linux_jobs_are_not_held_to_a_floor(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "fontconfig", source_package=True, platforms=("freebsd",))
+        bsd = {"platform": "freebsd", "arch": "x86_64", "capabilities": {"source_packages": True}}
+        posted: list = []
+        assert (
+            _submit_dag(tmp_path, monkeypatch, posted, [bsd], "fontconfig", platform="freebsd") == 0
+        )
+        jobs = self._jobs(posted)
+        assert len(jobs) == 1
+        assert jobs[0]["required_capabilities"] == ["source_packages"]
+
+    def test_noarch_job_is_held_to_the_reference_target_s_floor(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # A platform: any job is built on linux/x86_64 and inherits its floor.
+        _write_cap_recipe(tmp_path, "purepy", platforms=("any",))
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_SRC_PKG_239], "purepy") == 0
+        assert self._jobs(posted) == []
+        out = capsys.readouterr().out
+        assert "Skipping 1 noarch recipe(s)" in out
+        assert "purepy (glibc2.35)" in out
+
+    def test_noarch_job_submits_on_a_floor_builder(self, tmp_path, monkeypatch):
+        _write_cap_recipe(tmp_path, "purepy", platforms=("any",))
+        posted: list = []
+        assert _submit_dag(tmp_path, monkeypatch, posted, [_FLOOR_ONLY], "purepy") == 0
+        jobs = self._jobs(posted)
+        assert len(jobs) == 1
+        assert jobs[0]["platform"] == "any"
+        assert jobs[0]["required_capabilities"] == ["glibc2.35"]
 
 
 # ── CUDA host probe ─────────────────────────────────────────────

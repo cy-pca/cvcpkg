@@ -1249,6 +1249,7 @@ def builds_submit_dag(
     # host. Requiring the floor as a capability routes the job to a builder
     # that can actually produce it (see cvcpkg/glibc.py).
     from cvcpkg.glibc import capability_name as _glibc_cap
+    from cvcpkg.glibc import parse_version as _glibc_parse
     from cvcpkg.glibc import target_floor as _glibc_floor
 
     def _platform_caps(name: str, plat: str) -> list[str]:
@@ -1290,6 +1291,10 @@ def builds_submit_dag(
 
             caps.append(SOURCE_PACKAGES_CAPABILITY)
         return caps
+
+    def _job_caps(name: str, plat: str) -> list[str]:
+        """Every capability *name*'s job for *plat* carries (recipe's own + floor)."""
+        return sorted(set(_required_caps(name) + _platform_caps(name, plat)))
 
     def _min_disk(name: str) -> int | None:
         """A recipe's ``build.min_disk_gb`` (e.g. 35 for haiku-image).
@@ -1373,6 +1378,29 @@ def builds_submit_dag(
             )
             _builder_check = False
 
+    def _is_glibc_cap(cap: str) -> bool:
+        return cap.startswith("glibc") and _glibc_parse(cap) is not None
+
+    def _caps_cover(req: set[str], caps: set[str]) -> bool:
+        """Would a builder advertising *caps* pass the server's capability check?
+
+        Exactly the server's rule (every required capability advertised), with
+        one exception: a glibc floor counts as met by a builder that advertises
+        NO glibc capability at all.  That builder runs an agent older than
+        glibc capability reporting (or --no-auto-capabilities), so its glibc is
+        unknown, not wrong, and reading unknown as "cannot serve" would make
+        submit-dag refuse every linux recipe until the whole fleet had been
+        upgraded.  Unknown fails OPEN, as min_disk does.  A builder that reports
+        any glibc capability is judged on it: a 2.39 host advertises
+        glibc2.39/glibc2.41 and cannot produce a 2.35-floor bundle.
+        """
+        missing = req - caps
+        if not missing:
+            return True
+        if any(_is_glibc_cap(c) for c in caps):
+            return False
+        return all(_is_glibc_cap(c) for c in missing)
+
     def _has_builder(
         plat: str,
         ar: str,
@@ -1383,7 +1411,7 @@ def builds_submit_dag(
         if not req and not min_disk:
             return (plat, ar) in _supported_targets or plat in _supported_platforms
         return any(
-            req <= _caps
+            _caps_cover(req, _caps)
             # A builder advertising no free-disk figure (_disk is None) is an
             # agent older than disk-aware scheduling, or one run with
             # --no-free-disk.  Unknown fails OPEN here exactly as it does in
@@ -1719,35 +1747,35 @@ def builds_submit_dag(
                                 f"named recipes."
                             )
 
-                    # Drop recipes whose required capabilities no registered
-                    # builder covering this target advertises (e.g. a
+                    # Drop recipes whose job no single registered builder
+                    # covering this target could claim (e.g. a
                     # requires_capabilities: [cuda] recipe with no cuda
                     # builder) — their jobs would only sit pending until the
                     # server's unschedulable reaper failed them.
                     #
-                    # Only the recipe's OWN capabilities are weighed, not the
-                    # glibc floor the job also carries, so a recipe whose two
-                    # halves are individually servable but jointly are not
-                    # still reaches the server before anyone notices (that is
-                    # how torch-cp311-cuda got stranded: a cuda builder exists,
-                    # but it is the fleet's one 2.39 host).  Folding the floor
-                    # in here needs the unknown case to fail OPEN first — a
-                    # builder on an agent older than glibc capability reporting
-                    # advertises none, and reading that as "cannot serve" would
-                    # make submit-dag refuse every linux recipe until the whole
-                    # fleet had been upgraded.  Same reasoning as min_disk.
+                    # The check weighs everything the job will carry: the
+                    # recipe's own capabilities AND the linux glibc floor.
+                    # Weighing only the recipe's own let a job whose halves
+                    # are individually servable but jointly are not reach the
+                    # server anyway: torch-cp311-cuda (cuda + glibc2.35, and
+                    # the one cuda host runs 2.39), and fontconfig on the dev
+                    # cluster (source_packages + glibc2.35, which no dev linux
+                    # builder offered together: cy-pca/cvcpkg#329's
+                    # build-on-dev waited 25 minutes for a job the reaper then
+                    # failed).  A builder that reports no glibc capability
+                    # fails open on the floor (see _caps_cover).
                     if _builder_check:
                         _uncapable = [
                             n
                             for n in eligible
-                            if _required_caps(n) and not _has_builder(plat, ar, _required_caps(n))
+                            if _job_caps(n, plat) and not _has_builder(plat, ar, _job_caps(n, plat))
                         ]
                         if _uncapable:
                             click.echo(
                                 f"  Skipping {len(_uncapable)} recipe(s) for {plat}/{ar}: no "
-                                f"registered builder advertises the required capability: "
+                                f"registered builder advertises every required capability: "
                                 + ", ".join(
-                                    f"{n} ({', '.join(_required_caps(n))})"
+                                    f"{n} ({', '.join(_job_caps(n, plat))})"
                                     for n in sorted(_uncapable)
                                 )
                             )
@@ -1764,7 +1792,7 @@ def builds_submit_dag(
                             n
                             for n in eligible
                             if _min_disk(n)
-                            and not _has_builder(plat, ar, _required_caps(n), _min_disk(n))
+                            and not _has_builder(plat, ar, _job_caps(n, plat), _min_disk(n))
                         ]
                         if _undersized:
                             click.echo(
@@ -1790,9 +1818,9 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _required_caps(name) + _platform_caps(name, plat)
+                        _rc = _job_caps(name, plat)
                         if _rc:
-                            job["required_capabilities"] = sorted(set(_rc))
+                            job["required_capabilities"] = _rc
                         _d = _min_disk(name)
                         if _d is not None:
                             job["min_disk_gb"] = _d
@@ -1840,14 +1868,32 @@ def builds_submit_dag(
                             eligible = [n for n in eligible if n not in set(satisfied)]
 
                     # A noarch job is BUILT on the reference target, so its
-                    # disk requirement is checked against the builders that
-                    # cover that target, not against the fleet at large.
+                    # capabilities (including that platform's glibc floor) and
+                    # its disk requirement are checked against the builders
+                    # that cover that target, not against the fleet at large.
                     if _builder_check and eligible:
+                        _np = _noarch_target[0]
+                        _uncapable = [
+                            n
+                            for n in eligible
+                            if _job_caps(n, _np)
+                            and not _has_builder(*_noarch_target, _job_caps(n, _np))
+                        ]
+                        if _uncapable:
+                            click.echo(
+                                f"  Skipping {len(_uncapable)} noarch recipe(s): no registered "
+                                f"builder advertises every required capability: "
+                                + ", ".join(
+                                    f"{n} ({', '.join(_job_caps(n, _np))})"
+                                    for n in sorted(_uncapable)
+                                )
+                            )
+                            eligible = [n for n in eligible if n not in set(_uncapable)]
                         _undersized = [
                             n
                             for n in eligible
                             if _min_disk(n)
-                            and not _has_builder(*_noarch_target, _required_caps(n), _min_disk(n))
+                            and not _has_builder(*_noarch_target, _job_caps(n, _np), _min_disk(n))
                         ]
                         if _undersized:
                             click.echo(
@@ -1876,9 +1922,9 @@ def builds_submit_dag(
                         # A noarch job is built on the reference target, so it
                         # inherits THAT platform's floor even though the bundle
                         # itself is platform-independent.
-                        _rc = _required_caps(name) + _platform_caps(name, _noarch_target[0])
+                        _rc = _job_caps(name, _noarch_target[0])
                         if _rc:
-                            job["required_capabilities"] = sorted(set(_rc))
+                            job["required_capabilities"] = _rc
                         _d = _min_disk(name)
                         if _d is not None:
                             job["min_disk_gb"] = _d

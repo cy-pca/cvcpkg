@@ -2968,6 +2968,52 @@ def enforce_declared_files(
     )
 
 
+def check_noarch_wheels(install_dir: Path) -> list[str]:
+    """The wheels installed under *install_dir* that are not ``*-none-any``.
+
+    Each entry is ``<the .dist-info dir>: <its non-none-any tags>``.  pip
+    records the tag of the wheel it installed in ``*.dist-info/WHEEL``, so this
+    tells a compiled extension apart from a pure package without guessing from
+    file types (setuptools and pip ship Windows .exe launchers in pure wheels).
+    """
+    bad: list[str] = []
+    for wheel_file in sorted(install_dir.glob("**/*.dist-info/WHEEL")):
+        try:
+            text = wheel_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        tags = [ln.split(":", 1)[1].strip() for ln in text.splitlines() if ln.startswith("Tag:")]
+        off = [t for t in tags if not t.endswith("-none-any")]
+        if off:
+            bad.append(f"{wheel_file.parent.relative_to(install_dir).as_posix()}: {', '.join(off)}")
+    return bad
+
+
+def enforce_noarch_wheels(install_dir: Path, platform: str, recipe_name: str) -> None:
+    """Refuse to pack an any/noarch bundle that holds a platform wheel.
+
+    A generated python column is noarch when PyPI has a py3-none-any wheel, but
+    it builds from the sdist, and some sdists compile an optional C extension
+    whenever a compiler is there.  The noarch job then ships whichever host
+    claimed it: pyrsistent-cp312 0.20.0+cvc.2 went out as any/noarch with a
+    cp312-cp312-macosx_13_0_arm64 wheel inside (pvectorc.cpython-312-darwin.so),
+    and cython-cp311 the same way before it (#53).
+    """
+    if platform != "any":
+        return
+    bad = check_noarch_wheels(install_dir)
+    if not bad:
+        return
+    listed = "\n  ".join(bad)
+    raise BuildError(
+        f"{recipe_name}: this any/noarch bundle holds a platform-specific wheel:\n  {listed}\n"
+        "Its sdist compiled an extension on this host, so the bundle would only work "
+        "on hosts like this one.  If the extension is optional, turn it off for the "
+        "build (tools/gen_python_recipes.py _PURE_BUILD_ENV); otherwise build the "
+        "column per platform (_PREFER_BINARY)."
+    )
+
+
 def stage_bundle(
     install_dir: Path,
     manifest: dict[str, Any],
@@ -4124,6 +4170,7 @@ def pack_recipe(
         ctx.recipe.name,
         strict=strict_globs,
     )
+    enforce_noarch_wheels(ctx.install_dir, pkg_platform, ctx.recipe.name)
 
     manifest = generate_manifest(
         ctx.recipe,
@@ -4302,6 +4349,7 @@ def pack_from_prefix(
         recipe.name,
         strict=strict_globs,
     )
+    enforce_noarch_wheels(prefix, platform, recipe.name)
 
     manifest = generate_manifest(
         recipe,

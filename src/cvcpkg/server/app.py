@@ -67,7 +67,7 @@ from cvcpkg.server.limits import (
 )
 from cvcpkg.server.audit import AuditLog
 from cvcpkg.server.auth import TokenStore
-from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, etag_matches
+from cvcpkg.server.catalog_cache import CatalogBody, CatalogCache, accepts_gzip, etag_matches
 from cvcpkg.server.models import (
     AuditAction,
     AuditLogResponse,
@@ -2914,15 +2914,26 @@ def create_app(
             body = await _catalog_cache.get(
                 (scope, include_yanked), lambda: _build_catalog_body(scope, include_yanked)
             )
-            etag = body.etag(base)
+            gzipped = accepts_gzip(request.headers.get("accept-encoding", ""))
             headers = {
-                "ETag": etag,
+                "ETag": body.etag(base, gzipped=gzipped),
                 # Revalidate every time (the ETag makes that cheap), and keep a
                 # caller's private-org packages out of shared caches.
                 "Cache-Control": "private, no-cache" if caller else "no-cache",
+                "Vary": "Accept-Encoding",
             }
-            if etag_matches(request.headers.get("if-none-match", ""), etag):
+            # Either encoding's tag means the caller holds the current catalog.
+            if_none_match = request.headers.get("if-none-match", "")
+            if etag_matches(if_none_match, body.etag(base)) or etag_matches(
+                if_none_match, body.etag(base, gzipped=True)
+            ):
                 return Response(status_code=304, headers=headers)
+            if gzipped:
+                # Already encoded, so GZipMiddleware passes it through as is.
+                headers["Content-Encoding"] = "gzip"
+                return Response(
+                    await body.render_gzip(base), media_type="application/json", headers=headers
+                )
             return Response(body.render(base), media_type="application/json", headers=headers)
 
         # Mirror sync loop writes the upstream catalog into state.index (in
