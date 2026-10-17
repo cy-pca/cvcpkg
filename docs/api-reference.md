@@ -463,21 +463,29 @@ Retention purges are audited under the `nuke` action with actor `retention-gc`.
 ### Orphan archives
 
 An orphan is an archive file in storage that no package row references (in any
-yank state). Find them, admin only and dry-run by default:
+yank state), or an upload temp file left behind by a request or server that
+died mid-upload. Find them, admin only and dry-run by default:
 
 ```
-POST /v1/admin/gc/orphans?dry_run=true&min_age_seconds=3600
+POST /v1/admin/gc/orphans?dry_run=true&min_age_seconds=3600&staging_min_age_seconds=86400
 ```
 
-Each orphan carries `filename`, `size_bytes` and `tombstoned`: `true` when a
-tombstone names it (its bundle was removed but the archive delete failed, so
-downloads already answer `410`), `false` when nothing accounts for it (left by
-`DELETE` before it removed archives; still downloadable until deleted).
-`dry_run=false` deletes them and writes no tombstone. Files modified within
-`min_age_seconds` (default 3600) are skipped, since populate moves an archive
-into place before inserting its row; only `*.tar.zst` names are considered. A
-mirror lists its orphans but refuses to delete them (`409`): its archive
-directory also caches proxied downloads that have no row.
+Each orphan carries `filename`, `size_bytes`, `kind` and `tombstoned`:
+
+- `kind: archive` — a `*.tar.zst` with no row. `tombstoned` is `true` when a
+  tombstone names it (its bundle was removed but the archive delete failed, so
+  downloads already answer `410`), `false` when nothing accounts for it (left
+  by `DELETE` before it removed archives; still downloadable until deleted).
+  Archives modified within `min_age_seconds` (default 3600) are skipped, since
+  populate moves an archive into place before inserting its row.
+- `kind: staging` — a `tmp*.upload`, `.chunk`, `.populate`, `.mirror` or
+  `.downloading` file in the local archives directory, older than
+  `staging_min_age_seconds` (default one day) and not owned by a live
+  chunked-upload session.
+
+`dry_run=false` deletes them and writes no tombstone. A mirror lists its orphans
+but refuses to delete them (`409`): its archive directory also caches proxied
+downloads that have no row.
 
 ### Nuked-package tombstones
 

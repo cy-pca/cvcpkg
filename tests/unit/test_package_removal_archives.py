@@ -16,6 +16,7 @@ import asyncio
 import io
 import os
 import time
+import types
 
 import pytest
 
@@ -504,7 +505,9 @@ class TestOrphanSweep:
         os.utime(p, (t, t))
         return p
 
-    def test_lists_then_deletes_orphans(self, db_env):
+    def test_lists_then_deletes_orphans(self, db_env, monkeypatch):
+        from cvcpkg.server import app as app_module
+
         client, admin, pub, archives = db_env
         live = _publish(client, pub)
         gone = _publish(client, pub, name="gone")
@@ -512,25 +515,37 @@ class TestOrphanSweep:
         stray = self._stray(archives, "stray-1.0-wasm-wasm32-release-static.tar.zst")
         tombstoned = self._stray(archives, _fname(gone))  # bytes back, row gone
         recent = self._stray(archives, "recent.tar.zst", age_seconds=0)
-        staging = self._stray(archives, "tmpabc.upload")
+        day = 86400
+        dead_upload = self._stray(archives, "tmpdead.upload", age_seconds=2 * day)
+        dead_chunk = self._stray(archives, "tmpdead.chunk", age_seconds=2 * day)
+        fresh_upload = self._stray(archives, "tmpfresh.upload")  # 2h: maybe still running
+        live_chunk = self._stray(archives, "tmplive.chunk", age_seconds=2 * day)
+        monkeypatch.setitem(
+            app_module._upload_sessions,
+            "u1",
+            types.SimpleNamespace(temp_path=live_chunk),
+        )
 
         r = client.post("/v1/admin/gc/orphans", headers=_h(admin))
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["dry_run"] is True and body["skipped_recent"] == 1
-        assert {(o["filename"], o["tombstoned"]) for o in body["orphans"]} == {
-            (stray.name, False),
-            (tombstoned.name, True),
+        assert body["dry_run"] is True and body["skipped_recent"] == 3
+        assert {(o["filename"], o["kind"], o["tombstoned"]) for o in body["orphans"]} == {
+            (stray.name, "archive", False),
+            (tombstoned.name, "archive", True),
+            (dead_upload.name, "staging", False),
+            (dead_chunk.name, "staging", False),
         }
-        assert body["size_bytes"] == 2 * len(b"orphan")
-        assert stray.exists() and tombstoned.exists()
+        assert body["size_bytes"] == 4 * len(b"orphan")
+        assert stray.exists() and tombstoned.exists() and dead_upload.exists()
         assert client.get(f"/v1/download/{stray.name}").status_code == 200
 
         r = client.post("/v1/admin/gc/orphans?dry_run=false", headers=_h(admin))
         assert r.status_code == 200, r.text
         assert all(o["deleted"] for o in r.json()["orphans"])
         assert not stray.exists() and not tombstoned.exists()
-        assert recent.exists() and staging.exists()
+        assert not dead_upload.exists() and not dead_chunk.exists()
+        assert recent.exists() and fresh_upload.exists() and live_chunk.exists()
         assert (archives / _fname(live)).is_file()
         assert client.get(live).status_code == 200
 

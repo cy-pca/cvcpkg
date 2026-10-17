@@ -10816,23 +10816,37 @@ def create_app(
         min_age_seconds: int = Query(
             3600,
             ge=0,
-            description="Skip local files modified more recently than this.",
+            description="Skip local archives modified more recently than this.",
+        ),
+        staging_min_age_seconds: int = Query(
+            86400,
+            ge=0,
+            description="Skip upload temp files modified more recently than this.",
         ),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Find archive files no package row references; delete them on request.
 
-        Admin only, dry-run by default.  Each orphan carries ``tombstoned``:
-        true when a tombstone names it (its bundle was removed but the archive
-        delete failed; downloads already answer 410), false when nothing in
-        the catalog accounts for it (what DELETE left behind before it deleted
-        archives; such a file is still downloadable until deleted).  Deleting
-        an orphan writes no tombstone, since there is no row to copy one from.
+        Admin only, dry-run by default.  Each orphan has a ``kind``:
 
-        Files younger than *min_age_seconds* are skipped: populate moves an
-        archive into place before inserting its row.  A mirror's archive
-        directory also caches proxied downloads that have no row, so a mirror
-        only lists.
+        * ``archive`` -- a ``*.tar.zst`` in the archive store that no package
+          row references, in any yank state.  ``tombstoned`` is true when a
+          tombstone names it (its bundle was removed but the archive delete
+          failed; downloads already answer 410), false when nothing in the
+          catalog accounts for it (what DELETE left behind before it deleted
+          archives; such a file is still downloadable until deleted).
+          Deleting one writes no tombstone, since there is no row to copy
+          one from.
+        * ``staging`` -- an upload temp file (``tmp*.upload``, ``.chunk`` ...)
+          left in the local archives directory by a request or server that
+          died mid-upload.  Files of a live chunked-upload session are kept.
+
+        Archives younger than *min_age_seconds* are skipped (populate moves an
+        archive into place before inserting its row), and so are temp files
+        younger than *staging_min_age_seconds* (a chunked upload may run for
+        up to ``CVCPKG_UPLOAD_SESSION_TTL``, possibly in another worker).  A
+        mirror's archive directory also caches proxied downloads that have no
+        row, so a mirror only lists.
         """
         import time as _time
 
@@ -10847,6 +10861,8 @@ def create_app(
             files = archive_store.list_archives(state.storage_uri)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(501, f"cannot list the archive store: {exc}") from exc
+        staging = archive_store.list_staging(state.archives_dir())
+        live_uploads = {s.temp_path.name for s in _upload_sessions.values()}
         # Rows are read after the listing: a publish commits its row before it
         # stores the archive, so every file listed above already has its row.
         states = await _db_packages.archive_filename_states([f for f, _, _ in files])
@@ -10862,8 +10878,22 @@ def create_app(
             orphans.append(
                 {
                     "filename": fname,
+                    "kind": "archive",
                     "size_bytes": size,
                     "tombstoned": states.get(fname) == "tombstone",
+                    "deleted": False,
+                }
+            )
+        for fname, size, mtime in staging:
+            if fname in live_uploads or now - mtime < staging_min_age_seconds:
+                skipped_recent += 1
+                continue
+            orphans.append(
+                {
+                    "filename": fname,
+                    "kind": "staging",
+                    "size_bytes": size,
+                    "tombstoned": False,
                     "deleted": False,
                 }
             )
@@ -10875,7 +10905,9 @@ def create_app(
                     [o["filename"] for o in orphans]
                 )
                 for o in orphans:
-                    if recheck.get(o["filename"]) != "row":
+                    if o["kind"] == "staging":
+                        o["deleted"] = _unlink_staging(state.archives_dir() / o["filename"])
+                    elif recheck.get(o["filename"]) != "row":
                         o["deleted"] = archive_store.delete(state.storage_uri, o["filename"])
                 gone = [o for o in orphans if o["deleted"]]
                 ac.detail = (
@@ -10890,6 +10922,16 @@ def create_app(
             "skipped_recent": skipped_recent,
             "orphans": orphans,
         }
+
+    def _unlink_staging(path: Path) -> bool:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            logger.exception("orphan sweep: failed to delete %s", path)
+            return False
+        return True
 
     @app.post(
         "/v1/admin/purge/builds",

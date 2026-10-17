@@ -47,6 +47,10 @@ ARCHIVES_SUBDIR = "archives"
 STORAGE_CONFIG_FILE = "storage.yaml"
 # Every archive the server stores is named <name>-<version>-...-<link>.tar.zst.
 ARCHIVE_SUFFIX = ".tar.zst"
+# What the publish, chunked-upload, populate and mirror paths name their temp
+# files in the local archives directory before the archive gets its real name.
+# A request or server that dies mid-upload leaves them behind.
+STAGING_SUFFIXES = (".upload", ".chunk", ".populate", ".mirror", ".downloading")
 
 _READ_CHUNK = 1 << 16  # 64 KiB
 
@@ -233,6 +237,27 @@ def list_archives(storage_uri: str) -> list[tuple[str, int, float | None]]:
         return out
     names = get_backend(storage_uri).list(archive_uri(storage_uri, ""))
     return [(n, size(storage_uri, n), None) for n in sorted(names) if n.endswith(ARCHIVE_SUFFIX)]
+
+
+def list_staging(archives_dir: Path) -> list[tuple[str, int, float]]:
+    """Temp files in the local *archives_dir* as ``(filename, size, mtime)``.
+
+    Local even when archives live in a remote backend: uploads are always
+    staged on the server's own disk.
+    """
+    out: list[tuple[str, int, float]] = []
+    if not archives_dir.is_dir():
+        return out
+    for p in sorted(archives_dir.iterdir()):
+        if not p.name.endswith(STAGING_SUFFIXES):
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if p.is_file():
+            out.append((p.name, st.st_size, st.st_mtime))
+    return out
 
 
 def size(storage_uri: str, filename: str) -> int:
