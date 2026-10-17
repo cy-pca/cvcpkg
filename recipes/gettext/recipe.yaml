@@ -5,7 +5,10 @@ recipe:
   # cvc.2: macOS builds the full tree (msgfmt, xgettext, msgmerge, libtextstyle)
   # against cvcpkg's GNU libiconv instead of gettext-runtime alone, so nothing
   # needs Homebrew's msgfmt.
-  cvc_revision: 2
+  # cvc.3: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
+  # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
+  # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
+  cvc_revision: 3
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
