@@ -93,6 +93,36 @@ case "${CVC_PLATFORM}" in
         export CXXFLAGS="${CXXFLAGS//-I\/usr\/local\/include/}"
         ;;
 esac
+# NetBSD: the same for pkgsrc's /usr/pkg, and for the link too.  CPython bakes
+# its build flags into sysconfig (CFLAGS, LDFLAGS, LDSHARED), and setuptools
+# puts those FIRST on every extension's command line, ahead of the extension's
+# own -I/-L and of the environment's flags.  With env-netbsd.sh's
+# -I/usr/pkg/include -L/usr/pkg/lib -Wl,-R/usr/pkg/lib in them, every C
+# extension later built against this interpreter took pkgsrc's headers and
+# libraries over cvcpkg's: cffi-cp312 linked pkgsrc's libffi.so.8 instead of
+# cvcpkg's libffi.so.12 and could not load, and pyyaml-cp312 came out without
+# libyaml (dev cluster, python312 cvc.15).  CPython needs nothing from pkgsrc
+# -- its deps are all in CVC_DEPS_PREFIX -- so it also stops picking up an
+# optional pkgsrc library (gdbm, ...) that happens to be installed.
+#
+# That -R/usr/pkg/lib was also, by accident, the room the RPATH post-fixup
+# below rewrites into.  Without it a stdlib extension's link-time RPATH is just
+# make's mangled "RIGIN/../lib" (12 bytes), patchelf's "$ORIGIN/../.." is 13,
+# and growing it adds the PT_LOAD NetBSD's ld.elf_so refuses ("math.cpython-
+# 312.so: wrong number of segments (3 != 2)", python312 cvc.16 on the dev
+# cluster).  So reserve the room explicitly, in LDFLAGS_NODIST: CPython links
+# itself and its stdlib modules with it but keeps it out of sysconfig, so no
+# later extension inherits it (see env-netbsd.sh, cvc_netbsd_prefix_first).
+if [ "${CVC_PLATFORM}" = "netbsd" ]; then
+    export CFLAGS="${CFLAGS//-I\/usr\/pkg\/include/}"
+    export CXXFLAGS="${CXXFLAGS//-I\/usr\/pkg\/include/}"
+    export CPPFLAGS="${CPPFLAGS//-I\/usr\/pkg\/include/}"
+    LDFLAGS="${LDFLAGS//-Wl,-R\/usr\/pkg\/lib/}"
+    export LDFLAGS="${LDFLAGS//-L\/usr\/pkg\/lib/}"
+    if [ "$IS_CROSS" = false ]; then
+        export LDFLAGS_NODIST="-Wl,-R${CVC_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX}/lib${LDFLAGS_NODIST:+ ${LDFLAGS_NODIST}}"
+    fi
+fi
 
 # On macOS ensure the deployment target is propagated.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then

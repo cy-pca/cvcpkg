@@ -162,6 +162,9 @@ echo "cryptography-cp312: OPENSSL_DIR=${OPENSSL_DIR} (version ${CVC_OPENSSL_VERS
 # is the maturin already staged in the prefix rather than a fresh PyPI download.
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
+# NetBSD: build against our prefix ahead of pkgsrc, with a long RPATH that the
+# patchelf --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
+[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_prefix_first
 "${PY}" -m pip wheel \
     --no-deps \
     --no-build-isolation \

@@ -100,6 +100,9 @@ _dump_meson_log() {
     echo "-----------------------------------" >&2
 }
 
+# NetBSD: build against our prefix ahead of pkgsrc, with a long RPATH that the
+# patchelf --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
+[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_prefix_first
 if ! "${PY}" -m pip wheel \
   --no-build-isolation --no-deps --no-index --no-cache-dir \
   --wheel-dir "${WHEELOUT}" \
