@@ -116,12 +116,20 @@ package:
     # build.sh builds OpenBSD with no-dynamic-engine no-legacy (its linker
     # rejects the modules), so neither directory exists there; declaring them
     # for openbsd failed every pack under strict globs.
-    - { glob: "lib/engines-3/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
+    # A static Windows openssl produces no engines-3/ either (ossl-modules
+    # still exists), so windows is dropped from the engine assertion too.
+    # package.files only DECLARES what ships -- the whole install tree is
+    # staged regardless -- so a shared Windows build that does emit them still
+    # ships them; this just stops asserting their presence where they are absent.
+    - { glob: "lib/engines-3/", platforms: [linux, macos, freebsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - { glob: "lib/ossl-modules/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
     - lib/cmake/OpenSSL/
-    - lib/pkgconfig/openssl*
-    - lib/pkgconfig/libssl*
-    - lib/pkgconfig/libcrypto*
+    # Windows openssl does not install pkg-config .pc files (static least of
+    # all); the schema has no link scope, so assert them on every target
+    # except windows.
+    - { glob: "lib/pkgconfig/openssl*",   platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
+    - { glob: "lib/pkgconfig/libssl*",    platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
+    - { glob: "lib/pkgconfig/libcrypto*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - include/openssl/
     - bin/openssl*
   cmake_packages:
