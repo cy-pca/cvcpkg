@@ -5,6 +5,9 @@ recipe:
   # Added wasm/wasi/cosmo entries.  Expat is a dependency-free C89 parser
   # whose only platform requirement is an entropy source for its hash salt;
   # each cross script documents how that resolves on its target.
+  # Windows builds expat.pc (EXPAT_BUILD_PKGCONFIG=ON in build.ps1) and its
+  # xmlwf.exe now matches package.files; Windows has only cvc.3 published, so
+  # its first cvc.4 bundle carries both without a bump.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -75,7 +78,9 @@ package:
     - lib/pkgconfig/expat.pc
     - lib/cmake/expat-*/
     - include/expat*.h
-    - bin/xmlwf
+    # xmlwf.exe on Windows. The wasm, wasi and cosmo scripts build with
+    # EXPAT_BUILD_TOOLS=OFF, so they ship no xmlwf.
+    - { glob: "bin/xmlwf*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows] }
   cmake_packages:
     - { name: EXPAT, targets: ["expat::expat"] }
   pkg_config:
