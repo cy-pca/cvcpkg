@@ -164,6 +164,17 @@ _accept_license_opt = click.option(
         "default when CVCPKG_TRUST_MIRROR is set in the environment."
     ),
 )
+@click.option(
+    "--build-tool",
+    "build_tools",
+    multiple=True,
+    hidden=True,
+    help=(
+        "A requested component that a build runs but never links (install-deps "
+        "passes its recipe's build tools).  When this config/link has no bundle "
+        "of it, install the nearest variant published for this platform/arch."
+    ),
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -189,6 +200,7 @@ def install(
     keep_host_tools: bool | None,
     trust_mirror: bool | None,
     accept_licenses: tuple[str, ...] = (),
+    build_tools: tuple[str, ...] = (),
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -461,6 +473,32 @@ def install(
             for e in entries:
                 virtual_names.update(e.provides)
 
+            # A build tool with no bundle for this config/link comes from the
+            # nearest variant that has one (_resolve_build_tool_fallbacks).  It
+            # is then absent from `candidates`, so the resolution below leaves
+            # it alone, and its closure joins `picked` afterwards.
+            tool_picked, tool_variants = _resolve_build_tool_fallbacks(
+                [
+                    c
+                    for c in reqs.components
+                    if c.name in build_tools
+                    and c.name not in candidates
+                    and c.name not in virtual_names
+                ],
+                cat,
+                platform=plat,
+                arch=arc,
+                config=reqs.config,
+                link=reqs.link,
+                trust_mirror=trust_mirror,
+                requested_org=requested_org,
+            )
+            for name, (cfg, lnk) in sorted(tool_variants.items()):
+                click.echo(
+                    f"cvcpkg: build tool {name} has no {plat}/{arc}/{reqs.config}/{reqs.link} "
+                    f"bundle; using its {cfg}/{lnk} one (a build tool is run, not linked)"
+                )
+
             # Only resolve components that have candidates in the catalog,
             # either by concrete name or as a virtual package provider, or
             # that are satisfied without one (see _local_only).
@@ -475,6 +513,10 @@ def install(
                 result = resolve(resolvable, candidates, local_only=_local_only)
                 picked = result.picked
                 local_built = result.local
+            if tool_picked:
+                _merge_build_tools(
+                    picked, tool_picked, tool_variants, config=reqs.config, link=reqs.link
+                )
 
             # Components not in the catalog need source build.
             if fallback_to_source:
@@ -965,6 +1007,122 @@ def _find_dep_recipe(name: str, dirs: list[Path]):  # -> Recipe | None
     return None
 
 
+def _is_build_tool_recipe(recipe) -> bool:  # recipe: Recipe | None
+    """True for a recipe whose bundles are run or staged by a build, not linked.
+
+    ``build_type_independent`` marks them: cmake, ninja, meson, pkg-config, perl,
+    msys2, nasm, the autotools, the ``*-src`` source packages.  Libraries (zlib,
+    openssl) and interpreters with debug builds (python312) are not marked, so a
+    library listed under depends.build to be linked statically never changes
+    variant.
+    """
+    if recipe is None:
+        return False
+    build = recipe.raw.get("build") or {}
+    return bool(build.get("build_type_independent"))
+
+
+def _build_tool_variants(config: str, link: str) -> list[tuple[str, str]]:
+    """The other (config, link) variants a build tool may come from, nearest first."""
+    other_link = "static" if link == "shared" else "shared"
+    other_config = "debug" if config == "release" else "release"
+    return [(config, other_link), (other_config, link), (other_config, other_link)]
+
+
+def _same_bundle(a: CatalogEntry, b: CatalogEntry) -> bool:
+    if a.sha256 and b.sha256:
+        return a.sha256 == b.sha256
+    return bool(a.archive_url) and a.archive_url == b.archive_url
+
+
+def _resolve_build_tool_fallbacks(
+    tool_reqs: list,  # list[ComponentReq]
+    cat: dict,
+    *,
+    platform: str,
+    arch: str,
+    config: str,
+    link: str,
+    trust_mirror: bool | None,
+    requested_org: dict[str, str],
+) -> tuple[dict[str, CatalogEntry], dict[str, tuple[str, str]]]:
+    """Resolve build tools that have no bundle for this config/link from another.
+
+    A build tool is run during the build and never linked into the deliverable,
+    so any variant of it built for this platform/arch serves.  Several are
+    published for only some tuples: on Windows pkg-config and msys2 have only
+    release/shared bundles, so a static or debug install-deps used to fail with
+    "not found in the catalog for this platform tuple".
+
+    Each tool resolves, with its own runtime closure, in the nearest variant that
+    has it (see _build_tool_variants).  Returns the picked entries and, per tool,
+    the (config, link) it came from.
+    """
+    from cvcpkg.catalog import catalog_entries
+    from cvcpkg.resolver import resolve
+
+    picked: dict[str, CatalogEntry] = {}
+    used: dict[str, tuple[str, str]] = {}
+    remaining = list(tool_reqs)
+    for cfg, lnk in _build_tool_variants(config, link):
+        if not remaining:
+            break
+        candidates: dict[str, list[CatalogEntry]] = {}
+        for e in catalog_entries(
+            cat, platform=platform, arch=arch, build_type=cfg, link=lnk, trust_mirror=trust_mirror
+        ):
+            wanted_org = requested_org.get(e.name)
+            if wanted_org and e.org != wanted_org:
+                continue
+            candidates.setdefault(e.name, []).append(e)
+        here = [c for c in remaining if c.name in candidates]
+        if not here:
+            continue
+        for name, entry in resolve(here, candidates).picked.items():
+            prev = picked.get(name)
+            if prev is not None and not _same_bundle(prev, entry):
+                raise click.ClickException(
+                    f"build tools from different variants both need {name} "
+                    f"({prev.build_type}/{prev.link} and {entry.build_type}/{entry.link}); "
+                    f"one prefix cannot hold both"
+                )
+            picked[name] = entry
+        for c in here:
+            used[c.name] = (cfg, lnk)
+        remaining = [c for c in remaining if c.name not in candidates]
+    return picked, used
+
+
+def _merge_build_tools(
+    picked: dict[str, CatalogEntry],
+    tool_picked: dict[str, CatalogEntry],
+    tool_variants: dict[str, tuple[str, str]],
+    *,
+    config: str,
+    link: str,
+) -> None:
+    """Add the build tools' closure to *picked*, refusing a mixed-variant prefix.
+
+    A tool from another variant brings that variant's runtime deps (cmake's curl).
+    Where the install already resolved the same name for its own config/link, the
+    two are different bundles of one package and cannot share a prefix, so fail
+    with what to publish instead of overwriting one with the other.
+    """
+    clashes = sorted(
+        n for n, e in tool_picked.items() if n in picked and not _same_bundle(picked[n], e)
+    )
+    if clashes:
+        tools = ", ".join(f"{n} ({c}/{lk})" for n, (c, lk) in sorted(tool_variants.items()))
+        raise click.ClickException(
+            f"build tool(s) {tools} have no {config}/{link} bundle, and the variant "
+            f"installed instead needs {', '.join(clashes)}, which this install also "
+            f"resolves as {config}/{link}. One prefix cannot hold both variants: "
+            f"publish the build tool(s) for {config}/{link}."
+        )
+    for name, entry in tool_picked.items():
+        picked.setdefault(name, entry)
+
+
 @cli.command("install-deps")
 @click.argument("recipe")
 @_prefix_opt
@@ -1141,6 +1299,17 @@ def install_deps(
     target_names = (build_names - build_tool_names) | runtime_names
     host_names = host_tool_names | build_tool_names
 
+    # Build tools install() may take from another config/link when this one has
+    # no bundle of them: build-only deps (not also runtime) whose recipe says
+    # they are run or staged, not linked (_is_build_tool_recipe).
+    build_only = (build_names | host_tool_names) - runtime_names
+    run_only_tools: set[str] = set()
+    if build_only:
+        search_dirs = _install_deps_search_dirs(recipe_dir, recipes_dirs, no_default_recipes)
+        run_only_tools = {
+            n for n in build_only if _is_build_tool_recipe(_find_dep_recipe(n, search_dirs))
+        }
+
     if build_tool_names:
         excluded = (
             ""
@@ -1210,6 +1379,7 @@ def install_deps(
             keep_host_tools=None,
             trust_mirror=trust_mirror,
             accept_licenses=accept_licenses,
+            build_tools=tuple(sorted(run_only_tools.intersection(comps))),
         )
 
 
