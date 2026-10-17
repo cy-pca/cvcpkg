@@ -29,6 +29,8 @@ _REQUIRED = [
     "CVCPKG_CLI_PAIRING_TTL_SECONDS",
     "CVCPKG_CLI_POLL_INTERVAL",
     "CVCPKG_AUTH_GC_INTERVAL",
+    # /v1/catalog cache lifetime.
+    "CVCPKG_CATALOG_CACHE_TTL",
     # Multi-issuer SSO: the display label for the bare provider and the JSON
     # array of additional providers.
     "CVCPKG_OIDC_DISPLAY_NAME",

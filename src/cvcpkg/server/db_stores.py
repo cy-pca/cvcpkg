@@ -24,11 +24,11 @@ require_sqlalchemy()
 
 from sqlalchemy import and_, distinct, or_, select, update
 from sqlalchemy import func as sa_func
-from sqlalchemy import true as sa_true
 from sqlalchemy.exc import IntegrityError
 
 from cvcpkg.semver import version_sort_key
 from cvcpkg.server import principals as _principals_mod
+from cvcpkg.server.catalog_cache import changes_catalog
 from cvcpkg.server.db import (
     AuditRow,
     BuilderRow,
@@ -964,6 +964,53 @@ def _record_tombstones(
     )
 
 
+# Each catalog bundle's fields, in order, and the column each comes from.
+_CATALOG_COLUMNS = (
+    PackageRow.name,
+    PackageRow.version,
+    PackageRow.platform,
+    PackageRow.arch,
+    PackageRow.build_type,
+    PackageRow.link,
+    PackageRow.sha256,
+    PackageRow.size_bytes,
+    PackageRow.archive_url,
+    PackageRow.published_at,
+    PackageRow.yanked,
+    # A locally-served bundle whose upstream retired it: the mirror operator
+    # overrode the yank.  Surfaced so a client can honour upstream (the
+    # default) instead of silently installing something upstream considers
+    # retired.
+    PackageRow.upstream_yanked,
+    # A locally-published public bundle that shadows an upstream coordinate
+    # with different bytes: the local build diverges from — and disagrees
+    # with — the canonical upstream package.
+    PackageRow.diverges_upstream,
+    PackageRow.signature,
+    PackageRow.key_fingerprint,
+    PackageRow.release_tag,
+    PackageRow.recipe_version,
+    PackageRow.description,
+    PackageRow.homepage,
+    PackageRow.license,
+    PackageRow.maintainer,
+    PackageRow.tags,
+    PackageRow.published_by,
+    PackageRow.org_slug.label("org"),
+    PackageRow.required_deps,
+    PackageRow.provides,
+    # Last, and not a field: the tiebreak between rows of one version.
+    PackageRow.id,
+)
+_CATALOG_FIELDS = tuple(c.key for c in _CATALOG_COLUMNS[:-1])
+_CATALOG_NAME, _CATALOG_VERSION = _CATALOG_FIELDS.index("name"), _CATALOG_FIELDS.index("version")
+
+
+def _json_list(raw: str) -> list:
+    # Most rows hold "[]"; skipping the parse for them is measurable at 7k rows.
+    return json.loads(raw) if raw and raw != "[]" else []
+
+
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
 
@@ -1301,6 +1348,114 @@ class DbPackageIndex:
 
             return facets, total_bundles, distinct_names, total_size
 
+    @staticmethod
+    def _visible_catalog(stmt, private_orgs: Collection[str] | None, include_yanked: bool):
+        """Restrict *stmt*, a select over ``packages``, to one catalog scope.
+
+        Base packages (no org) and public organisations' packages are always
+        visible; *private_orgs* adds those private organisations' packages,
+        and ``None`` means every package (an admin's view).
+        """
+        # Left-join so base packages (org_slug == "") still appear even
+        # when there is no matching OrganizationRow.
+        stmt = stmt.select_from(PackageRow).outerjoin(
+            OrganizationRow,
+            PackageRow.org_slug == OrganizationRow.slug,
+        )
+        # A downstream mirror must be able to see that a bundle was *yanked*
+        # rather than merely absent: those mean different things (retired on
+        # purpose vs lost/nuked) and only the former should be recorded as an
+        # upstream verdict.  Ordinary clients still get the filtered view.
+        if not include_yanked:
+            stmt = stmt.where(PackageRow.yanked == False)  # noqa: E712
+        if private_orgs is not None:
+            visible = [
+                PackageRow.org_slug == "",
+                OrganizationRow.is_private == False,  # noqa: E712
+            ]
+            if private_orgs:
+                visible.append(PackageRow.org_slug.in_(sorted(private_orgs)))
+            stmt = stmt.where(or_(*visible))
+        return stmt
+
+    async def catalog_scope(
+        self, *, caller_token_name: str = "", is_admin: bool = False
+    ) -> frozenset[str] | None:
+        """The private organisations whose packages a caller's catalog includes.
+
+        ``None`` for an admin, who sees every package.  Callers with the same
+        scope see the same catalog, which is what the /v1/catalog cache keys on.
+        """
+        if is_admin:
+            return None
+        if not caller_token_name:
+            return frozenset()
+        async with get_session() as session:
+            q = (
+                select(OrganizationRow.slug)
+                .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                .where(OrgMemberRow.token_name == caller_token_name)
+                .where(OrganizationRow.is_private == True)  # noqa: E712
+            )
+            return frozenset((await session.execute(q)).scalars().all())
+
+    async def catalog_rows(
+        self, private_orgs: Collection[str] | None, *, include_yanked: bool = False
+    ) -> tuple[int, list]:
+        """The revision and the rows of one catalog scope, grouped by name.
+
+        Selects columns rather than ``PackageRow`` objects: building ORM
+        instances for every row was the largest single cost of the catalog.
+        Turn the rows into bundles with :meth:`catalog_bundles`.
+        """
+        async with get_session() as session:
+            q = self._visible_catalog(
+                select(*_CATALOG_COLUMNS), private_orgs, include_yanked
+            ).order_by(PackageRow.name)
+            rows = list((await session.execute(q)).all())
+            count_result = await session.execute(select(sa_func.count(PackageRow.id)))
+            revision = count_result.scalar() or 0
+        return revision, rows
+
+    @staticmethod
+    def catalog_bundles(rows: list) -> list[dict]:
+        """Catalog bundles from :meth:`catalog_rows`, each name's newest first.
+
+        Pure CPU work on plain rows, so it can run off the event loop.  Rows
+        are read by position: at ~7k rows, attribute access, re-parsing each
+        version for every platform and decoding empty JSON lists cost three
+        times what the rest of this does.
+        """
+        # SQL groups by name; order versions WITHIN each name newest-first by
+        # the canonical key, with PackageRow.id as a stable final tiebreak.
+        grouped_rows: dict[str, list] = {}
+        for r in rows:
+            grouped_rows.setdefault(r[_CATALOG_NAME], []).append(r)
+        sort_keys: dict[str, tuple] = {}
+
+        def newest_first(r) -> tuple:
+            version = r[_CATALOG_VERSION]
+            key = sort_keys.get(version)
+            if key is None:
+                key = sort_keys[version] = version_sort_key(version)
+            return key
+
+        bundles = []
+        for group in grouped_rows.values():
+            group.sort(key=lambda r: r[-1])
+            group.sort(key=newest_first, reverse=True)
+            for row in group:
+                # The row's last column, the id, has no field and is dropped.
+                b = dict(zip(_CATALOG_FIELDS, row, strict=False))
+                b["published_at"] = b["published_at"].isoformat()
+                b["yanked"] = bool(b["yanked"])
+                b["upstream_yanked"] = bool(b["upstream_yanked"])
+                b["diverges_upstream"] = bool(b["diverges_upstream"])
+                b["required_deps"] = _json_list(b["required_deps"])
+                b["provides"] = _json_list(b["provides"])
+                bundles.append(b)
+        return bundles
+
     async def get_catalog_dict(
         self,
         *,
@@ -1315,103 +1470,15 @@ class DbPackageIndex:
         private orgs where the caller is a member are also included.
         Admins (``is_admin=True``) see everything.
         """
+        scope = await self.catalog_scope(caller_token_name=caller_token_name, is_admin=is_admin)
+        revision, rows = await self.catalog_rows(scope, include_yanked=include_yanked)
+        return {"schema_version": 1, "revision": revision, "bundles": self.catalog_bundles(rows)}
+
+    async def count_catalog_bundles(self) -> int:
+        """How many bundles the anonymous catalog lists, without building it."""
         async with get_session() as session:
-            # Left-join so base packages (org_slug == "") still appear even
-            # when there is no matching OrganizationRow.
-            q = (
-                select(PackageRow).outerjoin(
-                    OrganizationRow,
-                    PackageRow.org_slug == OrganizationRow.slug,
-                )
-                # A downstream mirror must be able to see that a bundle was
-                # *yanked* rather than merely absent: those mean different
-                # things (retired on purpose vs lost/nuked) and only the former
-                # should be recorded as an upstream verdict.  Ordinary clients
-                # still get the filtered view.
-                .where(sa_true() if include_yanked else PackageRow.yanked == False)  # noqa: E712
-            )
-
-            if is_admin:
-                # Admins see all packages.
-                pass
-            elif caller_token_name:
-                # Include private-org packages the caller is a member of.
-                member_slugs_q = (
-                    select(OrganizationRow.slug)
-                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
-                    .where(OrgMemberRow.token_name == caller_token_name)
-                    .where(OrganizationRow.is_private == True)  # noqa: E712
-                )
-                q = q.where(
-                    or_(
-                        PackageRow.org_slug == "",
-                        OrganizationRow.is_private == False,  # noqa: E712
-                        PackageRow.org_slug.in_(member_slugs_q),
-                    )
-                )
-            else:
-                # Anonymous: base packages + public orgs only.
-                q = q.where(
-                    or_(
-                        PackageRow.org_slug == "",
-                        OrganizationRow.is_private == False,  # noqa: E712
-                    )
-                )
-
-            q = q.order_by(PackageRow.name)
-            result = await session.execute(q)
-            # SQL groups by name; order versions WITHIN each name newest-first by
-            # the canonical key, with PackageRow.id as a stable final tiebreak.
-            rows = list(result.scalars().all())
-            grouped_rows: dict[str, list[PackageRow]] = {}
-            for r in rows:
-                grouped_rows.setdefault(r.name, []).append(r)
-            ordered_rows: list[PackageRow] = []
-            for group in grouped_rows.values():
-                group.sort(key=lambda r: r.id)
-                group.sort(key=lambda r: version_sort_key(r.version), reverse=True)
-                ordered_rows.extend(group)
-            bundles = [
-                {
-                    "name": row.name,
-                    "version": row.version,
-                    "platform": row.platform,
-                    "arch": row.arch,
-                    "build_type": row.build_type,
-                    "link": row.link,
-                    "sha256": row.sha256,
-                    "size_bytes": row.size_bytes,
-                    "archive_url": row.archive_url,
-                    "published_at": row.published_at.isoformat(),
-                    "yanked": bool(row.yanked),
-                    # A locally-served bundle whose upstream retired it: the
-                    # mirror operator overrode the yank.  Surfaced so a client
-                    # can honour upstream (the default) instead of silently
-                    # installing something upstream considers retired.
-                    "upstream_yanked": bool(row.upstream_yanked),
-                    # A locally-published public bundle that shadows an upstream
-                    # coordinate with different bytes: the local build diverges
-                    # from — and disagrees with — the canonical upstream package.
-                    "diverges_upstream": bool(row.diverges_upstream),
-                    "signature": row.signature,
-                    "key_fingerprint": row.key_fingerprint,
-                    "release_tag": row.release_tag,
-                    "recipe_version": row.recipe_version,
-                    "description": row.description,
-                    "homepage": row.homepage,
-                    "license": row.license,
-                    "maintainer": row.maintainer,
-                    "tags": row.tags,
-                    "published_by": row.published_by,
-                    "org": row.org_slug,
-                    "required_deps": json.loads(row.required_deps or "[]"),
-                    "provides": json.loads(row.provides or "[]"),
-                }
-                for row in ordered_rows
-            ]
-            count_result = await session.execute(select(sa_func.count(PackageRow.id)))
-            revision = count_result.scalar() or 0
-            return {"schema_version": 1, "revision": revision, "bundles": bundles}
+            q = self._visible_catalog(select(sa_func.count(PackageRow.id)), frozenset(), False)
+            return int((await session.execute(q)).scalar() or 0)
 
     async def check_duplicate(
         self, name: str, version: str, platform: str, arch: str, build_type: str, link: str
@@ -1429,6 +1496,7 @@ class DbPackageIndex:
             )
             return result.scalars().first() is not None
 
+    @changes_catalog
     async def add_package(
         self,
         *,
@@ -1501,6 +1569,7 @@ class DbPackageIndex:
             )
             session.add(row)
 
+    @changes_catalog
     async def yank(
         self,
         name: str,
@@ -1584,6 +1653,7 @@ class DbPackageIndex:
             counted[value] = counted.get(value, 0) + 1
         return counted
 
+    @changes_catalog
     async def reconcile_from_upstream(
         self,
         upstream: str,
@@ -1716,6 +1786,7 @@ class DbPackageIndex:
                 )
         return counts
 
+    @changes_catalog
     async def reconcile_public_divergence(
         self,
         divergent_keys: set[tuple[str, str, str, str, str, str]],
@@ -1756,6 +1827,7 @@ class DbPackageIndex:
                 await session.commit()
         return changed
 
+    @changes_catalog
     async def unyank(
         self,
         name: str,
@@ -1784,6 +1856,7 @@ class DbPackageIndex:
             result = await session.execute(stmt)
             return result.rowcount
 
+    @changes_catalog
     async def backfill_deps(
         self,
         name: str,
@@ -1840,6 +1913,7 @@ class DbPackageIndex:
                 counts[column.key] = result.rowcount
         return counts
 
+    @changes_catalog
     async def delete(
         self,
         name: str,
@@ -1861,6 +1935,7 @@ class DbPackageIndex:
             result = await session.execute(stmt)
             return result.rowcount
 
+    @changes_catalog
     async def nuke_bundles(
         self,
         name: str,
@@ -2031,6 +2106,7 @@ class DbPackageIndex:
             rows = (await session.execute(q)).all()
         return [{"tag": r.release_tag or "", "count": r.count} for r in rows]
 
+    @changes_catalog
     async def delete_by_link(self, platform: str, link: str) -> int:
         """Delete all bundles matching a platform and link mode."""
         from sqlalchemy import delete as sa_delete
@@ -2084,6 +2160,7 @@ class DbPackageIndex:
                 "orgs": orgs,
             }
 
+    @changes_catalog
     async def gc_by_age(self, max_age_seconds: float) -> list[dict]:
         """Delete non-yanked packages older than *max_age_seconds*.
 
@@ -2124,6 +2201,7 @@ class DbPackageIndex:
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids)))
             return deleted
 
+    @changes_catalog
     async def purge_yanked(
         self,
         *,
@@ -2217,6 +2295,7 @@ class DbPackageIndex:
                         rec["archive_deleted"] = archive_store.delete(storage_uri, fname)
             return purged
 
+    @changes_catalog
     async def gc_by_storage(self, max_bytes: int) -> list[dict]:
         """Evict oldest non-release packages until total storage <= *max_bytes*.
 
@@ -2270,6 +2349,7 @@ class DbPackageIndex:
                 await session.execute(sa_delete(PackageRow).where(PackageRow.id.in_(ids_to_delete)))
             return to_delete
 
+    @changes_catalog
     async def gc_by_staleness(self, valid_chain_hashes: set[str]) -> list[dict]:
         """Delete non-release packages whose recipe_version is not in *valid_chain_hashes*.
 
@@ -2315,6 +2395,7 @@ class DbPackageIndex:
 class DbOrgStore:
     """Organization management backed by the ``organizations`` and ``org_members`` tables."""
 
+    @changes_catalog
     async def create(
         self,
         *,
@@ -2422,6 +2503,7 @@ class DbOrgStore:
             q = select(OrganizationRow.slug).where(OrganizationRow.is_private == True)  # noqa: E712
             return set((await session.execute(q)).scalars().all())
 
+    @changes_catalog
     async def update(
         self,
         slug: str,
