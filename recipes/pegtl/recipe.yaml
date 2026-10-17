@@ -1,0 +1,95 @@
+schema_version: 1
+recipe:
+  name: pegtl
+  # The 3.x line (3.2.9, 2026-09-21: a GCC 16.1 demangle fix on top of 3.2.8).
+  # 4.x is a separate major with an incompatible API (and a different license,
+  # below); libcvc's state_exec grammar targets 3.x.
+  upstream_version: "3.2.9"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    taocpp/PEGTL: the Parsing Expression Grammar Template Library, a
+    header-only C++17 library for writing parsers as PEG rules. Installed
+    through PEGTL's own CMake install, so the bundle ships pegtl-config.cmake
+    exporting the taocpp::pegtl INTERFACE target, found with
+    find_package(pegtl CONFIG). Used by libcvc's state_exec s-expression
+    grammar.
+  homepage: https://github.com/taocpp/PEGTL
+  # 3.x is MIT (LICENSE and README of the 3.2.9 tarball).  Only 4.x moved to
+  # BSL-1.0 (LICENSE_1_0.txt).
+  license: MIT
+  tags: [parsing, peg, cpp, header-only, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/taocpp/PEGTL/archive/refs/tags/3.2.9.tar.gz
+  # Tag 3.2.9 -> commit d59d07a84cd437e2047c8303387c274587698aa9.
+  sha256: "346aeb9644ce976fde499069403983d25e7b701914c6fac87c021cf04911627d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  # Explicit and empty: without a runtime key the manifest falls back to
+  # depends.build and cmake/ninja leak into required_deps
+  # (tests/unit/test_required_deps_no_host_tools.py).
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    # Cross targets reuse build.sh, which sources env-${CVC_PLATFORM}.sh
+    # (env-wasm.sh / env-wasm-mt.sh) and so builds with the Emscripten
+    # toolchain.  Nothing is compiled except PEGTL's std::filesystem probe, so
+    # every bundle is the same headers; the toolchain decides only which
+    # filesystem implementation the exported target asks for (none, below).
+    # The Windows-host entries are what windows-recipe-check's
+    # platform=wasm / wasm-mt runs.
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: windows
+      script: build-wasm.ps1
+      env:
+        CVC_WASM_THREADS: "1"
+
+package:
+  # Header-only: no library, just the headers, the CMake package config and
+  # the license.  PEGTL has no pkg-config file.
+  files:
+    - include/tao/pegtl.hpp
+    - include/tao/pegtl/
+    - share/pegtl/cmake/
+    - share/licenses/pegtl/
+  cmake_packages:
+    - { name: pegtl, targets: ["taocpp::pegtl"] }
+
+abi:
+  # target_compile_features(pegtl INTERFACE cxx_std_17)
+  cxx_std: 17
