@@ -1723,8 +1723,7 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
                 # coalesce, not a bare now(): this UPDATE also matches rows that
                 # are ALREADY yanked (there is no yanked.is_(False) guard), so a
                 # re-yank with a wider scope would otherwise reset the retention
@@ -1982,8 +1981,7 @@ class DbPackageIndex:
     ) -> int:
         async with get_session() as session:
             stmt = (
-                update(PackageRow)
-                .where(PackageRow.name == name, PackageRow.version == version)
+                update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
                 # Clearing yanked_at disarms retention: an unyanked bundle must
                 # not carry a stale clock that expires it later.
                 .values(yanked=False, yanked_at=None)
