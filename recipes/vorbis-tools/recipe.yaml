@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: vorbis-tools
   upstream_version: "1.4.2"
-  cvc_revision: 1
+  # cvc.2: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
+  # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
+  # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
+  # cvc.3: Windows: deps exported to configure, --with-ogg/--with-vorbis,
+  # -std=gnu17, and two patches (getopt.h vs MinGW's __argc macro; ogginfo's
+  # missing utf8.h include).  Linux/BSD builds also get the two harmless patches.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -20,7 +26,9 @@ source:
   sha256: "db7774ec2bf2c939b139452183669be84fda5774d6400fc57fde37f77624f0b0"
   strip_components: 1
 
-patches: []
+patches:
+  - getopt-mingw-argc.patch
+  - ogginfo-utf8-decl.patch
 
 depends:
   build:

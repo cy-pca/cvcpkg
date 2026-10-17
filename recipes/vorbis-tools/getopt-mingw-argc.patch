@@ -1,0 +1,38 @@
+cvcpkg: rename getopt.h's __argc / __argv parameters for MinGW.
+
+mingw-w64's <stdlib.h> defines __argc and __argv as macros
+(`#define __argc (*__p___argc())`), so the bundled getopt.h's prototypes,
+which use them as parameter names, expand into nonsense and every
+getopt_long() call fails to compile on Windows:
+  oggenc.c: passing argument 1 of 'getopt_long' makes pointer from integer
+  note: expected 'int * (*)()' but argument is of type 'int'
+Parameter names in a prototype carry no meaning, so the rename is a no-op
+everywhere else.
+
+--- a/include/getopt.h
++++ b/include/getopt.h
+@@ -131,20 +131,20 @@
+ /* Many other libraries have conflicting prototypes for getopt, with
+    differences in the consts, in stdlib.h.  To avoid compilation
+    errors, only prototype getopt for the GNU C library.  */
+-extern int getopt (int __argc, char *const *__argv, const char *__shortopts);
++extern int getopt (int argc_, char *const *argv_, const char *__shortopts);
+ # else /* not __GNU_LIBRARY__ */
+ extern int getopt ();
+ # endif /* __GNU_LIBRARY__ */
+ 
+ # ifndef __need_getopt
+-extern int getopt_long (int __argc, char *const *__argv, const char *__shortopts,
++extern int getopt_long (int argc_, char *const *argv_, const char *__shortopts,
+ 		        const struct option *__longopts, int *__longind);
+-extern int getopt_long_only (int __argc, char *const *__argv,
++extern int getopt_long_only (int argc_, char *const *argv_,
+ 			     const char *__shortopts,
+ 		             const struct option *__longopts, int *__longind);
+ 
+ /* Internal only.  Users should not call this directly.  */
+-extern int _getopt_internal (int __argc, char *const *__argv,
++extern int _getopt_internal (int argc_, char *const *argv_,
+ 			     const char *__shortopts,
+ 		             const struct option *__longopts, int *__longind,
+ 			     int __long_only);
