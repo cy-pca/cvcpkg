@@ -101,8 +101,13 @@ Server-side equivalents:
 ```sh
 cvcpkg cache purge --server https://cvcpkg.org --token "$TOKEN" --max-age-days 14
 cvcpkg cache server-stats --server https://cvcpkg.org --token "$TOKEN"
+cvcpkg cache server-gc --server https://cvcpkg.org --token "$TOKEN" --max-size 50G --dry-run
 cvcpkg cache server-gc --server https://cvcpkg.org --token "$TOKEN" --max-size 50G
 ```
+
+Server-side removal deletes the archive with the row and leaves a tombstone,
+so a download of a removed bundle answers `410`. The size rule never evicts
+the newest bundle of a package/platform/arch/config/link/org.
 
 ## Server-side cache
 
@@ -117,9 +122,9 @@ garbage-collected independently. Endpoints:
 |---|---|---|
 | `GET /v1/cache/status` | none (private orgs: member token) | Lightweight pre-build probe: is a build with this name + chain hash + platform cached? Returns the download URL, SHA-256, and size on a hit. |
 | `GET /v1/cache` | publisher or admin | List non-release cache entries; filters: `name`, `platform`, `arch`, paging. |
-| `DELETE /v1/cache` | admin | Bulk-purge cache entries, optionally `?older_than=14d`. |
+| `DELETE /v1/cache` | admin | Bulk-purge cache entries, optionally `?older_than=14d`; without it, everything but each coordinate's newest bundle. |
 | `GET /v1/cache/stats` | publisher or admin | Totals and per-org breakdown (non-admins see only their own orgs). |
-| `POST /v1/cache/gc` | admin | Garbage collection: `max_age_seconds`, `max_storage_bytes` (LRU), and/or `valid_chain_hashes` (stale-entry removal). |
+| `POST /v1/cache/gc` | admin | Garbage collection: `max_age_seconds`, `max_storage_bytes` (oldest first, never a coordinate's newest), and/or `valid_chain_hashes` (stale-entry removal); `dry_run: true` previews. |
 
 Entries pushed with `--server-cache-org` are tagged with the org, and
 lookups against a **private** org require a token belonging to an org

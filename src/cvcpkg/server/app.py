@@ -516,6 +516,24 @@ def _get_state() -> ServerState:
     return _state
 
 
+async def _release_org_storage(removed: list[dict]) -> None:
+    """Take *removed* bundles' bytes off their orgs' storage counters.
+
+    Publish adds a bundle's size to its org's counter and yank leaves it there,
+    so whatever finally deletes the row (delete, cache GC, nuke, retention)
+    subtracts it, once per org.
+    """
+    if _db_orgs is None:
+        return
+    deltas: dict[str, int] = {}
+    for d in removed:
+        slug = d.get("org_slug", "")
+        if slug:
+            deltas[slug] = deltas.get(slug, 0) + int(d.get("size_bytes") or 0)
+    for slug, delta in deltas.items():
+        await _db_orgs.update_storage_used(slug, -delta)
+
+
 class _AuditCtx:
     """Handle yielded by :func:`_audit_txn`.
 
@@ -1657,16 +1675,7 @@ async def _yank_retention_gc_loop() -> None:
                     older_than_days=_YANK_RETENTION_DAYS,
                     storage_uri=_state.storage_uri,
                 )
-                # Decrement each affected org's storage counter exactly once
-                # (yank never decremented, so purge is the sole adjustment) --
-                # same shape as the bulk-delete handler.
-                org_deltas: dict[str, int] = {}
-                for d in purged:
-                    slug = d.get("org_slug", "")
-                    if slug and _db_orgs is not None:
-                        org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-                for slug, delta in org_deltas.items():
-                    await _db_orgs.update_storage_used(slug, -delta)
+                await _release_org_storage(purged)
                 ac.detail = f"purged={len(purged)} {target}"
             if purged:
                 logger.info(
@@ -2232,7 +2241,12 @@ async def _enforce_mirror_budget() -> int:
     evicted = 0
     for cand in to_evict:
         name, version, platform, link = cand.key
-        await _db_packages.delete(name, version, platform=platform, link=link)
+        # No tombstone: an evicted bundle re-populates from upstream on the
+        # next sync and must not answer 410 meanwhile.  The archives are
+        # unlinked just below.
+        await _db_packages.delete(
+            name, version, platform=platform, link=link, storage_uri="", tombstone=False
+        )
         for fname in groups[cand.key]["archives"]:
             (state.archives_dir() / fname).unlink(missing_ok=True)
         if _db_audit is not None:
@@ -4093,34 +4107,30 @@ def create_app(
         """Bulk-purge non-release cache entries (admin-only).
 
         Use ``older_than`` to restrict deletion by age.  Without a filter
-        all non-release packages are removed.
+        every non-release package is removed except the newest bundle of each
+        coordinate (``gc_by_storage(0)``).  Archives and tombstones go with
+        the rows, as in ``POST /v1/cache/gc``.
         """
         if not _use_db:
             raise HTTPException(501, "Bulk cache deletion requires database backend")
 
+        state = _get_state()
+        secs = _parse_duration(older_than) if older_than else None
         deleted: list[dict] = []
         async with _audit_txn(
             AuditAction.cache_gc,
             actor.name,
             "cache",
         ) as ac:
-            if older_than:
-                secs = _parse_duration(older_than)
-                deleted = await _db_packages.gc_by_age(secs)
+            if secs is not None:
+                deleted = await _db_packages.gc_by_age(
+                    secs, storage_uri=state.storage_uri, removed_by=actor.name
+                )
             else:
-                # Delete all non-release packages (max_storage_bytes=0 evicts
-                # everything down to zero).
-                deleted = await _db_packages.gc_by_storage(0)
-
-            # Update org storage counters.
-            org_deltas: dict[str, int] = {}
-            for d in deleted:
-                slug = d.get("org_slug", "")
-                if slug and _db_orgs is not None:
-                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-            for slug, delta in org_deltas.items():
-                await _db_orgs.update_storage_used(slug, -delta)
-
+                deleted = await _db_packages.gc_by_storage(
+                    0, storage_uri=state.storage_uri, removed_by=actor.name
+                )
+            await _release_org_storage(deleted)
             ac.detail = f"bulk_delete deleted={len(deleted)} older_than={older_than!r}"
         return {"deleted_count": len(deleted), "deleted": deleted}
 
@@ -4159,58 +4169,75 @@ def create_app(
 
         Accepts a JSON body with one or more of:
         - ``max_age_seconds``: delete non-release packages older than this
-        - ``max_storage_bytes``: evict oldest non-release packages to fit
+        - ``max_storage_bytes``: evict oldest non-release packages to fit,
+          never the newest bundle of a coordinate (name, platform, arch,
+          build type, link, org)
         - ``valid_chain_hashes``: list of current chain hashes; entries
           whose ``recipe_version`` is not in this set are stale and removed
+        and optionally ``dry_run: true`` to get the list without deleting.
+
+        Each evicted bundle loses its row and its archive, and gets a
+        tombstone (reason ``gc``), so its download answers 410.
         """
         if not _use_db:
             raise HTTPException(501, "GC requires database backend")
 
         body = await request.json()
-        deleted: list[dict] = []
+        if not isinstance(body, dict):
+            raise HTTPException(422, "body must be a JSON object")
 
-        async with _audit_txn(
-            AuditAction.cache_gc,
-            actor.name,
-            "cache",
-        ) as ac:
-            if "max_age_seconds" in body:
-                age = float(body["max_age_seconds"])
-                if age <= 0:
-                    raise HTTPException(422, "max_age_seconds must be > 0")
-                deleted.extend(await _db_packages.gc_by_age(age))
+        # Validate everything before deleting anything: a 422 raised after an
+        # earlier rule ran would roll its rows back but not its archives.
+        age: float | None = None
+        cap: int | None = None
+        hashes: list | None = None
+        if "max_age_seconds" in body:
+            age = float(body["max_age_seconds"])
+            if age <= 0:
+                raise HTTPException(422, "max_age_seconds must be > 0")
+        if "max_storage_bytes" in body:
+            cap = int(body["max_storage_bytes"])
+            if cap < 0:
+                raise HTTPException(422, "max_storage_bytes must be >= 0")
+        if "valid_chain_hashes" in body:
+            hashes = body["valid_chain_hashes"]
+            if not isinstance(hashes, list):
+                raise HTTPException(422, "valid_chain_hashes must be a list of strings")
+        if age is None and cap is None and hashes is None:
+            raise HTTPException(
+                422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
+            )
+        dry_run = body.get("dry_run", False)
+        if not isinstance(dry_run, bool):
+            raise HTTPException(422, "dry_run must be a boolean")
 
-            if "max_storage_bytes" in body:
-                cap = int(body["max_storage_bytes"])
-                if cap < 0:
-                    raise HTTPException(422, "max_storage_bytes must be >= 0")
-                deleted.extend(await _db_packages.gc_by_storage(cap))
-
-            if "valid_chain_hashes" in body:
-                hashes = body["valid_chain_hashes"]
-                if not isinstance(hashes, list):
-                    raise HTTPException(422, "valid_chain_hashes must be a list of strings")
-                deleted.extend(await _db_packages.gc_by_staleness(set(hashes)))
-
-            if not body or not any(
-                k in body for k in ("max_age_seconds", "max_storage_bytes", "valid_chain_hashes")
-            ):
-                raise HTTPException(
-                    422, "specify max_age_seconds, max_storage_bytes, and/or valid_chain_hashes"
-                )
-
-            # Update org storage counters for deleted packages.
-            org_deltas: dict[str, int] = {}
-            for d in deleted:
-                org_slug = d.get("org_slug", "")
-                if org_slug and _db_orgs is not None:
-                    org_deltas[org_slug] = org_deltas.get(org_slug, 0) + d["size_bytes"]
-            for org_slug, delta in org_deltas.items():
-                await _db_orgs.update_storage_used(org_slug, -delta)
-
-            ac.detail = f"deleted={len(deleted)} params={body}"
+        state = _get_state()
+        rules = dict(
+            max_age_seconds=age,
+            max_storage_bytes=cap,
+            valid_chain_hashes=hashes,
+            storage_uri=state.storage_uri,
+            removed_by=actor.name,
+        )
+        if dry_run:
+            deleted = await _db_packages.gc(dry_run=True, **rules)
+        else:
+            async with _audit_txn(
+                AuditAction.cache_gc,
+                actor.name,
+                "cache",
+            ) as ac:
+                deleted = await _db_packages.gc(**rules)
+                await _release_org_storage(deleted)
+                params = {k: v for k, v in body.items() if k != "valid_chain_hashes"}
+                if hashes is not None:
+                    params["valid_chain_hashes"] = f"<{len(hashes)} hashes>"
+                archives = sum(1 for d in deleted if d["archive_deleted"])
+                ac.detail = f"deleted={len(deleted)} archives_deleted={archives} params={params}"
         return {
+            "dry_run": dry_run,
             "deleted_count": len(deleted),
+            "deleted_bytes": sum(d["size_bytes"] for d in deleted),
             "deleted": deleted,
         }
 
@@ -5389,15 +5416,7 @@ def create_app(
             if result["count"] == 0:
                 raise HTTPException(404, f"{target} not found")
 
-            # Yank never decremented the org counter, so purge is the sole
-            # adjustment; decrement once per nuked bundle.
-            org_deltas: dict[str, int] = {}
-            for d in result["nuked"]:
-                slug = d.get("org_slug", "")
-                if slug and _db_orgs is not None:
-                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-            for slug, delta in org_deltas.items():
-                await _db_orgs.update_storage_used(slug, -delta)
+            await _release_org_storage(result["nuked"])
             ac.detail = f"nuked={result['count']}"
         return {"message": f"nuked {target}", "count": result["count"]}
 
@@ -5445,6 +5464,26 @@ def create_app(
 
     # ── Delete (admin only) ─────────────────────────────────
 
+    def _yaml_delete_bundles(state: ServerState, doomed) -> tuple[int, int]:
+        """YAML backend: drop index entries matching *doomed*, then their archives.
+
+        Returns ``(bundles removed, archives deleted)``.  An archive another
+        remaining entry still references is kept.
+        """
+        bundles = state.index.get("bundles", [])
+        gone = [b for b in bundles if doomed(b)]
+        if not gone:
+            return 0, 0
+        state.index["bundles"] = [b for b in bundles if not doomed(b)]
+        state.save_index()
+        still = {(b.get("archive_url") or "").rsplit("/", 1)[-1] for b in state.index["bundles"]}
+        archives = 0
+        for b in gone:
+            fname = (b.get("archive_url") or "").rsplit("/", 1)[-1]
+            if fname and fname not in still and archive_store.delete(state.storage_uri, fname):
+                archives += 1
+        return len(gone), archives
+
     @app.delete("/v1/packages/{name}/{version}", tags=["publish"])
     async def delete_package(
         name: str,
@@ -5453,15 +5492,30 @@ def create_app(
         link: str | None = Query(None, description="Only delete bundles with this link mode"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
+        """Delete a package's bundles: rows, archives, and a tombstone each.
+
+        Legacy scope (platform/link only; see ``nuke``).  The download of a
+        deleted bundle answers 410 with reason ``deleted``.
+        """
+        state = _get_state()
         async with _audit_txn(AuditAction.delete, actor.name, f"{name}=={version}") as ac:
             if _use_db:
-                removed = await _db_packages.delete(name, version, platform=platform, link=link)
-                if removed == 0:
+                deleted = await _db_packages.delete(
+                    name,
+                    version,
+                    platform=platform,
+                    link=link,
+                    storage_uri=state.storage_uri,
+                    deleted_by=actor.name,
+                )
+                if not deleted:
                     raise HTTPException(404, f"{name}=={version} not found")
-                ac.detail = f"platform={platform} link={link}" if platform or link else ""
+                await _release_org_storage(deleted)
+                removed = len(deleted)
+                archives = sum(1 for d in deleted if d["archive_deleted"])
+                scope = f"platform={platform} link={link} " if platform or link else ""
+                ac.detail = f"{scope}archives_deleted={archives}"
             else:
-                state = _get_state()
-                before = len(state.index.get("bundles", []))
 
                 def _matches(b: dict) -> bool:
                     if b["name"] != name or b["version"] != version:
@@ -5470,15 +5524,14 @@ def create_app(
                         return False
                     return not (link and b.get("link") != link)
 
-                state.index["bundles"] = [
-                    b for b in state.index.get("bundles", []) if not _matches(b)
-                ]
-                after = len(state.index["bundles"])
-                if before == after:
+                removed, archives = _yaml_delete_bundles(state, _matches)
+                if not removed:
                     raise HTTPException(404, f"{name}=={version} not found")
-                state.save_index()
-                removed = before - after
-        return {"message": f"deleted {name}=={version}", "removed": removed}
+        return {
+            "message": f"deleted {name}=={version}",
+            "removed": removed,
+            "archives_deleted": archives,
+        }
 
     @app.delete("/v1/packages/by-link/{platform}/{link}", tags=["publish"])
     async def delete_packages_by_link(
@@ -5486,32 +5539,38 @@ def create_app(
         link: str,
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        """Delete all bundles matching a platform and link mode (admin only)."""
+        """Delete all bundles matching a platform and link mode (admin only).
+
+        Rows, archives, and a tombstone each, like ``DELETE
+        /v1/packages/{name}/{version}``.
+        """
+        state = _get_state()
         async with _audit_txn(
             AuditAction.delete,
             actor.name,
             f"platform={platform}/link={link}",
         ) as ac:
             if _use_db:
-                removed = await _db_packages.delete_by_link(platform, link)
-                if removed == 0:
+                deleted = await _db_packages.delete_by_link(
+                    platform, link, storage_uri=state.storage_uri, deleted_by=actor.name
+                )
+                if not deleted:
                     raise HTTPException(404, f"no {platform}/{link} bundles found")
+                await _release_org_storage(deleted)
+                removed = len(deleted)
+                archives = sum(1 for d in deleted if d["archive_deleted"])
             else:
-                # File-based backend
-                state = _get_state()
-                before = len(state.index.get("bundles", []))
-                state.index["bundles"] = [
-                    b
-                    for b in state.index.get("bundles", [])
-                    if not (b.get("platform") == platform and b.get("link") == link)
-                ]
-                after = len(state.index["bundles"])
-                if before == after:
+                removed, archives = _yaml_delete_bundles(
+                    state, lambda b: b.get("platform") == platform and b.get("link") == link
+                )
+                if not removed:
                     raise HTTPException(404, f"no {platform}/{link} bundles found")
-                state.save_index()
-                removed = before - after
-            ac.detail = f"{removed} bundles"
-        return {"message": f"deleted {platform}/{link} bundles", "removed": removed}
+            ac.detail = f"{removed} bundles, archives_deleted={archives}"
+        return {
+            "message": f"deleted {platform}/{link} bundles",
+            "removed": removed,
+            "archives_deleted": archives,
+        }
 
     # ── Token management (admin) ────────────────────────────
 
@@ -7153,9 +7212,15 @@ def create_app(
                 await _db_packages.unyank(name, version, **kwargs)
             else:
                 # delete() narrows by platform/link only (matches /v1 delete API).
-                await _db_packages.delete(
-                    name, version, platform=platform or None, link=link or None
+                deleted = await _db_packages.delete(
+                    name,
+                    version,
+                    platform=platform or None,
+                    link=link or None,
+                    storage_uri=_get_state().storage_uri,
+                    deleted_by="admin-ui",
                 )
+                await _release_org_storage(deleted)
         return RedirectResponse("/admin/packages", status_code=303)
 
     @app.get("/admin/tokens", tags=["admin"], response_class=HTMLResponse)
@@ -10760,13 +10825,7 @@ def create_app(
             dry_run=dry_run,
         )
         if not dry_run and purged:
-            org_deltas: dict[str, int] = {}
-            for d in purged:
-                slug = d.get("org_slug", "")
-                if slug and _db_orgs is not None:
-                    org_deltas[slug] = org_deltas.get(slug, 0) + d["size_bytes"]
-            for slug, delta in org_deltas.items():
-                await _db_orgs.update_storage_used(slug, -delta)
+            await _release_org_storage(purged)
             async with _audit_txn(
                 AuditAction.nuke, actor.name, f"gc/yanked older_than={older_than_days}d"
             ) as ac:
@@ -10777,6 +10836,135 @@ def create_app(
             "count": len(purged),
             "purged": [{k: v for k, v in p.items() if k != "yanked_at"} for p in purged],
         }
+
+    @app.post(
+        "/v1/admin/gc/orphans",
+        tags=["admin"],
+    )
+    async def admin_gc_orphans(
+        dry_run: bool = Query(
+            True,
+            description="Report the orphan archives without deleting anything.",
+        ),
+        min_age_seconds: int = Query(
+            3600,
+            ge=0,
+            description="Skip local archives modified more recently than this.",
+        ),
+        staging_min_age_seconds: int = Query(
+            86400,
+            ge=0,
+            description="Skip upload temp files modified more recently than this.",
+        ),
+        actor: TokenRecord = Depends(require_role(TokenRole.admin)),
+    ):
+        """Find archive files no package row references; delete them on request.
+
+        Admin only, dry-run by default.  Each orphan has a ``kind``:
+
+        * ``archive`` -- a ``*.tar.zst`` in the archive store that no package
+          row references, in any yank state.  ``tombstoned`` is true when a
+          tombstone names it (its bundle was removed but the archive delete
+          failed; downloads already answer 410), false when nothing in the
+          catalog accounts for it (what DELETE left behind before it deleted
+          archives; such a file is still downloadable until deleted).
+          Deleting one writes no tombstone, since there is no row to copy
+          one from.
+        * ``staging`` -- an upload temp file (``tmp*.upload``, ``.chunk`` ...)
+          left in the local archives directory by a request or server that
+          died mid-upload.  Files of a live chunked-upload session are kept.
+
+        Archives younger than *min_age_seconds* are skipped (populate moves an
+        archive into place before inserting its row), and so are temp files
+        younger than *staging_min_age_seconds* (a chunked upload may run for
+        up to ``CVCPKG_UPLOAD_SESSION_TTL``, possibly in another worker).  A
+        mirror's archive directory also caches proxied downloads that have no
+        row, so a mirror only lists.
+        """
+        import time as _time
+
+        if not _use_db or _db_packages is None:
+            raise HTTPException(501, "the orphan sweep requires the database backend")
+        if not dry_run and MIRROR_MODE:
+            raise HTTPException(
+                409, "a mirror caches proxied archives without rows; orphans are listed only"
+            )
+        state = _get_state()
+        try:
+            files = archive_store.list_archives(state.storage_uri)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(501, f"cannot list the archive store: {exc}") from exc
+        staging = archive_store.list_staging(state.archives_dir())
+        live_uploads = {s.temp_path.name for s in _upload_sessions.values()}
+        # Rows are read after the listing: a publish commits its row before it
+        # stores the archive, so every file listed above already has its row.
+        states = await _db_packages.archive_filename_states([f for f, _, _ in files])
+        now = _time.time()
+        orphans: list[dict] = []
+        skipped_recent = 0
+        for fname, size, mtime in files:
+            if states.get(fname) == "row":
+                continue
+            if mtime is not None and now - mtime < min_age_seconds:
+                skipped_recent += 1
+                continue
+            orphans.append(
+                {
+                    "filename": fname,
+                    "kind": "archive",
+                    "size_bytes": size,
+                    "tombstoned": states.get(fname) == "tombstone",
+                    "deleted": False,
+                }
+            )
+        for fname, size, mtime in staging:
+            if fname in live_uploads or now - mtime < staging_min_age_seconds:
+                skipped_recent += 1
+                continue
+            orphans.append(
+                {
+                    "filename": fname,
+                    "kind": "staging",
+                    "size_bytes": size,
+                    "tombstoned": False,
+                    "deleted": False,
+                }
+            )
+        if not dry_run and orphans:
+            async with _audit_txn(AuditAction.delete, actor.name, "gc/orphans") as ac:
+                # Re-check each file just before deleting it, in case a row
+                # appeared since the scan.
+                recheck = await _db_packages.archive_filename_states(
+                    [o["filename"] for o in orphans]
+                )
+                for o in orphans:
+                    if o["kind"] == "staging":
+                        o["deleted"] = _unlink_staging(state.archives_dir() / o["filename"])
+                    elif recheck.get(o["filename"]) != "row":
+                        o["deleted"] = archive_store.delete(state.storage_uri, o["filename"])
+                gone = [o for o in orphans if o["deleted"]]
+                ac.detail = (
+                    f"orphans_deleted={len(gone)} "
+                    f"bytes={sum(max(o['size_bytes'], 0) for o in gone)}"
+                )
+        return {
+            "ok": True,
+            "dry_run": dry_run,
+            "count": len(orphans),
+            "size_bytes": sum(max(o["size_bytes"], 0) for o in orphans),
+            "skipped_recent": skipped_recent,
+            "orphans": orphans,
+        }
+
+    def _unlink_staging(path: Path) -> bool:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            logger.exception("orphan sweep: failed to delete %s", path)
+            return False
+        return True
 
     @app.post(
         "/v1/admin/purge/builds",

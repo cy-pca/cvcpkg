@@ -466,8 +466,8 @@ class TestYankDelete:
             idx = DbPackageIndex()
             await _add(idx, name="zlib", platform="linux")
             await _add(idx, name="zlib", platform="windows")
-            n = await idx.delete("zlib", "1.0.0", platform="linux")
-            assert n == 1
+            deleted = await idx.delete("zlib", "1.0.0", platform="linux", storage_uri="")
+            assert len(deleted) == 1
             _, total = await idx.get_bundles(include_yanked=True)
             assert total == 1
 
@@ -480,8 +480,8 @@ class TestYankDelete:
             idx = DbPackageIndex()
             await _add(idx, name="a", platform="linux", link="shared")
             await _add(idx, name="b", platform="linux", link="static")
-            n = await idx.delete_by_link("linux", "static")
-            assert n == 1
+            deleted = await idx.delete_by_link("linux", "static", storage_uri="")
+            assert len(deleted) == 1
             _, total = await idx.get_bundles()
             assert total == 1
 
@@ -680,7 +680,7 @@ class TestGcSweeps:
             old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)
             await _backdate(published_at=old, name="old")
             await _backdate(published_at=old, name="tagged")
-            deleted = await idx.gc_by_age(max_age_seconds=86400)
+            deleted = await idx.gc_by_age(max_age_seconds=86400, storage_uri="")
             names = {d["name"] for d in deleted}
             assert names == {"old"}  # tagged is exempt, fresh is too new
             _, total = await idx.get_bundles()
@@ -695,14 +695,16 @@ class TestGcSweeps:
 
         async def _t():
             idx = DbPackageIndex()
-            await _add(idx, name="oldest", size_bytes=100)
+            await _add(idx, name="oldest", version="1.0", size_bytes=100)
+            await _add(idx, name="oldest", version="2.0", size_bytes=100)
             await _add(idx, name="newer", size_bytes=100)
             # Make "oldest" genuinely older so it is evicted first.
             old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=5)
             await _backdate(published_at=old, name="oldest")
-            assert await idx.gc_by_storage(max_bytes=1000) == []  # under budget
-            deleted = await idx.gc_by_storage(max_bytes=100)
-            assert [d["name"] for d in deleted] == ["oldest"]
+            assert await idx.gc_by_storage(max_bytes=1000, storage_uri="") == []  # under budget
+            deleted = await idx.gc_by_storage(max_bytes=100, storage_uri="")
+            # Only oldest 1.0 can go: 2.0 and newer are their coordinates' newest.
+            assert [(d["name"], d["version"]) for d in deleted] == [("oldest", "1.0")]
 
         run(_t())
 
@@ -713,7 +715,7 @@ class TestGcSweeps:
             idx = DbPackageIndex()
             await _add(idx, name="keep", recipe_version="good")
             await _add(idx, name="drop", recipe_version="stale")
-            deleted = await idx.gc_by_staleness({"good"})
+            deleted = await idx.gc_by_staleness({"good"}, storage_uri="")
             assert [d["name"] for d in deleted] == ["drop"]
             _, total = await idx.get_bundles()
             assert total == 1

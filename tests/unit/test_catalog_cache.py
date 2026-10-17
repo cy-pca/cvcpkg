@@ -589,6 +589,7 @@ _READS = {
         "stranded_upstreams",
         "get_tombstones",
         "get_tombstone_by_filename",
+        "archive_filename_states",
         "get_release_tags",
         "total_storage_bytes",
         "cache_stats",
