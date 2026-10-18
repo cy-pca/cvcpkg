@@ -116,12 +116,13 @@ package:
     # build.sh builds OpenBSD with no-dynamic-engine no-legacy (its linker
     # rejects the modules), so neither directory exists there; declaring them
     # for openbsd failed every pack under strict globs.
-    # A static Windows openssl produces no engines-3/ either (ossl-modules
-    # still exists), so windows is dropped from the engine assertion too.
-    # package.files only DECLARES what ships -- the whole install tree is
-    # staged regardless -- so a shared Windows build that does emit them still
-    # ships them; this just stops asserting their presence where they are absent.
-    - { glob: "lib/engines-3/", platforms: [linux, macos, freebsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
+    # A static macOS or Windows openssl produces no engines-3/ either
+    # (ossl-modules still exists on both), so macos and windows are dropped from
+    # the engine assertion too. package.files only DECLARES what ships -- the
+    # whole install tree is staged regardless -- so a shared build that does emit
+    # them still ships them; this just stops asserting them where a static build
+    # omits them. (Linux static openssl does still build the engine modules.)
+    - { glob: "lib/engines-3/", platforms: [linux, freebsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - { glob: "lib/ossl-modules/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
     - lib/cmake/OpenSSL/
     # Windows openssl does not install pkg-config .pc files (static least of
