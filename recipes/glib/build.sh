@@ -72,6 +72,15 @@ case "${CVC_PLATFORM}" in
     openbsd) _meson_extra+=(-Dxattr=false) ;;
 esac
 
+# On a failed setup, show meson's own log: the console says only that a
+# dependency was not found, the log has the probe's compiler command and error.
+_dump_meson_log() {
+    local _log="${CVC_BUILD_DIR}/meson-logs/meson-log.txt"
+    echo "----- meson-log.txt (${_log}) -----" >&2
+    if [ -f "${_log}" ]; then tail -n 300 "${_log}" >&2; else echo "(no meson log)" >&2; fi
+    echo "-----------------------------------" >&2
+}
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -90,7 +99,7 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dintrospection=disabled \
     -Ddtrace=false \
     -Dsysprof=disabled \
-    ${_meson_extra[@]+"${_meson_extra[@]}"}
+    ${_meson_extra[@]+"${_meson_extra[@]}"} || { _dump_meson_log; exit 1; }
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
