@@ -29,15 +29,17 @@ recipe:
     runtime by libvorbis.
 
 source:
-  type: tarball
-  url: https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-1.3.6.tar.gz
-  sha256: "83e6704730683d004d20e21b8f7f55dcb3383cdf84c0daedf30bde175f774638"
-  strip_components: 1
+  # Built from the source package libogg-src, which pins the upstream tarball
+  # (https://ftp.osuosl.org/pub/xiph/releases/ogg/libogg-1.3.6.tar.gz).
+  type: package
+  package: libogg-src
 
 patches: []
 
 depends:
   build:
+    - name: libogg-src
+      version: "==1.3.6"
     # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
     # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
     # builder has.  The prod builder cmps-a91453 has an incomplete one: lame

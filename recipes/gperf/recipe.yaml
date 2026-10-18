@@ -20,15 +20,17 @@ recipe:
     runs it to generate src/fcobjshash.h.
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/gperf/gperf-3.1.tar.gz
-  sha256: "588546b945bba4b70b6a3a616e80b4ab466e3f33024a352fc2198112cdbb3ae2"
-  strip_components: 1
+  # Built from the source package gperf-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/gperf/gperf-3.1.tar.gz).
+  type: package
+  package: gperf-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: gperf-src
+      version: "==3.1"
   host_tools: []
 
 build:

@@ -15,15 +15,17 @@ recipe:
     optimizations (libavcodec/libswscale SIMD kernels).
 
 source:
-  type: tarball
-  url: https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz
-  sha256: "1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148"
-  strip_components: 1
+  # Built from the source package nasm-src, which pins the upstream tarball
+  # (https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz).
+  type: package
+  package: nasm-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: nasm-src
+      version: "==2.16.03"
   runtime: []
   host_tools: []
 

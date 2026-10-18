@@ -16,15 +16,17 @@ recipe:
   tags: [libraries, i18n]
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/aspell/aspell-0.60.8.tar.gz
-  sha256: "f9b77e515334a751b2e60daab5db23499e26c9209f5e7b7443b05235ad0226f2"
-  strip_components: 1
+  # Built from the source package aspell-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/aspell/aspell-0.60.8.tar.gz).
+  type: package
+  package: aspell-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: aspell-src
+      version: "==0.60.8"
   runtime: []
   host_tools: []
 

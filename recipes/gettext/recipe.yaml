@@ -23,15 +23,17 @@ recipe:
   tags: [utils]
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz
-  sha256: "85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a"
-  strip_components: 1
+  # Built from the source package gettext-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz).
+  type: package
+  package: gettext-src
 
 patches: []
 
 depends:
   build:
+    - name: gettext-src
+      version: "==1.0"
     # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
     # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
     # builder has.  The prod builder cmps-a91453 has an incomplete one: lame

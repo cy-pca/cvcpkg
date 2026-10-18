@@ -17,15 +17,17 @@ recipe:
     for HTTPS on Linux/BSD).
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz
-  sha256: "92e0e3bd4c02d4aeee76036b2ddd83f0c732ba4cda5cb71d583272b23587a76c"
-  strip_components: 1
+  # Built from the source package libtasn1-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz).
+  type: package
+  package: libtasn1-src
 
 patches: []
 
 depends:
   build:
+    - name: libtasn1-src
+      version: "==4.20.0"
     - make
   runtime: []
   host_tools: []

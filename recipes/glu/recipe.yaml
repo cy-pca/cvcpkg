@@ -13,17 +13,17 @@ recipe:
     The OpenGL Utility library (GLU), linking the libglvnd loader.
 
 source:
-  type: tarball
-  # Canonical mesa archive (mesa.freedesktop.org/archive/... 308-redirects here,
-  # and cvcpkg's urllib downloader doesn't follow it). Same tarball/sha256.
-  url: https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz
-  sha256: "bd43fe12f374b1192eb15fe20e45ff456b9bc26ab57f0eee919f96ca0f8a330f"
-  strip_components: 1
+  # Built from the source package glu-src, which pins the upstream tarball
+  # (https://archive.mesa3d.org/glu/glu-9.0.3.tar.xz).
+  type: package
+  package: glu-src
 
 patches: []
 
 depends:
   build:
+    - name: glu-src
+      version: "==9.0.3"
     - meson
     - ninja
     - pkg-config

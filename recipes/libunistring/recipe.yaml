@@ -12,15 +12,17 @@ recipe:
   tags: [libraries, i18n]
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.gz
-  sha256: "8ea8ccf86c09dd801c8cac19878e804e54f707cf69884371130d20bde68386b7"
-  strip_components: 1
+  # Built from the source package libunistring-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.gz).
+  type: package
+  package: libunistring-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: libunistring-src
+      version: "==1.3"
   runtime:
     - name: iconv
       version: ">=1.17"

@@ -16,15 +16,17 @@ recipe:
   tags: [libraries, i18n, networking]
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz
-  sha256: "4c21a791b610b9519b9d0e12b8097bf2f359b12f8dd92647611a929e6bfd7d64"
-  strip_components: 1
+  # Built from the source package idn2-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/libidn/libidn2-2.3.7.tar.gz).
+  type: package
+  package: idn2-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: idn2-src
+      version: "==2.3.7"
   runtime:
     - name: libunistring
       version: ">=1.0"
