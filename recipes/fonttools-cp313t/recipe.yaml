@@ -2,11 +2,7 @@ schema_version: 1
 recipe:
   name: fonttools-cp313t
   upstream_version: "4.63.0"
-  # cvc.2: republish.  The published noarch cvc.1 bundle's console scripts
-  # (fonttools, pyftmerge, pyftsubset, ttx) carry the build machine's interpreter as their shebang (the old
-  # libcvc-deps macOS CI prefix), so they cannot run anywhere; packing today
-  # rewrites it to /usr/bin/env.
-  cvc_revision: 2
+  cvc_revision: 3
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -55,12 +51,16 @@ build:
   matrix:
     - platform: any
       script: build.sh
+      env:
+        FONTTOOLS_WITH_CYTHON: "0"
     - platform: windows
       script: build.ps1
+      env:
+        FONTTOOLS_WITH_CYTHON: "0"
 
 package:
   files:
     - { glob: "lib/python3.13t/site-packages/fontTools/", platforms: [any] }
     - { glob: "lib/python3.13t/site-packages/fonttools-*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/fonttools/", platforms: [windows] }
-    - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
+    - { glob: "Lib/site-packages/fontTools/", platforms: [windows] }
+    - { glob: "Lib/site-packages/fonttools-*.dist-info/", platforms: [windows] }
