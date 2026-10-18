@@ -174,8 +174,11 @@ def test_a_pushed_recipe_archive_is_a_recipes_dir(env, tmp_path):
     dest = tmp_path / "recipes"
     dest.mkdir()
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
+        # Scripts are executable in the archive (the bit a POSIX extract keeps;
+        # Windows filesystems have none to check).
+        assert tar.getmember("widget/build.sh").mode & 0o111
+        assert not tar.getmember("widget/patches/fix.patch").mode & 0o111
         _extract(tar, dest)
-    assert (dest / "widget" / "build.sh").stat().st_mode & 0o111
     assert (dest / "widget" / "patches" / "fix.patch").is_file()
     # Byte-for-byte what was pushed: the recipe dir round-trips.
     with tarfile.open(fileobj=io.BytesIO(_recipe_bundle("widget")), mode="r:gz") as pushed:
