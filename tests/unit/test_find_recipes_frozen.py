@@ -13,6 +13,14 @@ import sys
 import pytest
 
 from cvcpkg.builder import find_recipes_dir
+from cvcpkg.bundled_recipes import MODULE
+
+
+@pytest.fixture(autouse=True)
+def _no_embedded_recipes(monkeypatch):
+    # These cover the data-file layouts; test_bundled_recipes covers the
+    # embedded set, which find_recipes_dir() would otherwise prefer.
+    monkeypatch.setitem(sys.modules, MODULE, None)
 
 
 def _bundle(base, subpath):

@@ -16,6 +16,9 @@ import hashlib
 import os
 from pathlib import Path
 
+# Where the frozen binary unpacks its embedded recipes (cvcpkg.bundled_recipes).
+BUNDLED_RECIPES_SUBDIR = "bundled-recipes"
+
 
 def default_cache_dir() -> Path:
     """Return the default cache directory, respecting CVCPKG_CACHE."""
@@ -72,12 +75,16 @@ def file_sha256(path: Path) -> str:
 def gc(cache_dir: Path, referenced_hashes: set[str]) -> int:
     """Remove cached archives not in *referenced_hashes*.
 
+    The frozen binary's unpacked recipes (``bundled-recipes/``, see
+    :mod:`cvcpkg.bundled_recipes`) are not an archive and are left alone.
     Returns the number of entries removed.
     """
     if not cache_dir.is_dir():
         return 0
     removed = 0
     for entry in cache_dir.iterdir():
+        if entry.name == BUNDLED_RECIPES_SUBDIR:
+            continue
         if entry.is_dir() and entry.name not in referenced_hashes:
             for f in entry.iterdir():
                 f.unlink()
