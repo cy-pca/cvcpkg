@@ -47,10 +47,17 @@ cd "${CVC_SOURCE_DIR}"
 # aborted ("Symbol not found: _g_libintl_bind_textdomain_codeset", which broke
 # qt6's rcc).  So macOS depends on cvcpkg's gettext, and meson must see it.
 # c_link_args is set below, and meson then ignores LDFLAGS, so the -L goes there.
+#
+# The include goes in CPPFLAGS, which meson adds to C, C++ and Objective-C
+# alike.  GLib enables C++, and meson runs dependency('intl')'s probes with the
+# C++ compiler then; with the -I in CFLAGS (C only) clang++ could not find
+# gettext's libintl.h, so meson fell back to proxy-libintl anyway.  glib cvc.3
+# for macOS shipped proxy-libintl's libintl.8.dylib, which replaced gettext's in
+# a shared prefix (gettext's msgfmt then died on _libintl_bindtextdomain).
 _link_flags="${_rpath_flags}"
 if [ -n "${CVC_DEPS_PREFIX:-}" ] && { [ -f "${CVC_DEPS_PREFIX}/include/iconv.h" ] ||
                                       [ -f "${CVC_DEPS_PREFIX}/include/libintl.h" ]; }; then
-    export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+    export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
     export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
     export LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
     _link_flags="-L${CVC_DEPS_PREFIX}/lib ${_rpath_flags}"
@@ -72,6 +79,15 @@ case "${CVC_PLATFORM}" in
     openbsd) _meson_extra+=(-Dxattr=false) ;;
 esac
 
+# On a failed setup, show meson's own log: the console says only that a
+# dependency was not found, the log has the probe's compiler command and error.
+_dump_meson_log() {
+    local _log="${CVC_BUILD_DIR}/meson-logs/meson-log.txt"
+    echo "----- meson-log.txt (${_log}) -----" >&2
+    if [ -f "${_log}" ]; then tail -n 300 "${_log}" >&2; else echo "(no meson log)" >&2; fi
+    echo "-----------------------------------" >&2
+}
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -90,10 +106,20 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dintrospection=disabled \
     -Ddtrace=false \
     -Dsysprof=disabled \
-    ${_meson_extra[@]+"${_meson_extra[@]}"}
+    ${_meson_extra[@]+"${_meson_extra[@]}"} || { _dump_meson_log; exit 1; }
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
+
+# GLib links the platform's libintl (libc's, or cvcpkg's gettext) and never
+# ships one.  A libintl in the staged tree means meson built proxy-libintl,
+# and that copy would replace gettext's in a shared prefix.
+for _f in "${CVC_INSTALL_DIR}"/lib/libintl* "${CVC_INSTALL_DIR}"/include/libintl.h; do
+    if [ -e "${_f}" ] || [ -L "${_f}" ]; then
+        echo "glib: ${_f#"${CVC_INSTALL_DIR}"/} is staged: GLib built its own libintl" >&2
+        exit 1
+    fi
+done
 
 # Make installed .pc/.cmake files relocatable.
 cvc_rewrite_install_paths
