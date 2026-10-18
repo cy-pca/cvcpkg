@@ -4289,6 +4289,7 @@ class DbBuildJobStore:
             error_message=row.error_message,
             result_archive_url=row.result_archive_url,
             depends_on=dep_ids if dep_ids is not None else [],
+            updated_at=_ensure_aware(row.updated_at),
         )
 
     async def _load_dep_ids(self, session, job_id: int) -> list[int]:
@@ -4596,6 +4597,35 @@ class DbBuildJobStore:
                     builder_row.current_jobs = active
             dep_ids = await self._load_dep_ids(session, job_id)
             return self._row_to_info(row, dep_ids), True
+
+    async def changed_since(
+        self, since: datetime.datetime, *, limit: int = 500
+    ) -> list[BuildJobInfo]:
+        """Jobs whose row changed at or after *since*, oldest change first.
+
+        Backs the live builds feed.  Dependency ids are left out (each would
+        cost a query per job); the pages read them from the job itself.
+        """
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(BuildJobRow)
+                        .where(BuildJobRow.updated_at >= since)
+                        .order_by(BuildJobRow.updated_at.asc(), BuildJobRow.id.asc())
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [self._row_to_info(r) for r in rows]
+
+    async def latest_update(self) -> datetime.datetime | None:
+        """The newest ``updated_at`` in the queue, or None when it is empty."""
+        async with get_session() as session:
+            newest = (await session.execute(select(sa_func.max(BuildJobRow.updated_at)))).scalar()
+        return _ensure_aware(newest)
 
     async def list_active_by_builder(self, builder_id: int) -> list[BuildJobInfo]:
         """Return jobs currently assigned to a builder in dispatched or running state."""
@@ -5673,6 +5703,46 @@ class DbRecipeStore:
             q = q.order_by(RecipeRow.name.asc()).limit(limit).offset(offset)
             rows = (await session.execute(q)).scalars().all()
             return [self._row_to_info(r) for r in rows], total
+
+    async def bundle_index(self) -> list[tuple[str, str, str, str]]:
+        """``(name, org_slug, bundle_path, stamp)`` for every recipe, in one query.
+
+        *stamp* changes whenever the stored bundle does (its hash, size and
+        upload time), so a caller can cache what it derives from each bundle
+        and re-read only the ones that changed.
+        """
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        RecipeRow.name,
+                        RecipeRow.org_slug,
+                        RecipeRow.bundle_path,
+                        RecipeRow.recipe_hash,
+                        RecipeRow.bundle_size,
+                        RecipeRow.updated_at,
+                    ).order_by(RecipeRow.name.asc(), RecipeRow.org_slug.asc())
+                )
+            ).all()
+        return [
+            (
+                r.name,
+                r.org_slug or "",
+                r.bundle_path,
+                f"{r.recipe_hash}:{r.bundle_size}:{_ensure_aware(r.updated_at).isoformat()}",
+            )
+            for r in rows
+        ]
+
+    async def signature(self) -> tuple[int, str]:
+        """``(count, newest updated_at)``: changes on any push or delete."""
+        async with get_session() as session:
+            count, newest = (
+                await session.execute(
+                    select(sa_func.count(RecipeRow.id), sa_func.max(RecipeRow.updated_at))
+                )
+            ).one()
+        return int(count or 0), (_ensure_aware(newest).isoformat() if newest else "")
 
     async def delete(self, name: str, *, org_slug: str = "") -> bool:
         """Delete a recipe.  Returns True if a row was deleted."""

@@ -14,6 +14,10 @@ private orgs, its token).  The hub then pushes JSON messages:
   sent once on subscribe (``builders``).
 * ``{"type": "builder", "builder": {...}}``: one builder changed.
 * ``{"type": "builder_removed", "id": N}``: one builder was unregistered.
+* ``{"type": "builds", "jobs": [...]}``: build jobs that changed (``builds``).
+* ``{"type": "log", "job": N, "offset": B, "data": "..."}``,
+  ``{"type": "log_end", "job": N, "status": "..."}``: a build log tailed for
+  this connection alone (the hello's ``log``; see the endpoint).
 * ``{"type": "resync"}``: the viewer fell too far behind and messages were
   dropped; reload from the REST endpoints.
 
@@ -28,6 +32,7 @@ rule the REST endpoints apply.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import logging
 import time
@@ -36,7 +41,7 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-TOPICS = frozenset({"activity", "builders"})
+TOPICS = frozenset({"activity", "builders", "builds"})
 
 #: Messages a slow viewer may have queued before it is told to resync.
 QUEUE_MAX = 256
@@ -46,6 +51,10 @@ QUEUE_MAX = 256
 #: publish), so an id just under the mark may become visible after the mark
 #: moved past it.
 EVENT_LOOKBACK = 32
+
+#: How far before the newest change seen the builds poll looks again, for the
+#: same reason: a transaction that started earlier can commit a little later.
+JOB_LOOKBACK = datetime.timedelta(seconds=3)
 
 
 class HubFullError(Exception):
@@ -86,6 +95,8 @@ class LiveHub:
         fetch_latest_id: Callable[[], Awaitable[int]],
         fetch_builders: Callable[[], Awaitable[list]] | None,
         fetch_private_orgs: Callable[[], Awaitable[Collection[str]]],
+        fetch_jobs_since: Callable[[datetime.datetime], Awaitable[list]] | None = None,
+        fetch_latest_job_update: Callable[[], Awaitable[datetime.datetime | None]] | None = None,
         poll_interval: float = 2.0,
         builders_interval: float = 10.0,
         max_subscribers: int = 500,
@@ -94,6 +105,8 @@ class LiveHub:
         self._fetch_latest_id = fetch_latest_id
         self._fetch_builders = fetch_builders
         self._fetch_private_orgs = fetch_private_orgs
+        self._fetch_jobs_since = fetch_jobs_since
+        self._fetch_latest_job_update = fetch_latest_job_update
         self.poll_interval = poll_interval
         self.builders_interval = builders_interval
         self.max_subscribers = max_subscribers
@@ -110,6 +123,10 @@ class LiveHub:
         self._builders: dict[int, tuple[dict, str, str]] | None = None
         self._builders_at = 0.0
         self._builders_dirty = False
+        # Builds: the newest job change pushed so far, and the (id, updated_at)
+        # pairs pushed within JOB_LOOKBACK of it, so a re-read sends nothing twice.
+        self._jobs_cursor: datetime.datetime | None = None
+        self._jobs_sent: set[tuple[int, datetime.datetime]] = set()
 
     # ── Subscription ────────────────────────────────────────────
 
@@ -125,6 +142,18 @@ class LiveHub:
             if "activity" in sub.topics and self._floor is None:
                 self._floor = await self._fetch_latest_id()
                 self._sent.clear()
+            if (
+                "builds" in sub.topics
+                and self._jobs_cursor is None
+                and self._fetch_jobs_since is not None
+            ):
+                latest = (
+                    await self._fetch_latest_job_update()
+                    if self._fetch_latest_job_update is not None
+                    else None
+                )
+                self._jobs_cursor = latest or datetime.datetime.now(datetime.timezone.utc)
+                self._jobs_sent.clear()
             snapshot: list[dict] | None = None
             if "builders" in sub.topics and self._fetch_builders is not None:
                 if self._builders is None or self._builders_stale():
@@ -188,6 +217,8 @@ class LiveHub:
                 self._floor = None
                 self._sent.clear()
                 self._builders = None
+                self._jobs_cursor = None
+                self._jobs_sent.clear()
 
     async def tick(self) -> None:
         """One poll: push new events and changed builders.  Hold the lock."""
@@ -199,6 +230,12 @@ class LiveHub:
             and (self._builders is None or self._builders_dirty or self._builders_stale())
         ):
             await self._poll_builders()
+        if (
+            self._jobs_cursor is not None
+            and self._fetch_jobs_since is not None
+            and any("builds" in s.topics for s in self._subs)
+        ):
+            await self._poll_jobs()
 
     def _builders_stale(self) -> bool:
         return time.monotonic() - self._builders_at >= self.builders_interval
@@ -258,3 +295,28 @@ class LiveHub:
             for org, i in removed:
                 if sub.can_see(org, private):
                     sub.offer({"type": "builder_removed", "id": i})
+
+    async def _poll_jobs(self) -> None:
+        assert self._fetch_jobs_since is not None and self._jobs_cursor is not None
+        jobs = await self._fetch_jobs_since(self._jobs_cursor - JOB_LOOKBACK)
+        fresh = []
+        for j in jobs:
+            stamp = j.updated_at or self._jobs_cursor
+            if (j.id, stamp) in self._jobs_sent:
+                continue
+            self._jobs_sent.add((j.id, stamp))
+            fresh.append(j)
+            if stamp > self._jobs_cursor:
+                self._jobs_cursor = stamp
+        horizon = self._jobs_cursor - JOB_LOOKBACK
+        self._jobs_sent = {(i, t) for i, t in self._jobs_sent if t >= horizon}
+        if not fresh:
+            return
+        private = await self._private_for(j.org_slug for j in fresh)
+        payload = [(j.org_slug or "", j.model_dump(mode="json")) for j in fresh]
+        for sub in list(self._subs):
+            if "builds" not in sub.topics:
+                continue
+            visible = [d for org, d in payload if sub.can_see(org, private)]
+            if visible:
+                sub.offer({"type": "builds", "jobs": visible})

@@ -462,13 +462,13 @@ class TestRecipeEndpoints:
         )
         assert resp.status_code == 404
 
-    def test_reader_cannot_list(self, db_server_env):
+    def test_reader_can_list(self, db_server_env):
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
         resp = client.get(
             "/v1/recipes",
             headers={"Authorization": f"Bearer {reader_tok}"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
 
     def test_reader_cannot_download(self, db_server_env):
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
@@ -500,10 +500,10 @@ class TestRecipeEndpoints:
         )
         assert resp.status_code == 404
 
-    def test_requires_auth(self, db_server_env):
+    def test_list_is_public(self, db_server_env):
         client, *_ = db_server_env
         resp = client.get("/v1/recipes")
-        assert resp.status_code == 401
+        assert resp.status_code == 200
 
 
 # ── GET /v1/recipes/bundle ──────────────────────────────────────

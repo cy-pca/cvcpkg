@@ -900,8 +900,19 @@ class BuildJobRow(Base):
     log_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_archive_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bumped by every write to the row (ORM flushes and Core UPDATEs alike, via
+    # onupdate), so the live builds feed can ask "what changed since T" with
+    # one indexed range query instead of diffing the whole queue.
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        onupdate=lambda: datetime.datetime.now(datetime.timezone.utc),
+        server_default=func.now(),
+    )
 
     __table_args__ = (
+        Index("ix_build_jobs_updated_at", "updated_at"),
         Index("ix_build_jobs_dag_id", "dag_id"),
         Index("ix_build_jobs_org_slug", "org_slug"),
         Index("ix_build_jobs_status", "status"),

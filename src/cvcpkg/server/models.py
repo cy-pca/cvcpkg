@@ -1118,6 +1118,9 @@ class BuildJobInfo(BaseModel):
     finished_at: datetime.datetime | None = None
     log_url: str | None = None
     log_size_bytes: int | None = None
+    updated_at: datetime.datetime | None = Field(
+        default=None, description="When anything about the job last changed."
+    )
     error_message: str | None = None
     result_archive_url: str | None = None
     depends_on: list[int] = Field(default_factory=list)
