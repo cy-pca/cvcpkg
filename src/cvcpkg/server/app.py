@@ -1965,6 +1965,31 @@ _populate_stats: dict = {
 }
 
 
+class _GZipExceptArchives:
+    """GZipMiddleware for every route except the archive downloads.
+
+    Archives are ``.tar.zst``, which gzip cannot shrink.  With the app-wide
+    middleware, every download from a client sending Accept-Encoding (the cvcpkg
+    client's httpx always does) was recompressed chunk by chunk on the event
+    loop.  Under a CI download burst that was ~70% of the single worker's CPU
+    (py-spy, 2026-10-18), and the responses lost their Content-Length.
+    Starlette's ``exclude_content_types`` would do this by media type, but only
+    1.7+ has it, so this routes by path, which works on every supported version.
+    """
+
+    _SKIP_PREFIXES = ("/v1/download/", "/v1/mirror/download/")
+
+    def __init__(self, app, **gzip_kwargs) -> None:
+        self.app = app
+        self.gzip = GZipMiddleware(app, **gzip_kwargs)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope.get("path", "").startswith(self._SKIP_PREFIXES):
+            await self.app(scope, receive, send)
+        else:
+            await self.gzip(scope, receive, send)
+
+
 def _safe_archive_filename(
     name: str, version: str, platform: str, arch: str, build_type: str, link: str
 ) -> str:
@@ -2632,8 +2657,10 @@ def create_app(
     # (every fresh CI job) still pulled the full ~6 MB body UNCOMPRESSED; gzip takes that to a few
     # hundred KB, so each catalog request holds a uvicorn worker far less time (the transfer half of
     # the 503-under-CI-load fix). minimum_size skips tiny bodies; gzip engages only when the client
-    # sends Accept-Encoding (the cvcpkg client's httpx does).
-    app.add_middleware(GZipMiddleware, minimum_size=512)
+    # sends Accept-Encoding (the cvcpkg client's httpx does).  Archive downloads are left alone
+    # (see _GZipExceptArchives).  Level 6, not Starlette's default 9: nearly the same size for
+    # JSON at a fraction of the CPU, and the catalog is gzipped once in its cache anyway.
+    app.add_middleware(_GZipExceptArchives, minimum_size=512, compresslevel=6)
 
     # ── Rate limiting state (per-IP, sliding window) ──────
     _rate_buckets: dict[str, list[float]] = {}
