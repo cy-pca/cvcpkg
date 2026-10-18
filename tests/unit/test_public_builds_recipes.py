@@ -79,6 +79,15 @@ def _recipe_bundle(name: str) -> bytes:
     return buf.getvalue()
 
 
+def _extract(tar: tarfile.TarFile, dest) -> None:
+    # extractall's ``filter`` (PEP 706) is missing from older 3.10/3.11 patch
+    # releases, which CI's macOS runner has.
+    if hasattr(tarfile, "data_filter"):
+        tar.extractall(dest, filter="data")
+    else:
+        tar.extractall(dest)
+
+
 def _push(client, tok, name, org=""):
     return client.post(
         f"/v1/recipes/{name}",
@@ -165,7 +174,7 @@ def test_a_pushed_recipe_archive_is_a_recipes_dir(env, tmp_path):
     dest = tmp_path / "recipes"
     dest.mkdir()
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
-        tar.extractall(dest, filter="data")
+        _extract(tar, dest)
     assert (dest / "widget" / "build.sh").stat().st_mode & 0o111
     assert (dest / "widget" / "patches" / "fix.patch").is_file()
     # Byte-for-byte what was pushed: the recipe dir round-trips.
@@ -189,7 +198,7 @@ def test_a_server_recipe_archive_brings_its_shared_helpers(env, tmp_path):
     dest.mkdir()
     with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tar:
         names = tar.getnames()
-        tar.extractall(dest, filter="data")
+        _extract(tar, dest)
     assert "zlib/recipe.yaml" in names
     assert any(n.startswith("_common/") for n in names)
     assert [x.name for x in list_recipes(dest)] == ["zlib"]
