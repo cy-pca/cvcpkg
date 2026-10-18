@@ -2076,6 +2076,42 @@ class DbPackageIndex:
                 await session.commit()
         return changed
 
+    async def variants(
+        self,
+        name: str,
+        version: str,
+        *,
+        platform: str | None = None,
+        arch: str | None = None,
+        link: str | None = None,
+        build_type: str | None = None,
+    ) -> list[dict]:
+        """The bundles a yank/unyank scope matches, each with its ``yanked`` state.
+
+        Read before a yank or unyank so its webhook can name exactly the
+        bundles that changed (the store methods return only a row count, which
+        the CLI's no-op check relies on).  Same dict shape as the removal
+        paths' ``_removed_dict``, plus ``yanked``.
+        """
+        async with get_session() as session:
+            q = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+            if platform is not None:
+                q = q.where(PackageRow.platform == platform)
+            if arch is not None:
+                q = q.where(PackageRow.arch == arch)
+            if link is not None:
+                q = q.where(PackageRow.link == link)
+            if build_type is not None:
+                q = q.where(PackageRow.build_type == build_type)
+            rows = (await session.execute(q)).scalars().all()
+            out = []
+            for r in rows:
+                d = _removed_dict(r)
+                del d["archive_deleted"]
+                d["yanked"] = bool(r.yanked)
+                out.append(d)
+            return out
+
     @changes_catalog
     async def unyank(
         self,

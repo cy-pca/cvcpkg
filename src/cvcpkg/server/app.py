@@ -1069,6 +1069,61 @@ async def emit_webhook_event(
         )
 
 
+#: The bundle fields a package lifecycle webhook names for each variant.
+_WEBHOOK_VARIANT_KEYS = ("platform", "arch", "build_type", "link")
+
+
+async def emit_package_events(
+    event: str,
+    bundles: list[dict],
+    *,
+    actor: str,
+    reason: str = "",
+) -> None:
+    """Fire *event* once per package version and org among *bundles*.
+
+    *bundles* are the dicts the store's removal paths return (``name``,
+    ``version``, ``platform``, ``arch``, ``build_type``, ``link``,
+    ``org_slug``), one per bundle that changed.  Each event lists its
+    ``variants``.  It is scoped like ``package.published``: an org's events go
+    only to that org's webhooks and public ones only to global webhooks, so a
+    private org's yank never reaches anyone else's endpoint.
+
+    Call it after the change committed.  It never raises: a webhook problem
+    must not fail the yank, delete or GC that triggered it.
+    """
+    if not bundles or not _use_db or _db_webhooks is None:
+        return
+    try:
+        groups: dict[tuple[str, str, str], list[dict]] = {}
+        for b in bundles:
+            key = (b["name"], b["version"], b.get("org_slug") or "")
+            groups.setdefault(key, []).append(b)
+        # A GC can remove thousands of bundles: look up subscribers once per
+        # org, not once per package, and skip orgs nobody listens to.
+        listening = {
+            org
+            for org in {org for _, _, org in groups}
+            if await _db_webhooks.list_active_for_event(event, org_slug=org)
+        }
+        for (name, version, org), group in groups.items():
+            if org not in listening:
+                continue
+            data = {
+                "name": name,
+                "version": version,
+                "org": org,
+                "variants": [{k: b.get(k, "") for k in _WEBHOOK_VARIANT_KEYS} for b in group],
+                "count": len(group),
+                "actor": actor,
+            }
+            if reason:
+                data["reason"] = reason
+            await emit_webhook_event(event, data, org_slug=org)
+    except Exception:
+        logger.exception("failed to emit %s webhooks", event)
+
+
 # ── Connected WebSocket builders ───────────────────────────────
 
 # Maps builder_id -> WebSocket for all connected builders.
@@ -1722,6 +1777,9 @@ async def _yank_retention_gc_loop() -> None:
                 )
                 await _release_org_storage(purged)
                 ac.detail = f"purged={len(purged)} {target}"
+            await emit_package_events(
+                "package.nuked", purged, actor="retention-gc", reason="retention"
+            )
             if purged:
                 logger.info(
                     "yank retention GC: purged %d bundle(s) yanked over %d days ago",
@@ -2314,7 +2372,7 @@ async def _enforce_mirror_budget() -> int:
         # No tombstone: an evicted bundle re-populates from upstream on the
         # next sync and must not answer 410 meanwhile.  The archives are
         # unlinked just below.
-        await _db_packages.delete(
+        removed = await _db_packages.delete(
             name,
             version,
             platform=platform,
@@ -2322,6 +2380,9 @@ async def _enforce_mirror_budget() -> int:
             storage_uri="",
             tombstone=False,
             deleted_by="mirror-evict",
+        )
+        await emit_package_events(
+            "package.deleted", removed, actor="mirror-evict", reason="mirror-evict"
         )
         for fname in groups[cand.key]["archives"]:
             (state.archives_dir() / fname).unlink(missing_ok=True)
@@ -4244,6 +4305,7 @@ def create_app(
                 )
             await _release_org_storage(deleted)
             ac.detail = f"bulk_delete deleted={len(deleted)} older_than={older_than!r}"
+        await emit_package_events("package.deleted", deleted, actor=actor.name, reason="gc")
         return {"deleted_count": len(deleted), "deleted": deleted}
 
     @app.get("/v1/cache/stats", tags=["cache"])
@@ -4346,6 +4408,7 @@ def create_app(
                     params["valid_chain_hashes"] = f"<{len(hashes)} hashes>"
                 archives = sum(1 for d in deleted if d["archive_deleted"])
                 ac.detail = f"deleted={len(deleted)} archives_deleted={archives} params={params}"
+            await emit_package_events("package.deleted", deleted, actor=actor.name, reason="gc")
         return {
             "dry_run": dry_run,
             "deleted_count": len(deleted),
@@ -5224,6 +5287,10 @@ def create_app(
                 "arch": session.arch,
                 "org": getattr(session, "org", "") or "",
             },
+            # Scoped like the single-shot publish: without it an org's chunked
+            # publish went to the GLOBAL webhooks (a private org's included)
+            # and never to the org's own.
+            org_slug=getattr(session, "org", "") or "",
         )
 
         edge_warning = _edge_public_publish_warning(getattr(session, "org", "") or "")
@@ -5307,17 +5374,17 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
+        changed: list[dict] = []
         async with _audit_txn(AuditAction.yank, actor.name, target):
             if _use_db:
-                n = await _db_packages.yank(
-                    name,
-                    version,
-                    platform=platform,
-                    arch=arch,
-                    link=link,
-                    build_type=build_type,
-                    actor=actor.name,
-                )
+                scope = dict(platform=platform, arch=arch, link=link, build_type=build_type)
+                # Read first: only the bundles this call changes go in the webhook.
+                changed = [
+                    b
+                    for b in await _db_packages.variants(name, version, **scope)
+                    if not b["yanked"]
+                ]
+                n = await _db_packages.yank(name, version, **scope, actor=actor.name)
             else:
                 state = _get_state()
                 n = 0
@@ -5335,6 +5402,7 @@ def create_app(
                     b["yanked"] = True
                     n += 1
                 state.save_index()
+        await emit_package_events("package.yanked", changed, actor=actor.name)
         return {"message": f"yanked {target}", "count": n}
 
     @app.post("/v1/packages/{name}/{version}/unyank", tags=["publish"])
@@ -5361,17 +5429,15 @@ def create_app(
         target = f"{name}=={version}"
         if scope_detail:
             target = f"{target} [{scope_detail}]"
+        changed: list[dict] = []
         async with _audit_txn(AuditAction.unyank, actor.name, target):
             if _use_db:
-                n = await _db_packages.unyank(
-                    name,
-                    version,
-                    platform=platform,
-                    arch=arch,
-                    link=link,
-                    build_type=build_type,
-                    actor=actor.name,
-                )
+                scope = dict(platform=platform, arch=arch, link=link, build_type=build_type)
+                # Read first: only the bundles this call changes go in the webhook.
+                changed = [
+                    b for b in await _db_packages.variants(name, version, **scope) if b["yanked"]
+                ]
+                n = await _db_packages.unyank(name, version, **scope, actor=actor.name)
             else:
                 state = _get_state()
                 n = 0
@@ -5389,6 +5455,7 @@ def create_app(
                     b["yanked"] = False
                     n += 1
                 state.save_index()
+        await emit_package_events("package.unyanked", changed, actor=actor.name)
         return {"message": f"unyanked {target}", "count": n}
 
     @app.post("/v1/admin/packages/{name}/{version}/backfill-deps", tags=["admin"])
@@ -5537,6 +5604,9 @@ def create_app(
 
             await _release_org_storage(result["nuked"])
             ac.detail = f"nuked={result['count']}"
+        await emit_package_events(
+            "package.nuked", result["nuked"], actor=actor.name, reason="manual"
+        )
         return {"message": f"nuked {target}", "count": result["count"]}
 
     @app.get("/v1/packages/{name}/tombstones", tags=["packages"])
@@ -5617,6 +5687,7 @@ def create_app(
         deleted bundle answers 410 with reason ``deleted``.
         """
         state = _get_state()
+        deleted: list[dict] = []
         async with _audit_txn(AuditAction.delete, actor.name, f"{name}=={version}") as ac:
             if _use_db:
                 deleted = await _db_packages.delete(
@@ -5646,6 +5717,7 @@ def create_app(
                 removed, archives = _yaml_delete_bundles(state, _matches)
                 if not removed:
                     raise HTTPException(404, f"{name}=={version} not found")
+        await emit_package_events("package.deleted", deleted, actor=actor.name, reason="deleted")
         return {
             "message": f"deleted {name}=={version}",
             "removed": removed,
@@ -5664,6 +5736,7 @@ def create_app(
         /v1/packages/{name}/{version}``.
         """
         state = _get_state()
+        deleted: list[dict] = []
         async with _audit_txn(
             AuditAction.delete,
             actor.name,
@@ -5685,6 +5758,7 @@ def create_app(
                 if not removed:
                     raise HTTPException(404, f"no {platform}/{link} bundles found")
             ac.detail = f"{removed} bundles, archives_deleted={archives}"
+        await emit_package_events("package.deleted", deleted, actor=actor.name, reason="deleted")
         return {
             "message": f"deleted {platform}/{link} bundles",
             "removed": removed,
@@ -7473,12 +7547,20 @@ def create_app(
             f"{platform}/{arch}/{build_type}/{link} via /admin",
         ):
             if action == "yank":
+                changed = [
+                    b
+                    for b in await _db_packages.variants(name, version, **kwargs)
+                    if not b["yanked"]
+                ]
                 await _db_packages.yank(name, version, actor="admin-ui", **kwargs)
             elif action == "unyank":
+                changed = [
+                    b for b in await _db_packages.variants(name, version, **kwargs) if b["yanked"]
+                ]
                 await _db_packages.unyank(name, version, actor="admin-ui", **kwargs)
             else:
                 # delete() narrows by platform/link only (matches /v1 delete API).
-                deleted = await _db_packages.delete(
+                changed = await _db_packages.delete(
                     name,
                     version,
                     platform=platform or None,
@@ -7486,7 +7568,13 @@ def create_app(
                     storage_uri=_get_state().storage_uri,
                     deleted_by="admin-ui",
                 )
-                await _release_org_storage(deleted)
+                await _release_org_storage(changed)
+        await emit_package_events(
+            {"yank": "package.yanked", "unyank": "package.unyanked"}.get(action, "package.deleted"),
+            changed,
+            actor="admin-ui",
+            reason="deleted" if action == "delete" else "",
+        )
         return RedirectResponse("/admin/packages", status_code=303)
 
     @app.get("/admin/tokens", tags=["admin"], response_class=HTMLResponse)
@@ -11107,6 +11195,7 @@ def create_app(
                 AuditAction.nuke, actor.name, f"gc/yanked older_than={older_than_days}d"
             ) as ac:
                 ac.detail = f"purged={len(purged)}"
+            await emit_package_events("package.nuked", purged, actor=actor.name, reason="retention")
         return {
             "ok": True,
             "dry_run": dry_run,
