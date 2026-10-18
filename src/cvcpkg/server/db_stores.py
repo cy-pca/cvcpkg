@@ -38,6 +38,7 @@ from cvcpkg.server.db import (
     MirrorRow,
     OrganizationRow,
     OrgMemberRow,
+    PackageEventRow,
     PackageRow,
     PackageTombstoneRow,
     PrincipalRow,
@@ -57,6 +58,7 @@ from cvcpkg.server.models import (
     AuditEntry,
     BuilderInfo,
     BuilderStatus,
+    BuilderSystemStats,
     BuildJobAlreadyClaimedError,
     BuildJobInfo,
     BuildJobNotActiveError,
@@ -66,6 +68,7 @@ from cvcpkg.server.models import (
     OrgInfo,
     OrgMember,
     OrgRole,
+    PackageEvent,
     PackageInfo,
     RecipeInfo,
     TagInfo,
@@ -1054,6 +1057,14 @@ async def _remove_bundles(
         return []
     if tombstone:
         _record_tombstones(session, rows, reason=reason, nuked_by=removed_by)
+    # Before the delete: the event copies its fields off the row.
+    _record_events(
+        session,
+        rows,
+        _REMOVAL_EVENT_KIND.get(reason, "nuke"),
+        actor=removed_by,
+        detail=_REMOVAL_EVENT_DETAIL.get(reason, reason),
+    )
     ids = [r.id for r in rows]
     for i in range(0, len(ids), _DELETE_CHUNK):
         await session.execute(
@@ -1123,6 +1134,68 @@ _CATALOG_NAME, _CATALOG_VERSION = _CATALOG_FIELDS.index("name"), _CATALOG_FIELDS
 def _json_list(raw: str) -> list:
     # Most rows hold "[]"; skipping the parse for them is measurable at 7k rows.
     return json.loads(raw) if raw and raw != "[]" else []
+
+
+#: How the activity feed shows each removal reason: a delete or GC eviction is
+#: a ``delete``; every kind of nuke is a ``nuke``, with its reason as detail.
+_REMOVAL_EVENT_KIND = {NUKE_REASON_DELETED: "delete", NUKE_REASON_GC: "delete"}
+_REMOVAL_EVENT_DETAIL = {NUKE_REASON_DELETED: "", NUKE_REASON_GC: "cache GC"}
+
+
+def _publish_detail(row) -> str:
+    """The feed's note on a publish: a mirror import or a placeholder."""
+    if row.origin_upstream:
+        return f"mirrored from {row.origin_upstream}"
+    if not row.archive_url:
+        return "placeholder"
+    return ""
+
+
+def _record_events(session, rows, kind: str, *, actor: str = "", detail: str = "") -> None:
+    """Insert one activity-feed event per PackageRow in *rows*.
+
+    Called inside the transaction that makes the change, so an event exists
+    exactly when its change committed.  Variant fields are copied off the row,
+    so a delete or nuke still has its event after the row is gone.
+    """
+    session.add_all(
+        PackageEventRow(
+            kind=kind,
+            name=r.name,
+            version=r.version,
+            platform=r.platform,
+            arch=r.arch,
+            build_type=r.build_type,
+            link=r.link,
+            org_slug=r.org_slug,
+            actor=actor,
+            size_bytes=r.size_bytes or 0,
+            detail=detail,
+        )
+        for r in rows
+    )
+
+
+def _variant_select(
+    name: str,
+    version: str,
+    *,
+    platform: str | None = None,
+    arch: str | None = None,
+    link: str | None = None,
+    build_type: str | None = None,
+):
+    """SELECT the PackageRows a yank or unyank scope matches."""
+    sel = select(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
+    if platform is not None:
+        sel = sel.where(PackageRow.platform == platform)
+    if arch is not None:
+        sel = sel.where(PackageRow.arch == arch)
+    if link is not None:
+        sel = sel.where(PackageRow.link == link)
+    if build_type is not None:
+        sel = sel.where(PackageRow.build_type == build_type)
+    return sel
 
 
 class DbPackageIndex:
@@ -1709,6 +1782,9 @@ class DbPackageIndex:
                 origin_upstream=origin_upstream,
             )
             session.add(row)
+            _record_events(
+                session, [row], "publish", actor=published_by, detail=_publish_detail(row)
+            )
 
     @changes_catalog
     async def yank(
@@ -1720,8 +1796,30 @@ class DbPackageIndex:
         arch: str | None = None,
         link: str | None = None,
         build_type: str | None = None,
+        actor: str = "",
     ) -> int:
         async with get_session() as session:
+            # Only rows this call actually yanks get an event: a re-yank with a
+            # wider scope must not repeat the ones already yanked.
+            newly = [
+                r
+                for r in (
+                    await session.execute(
+                        _variant_select(
+                            name,
+                            version,
+                            platform=platform,
+                            arch=arch,
+                            link=link,
+                            build_type=build_type,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+                if not r.yanked
+            ]
+            _record_events(session, newly, "yank", actor=actor)
             stmt = (
                 update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
                 # coalesce, not a bare now(): this UPDATE also matches rows that
@@ -1872,6 +1970,9 @@ class DbPackageIndex:
             }
 
             to_tombstone = []
+            # For the activity feed: what this pass yanked and unyanked here.
+            yanked_now: list[PackageRow] = []
+            unyanked_now: list[PackageRow] = []
             for r in rows:
                 key = (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
                 if key in upstream_yanked:
@@ -1891,6 +1992,7 @@ class DbPackageIndex:
                         continue
                     r.yanked = True
                     r.yanked_at = r.yanked_at or now
+                    yanked_now.append(r)
                     counts["yanked"] += 1
                     continue
                 if key in upstream_present:
@@ -1902,6 +2004,7 @@ class DbPackageIndex:
                         if r.yanked:
                             r.yanked = False
                             r.yanked_at = None
+                            unyanked_now.append(r)
                             counts["unyanked"] += 1
                     continue
                 # Gone from upstream's catalog.
@@ -1909,6 +2012,7 @@ class DbPackageIndex:
                     if not r.yanked:
                         r.yanked = True
                         r.yanked_at = r.yanked_at or now
+                        yanked_now.append(r)
                     if key not in already_tombstoned:
                         to_tombstone.append(r)
                         counts["tombstoned"] += 1
@@ -1916,8 +2020,12 @@ class DbPackageIndex:
                     if not r.yanked:
                         r.yanked = True
                         r.yanked_at = r.yanked_at or now
+                        yanked_now.append(r)
                         counts["ambiguous"] += 1
 
+            note = f"following {upstream}"
+            _record_events(session, yanked_now, "yank", actor=nuked_by, detail=note)
+            _record_events(session, unyanked_now, "unyank", actor=nuked_by, detail=note)
             if to_tombstone:
                 _record_tombstones(
                     session,
@@ -1978,8 +2086,28 @@ class DbPackageIndex:
         arch: str | None = None,
         link: str | None = None,
         build_type: str | None = None,
+        actor: str = "",
     ) -> int:
         async with get_session() as session:
+            restored = [
+                r
+                for r in (
+                    await session.execute(
+                        _variant_select(
+                            name,
+                            version,
+                            platform=platform,
+                            arch=arch,
+                            link=link,
+                            build_type=build_type,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+                if r.yanked
+            ]
+            _record_events(session, restored, "unyank", actor=actor)
             stmt = (
                 update(PackageRow).where(PackageRow.name == name, PackageRow.version == version)
                 # Clearing yanked_at disarms retention: an unyanked bundle must
@@ -2586,6 +2714,152 @@ class DbPackageIndex:
                 reason=NUKE_REASON_GC,
                 removed_by=removed_by,
                 storage_uri=storage_uri,
+            )
+
+
+# ── DB Package Event Store (activity feed) ──────────────────────
+
+
+def _like_escape(text: str) -> str:
+    """*text* with LIKE's wildcards escaped (escape char: backslash)."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _event_from_row(row: PackageEventRow) -> PackageEvent:
+    return PackageEvent(
+        id=row.id,
+        created_at=_ensure_aware(row.created_at),
+        kind=row.kind,
+        name=row.name,
+        version=row.version,
+        platform=row.platform,
+        arch=row.arch,
+        build_type=row.build_type,
+        link=row.link,
+        org_slug=row.org_slug,
+        actor=row.actor,
+        size_bytes=row.size_bytes or 0,
+        detail=row.detail,
+    )
+
+
+class DbPackageEventStore:
+    """Reads the ``package_events`` table the package store writes."""
+
+    @staticmethod
+    def _filtered(
+        q,
+        *,
+        kinds: Collection[str] = (),
+        name: str = "",
+        org_slug: str | None = None,
+        platform: str = "",
+        arch: str = "",
+        actor: str = "",
+        exclude_orgs: Collection[str] = (),
+    ):
+        if kinds:
+            q = q.where(PackageEventRow.kind.in_(list(kinds)))
+        if name:
+            q = q.where(PackageEventRow.name.ilike(f"%{_like_escape(name)}%", escape="\\"))
+        if org_slug is not None:
+            q = q.where(PackageEventRow.org_slug == org_slug)
+        if platform:
+            q = q.where(PackageEventRow.platform == platform)
+        if arch:
+            q = q.where(PackageEventRow.arch == arch)
+        if actor:
+            q = q.where(PackageEventRow.actor.ilike(f"%{_like_escape(actor)}%", escape="\\"))
+        if exclude_orgs:
+            q = q.where(PackageEventRow.org_slug.not_in(list(exclude_orgs)))
+        return q
+
+    async def list_events(
+        self,
+        *,
+        kinds: Collection[str] = (),
+        name: str = "",
+        org_slug: str | None = None,
+        platform: str = "",
+        arch: str = "",
+        actor: str = "",
+        exclude_orgs: Collection[str] = (),
+        max_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[PackageEvent], int, int]:
+        """Newest-first page of events, the filtered total, and the snapshot id.
+
+        *max_id* pins the page to events up to that id, so paging stays stable
+        while new events arrive; None takes the newest id now.  *name* and
+        *actor* match case-insensitive substrings; the rest match exactly.
+        *exclude_orgs* drops the events of orgs the caller may not see.
+        """
+        filters = dict(
+            kinds=kinds,
+            name=name,
+            org_slug=org_slug,
+            platform=platform,
+            arch=arch,
+            actor=actor,
+            exclude_orgs=exclude_orgs,
+        )
+        async with get_session() as session:
+            if max_id is None:
+                max_id = int(
+                    (await session.execute(select(sa_func.max(PackageEventRow.id)))).scalar() or 0
+                )
+            total = int(
+                (
+                    await session.execute(
+                        self._filtered(
+                            select(sa_func.count(PackageEventRow.id)).where(
+                                PackageEventRow.id <= max_id
+                            ),
+                            **filters,
+                        )
+                    )
+                ).scalar()
+                or 0
+            )
+            rows = (
+                (
+                    await session.execute(
+                        self._filtered(
+                            select(PackageEventRow).where(PackageEventRow.id <= max_id),
+                            **filters,
+                        )
+                        .order_by(PackageEventRow.id.desc())
+                        .limit(limit)
+                        .offset(offset)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_event_from_row(r) for r in rows], total, max_id
+
+    async def since(self, after_id: int, *, limit: int = 500) -> list[PackageEvent]:
+        """Events with an id above *after_id*, oldest first (the live feed)."""
+        async with get_session() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(PackageEventRow)
+                        .where(PackageEventRow.id > after_id)
+                        .order_by(PackageEventRow.id.asc())
+                        .limit(limit)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            return [_event_from_row(r) for r in rows]
+
+    async def latest_id(self) -> int:
+        async with get_session() as session:
+            return int(
+                (await session.execute(select(sa_func.max(PackageEventRow.id)))).scalar() or 0
             )
 
 
@@ -3609,6 +3883,33 @@ class DbTagStore:
 # ── DB Builder Store ────────────────────────────────────────────
 
 
+def _builder_version(labels) -> str | None:
+    """The version a builder's ``cvcpkg=<version>[@<commit>]`` label names."""
+    if not isinstance(labels, list):
+        return None
+    for label in labels:
+        if isinstance(label, str) and label.startswith("cvcpkg="):
+            return label[len("cvcpkg=") :] or None
+    return None
+
+
+def _decode_system_stats(raw: str | None) -> BuilderSystemStats | None:
+    if not raw:
+        return None
+    try:
+        return BuilderSystemStats.model_validate_json(raw)
+    except ValueError:
+        return None
+
+
+def _encode_system_stats(stats: BuilderSystemStats | dict | None) -> str | None:
+    if stats is None:
+        return None
+    if isinstance(stats, dict):
+        stats = BuilderSystemStats.model_validate(stats)
+    return stats.model_dump_json(exclude_none=True)
+
+
 class DbBuilderStore:
     """DB-backed store for registered remote build agents."""
 
@@ -3645,6 +3946,8 @@ class DbBuilderStore:
         except (json.JSONDecodeError, TypeError):
             capabilities = {}
         return BuilderInfo(
+            version=_builder_version(labels),
+            system=_decode_system_stats(row.system_stats),
             id=row.id,
             name=row.name,
             org_slug=row.org_slug,
@@ -3677,6 +3980,7 @@ class DbBuilderStore:
         max_jobs: int = 1,
         prefer_affinity: bool = False,
         free_disk_gb: int | None = None,
+        system: BuilderSystemStats | dict | None = None,
     ) -> BuilderInfo:
         """Register a new builder or re-register an existing one."""
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -3703,6 +4007,8 @@ class DbBuilderStore:
                 # incarnation left: a stale number is worse than none, since
                 # "unknown" fails open while a stale one can mispair.
                 row.free_disk_gb = free_disk_gb
+                # Same reasoning: a new incarnation's figures, or none.
+                row.system_stats = _encode_system_stats(system)
                 row.status = BuilderStatus.online
                 row.last_heartbeat = now
                 row.registered_by = registered_by
@@ -3720,6 +4026,7 @@ class DbBuilderStore:
                 max_jobs=max_jobs,
                 prefer_affinity=prefer_affinity,
                 free_disk_gb=free_disk_gb,
+                system_stats=_encode_system_stats(system),
                 last_heartbeat=now,
                 registered_by=registered_by,
             )
@@ -3818,6 +4125,7 @@ class DbBuilderStore:
         current_jobs: int = 0,
         reconcile: bool = False,
         free_disk_gb: int | None = None,
+        system: BuilderSystemStats | dict | None = None,
     ) -> BuilderInfo | None:
         """Record a heartbeat from a builder. Returns updated info or None.
 
@@ -3830,7 +4138,8 @@ class DbBuilderStore:
         work volume; ``None`` leaves the stored value alone.  It has to be
         "leave alone" rather than "clear", because the scheduler itself calls
         this to bump ``current_jobs`` after a dispatch and must not wipe the
-        figure it just matched against.
+        figure it just matched against.  *system* (host CPU/memory/disk
+        figures) is likewise left alone when ``None``.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
         async with get_session() as session:
@@ -3843,6 +4152,8 @@ class DbBuilderStore:
             row.status = status
             if free_disk_gb is not None:
                 row.free_disk_gb = free_disk_gb
+            if system is not None:
+                row.system_stats = _encode_system_stats(system)
             if reconcile:
                 db_count = (
                     await session.execute(

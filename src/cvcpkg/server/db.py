@@ -258,6 +258,54 @@ class PackageTombstoneRow(Base):
     )
 
 
+class PackageEventRow(Base):
+    """One publish, yank, unyank, delete or nuke of one bundle variant.
+
+    The activity feed (``/v1/activity``, the ``/activity`` page and the live
+    socket) reads this table.  The audit log is admin-only and keeps one entry
+    per request with a free-text target, so it cannot be filtered by variant or
+    by org visibility.  Rows are written by the package store in the same
+    transaction as the change they describe, so the feed never shows a change
+    that rolled back.  ``org_slug`` decides who sees a row: a private org's
+    events are shown only to its members and admins.
+    """
+
+    __tablename__ = "package_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.datetime.now(datetime.timezone.utc),
+        server_default=func.now(),
+    )
+    # publish | yank | unyank | delete | nuke
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    platform: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    arch: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    build_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="", server_default=""
+    )
+    link: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    org_slug: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="", server_default=""
+    )
+    actor: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    size_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        Index("ix_package_events_kind", "kind"),
+        Index("ix_package_events_name", "name"),
+        Index("ix_package_events_org_slug", "org_slug"),
+        Index("ix_package_events_created_at", "created_at"),
+    )
+
+
 class OrganizationRow(Base):
     __tablename__ = "organizations"
 
@@ -780,6 +828,10 @@ class BuilderRow(Base):
     # through.  A NOT NULL DEFAULT 0 would read as "no space" and strand every
     # min_disk_gb job on every builder that predates this column.
     free_disk_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The host's CPU, memory and disk figures from the latest heartbeat, as a
+    # JSON object (see cvcpkg.sysstats).  NULL until a builder new enough to
+    # send them beats; shown on the builders page, never used for scheduling.
+    system_stats: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_heartbeat: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

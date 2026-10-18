@@ -40,6 +40,16 @@ Builders register with the server on startup and maintain presence via
 periodic heartbeats. If a builder misses heartbeats, it transitions to
 "offline" status and won't receive new jobs.
 
+Each heartbeat also carries the host's CPU, memory and disk figures (CPU busy
+since the last beat, load average, physical memory, and the size and free space
+of the volume holding `--work-dir`). The builders page shows them, and its
+detail view adds the running and recent jobs. They are measured without extra
+packages (`/proc` on Linux, the Win32 API on Windows, `sysctl` on macOS and the
+BSDs), and a figure a platform cannot provide is left out. The scheduler does
+not use them. The page also shows each builder's cvcpkg version, taken from the
+`cvcpkg=<version>[@<commit>]` label every builder gives itself. The version is
+green when it matches the server's and yellow when it does not.
+
 ```bash
 # The token comes from CVCPKG_TOKEN -- here an env file (see "Keeping the token
 # out of ps" below), so it is never on the command line.

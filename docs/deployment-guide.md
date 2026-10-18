@@ -144,8 +144,10 @@ WebSocket open to `/v1/builders/{id}/ws` for job dispatch, force-cancel and
 through hands the backend a plain `GET` on a WebSocket-only route, which
 answers `404` — builders then fall back to HTTP long-poll, and
 `POST /v1/admin/update-builders` (run by every production deploy) reaches no
-builder at all.  Both snippets below forward upgrades; the check after them
-confirms it.
+builder at all.  The `/activity` and `/builders` pages also update over a
+WebSocket, `/v1/live/ws`; without upgrades they fall back to polling.  Both
+snippets below forward upgrades on every path; the check after them confirms
+it.
 
 ### Apache2 (with Let's Encrypt)
 
@@ -161,7 +163,8 @@ version):
     SSLCertificateKeyFile /etc/letsencrypt/live/pkg.example.com/privkey.pem
 
     ProxyPreserveHost On
-    # upgrade=websocket: tunnel the builder WebSocket (/v1/builders/{id}/ws).
+    # upgrade=websocket: tunnel the builder WebSocket (/v1/builders/{id}/ws)
+    # and the pages' live updates (/v1/live/ws).
     # retry=0: after a failed connect (the backend restarting in a deploy),
     # try it again on the next request instead of answering 503 for 60s more.
     ProxyPass / http://127.0.0.1:8420/ upgrade=websocket retry=0
