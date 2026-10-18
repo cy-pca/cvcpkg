@@ -319,6 +319,26 @@ function Invoke-CvcRewriteInstallPaths {
 # ambient C:\msys64 (all a GitHub-hosted image has: the `base` group, no
 # compiler, no make) is only a last-resort fallback.
 
+# Initialize-CvcMsysShell BASH -- start BASH once, discarding its output, and
+# return the path.  A freshly unpacked MSYS2 (the msys2 build dep, new in every
+# job's prefix) runs its first-launch setup when the user's home directory does
+# not exist yet, which is always the case under a builder service with no HOME
+# set: it creates /home/<user> and prints "Copying skeleton files ..." to
+# STDOUT.  That landed in the first captured `bash -lc` probe below, so the
+# probe's output was not "OK" and the first tool checked was reported missing:
+# automake on the prod Windows builder failed with "MSYS build tools not found
+# on PATH ...: make" with make installed.  (Interactive shells and ssh sessions
+# set HOME, so the setup never ran there and the failure did not reproduce.)
+$script:CvcMsysShellsReady = @{}
+function Initialize-CvcMsysShell {
+    param([string]$Bash)
+    if (-not $script:CvcMsysShellsReady.ContainsKey($Bash)) {
+        $null = & $Bash -lc 'true' 2>&1
+        $script:CvcMsysShellsReady[$Bash] = $true
+    }
+    return $Bash
+}
+
 function Get-CvcGitBash {
     # Return a bash.exe that has (or can find) mingw-w64 gcc + make +
     # autotools on its PATH.  Priority order:
@@ -348,12 +368,12 @@ function Get-CvcGitBash {
         "${env:ProgramFiles(x86)}\Git\usr\bin\bash.exe"
     ))
     foreach ($candidate in $candidates) {
-        if (Test-Path $candidate) { return $candidate }
+        if (Test-Path $candidate) { return (Initialize-CvcMsysShell $candidate) }
     }
     $found = Get-Command bash -ErrorAction SilentlyContinue |
              Where-Object { $_.Source -notmatch 'System32' } |
              Select-Object -First 1
-    if ($found) { return $found.Source }
+    if ($found) { return (Initialize-CvcMsysShell $found.Source) }
     throw 'bash.exe not found (looked under CVC_MSYS2_DIR, CVC_BUILD_PREFIX\msys2\usr\bin\, CVC_DEPS_PREFIX\msys2\usr\bin\, C:\msys64\usr\bin\, Git\usr\bin\, and PATH)'
 }
 
@@ -469,7 +489,9 @@ function Invoke-CvcMsysAutotoolsBuild {
     # straight through and configure failed obscurely much later.
     $required = @('m4', 'libtool', 'autoconf', 'automake', 'make')
     $missing  = @($required | Where-Object {
-        $found = & $bash -lc "$depsFlag command -v $_ >/dev/null 2>&1 && echo OK"
+        # Last line only: anything a login shell prints first (see
+        # Initialize-CvcMsysShell) must not hide the OK.
+        $found = & $bash -lc "$depsFlag command -v $_ >/dev/null 2>&1 && echo OK" | Select-Object -Last 1
         "$found".Trim() -ne 'OK'
     })
     if ($missing.Count -gt 0) {
@@ -610,7 +632,9 @@ function Invoke-CvcMsysHostToolBuild {
 
     # Probe each tool BY NAME, testing a scalar (see Invoke-CvcMsysAutotoolsBuild).
     $missing = @($Require | Where-Object {
-        $found = & $bash -lc "$prelude command -v $_ >/dev/null 2>&1 && echo OK"
+        # Last line only: anything a login shell prints first (see
+        # Initialize-CvcMsysShell) must not hide the OK.
+        $found = & $bash -lc "$prelude command -v $_ >/dev/null 2>&1 && echo OK" | Select-Object -Last 1
         "$found".Trim() -ne 'OK'
     })
     if ($missing.Count -gt 0) {
