@@ -1,0 +1,18 @@
+cvcpkg: NetBSD declares pthread_getaffinity_np() in <pthread.h> (with its own
+cpuset_t), so meson's has_header_symbol check sets HAVE_PTHREAD_GETAFFINITY_NP,
+but it has no glibc-style cpu_set_t, CPU_SETSIZE, CPU_ZERO or CPU_COUNT and
+g_get_num_processors() failed to compile.  Take the affinity path only where
+CPU_ZERO exists; NetBSD then uses sysconf(_SC_NPROCESSORS_ONLN).  Same change
+as pkgsrc devel/glib2's patch-glib_gthread.c; still needed upstream (main).
+
+--- a/glib/gthread.c
++++ b/glib/gthread.c
+@@ -1090,7 +1090,7 @@ g_get_num_processors (void)
+ 
+   if (count > 0)
+     return count;
+-#elif defined(_SC_NPROCESSORS_ONLN) && defined(THREADS_POSIX) && defined(HAVE_PTHREAD_GETAFFINITY_NP)
++#elif defined(_SC_NPROCESSORS_ONLN) && defined(THREADS_POSIX) && defined(HAVE_PTHREAD_GETAFFINITY_NP) && defined(CPU_ZERO)
+   {
+     int ncores = MIN (sysconf (_SC_NPROCESSORS_ONLN), CPU_SETSIZE);
+     cpu_set_t cpu_mask;

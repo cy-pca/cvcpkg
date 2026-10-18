@@ -31,7 +31,13 @@ source:
   sha256: "9f23a9de803c695bbfde7e37d6626b18b9a83869689dd79019bf3ae66c3e6771"
   strip_components: 1
 
-patches: []
+patches:
+  # NetBSD: g_get_num_processors() used glibc's cpu_set_t/CPU_* macros because
+  # NetBSD's <pthread.h> declares pthread_getaffinity_np (with cpuset_t).  The
+  # affinity path now also needs CPU_ZERO.  Every platform that built before
+  # either defines CPU_ZERO there or never took that path, so only NetBSD's code
+  # changes, and glib was never published for NetBSD: no revision bump.
+  - netbsd-cpu-set.patch
 
 depends:
   build:
