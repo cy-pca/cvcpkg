@@ -76,6 +76,16 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   webhooks even for an org's package (a private org's included), and never to
   the org's own webhooks. It is now scoped to the org, like a single-shot
   publish.
+- **The single-file `cvcpkg` starts in about 1 s on Windows** (was 5-13 s).
+  The standard recipes are now embedded in the executable as one zip in its
+  Python archive, which the onefile bootloader never unpacks. They used to be
+  ~3,300 data files that it unpacked to a temp dir on every start. A command
+  that needs the default recipes (`validate`, `build`, `install`'s source
+  fallback) writes them once per recipe set to
+  `<cache>/bundled-recipes/<digest>/`, and later starts reuse that copy.
+  `cvcpkg gc` leaves that directory alone. `--recipes-dir` and `./recipes`
+  still override the defaults by name. Builders never read the bundled
+  recipes, so a builder start no longer writes any recipe files.
 
 ---
 

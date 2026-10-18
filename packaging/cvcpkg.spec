@@ -2,7 +2,12 @@
 #
 # Produces a single executable that bundles the CPython runtime, cvcpkg + its
 # dependency closure, and the STANDARD RECIPES — so the binary discovers recipes
-# with no --recipes-dir (find_recipes_dir() checks sys._MEIPASS first).
+# with no --recipes-dir (find_recipes_dir() checks the embedded set first).
+#
+# The recipes are NOT shipped as data: onefile unpacks every data file on every
+# start, and ~3,300 recipe files made `cvcpkg --version` take 5-13 s on Windows.
+# They are zipped into a generated module (cvcpkg.bundled_recipes.MODULE) that
+# goes into the PYZ, which the bootloader reads in place and never unpacks.
 #
 # Two variants, selected by the CVCPKG_BUNDLE_SERVER env var at build time:
 #
@@ -22,15 +27,24 @@
 
 import os
 import pathlib
+import sys
 
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 ROOT = pathlib.Path(SPECPATH).parent
 BUNDLE_SERVER = bool(os.environ.get("CVCPKG_BUNDLE_SERVER"))
 
+# The standard recipes, embedded in the PYZ (see the header).  The generator
+# lives in the package so the runtime that unpacks the archive and the code
+# that writes it cannot disagree on its layout.
+sys.path.insert(0, str(ROOT / "src"))
+from cvcpkg.bundled_recipes import MODULE as RECIPES_MODULE  # noqa: E402
+from cvcpkg.bundled_recipes import write_module  # noqa: E402
+
+_generated = pathlib.Path(workpath) / "generated"  # noqa: F821 - spec global
+write_module(ROOT / "recipes", _generated)
+
 datas = [
-    # The standard recipes, bundled + discoverable by default.
-    (str(ROOT / "recipes"), "cvcpkg/recipes"),
     # JSON schemas (`cvcpkg validate`) and server landing assets.
     (str(ROOT / "src" / "cvcpkg" / "schemas"), "cvcpkg/schemas"),
     (str(ROOT / "src" / "cvcpkg" / "server" / "assets"), "cvcpkg/server/assets"),
@@ -52,6 +66,7 @@ datas += copy_metadata("cvcpkg")
 # follows -- but it is bundled only if [builder] is in the build env; without
 # it the frozen `builder run` silently falls back to HTTP long-poll.
 hiddenimports = [
+    RECIPES_MODULE,
     "jsonschema",
     "httpx",
     "cryptography",
@@ -96,7 +111,7 @@ else:
 
 a = Analysis(
     [entry],
-    pathex=[str(ROOT / "src")],
+    pathex=[str(ROOT / "src"), str(_generated)],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
