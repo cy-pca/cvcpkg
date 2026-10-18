@@ -11,7 +11,13 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 4
+  # cvc.5: package.files fixed for the strict pack check.  Windows names the
+  # import library lib/sqlite3.lib, which lib/libsqlite3* never matched, so
+  # every Windows build failed to pack; the cross targets have no CLI, so
+  # bin/sqlite3* is now scoped to the platforms that build one.
+  # Windows sqlite3.pc also had the build dir as its prefix and said
+  # "Version: 3"; it now uses ${pcfiledir} and the real version.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -79,14 +85,16 @@ build:
 
 package:
   files:
-    # bin/sqlite3* is absent on the cross targets — those build the library
-    # only, since the CLI is not runnable on the build host.  package.files
-    # entries are globs, so a non-matching one is a no-op there.
+    # lib/libsqlite3* (Unix) and lib/sqlite3* (MSVC: sqlite3.lib) are one
+    # alternate pair; the pack check needs only one of them to match.
     - lib/libsqlite3*
+    - lib/sqlite3*
     - lib/pkgconfig/sqlite3.pc
     - include/sqlite3.h
     - include/sqlite3ext.h
-    - bin/sqlite3*
+    # The cross targets build the library only, since the CLI is not runnable
+    # on the build host.
+    - { glob: "bin/sqlite3*", platforms: [linux, macos, freebsd, openbsd, netbsd, windows] }
   cmake_packages: []
 
 abi:

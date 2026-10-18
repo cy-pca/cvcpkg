@@ -44,20 +44,26 @@ try {
     Copy-Item sqlite3ext.h $incDir -Force
     Copy-Item sqlite3.exe  "$binDir\sqlite3.exe" -Force
 
-    # Generate a pkg-config file.
+    # Generate a pkg-config file.  ${pcfiledir} keeps it relocatable: an
+    # absolute prefix here baked the builder's scratch dir into the bundle.
+    $version = (Get-Content -Raw VERSION).Trim()
     New-Item -ItemType Directory -Force -Path "$libDir\pkgconfig" | Out-Null
     @"
-prefix=$($prefix -replace '\\','/')
+prefix=`${pcfiledir}/../..
 exec_prefix=`${prefix}
 libdir=`${exec_prefix}/lib
 includedir=`${prefix}/include
 
 Name: SQLite3
 Description: SQL database engine
-Version: 3
+Version: $version
 Libs: -L`${libdir} -lsqlite3
 Cflags: -I`${includedir}
 "@ | Set-Content "$libDir\pkgconfig\sqlite3.pc"
 } finally {
     Pop-Location
+}
+
+if (Get-Command Invoke-CvcRewriteInstallPaths -ErrorAction SilentlyContinue) {
+    Invoke-CvcRewriteInstallPaths
 }
