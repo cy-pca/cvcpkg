@@ -29,17 +29,22 @@ building the `cryptography` dependency from source:
 ### Root cause
 
 The `cryptography` Python package uses **maturin** as its build
-backend (a Rust-based tool). On BSD platforms:
+backend (a Rust-based tool). On BSD platforms (re-investigated
+2026-10-16 on OpenBSD 7.7; details in
+[openbsd-rust-cryptography.md](openbsd-rust-cryptography.md)):
 
-1. **maturin's platform detection fails** — it emits "Unsupported
-   platform: 312" and cannot determine the target OS.
-2. **Even with Rust installed from packages**, building maturin from
-   source via `cargo install` either:
-   - Fails due to Cargo.lock pinning dependencies that require a
-     newer Rust (e.g., `time@0.3.47` needs rustc 1.88+, but OpenBSD
-     7.7 ships rustc 1.86).
-   - Segfaults (SIGSEGV in `cc1plus` or `rustc`) on OpenBSD 7.7
-     due to compiler bugs.
+1. **No `cargo` on PATH.** maturin then asks its helper puccinialin to
+   install Rust through rustup. puccinialin misreads the BSD Python ABI
+   tag (`cpython-312`) as the platform "312" -- that is the "Unsupported
+   platform: 312" -- and rustup has no OpenBSD host anyway. maturin
+   itself supports OpenBSD (it tags wheels `openbsd_7_7_amd64`).
+2. **With Rust installed from packages**, pip's build isolation picks the
+   newest maturin, whose MSRV can be above the packaged rustc: maturin
+   1.14.1 needs rustc 1.89 (`time@0.3.47` 1.88), and OpenBSD 7.7 ships
+   1.86. maturin 1.11.5 (MSRV 1.85) builds there, and cryptography 48
+   then builds against both base LibreSSL 4.1.0 and OpenSSL 3.4.1.
+   (An earlier note here blamed segfaults in `rustc`/`cc1plus`; that did
+   not reproduce in five cargo builds.)
 3. **OpenBSD disk layout** — the default auto-partitioning allocates
    only ~3GB to `/usr` and 1GB to `/`. Rust alone needs ~750MB
    under `/usr/local`, and `cargo build` fills `/tmp` (on root).
