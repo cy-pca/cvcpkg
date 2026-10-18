@@ -25,15 +25,17 @@ recipe:
     GDK-Pixbuf.
 
 source:
-  type: tarball
-  url: https://download.sourceforge.net/libpng/libpng-1.6.44.tar.xz
-  sha256: "60c4da1d5b7f0aa8d158da48e8f8afa9773c1c8baa5d21974df61f1886b8ce8e"
-  strip_components: 1
+  # Built from the source package libpng-src, which pins the upstream tarball
+  # (https://download.sourceforge.net/libpng/libpng-1.6.44.tar.xz).
+  type: package
+  package: libpng-src
 
 patches: []
 
 depends:
   build:
+    - name: libpng-src
+      version: "==1.6.44"
     - cmake
     - ninja
   runtime:

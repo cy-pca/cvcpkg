@@ -16,15 +16,17 @@ recipe:
   tags: [geometry, gis, math]
 
 source:
-  type: tarball
-  url: https://download.osgeo.org/geos/geos-3.13.0.tar.bz2
-  sha256: "47ec83ff334d672b9e4426695f15da6e6368244214971fabf386ff8ef6df39e4"
-  strip_components: 1
+  # Built from the source package libgeos-src, which pins the upstream tarball
+  # (https://download.osgeo.org/geos/geos-3.13.0.tar.bz2).
+  type: package
+  package: libgeos-src
 
 patches: []
 
 depends:
   build:
+    - name: libgeos-src
+      version: "==3.13.0"
     - cmake
     - ninja
   runtime: []

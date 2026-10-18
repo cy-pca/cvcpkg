@@ -25,15 +25,17 @@ recipe:
     Pared-down static builds are also provided for wasm, wasi, and cosmo.
 
 source:
-  type: tarball
-  url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
-  sha256: "089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304"
-  strip_components: 1
+  # Built from the source package ffmpeg-src, which pins the upstream tarball
+  # (https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz).
+  type: package
+  package: ffmpeg-src
 
 patches: []
 
 depends:
   build:
+    - name: ffmpeg-src
+      version: "==7.1.2"
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: nasm

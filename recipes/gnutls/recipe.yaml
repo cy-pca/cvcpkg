@@ -21,15 +21,17 @@ recipe:
     Links nettle/hogweed (crypto) and gmp (bignum).
 
 source:
-  type: tarball
-  url: https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.9.tar.xz
-  sha256: "69e113d802d1670c4d5ac1b99040b1f2d5c7c05daec5003813c049b5184820ed"
-  strip_components: 1
+  # Built from the source package gnutls-src, which pins the upstream tarball
+  # (https://www.gnupg.org/ftp/gcrypt/gnutls/v3.8/gnutls-3.8.9.tar.xz).
+  type: package
+  package: gnutls-src
 
 patches: []
 
 depends:
   build:
+    - name: gnutls-src
+      version: "==3.8.9"
     - make
     - pkg-config
     - nettle

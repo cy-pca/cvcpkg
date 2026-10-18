@@ -145,6 +145,22 @@ NAME's bundles do not change (same tarball, same patches), so its
 converted: on 2026-10-15 the linux/arm64 runners could not reach
 xorg.freedesktop.org at all.
 
+Recipes that build the same tarball share one source package.  The tool groups
+the NAMEs it is given by their `source:` block and names each group's package
+after what the names have in common: the `-cp3XX[t]` interpreter suffix dropped
+(`pyyaml-cp311` ... `pyyaml-cp313` build from `pyyaml-src`), then the shortest
+name if the others extend it (`ffmpeg`, `ffmpeg-cli`, `ffmpeg-lgpl` build from
+`ffmpeg-src`; `vtk` and `vtk-python-cp3XX` from `vtk-src`).  `--src NAME` names
+it when the names share nothing: `--src pyside-setup-src` for the
+`pyside6-cp3XX` and `shiboken6-cp3XX` recipes, `--src python313-src` for
+`python313` and `python313t`.  An existing source recipe of the same tarball is
+reused whatever its name, so a recipe added later joins its siblings' package.
+When one project is pinned at two versions (an older `numpy-cp311` beside
+`numpy-cp312`...), the larger group keeps the name, and a lone recipe of the
+other tarball gets its own `NAME-src`.  The source package's license is the
+members' license, or all of them joined with `AND` when they differ
+(`ffmpeg-src`: the GPL and LGPL builds).
+
 `cvcpkg recipes --validate` checks that `source.package` is listed in
 `depends.build`.  Fleet jobs of such recipes require the builder capability
 `source_packages`, which every builder running this code advertises, so a

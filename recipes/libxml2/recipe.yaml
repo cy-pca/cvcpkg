@@ -41,15 +41,17 @@ recipe:
     Required by ImageMagick (delegate for its configuration/SVG parsing).
 
 source:
-  type: tarball
-  url: https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.9.tar.xz
-  sha256: "59912db536ab56a3996489ea0299768c7bcffe57169f0235e7f962a91f483590"
-  strip_components: 1
+  # Built from the source package libxml2-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.9.tar.xz).
+  type: package
+  package: libxml2-src
 
 patches: []
 
 depends:
   build:
+    - name: libxml2-src
+      version: "==2.12.9"
     - cmake
     - ninja
   runtime:

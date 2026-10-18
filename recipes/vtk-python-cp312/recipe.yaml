@@ -48,13 +48,10 @@ recipe:
   tags: [graphics, python, bindings]
 
 source:
-  # Same pinned tarball + sha256 as recipes/vtk — the Python wrappers MUST be
-  # generated from the identical C++ source so the wrapped ABI matches the `vtk`
-  # package's libvtk*-9.5 libraries at runtime.
-  type: tarball
-  url: https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz
-  sha256: "04ae86246b9557c6b61afbc534a6df099244fbc8f3937f82e6bc0570953af87d"
-  strip_components: 1
+  # Built from the source package vtk-src, which pins the upstream tarball
+  # (https://www.vtk.org/files/release/9.5/VTK-9.5.0.tar.gz).
+  type: package
+  package: vtk-src
 
 python:
   interpreter: python312
@@ -79,6 +76,8 @@ patches:
 
 depends:
   build:
+    - name: vtk-src
+      version: "==9.5.0"
     - cmake
     - ninja
     # Wrappers are built against the cvcpkg python312 interpreter (cp312), the

@@ -21,15 +21,17 @@ recipe:
     Supports JPEG, PNG, TIFF, and other formats.  Required by GTK 4.
 
 source:
-  type: tarball
-  url: https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-2.42.12.tar.xz
-  sha256: "b9505b3445b9a7e48ced34760c3bcb73e966df3ac94c95a148cb669ab748e3c7"
-  strip_components: 1
+  # Built from the source package gdk-pixbuf-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/gdk-pixbuf/2.42/gdk-pixbuf-2.42.12.tar.xz).
+  type: package
+  package: gdk-pixbuf-src
 
 patches: []
 
 depends:
   build:
+    - name: gdk-pixbuf-src
+      version: "==2.42.12"
     - ninja
     - meson
     - pkg-config

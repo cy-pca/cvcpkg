@@ -12,15 +12,17 @@ recipe:
   tags: [graphics]
 
 source:
-  type: tarball
-  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtshadertools-everywhere-src-6.8.2.tar.xz
-  sha256: "d1d5f90e8885fc70d63ac55a4ce4d9a2688562033a000bc4aff9320f5f551871"
-  strip_components: 1
+  # Built from the source package qtshadertools-src, which pins the upstream tarball
+  # (https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtshadertools-everywhere-src-6.8.2.tar.xz).
+  type: package
+  package: qtshadertools-src
 
 patches: []
 
 depends:
   build:
+    - name: qtshadertools-src
+      version: "==6.8.2"
     - cmake
     - ninja
     - name: python3

@@ -26,15 +26,17 @@ recipe:
     GIS stack has a reputation earned by GDAL and PROJ rather than by this.
 
 source:
-  type: tarball
-  url: https://download.osgeo.org/geos/geos-3.14.1.tar.bz2
-  sha256: "3c20919cda9a505db07b5216baa980bacdaa0702da715b43f176fb07eff7e716"
-  strip_components: 1
+  # Built from the source package geos-src, which pins the upstream tarball
+  # (https://download.osgeo.org/geos/geos-3.14.1.tar.bz2).
+  type: package
+  package: geos-src
 
 patches: []
 
 depends:
   build:
+    - name: geos-src
+      version: "==3.14.1"
     - cmake
     - ninja
   runtime: []

@@ -16,15 +16,17 @@ recipe:
   tags: [multimedia]
 
 source:
-  type: tarball
-  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtmultimedia-everywhere-src-6.8.2.tar.xz
-  sha256: "34f561fdc07b158bcc4ad040b596fc6086c48908060e854b473b557e4feb1569"
-  strip_components: 1
+  # Built from the source package qtmultimedia-src, which pins the upstream tarball
+  # (https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtmultimedia-everywhere-src-6.8.2.tar.xz).
+  type: package
+  package: qtmultimedia-src
 
 patches: []
 
 depends:
   build:
+    - name: qtmultimedia-src
+      version: "==6.8.2"
     - cmake
     - ninja
     - name: python3

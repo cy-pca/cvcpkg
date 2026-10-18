@@ -22,16 +22,17 @@ recipe:
   tags: [math, wasm, wasi]
 
 source:
-  type: tarball
-  url: https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz
-  mirror: https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz
-  sha256: "277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2"
-  strip_components: 1
+  # Built from the source package mpfr-src, which pins the upstream tarball
+  # (https://www.mpfr.org/mpfr-4.2.1/mpfr-4.2.1.tar.xz).
+  type: package
+  package: mpfr-src
 
 patches: []
 
 depends:
   build:
+    - name: mpfr-src
+      version: "==4.2.1"
     - make
     # Windows autotools build (Invoke-CvcMsysAutotoolsBuild in build.ps1) needs the
     # GNU toolchain in the BUILD closure. cvcpkg stages host_tools only when

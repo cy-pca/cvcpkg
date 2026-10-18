@@ -19,15 +19,17 @@ recipe:
     compositors and clients.  Required by GTK 4 on Linux.
 
 source:
-  type: tarball
-  url: https://xkbcommon.org/download/libxkbcommon-1.7.0.tar.xz
-  sha256: "65782f0a10a4b455af9c6baab7040e2f537520caa2ec2092805cdfd36863b247"
-  strip_components: 1
+  # Built from the source package xkbcommon-src, which pins the upstream tarball
+  # (https://xkbcommon.org/download/libxkbcommon-1.7.0.tar.xz).
+  type: package
+  package: xkbcommon-src
 
 patches: []
 
 depends:
   build:
+    - name: xkbcommon-src
+      version: "==1.7.0"
     - ninja
     - meson
     - pkg-config

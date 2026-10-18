@@ -15,15 +15,17 @@ recipe:
     geometric types.  Required by GTK 4.
 
 source:
-  type: tarball
-  url: https://download.gnome.org/sources/graphene/1.10/graphene-1.10.8.tar.xz
-  sha256: "a37bb0e78a419dcbeaa9c7027bcff52f5ec2367c25ec859da31dfde2928f279a"
-  strip_components: 1
+  # Built from the source package graphene-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/graphene/1.10/graphene-1.10.8.tar.xz).
+  type: package
+  package: graphene-src
 
 patches: []
 
 depends:
   build:
+    - name: graphene-src
+      version: "==1.10.8"
     - ninja
     - meson
     - pkg-config
