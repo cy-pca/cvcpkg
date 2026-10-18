@@ -1965,6 +1965,32 @@ _populate_stats: dict = {
 }
 
 
+class _GZipExceptArchives:
+    """GZipMiddleware for every route except the archive downloads.
+
+    Archives are ``.tar.zst``, which gzip cannot shrink.  With the app-wide
+    middleware, every download from a client sending Accept-Encoding: gzip
+    (httpx does by default; the cvcpkg client's urllib fetch does not) was
+    recompressed chunk by chunk on the event loop, and lost its Content-Length.
+    For a download burst made of such requests that was ~70% of the single
+    worker's CPU (py-spy, 2026-10-18).
+    Starlette's ``exclude_content_types`` would do this by media type, but only
+    1.7+ has it, so this routes by path, which works on every supported version.
+    """
+
+    _SKIP_PREFIXES = ("/v1/download/", "/v1/mirror/download/")
+
+    def __init__(self, app, **gzip_kwargs) -> None:
+        self.app = app
+        self.gzip = GZipMiddleware(app, **gzip_kwargs)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http" and scope.get("path", "").startswith(self._SKIP_PREFIXES):
+            await self.app(scope, receive, send)
+        else:
+            await self.gzip(scope, receive, send)
+
+
 def _safe_archive_filename(
     name: str, version: str, platform: str, arch: str, build_type: str, link: str
 ) -> str:
@@ -2632,8 +2658,11 @@ def create_app(
     # (every fresh CI job) still pulled the full ~6 MB body UNCOMPRESSED; gzip takes that to a few
     # hundred KB, so each catalog request holds a uvicorn worker far less time (the transfer half of
     # the 503-under-CI-load fix). minimum_size skips tiny bodies; gzip engages only when the client
-    # sends Accept-Encoding (the cvcpkg client's httpx does).
-    app.add_middleware(GZipMiddleware, minimum_size=512)
+    # sends Accept-Encoding: gzip (the cvcpkg client asks for it on the catalog fetch only; httpx
+    # clients ask by default).  Archive downloads are left alone (see _GZipExceptArchives).
+    # Level 6, not Starlette's default 9: nearly the same size for JSON at a fraction of the CPU,
+    # and the catalog is gzipped once in its cache anyway.
+    app.add_middleware(_GZipExceptArchives, minimum_size=512, compresslevel=6)
 
     # ── Rate limiting state (per-IP, sliding window) ──────
     _rate_buckets: dict[str, list[float]] = {}
@@ -4637,8 +4666,10 @@ def create_app(
             )
 
         def _stream():
+            # 1 MiB chunks: each chunk is a thread-pool hop plus a socket write on the one
+            # worker, and at 64 KiB that overhead was a third of a download burst's CPU.
             with archive_store.open_stream(state.storage_uri, safe_name) as f:
-                while chunk := f.read(1 << 16):
+                while chunk := f.read(1 << 20):
                     yield chunk
 
         headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
