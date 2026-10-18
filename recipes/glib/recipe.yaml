@@ -5,7 +5,14 @@ recipe:
   # cvc.3: macOS links cvcpkg's gettext libintl (and its libiconv) instead of
   # building proxy-libintl, whose libintl.8.dylib the bundle never shipped, so
   # libglib loaded gettext's and dyld could not find g_libintl_* (qt6 rcc).
-  cvc_revision: 3
+  # cvc.4: ...which cvc.3 did not actually achieve.  Meson probes
+  # dependency('intl') with the C++ compiler, and build.sh's -I was in CFLAGS
+  # only, so clang++ never saw gettext's libintl.h and meson still built
+  # proxy-libintl: the cvc.3 macOS bundles ship lib/libintl{,.8}.dylib and
+  # include/libintl.h, which replace gettext's in a shared prefix.  The -I is now
+  # in CPPFLAGS (all C-family languages), and build.sh fails if a libintl is
+  # staged.  Since #316's --wrap-mode=nofallback a macOS build failed outright.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
