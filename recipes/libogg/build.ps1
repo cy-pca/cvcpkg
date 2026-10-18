@@ -54,4 +54,10 @@ Write-Host "cvcpkg: bash -lc `"$cmd`""
 & $bash -lc $cmd
 if ($LASTEXITCODE -ne 0) { throw 'libogg build failed' }
 
+# No libtool .la files in the bundle, as on Unix (build.sh): they record this
+# job's prefix, and after relocation a consumer's libtool followed them to a
+# mangled path -- vorbis-tools on the prod Windows builder failed with
+# "cannot find the library 'C:C:\Users\...\libvorbis.la'".
+Get-ChildItem -Path $env:CVC_INSTALL_DIR -Recurse -Filter '*.la' -File | Remove-Item -Force
+
 Invoke-CvcRewriteInstallPaths

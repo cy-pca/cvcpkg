@@ -9,6 +9,14 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @('--disable-dependency-tracking')
+# -std=gnu17: MinGW gcc 15+ defaults to C23, where loop_wchar.h's old-style
+# `extern size_t mbrtowc ();` declares a no-argument function ("too many
+# arguments to function 'mbrtowc'"); the helper clears CFLAGS, so pass it to
+# configure.
+Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @('--disable-dependency-tracking', "CFLAGS='-O2 -std=gnu17'")
+
+# No libtool .la files in the bundle, as on Unix (build.sh): they record this
+# job's prefix, which consumers' libtool then follows after relocation.
+Get-ChildItem -Path $env:CVC_INSTALL_DIR -Recurse -Filter '*.la' -File | Remove-Item -Force
 
 Invoke-CvcRewriteInstallPaths

@@ -7,7 +7,9 @@ recipe:
   # /usr/local/opt/gettext/lib/libintl.8.dylib, so it aborts on any Mac without
   # Homebrew.  build.sh now configures --disable-nls on macOS.  Every platform rebuilds.
   # cvc.5: Unix bundles ship no libtool .la (see build.sh).
-  cvc_revision: 5
+  # cvc.6: Windows compiles as gnu17 (gcc 15's C23 default broke loop_wchar.h)
+  # and, like Unix, ships no libtool .la files.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
