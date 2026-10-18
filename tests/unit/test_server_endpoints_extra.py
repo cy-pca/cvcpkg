@@ -1013,9 +1013,10 @@ class TestBuildersBuildsGated:
         ).status_code in (422, 501)
         assert c.get("/v1/builds", headers=_auth(pub)).status_code == 501
         assert c.get("/v1/builds/1").status_code in (401, 404, 501)
-        # Auth on the list endpoint.
-        assert c.get("/v1/builds").status_code == 401
-        assert c.get("/v1/builds", headers=_auth(env["reader"])).status_code == 403
+        # The list is a public read now: no token is needed, so without a DB it
+        # is the missing backend that answers.
+        assert c.get("/v1/builds").status_code == 501
+        assert c.get("/v1/builds", headers=_auth(env["reader"])).status_code == 501
 
 
 # ── CLI auth / device broker (DB-gated) ─────────────────────────

@@ -920,8 +920,8 @@ def _sse_reauth_rejection(actor: TokenRecord | None) -> str | None:
         return "token revoked or expired"
     if actor.via_previous_hash:
         return "pre-rotation secret not allowed"
-    if actor.role not in (TokenRole.publisher, TokenRole.admin):
-        return "insufficient role"
+    # No role check: a public job's log is readable by anyone, so a token of
+    # any role may tail it.  A private org's job is re-checked separately.
     return None
 
 
@@ -1166,6 +1166,12 @@ def _ws_forget(builder_id: int, ws: WebSocket) -> None:
 # cadence bounds that exposure without hitting the token store on every frame.
 _WS_REAUTH_INTERVAL_SECONDS = float(os.environ.get("CVCPKG_WS_REAUTH_INTERVAL", "30"))
 
+# A tailed build log is read this often (seconds) while it is quiet, and sent in
+# frames of at most this many bytes.
+_LIVE_LOG_POLL_SECONDS = float(os.environ.get("CVCPKG_LIVE_LOG_POLL_INTERVAL", "1"))
+_LIVE_LOG_CHUNK = 256 * 1024
+_TERMINAL_JOB_STATUSES = frozenset({"succeeded", "failed", "cancelled", "timed_out"})
+
 # How often (seconds) the live hub polls for changes nobody told it about while
 # a page watches /v1/live/ws: another worker's publish, the reaper, a CLI GC.
 _LIVE_POLL_INTERVAL = float(os.environ.get("CVCPKG_LIVE_POLL_INTERVAL", "2"))
@@ -1318,11 +1324,15 @@ async def _build_log_events(job_id: int, logs_dir, raw: str, assert_visible):
         # store on every poll.
         now = time.monotonic()
         if now - last_reauth >= _SSE_REAUTH_INTERVAL_SECONDS:
-            fresh = await _authenticate_token(raw)
-            reason = _sse_reauth_rejection(fresh)
-            if reason is not None:
-                yield f"event: error\ndata: {reason}\n\n"
-                return
+            # An anonymous stream has no token to re-check, only visibility (an
+            # org can turn private while its job's log is being tailed).
+            fresh = None
+            if raw is not None:
+                fresh = await _authenticate_token(raw)
+                reason = _sse_reauth_rejection(fresh)
+                if reason is not None:
+                    yield f"event: error\ndata: {reason}\n\n"
+                    return
             try:
                 await assert_visible(fresh, info)
             except HTTPException:
@@ -2542,6 +2552,8 @@ def create_app(
                 fetch_latest_id=_db_events.latest_id,
                 fetch_builders=_db_builders.list_builders,
                 fetch_private_orgs=_live_private_orgs,
+                fetch_jobs_since=_db_build_jobs.changed_since,
+                fetch_latest_job_update=_db_build_jobs.latest_update,
                 poll_interval=_LIVE_POLL_INTERVAL,
             )
             _use_db = True
@@ -3122,69 +3134,110 @@ def create_app(
             self.name = name
             self.raw = raw
 
-    #: (signature, parsed) — see _pushed_recipes_for_deps.
-    _pushed_deps_cache: dict[str, object] = {"sig": None, "val": []}
+    #: (name, org) -> (bundle stamp, (recipe name, raw recipe.yaml) or None):
+    #: each pushed bundle's parsed recipe, re-read only when that bundle
+    #: changes.  See _pushed_recipes_for_deps.
+    _pushed_recipe_cache: dict[tuple[str, str], tuple[str, tuple[str, dict] | None]] = {}
 
-    #: the whole /v1/deps response, cached on (local recipe sig, pushed sig).
-    _deps_graph_cache: dict[str, object] = {"sig": None, "val": None}
+    #: the whole /v1/deps response body, cached on (local recipe sig, pushed
+    #: sig); "task" is the rebuild in flight, which every waiter shares.
+    _deps_graph_cache: dict[str, object] = {"sig": None, "val": None, "task": None}
 
-    async def _pushed_recipes_for_deps() -> list[tuple[str, dict]]:
-        """Parse ``recipe.yaml`` out of every pushed recipe bundle.
+    #: The server's own recipes, parsed once per local recipe set (in practice
+    #: once per deploy), so a push rebuilds the graph without re-parsing them.
+    _local_recipes_cache: dict[str, object] = {"sig": None, "val": []}
 
-        Cached on ``(count, latest updated_at)`` from the recipes table, which
-        changes on any push, so a fresh push is reflected immediately while the
-        common case costs one cheap listing. Without a cache this would open
-        and gunzip several hundred tarballs on every package page view.
+    #: How long a /v1/deps request waits for a rebuild before serving the
+    #: previous graph.  A rebuild normally takes well under a second (only the
+    #: changed bundles are parsed); this bounds the pathological case.
+    _DEPS_REBUILD_WAIT_SECONDS = 5.0
+
+    def _parse_pushed_bundle(bundle_path: str, fallback_name: str) -> tuple[str, dict] | None:
+        """The ``(name, raw recipe.yaml)`` inside one pushed bundle, or None.
+
+        Blocking (gunzip + YAML): call it in a worker thread.  One unreadable
+        or malformed bundle yields None rather than blanking the graph for
+        every other package.
         """
-        if not (_use_db and _db_recipes is not None):
-            return []
         import io
         import tarfile
 
         import yaml as _yaml
 
         try:
-            infos, total = await _db_recipes.list_recipes(limit=10000, offset=0)
+            if not bundle_path or not Path(bundle_path).is_file():
+                return None
+            with tarfile.open(bundle_path, "r:gz") as tar:
+                for member in tar:
+                    if member.isfile() and Path(member.name).name == "recipe.yaml":
+                        fh = tar.extractfile(member)
+                        if fh is None:
+                            return None
+                        raw = _yaml.safe_load(io.BytesIO(fh.read()))
+                        break
+                else:
+                    return None
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return (raw.get("recipe") or {}).get("name") or fallback_name, raw
+
+    async def _pushed_deps_sig() -> tuple:
+        """What the pushed overlay depends on: the recipes table and which orgs are private."""
+        if not (_use_db and _db_recipes is not None):
+            return ()
+        try:
+            sig = await _db_recipes.signature()
+            private = await _db_orgs.private_slugs() if _db_orgs is not None else set()
+        except Exception:  # pragma: no cover - a DB blip must not 500 the page
+            return ()
+        return (*sig, tuple(sorted(private)))
+
+    async def _pushed_recipes_for_deps() -> list[tuple[str, dict]]:
+        """``(name, raw recipe.yaml)`` for every pushed recipe the public may see.
+
+        A private org's recipes stay out: the graph is served to anonymous
+        callers, and it names every recipe in it with its dependencies and
+        metadata.
+
+        Each bundle is parsed once and cached on its stamp (hash, size, upload
+        time), so a push re-reads one bundle, not all of them.  The parsing
+        runs in a worker thread.  It used to open and gunzip every bundle on
+        the event loop whenever any recipe changed, which on cvcpkg.org (a few
+        thousand bundles, pushed to constantly) made /v1/deps take 15 minutes
+        and stalled every other response in the meantime.
+        """
+        if not (_use_db and _db_recipes is not None):
+            return []
+        try:
+            index = await _db_recipes.bundle_index()
+            private = await _db_orgs.private_slugs() if _db_orgs is not None else set()
         except Exception:  # pragma: no cover - listing must never 500 the page
             return []
+        index = [row for row in index if not row[1] or row[1] not in private]
 
-        latest = max((i.updated_at for i in infos), default=None)
-        sig = (total, latest.isoformat() if latest else "")
-        if _pushed_deps_cache["sig"] == sig:
-            return _pushed_deps_cache["val"]  # type: ignore[return-value]
+        changed = [
+            (name, org, path, stamp)
+            for name, org, path, stamp in index
+            if _pushed_recipe_cache.get((name, org), ("",))[0] != stamp
+        ]
+        if changed:
 
-        out: list[tuple[str, dict]] = []
-        for info in infos:
-            try:
-                bundle_path = await _db_recipes.get_bundle_path(info.name, org_slug=info.org_slug)
-                if not bundle_path or not Path(bundle_path).is_file():
-                    continue
-                with tarfile.open(bundle_path, "r:gz") as tar:
-                    member = next(
-                        (
-                            m
-                            for m in tar.getmembers()
-                            if m.isfile() and Path(m.name).name == "recipe.yaml"
-                        ),
-                        None,
-                    )
-                    if member is None:
-                        continue
-                    fh = tar.extractfile(member)
-                    if fh is None:
-                        continue
-                    raw = _yaml.safe_load(io.BytesIO(fh.read()))
-                if isinstance(raw, dict):
-                    name = (raw.get("recipe") or {}).get("name") or info.name
-                    out.append((name, raw))
-            except Exception:
-                # One unreadable or malformed bundle must not blank the graph
-                # for every other package.
-                continue
+            def _parse_all():
+                return [
+                    ((name, org), stamp, _parse_pushed_bundle(path, name))
+                    for name, org, path, stamp in changed
+                ]
 
-        _pushed_deps_cache["sig"] = sig
-        _pushed_deps_cache["val"] = out
-        return out
+            for key, stamp, parsed in await asyncio.to_thread(_parse_all):
+                _pushed_recipe_cache[key] = (stamp, parsed)
+        live = {(name, org) for name, org, _, _ in index}
+        for key in [k for k in _pushed_recipe_cache if k not in live]:
+            del _pushed_recipe_cache[key]
+        return [
+            parsed for key in sorted(live) if (parsed := _pushed_recipe_cache[key][1]) is not None
+        ]
 
     def _local_recipe_sig() -> tuple:
         """Cheap signature of the server's local recipe set: (count, newest
@@ -3212,20 +3265,25 @@ def create_app(
             return (0, 0.0)
         return (count, newest)
 
-    def _build_deps_graph(pushed: list) -> dict:
+    def _load_local_recipes() -> list:
+        """Parse the server's own recipe set (blocking: run it in a thread)."""
+        from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
+
+        try:
+            return list(list_recipes(find_recipes_dir()))
+        except RecipeError:
+            return []
+
+    def _build_deps_graph(local: list, pushed: list) -> dict:
         """Build the forward/reverse/meta/recipe_names maps from the local recipe
         set plus the *pushed* overlay.  Parses hundreds of recipe.yaml files
         (``Recipe.load`` per directory) and is therefore CPU/IO-heavy — several
         seconds on a full catalog — so callers MUST run it off the event loop
         (``asyncio.to_thread``); otherwise it blocks every concurrent request,
         notably the ``/v1/search`` the search page fires alongside this one."""
-        from cvcpkg.builder import RecipeError, find_recipes_dir, list_recipes
         from cvcpkg.refs import parse_dep_ref
 
-        try:
-            recipes = list(list_recipes(find_recipes_dir()))
-        except RecipeError:
-            recipes = []
+        recipes = list(local)
 
         # Overlay pushed recipes (later entries win on a name collision — the
         # same "later wins" rule --recipes-dir uses), so an org's own push
@@ -3296,21 +3354,45 @@ def create_app(
         `community` rather than mainline. Nothing errored; the sections just
         were not there.
         """
+        # The graph is cached on (local recipe set, pushed recipes).  Both
+        # signatures are cheap, so the hot path is two small queries and a
+        # cached body.  When either changes, the old graph is served while one
+        # rebuild runs in the background (shared by every caller), so a burst of
+        # package-page views during a stream of recipe pushes never queues
+        # behind a rebuild, let alone starts one each.
+        sig = (await asyncio.to_thread(_local_recipe_sig), await _pushed_deps_sig())
+        cached = _deps_graph_cache["val"]
+        if _deps_graph_cache["sig"] != sig or cached is None:
+            task = _deps_graph_cache["task"]
+            if task is None or task.done():
+                task = asyncio.ensure_future(_rebuild_deps_graph(sig))
+                task.add_done_callback(_log_deps_rebuild_failure)
+                _deps_graph_cache["task"] = task
+            if cached is None:
+                await asyncio.shield(task)
+            else:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), _DEPS_REBUILD_WAIT_SECONDS)
+                except asyncio.TimeoutError:
+                    pass  # serve the previous graph; the rebuild carries on
+            cached = _deps_graph_cache["val"]
+        return Response(content=cached, media_type="application/json")
+
+    def _log_deps_rebuild_failure(task: asyncio.Task) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.error("dependency graph rebuild failed", exc_info=task.exception())
+
+    async def _rebuild_deps_graph(sig: tuple) -> None:
+        local_sig = sig[0]
+        if _local_recipes_cache["sig"] != local_sig:
+            _local_recipes_cache["val"] = await asyncio.to_thread(_load_local_recipes)
+            _local_recipes_cache["sig"] = local_sig
         pushed = await _pushed_recipes_for_deps()
-        # Serve the whole graph from a cache keyed on (local recipe set, pushed
-        # set).  Building it parses hundreds of recipe.yaml files (several
-        # seconds), so a miss runs in a worker thread — never on the event loop,
-        # which would serialise every concurrent request, notably the
-        # /v1/search the search page fires alongside this one.  Both signatures
-        # are cheap, so the hot path is a dict lookup and a JSON dump.
-        local_sig = await asyncio.to_thread(_local_recipe_sig)
-        sig = (local_sig, _pushed_deps_cache["sig"])
-        if _deps_graph_cache["sig"] == sig and _deps_graph_cache["val"] is not None:
-            return JSONResponse(_deps_graph_cache["val"])
-        result = await asyncio.to_thread(_build_deps_graph, pushed)
+        result = await asyncio.to_thread(_build_deps_graph, _local_recipes_cache["val"], pushed)
+        _deps_graph_cache["val"] = await asyncio.to_thread(
+            lambda: json.dumps(result, separators=(",", ":")).encode()
+        )
         _deps_graph_cache["sig"] = sig
-        _deps_graph_cache["val"] = result
-        return JSONResponse(result)
 
     # ── Recipe content (read) ──────────────────────────────
     #
@@ -3623,15 +3705,13 @@ def create_app(
                     tar.addfile(info, _io.BytesIO(data))
             media_type, suffix = "application/gzip", "tar.gz"
 
-        buf.seek(0)
         label = f"{name}-recipe.{suffix}" if not org else f"{org}-{name}-recipe.{suffix}"
-        return StreamingResponse(
-            buf,
+        # The whole archive is already in memory: send it as one body with its
+        # real length, rather than streaming a BytesIO line by line.
+        return Response(
+            content=buf.getvalue(),
             media_type=media_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{label}"',
-                "Content-Length": str(buf.getbuffer().nbytes),
-            },
+            headers={"Content-Disposition": f'attachment; filename="{label}"'},
         )
 
     # ── Packages (read) ─────────────────────────────────────
@@ -6366,10 +6446,12 @@ def create_app(
         """Push activity-feed events and builder changes to a browser page.
 
         The page's first frame is ``{"type": "hello", "topics": [...],
-        "token": "..."}`` (topics: ``activity``, ``builders``; the token is
-        optional and only widens what a private org's member sees).  The token
-        rides in a frame rather than the URL so it stays out of access logs.
-        See :mod:`cvcpkg.server.live` for the messages.
+        "token": "...", "log": {"job": N, "offset": B}}``.  Topics are
+        ``activity``, ``builders`` and ``builds``; the token is optional and
+        only widens what a private org's member sees; ``log`` (optional) tails
+        build job N's log from byte B for this connection.  The token rides in
+        a frame rather than the URL so it stays out of access logs.  See
+        :mod:`cvcpkg.server.live` for the messages.
         """
         from cvcpkg.server import live as _live
 
@@ -6396,13 +6478,24 @@ def create_app(
             await websocket.close(code=4001, reason="this server requires authentication for reads")
             return
         topics = {t for t in (hello.get("topics") or []) if t in _live.TOPICS}
-        if not topics:
+        log_req = hello.get("log") if isinstance(hello.get("log"), dict) else None
+        log_job: int | None = None
+        if log_req is not None:
+            try:
+                log_job = int(log_req.get("job"))
+                log_offset = max(0, int(log_req.get("offset") or 0))
+            except (TypeError, ValueError):
+                await websocket.close(code=4000, reason="bad log request")
+                return
+        if not topics and log_job is None:
             await websocket.close(code=4000, reason="no known topics")
             return
 
         sub = _live.Subscriber(topics=frozenset(topics))
+        viewer: dict[str, TokenRecord | None] = {"who": caller}
 
         async def _see_as(who: TokenRecord | None) -> None:
+            viewer["who"] = who
             sub.is_admin = who is not None and who.role == TokenRole.admin
             sub.member_orgs = frozenset(
                 await _db_orgs.member_org_slugs(who.name)
@@ -6411,11 +6504,6 @@ def create_app(
             )
 
         await _see_as(caller)
-        try:
-            await _live_hub.subscribe(sub)
-        except _live.HubFullError:
-            await websocket.close(code=1013, reason="too many live viewers; try again later")
-            return
 
         async def _pump() -> None:
             while True:
@@ -6440,11 +6528,99 @@ def create_app(
                     return
                 await _see_as(who)
 
+        async def _tail_log() -> None:
+            # A build job's log, from the requested byte offset, until the job
+            # has finished and nothing more was written.  Sent through the same
+            # queue as the topics so frames never interleave on the socket.
+            import codecs
+
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            offset = log_offset
+            logs_dir = _get_state().logs_dir()
+            checked = 0.0
+            while True:
+                info = await _db_build_jobs.get(log_job)
+                now = time.monotonic()
+                try:
+                    if info is None:
+                        raise HTTPException(404)
+                    if now - checked >= _WS_REAUTH_INTERVAL_SECONDS:
+                        await _assert_build_visible(viewer["who"], info)
+                        checked = now
+                except HTTPException:
+                    sub.offer({"type": "log_end", "job": log_job, "status": "not_found"})
+                    return
+                wrote = False
+                path = await _db_build_jobs.get_log_path(log_job, logs_dir=logs_dir)
+                if path is not None:
+                    size = path.stat().st_size
+                    if size < offset:
+                        offset = 0  # the log was replaced (a retried job)
+                        decoder.reset()
+                        sub.offer({"type": "log_reset", "job": log_job})
+                    if size > offset:
+                        # Back-pressure: let the socket drain before reading
+                        # more, or a long log would overflow the queue (which
+                        # trades the backlog for a lossy resync).
+                        while sub.queue.qsize() > _live.QUEUE_MAX // 2:
+                            await asyncio.sleep(0.05)
+                        with open(path, "rb") as f:
+                            f.seek(offset)
+                            chunk = f.read(_LIVE_LOG_CHUNK)
+                        sub.offer(
+                            {
+                                "type": "log",
+                                "job": log_job,
+                                "offset": offset,
+                                "next": offset + len(chunk),
+                                "data": decoder.decode(chunk),
+                            }
+                        )
+                        offset += len(chunk)
+                        wrote = True
+                if wrote:
+                    await asyncio.sleep(0)  # more may be waiting; read it now
+                    continue
+                if info.status in _TERMINAL_JOB_STATUSES:
+                    tail = decoder.decode(b"", final=True)
+                    if tail:
+                        sub.offer(
+                            {
+                                "type": "log",
+                                "job": log_job,
+                                "offset": offset,
+                                "next": offset,
+                                "data": tail,
+                            }
+                        )
+                    sub.offer({"type": "log_end", "job": log_job, "status": info.status})
+                    return
+                await asyncio.sleep(_LIVE_LOG_POLL_SECONDS)
+
+        if topics:
+            try:
+                await _live_hub.subscribe(sub)
+            except _live.HubFullError:
+                await websocket.close(code=1013, reason="too many live viewers; try again later")
+                return
+        else:
+            sub.offer({"type": "ready", "topics": [], "latest_id": 0})
         tasks = [asyncio.create_task(c()) for c in (_pump, _drain, _reauth)]
+        # The tail ending (the job finished) must not close the socket: the
+        # page keeps its topics.  So it is cancelled with the rest, but not
+        # waited on.
+        log_task = None
+        if log_job is not None:
+            if not _use_db or _db_build_jobs is None:
+                sub.offer({"type": "log_end", "job": log_job, "status": "not_found"})
+            else:
+                log_task = asyncio.create_task(_tail_log())
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
             _live_hub.unsubscribe(sub)
+            if log_task is not None:
+                tasks.append(log_task)
             for t in tasks:
                 t.cancel()
             for t in tasks:
@@ -9752,16 +9928,20 @@ def create_app(
             ac.detail = f"{len(infos)} jobs"
         return DagSubmitResponse(dag_id=dag_id, total=len(infos), jobs=infos)
 
-    async def _assert_build_visible(actor: TokenRecord, info) -> None:
-        """404 unless *actor* may see build job *info* (member of its private org)."""
-        if actor.role == TokenRole.admin or _db_orgs is None:
+    async def _assert_build_visible(actor: TokenRecord | None, info) -> None:
+        """404 unless *actor* may see build job *info*.
+
+        A job with no org or in a public org is visible to everyone, anonymous
+        callers included; a private org's job only to its members and admins.
+        """
+        if (actor is not None and actor.role == TokenRole.admin) or _db_orgs is None:
             return
         org = getattr(info, "org_slug", "") or ""
         if not org:
             return
         org_info = await _db_orgs.get(org)
         if org_info is not None and org_info.is_private:
-            if not await _db_orgs.is_member(org, actor.name):
+            if actor is None or not await _db_orgs.is_member(org, actor.name):
                 raise HTTPException(404, "build job not found")
 
     async def _assert_dag_visible(actor: TokenRecord, dag_id: str) -> None:
@@ -9795,10 +9975,17 @@ def create_app(
         builder_id: int | None = Query(None, description="Filter by builder ID"),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """List build jobs with optional filters."""
+        """List build jobs with optional filters.
+
+        Public: jobs with no org or in a public org are listed for anyone,
+        anonymous callers included.  A private org's jobs are listed only for
+        its members and admins.
+        """
         _require_db_build_jobs()
+        actor = _auth or _caller
         jobs, total = await _db_build_jobs.list_jobs(
             status=status,
             platform=platform,
@@ -9811,7 +9998,11 @@ def create_app(
             builder_id=builder_id,
             limit=limit,
             offset=offset,
-            visible_to=(None if actor.role == TokenRole.admin else actor.name),
+            visible_to=(
+                None
+                if actor is not None and actor.role == TokenRole.admin
+                else (actor.name if actor is not None else "")
+            ),
         )
         return BuildJobListResponse(total=total, jobs=jobs)
 
@@ -9876,14 +10067,15 @@ def create_app(
     @app.get("/v1/builds/{job_id}", response_model=BuildJobInfo, tags=["builds"])
     async def get_build(
         job_id: int,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """Get a single build job by ID."""
+        """Get a single build job by ID (public unless it is a private org's)."""
         _require_db_build_jobs()
         info = await _db_build_jobs.get(job_id)
         if info is None:
             raise HTTPException(404, f"build job {job_id} not found")
-        await _assert_build_visible(actor, info)
+        await _assert_build_visible(_auth or _caller, info)
         return info
 
     @app.post("/v1/builds/{job_id}/cancel", tags=["builds"])
@@ -10361,14 +10553,15 @@ def create_app(
     )
     async def download_build_log(
         job_id: int,
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """Download the full log for a build job."""
+        """Download the full log for a build job (public unless it is a private org's)."""
         _require_db_build_jobs()
         _job = await _db_build_jobs.get(job_id)
         if _job is None:
             raise HTTPException(404, f"build job {job_id} not found")
-        await _assert_build_visible(actor, _job)
+        await _assert_build_visible(_auth or _caller, _job)
         state = _get_state()
         path = await _db_build_jobs.get_log_path(job_id, logs_dir=state.logs_dir())
         if path is None:
@@ -10414,18 +10607,19 @@ def create_app(
         custom headers).
         """
         _require_db_build_jobs()
-        # Accept auth from either header or query param
+        # Accept auth from either header or query param.  None is fine: a
+        # public job's log is public.  A token that is presented must verify.
         raw = _extract_token(authorization) or token
-        if raw is None:
-            raise HTTPException(401, "missing authentication")
-        record = await _authenticate_token(raw)
-        if record is None:
-            raise HTTPException(401, "invalid or expired token")
-        if record.role not in (TokenRole.publisher, TokenRole.admin):
-            raise HTTPException(403, "insufficient role")
-        # Grace secrets are data-plane-only (publish/upload); privileged
-        # build-log access is not opted in, so reject them here too.
-        _reject_grace_secret(record)
+        record = None
+        if raw is not None:
+            record = await _authenticate_token(raw)
+            if record is None:
+                raise HTTPException(401, "invalid or expired token")
+            # Grace secrets are data-plane-only (publish/upload); privileged
+            # build-log access is not opted in, so reject them here too.
+            _reject_grace_secret(record)
+        elif _get_state().require_auth_for_reads:
+            raise HTTPException(401, "this server requires authentication for reads")
         # Enforce org membership when the job exists; a missing job falls through
         # to the generator's existing "job not found" SSE event (preserved contract).
         _job = await _db_build_jobs.get(job_id)
@@ -10732,14 +10926,23 @@ def create_app(
         org_slug: str | None = Query(None),
         limit: int = Query(100, ge=1, le=1000),
         offset: int = Query(0, ge=0),
-        actor: TokenRecord = Depends(require_role(TokenRole.publisher, TokenRole.admin)),
+        _auth: TokenRecord | None = Depends(optional_reader_auth),
+        _caller: TokenRecord | None = Depends(optional_token),
     ):
-        """List server-managed recipe bundles."""
+        """List server-managed recipe bundles.
+
+        Public: recipes with no org or in a public org are listed for anyone,
+        anonymous callers included; a private org's only for its members and
+        admins.
+        """
         _require_db_recipes()
-        is_admin = actor.role == TokenRole.admin
+        actor = _auth or _caller
+        is_admin = actor is not None and actor.role == TokenRole.admin
         allowed: set[str] | None = None
         if not is_admin and _db_orgs is not None:
-            allowed = {""} | await _db_orgs.member_org_slugs(actor.name)
+            allowed = {""} | (
+                await _db_orgs.member_org_slugs(actor.name) if actor is not None else set()
+            )
             if org_slug is not None and org_slug not in allowed:
                 _o = await _db_orgs.get(org_slug)
                 if _o is not None and _o.is_private:

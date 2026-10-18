@@ -30,6 +30,28 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Builds, build logs and recipes are public reads.** `GET /v1/builds`,
+  `/v1/builds/{id}`, `/v1/builds/{id}/log` (and its stream) and
+  `GET /v1/recipes` no longer need a publisher token. As for builders and
+  packages, a private org's jobs and recipes stay visible only to its members
+  and admins. The `/builds`, `/build/{id}` and `/recipes` pages and the
+  builder detail view work without a token.
+- **Live builds and logs.** The builds page updates rows as jobs move, and
+  the build detail page streams its log and status over `/v1/live/ws` (new
+  `builds` topic and per-connection log tail; `build_jobs.updated_at`,
+  migration 033). The log no longer travels over an EventSource with the
+  token in its URL.
+- **Fix: package pages showed no recipe.** The recipe section loaded only
+  after `/v1/deps`, which on cvcpkg.org took 15 minutes. Whenever any recipe
+  changed, it re-opened every pushed recipe bundle on the event loop, so it
+  also stalled other responses: recipe archive downloads arrived truncated.
+  The recipe now loads on its own. `/v1/deps` parses each bundle once
+  (re-reading only those that change, in a worker thread), shares one rebuild
+  among concurrent callers, and keeps the server's own recipes parsed between
+  pushes. It also no longer includes a private org's recipes. The recipe
+  section shows the commands to build, install and package from the downloaded
+  recipe.
+
 - **Activity feed.** Every publish, yank, unyank, delete and nuke is recorded
   per bundle variant (`package_events`, migration 032, backfilled from the
   catalog and tombstones). The new `/activity` page lists them with filters

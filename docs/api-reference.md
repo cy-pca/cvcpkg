@@ -236,6 +236,11 @@ pages.  All four endpoints accept an `org` query parameter
 Distinct from the publisher-facing `/v1/recipes/{name}` store used by
 remote builds.
 
+`GET /v1/recipes` (the list of recipes pushed to the server, which the
+`/recipes` page shows) is public too: anyone, anonymous callers included,
+sees recipes with no org or in a public org; a private org's only its members
+and admins.  `limit` is at most 1000, so page with `offset`.
+
 ### `GET /v1/recipe/{name}`
 
 Return the raw `recipe.yaml` for a named recipe as `text/yaml`.
@@ -261,9 +266,34 @@ Return the contents of one artifact.
 
 Download the recipe and its scripts as one archive, including the shared
 `_common/` helpers.  Extracting into a `recipes/` directory yields a
-well-formed recipe usable with `cvcpkg build <name> --recipes-dir <dir>`.
+well-formed recipe directory, so the package page can offer:
+
+```bash
+mkdir -p recipes
+curl -fsSL https://cvcpkg.org/v1/recipe/zlib/archive | tar -xz -C recipes
+cvcpkg install-deps recipes/zlib --prefix ./prefix                         # its dependencies, prebuilt
+cvcpkg build zlib --recipes-dir recipes --no-deps --prefix ./prefix        # build and install
+cvcpkg pack zlib --recipes-dir recipes --prefix ./prefix --output-dir ./dist   # package it
+```
 
 **Query Parameters**: `format` (`tar.gz` default, or `zip`), `org`.
+
+---
+
+## Builds (read)
+
+Build jobs and their logs are public reads, under the same rule: a job with
+no org or in a public org is visible to anyone, anonymous callers included;
+a private org's job only to its members and admins (others get `404`).  A
+token is needed only on a server that requires auth for reads.  Submitting,
+cancelling and every builder-facing endpoint still need a publisher token.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /v1/builds` | Jobs, newest first; filters `status`, `platform`, `arch`, `config`, `link`, `dag_id` (a trailing `*` matches a prefix), `recipe_name`, `org_slug`, `builder_id`; `limit` (1–1000), `offset` |
+| `GET /v1/builds/{id}` | One job, including `updated_at` (when anything about it last changed) |
+| `GET /v1/builds/{id}/log` | The job's log as `text/plain` |
+| `GET /v1/builds/{id}/log/stream` | The log as Server-Sent Events until the job ends (kept for older clients; the pages use `/v1/live/ws`) |
 
 ---
 
@@ -804,11 +834,14 @@ Pushes new activity events and builder changes to browser pages. The first
 frame the client sends is a hello:
 
 ```json
-{"type": "hello", "topics": ["activity", "builders"], "token": "cvctok_..."}
+{"type": "hello", "topics": ["activity", "builders", "builds"], "token": "cvctok_...",
+ "log": {"job": 123, "offset": 0}}
 ```
 
 `token` is optional, as for `GET /v1/activity`. It travels in the frame
-rather than the URL so it stays out of access logs. The server answers:
+rather than the URL so it stays out of access logs. `log` is optional: it
+tails build job 123's log for this connection from byte `offset` (a page
+resuming after a reconnect passes the last `next` it got). The server answers:
 
 | Message | When |
 |---|---|
@@ -817,6 +850,10 @@ rather than the URL so it stays out of access logs. The server answers:
 | `{"type": "builders", "builders": [...]}` | Every visible builder, once, on subscribe (`builders`) |
 | `{"type": "builder", "builder": {...}}` | One builder changed (a heartbeat, a status change, a dispatch) |
 | `{"type": "builder_removed", "id": N}` | A builder was unregistered |
+| `{"type": "builds", "jobs": [...]}` | Build jobs that changed: submitted, dispatched, started, finished, cancelled, or their log grew (`builds`) |
+| `{"type": "log", "job": N, "offset": B, "next": E, "data": "..."}` | The tailed log's bytes `B`..`E`, as text |
+| `{"type": "log_reset", "job": N}` | The log was replaced (the job was retried); start over |
+| `{"type": "log_end", "job": N, "status": "..."}` | The job finished and its log is complete (`not_found` if the viewer may not see it) |
 | `{"type": "resync"}` | The client fell behind and messages were dropped; reload over REST |
 
 Close codes: `4000` bad hello, `4001` invalid token (or reads require one),

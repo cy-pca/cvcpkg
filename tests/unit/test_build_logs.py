@@ -607,13 +607,13 @@ class TestBuildLogEndpoints:
         )
         assert resp.status_code == 403
 
-    def test_reader_cannot_download_log(self, db_server_env):
+    def test_log_download_is_public(self, db_server_env):
+        """Build logs are public reads now: a reader, or no token at all, gets a
+        public job's log (here: none exists yet, so 404 -- never 401/403)."""
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
-        resp = client.get(
-            "/v1/builds/1/log",
-            headers={"Authorization": f"Bearer {reader_tok}"},
-        )
-        assert resp.status_code == 403
+        for headers in ({"Authorization": f"Bearer {reader_tok}"}, {}):
+            resp = client.get("/v1/builds/1/log", headers=headers)
+            assert resp.status_code == 404
 
     # ── Log stream (SSE) endpoint tests ────────────────────────
 
@@ -791,9 +791,19 @@ class TestBuildLogEndpoints:
         body = resp.text
         assert "event: error" in body
 
-    def test_log_stream_requires_auth(self, db_server_env):
+    def test_log_stream_is_public(self, db_server_env):
+        """No token is needed to tail a public job's log (a missing job still
+        answers with the stream's error event, not a 401)."""
         client, admin_tok, pub_tok, reader_tok, _ = db_server_env
-        resp = client.get("/v1/builds/1/log/stream")
+        resp = client.get("/v1/builds/9999/log/stream")
+        assert resp.status_code == 200
+        assert "event: error" in resp.text
+
+    def test_log_stream_rejects_an_invalid_token(self, db_server_env):
+        client, admin_tok, pub_tok, reader_tok, _ = db_server_env
+        resp = client.get(
+            "/v1/builds/9999/log/stream", headers={"Authorization": "Bearer cvctok_nope"}
+        )
         assert resp.status_code == 401
 
     def test_log_stream_revoked_token_terminates(self, db_server_env, monkeypatch):
@@ -898,5 +908,7 @@ class TestSseReauthRejection:
             "pre-rotation secret not allowed"
         )
 
-    def test_demoted_below_publisher_is_rejected(self):
-        assert self._reject()(self._record(role=TokenRole.reader)) == "insufficient role"
+    def test_a_reader_is_kept(self):
+        # Public logs are readable by anyone; a reader (or a token demoted to
+        # one) keeps its stream.  Private-org visibility is re-checked apart.
+        assert self._reject()(self._record(role=TokenRole.reader)) is None

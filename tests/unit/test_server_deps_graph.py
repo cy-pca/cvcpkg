@@ -54,6 +54,15 @@ def _recipe_bundle(name: str, runtime_deps: list[str]) -> bytes:
     return buf.getvalue()
 
 
+def _push(client, hdr, name, deps, *, org=""):
+    return client.post(
+        f"/v1/recipes/{name}",
+        params={"org_slug": org} if org else None,
+        headers=hdr,
+        files={"file": (f"{name}.tar.gz", _recipe_bundle(name, deps), "application/gzip")},
+    )
+
+
 @pytest.fixture(scope="module")
 def server_env(tmp_path_factory):
     """One server + DB for the whole module.
@@ -217,33 +226,18 @@ class TestDepsGraphIncludesPushedRecipes:
         assert "good" in after.json()["forward"], "a corrupt bundle blanked the graph"
 
     def test_local_recipe_parse_is_cached(self, server_env, monkeypatch):
-        """The slow local-recipe parse must not re-run on a cache hit.
+        """The slow local-recipe parse runs once per local recipe set, not per push.
 
-        `/v1/deps` used to call `list_recipes(find_recipes_dir())` — hundreds of
-        synchronous recipe.yaml parses — on EVERY request, on the event loop, so
-        it took ~10s and serialised the `/v1/search` the search page fires
-        alongside it (results table spun until it finished). The whole graph is
-        now cached on (local recipe sig, pushed sig): a second call with no push
-        between must not parse again.
+        `/v1/deps` used to call `list_recipes(find_recipes_dir())` -- hundreds of
+        synchronous recipe.yaml parses -- on every request, then on every graph
+        rebuild, and a rebuild followed every recipe push.  On cvcpkg.org, where
+        recipes are pushed constantly, that kept the graph permanently stale and
+        the endpoint took minutes.  The local set is now parsed once and reused
+        until it changes on disk: neither a cache hit nor a push re-parses it.
         """
         client, admin_token, _tmp = server_env
         hdr = {"Authorization": f"Bearer {admin_token}"}
-
-        # A push bumps the pushed signature, so the NEXT /v1/deps is a guaranteed
-        # cache miss regardless of what earlier tests primed.
-        r = client.post(
-            "/v1/recipes/cachetest",
-            headers=hdr,
-            files={
-                "file": (
-                    "cachetest.tar.gz",
-                    _recipe_bundle("cachetest", ["zlib"]),
-                    "application/gzip",
-                )
-            },
-        )
-        if r.status_code == 501:
-            pytest.skip("recipe distribution requires a DB backend")
+        client.get("/v1/deps")  # whatever earlier tests left, the local set is parsed now
 
         import cvcpkg.builder as _builder
 
@@ -256,10 +250,57 @@ class TestDepsGraphIncludesPushedRecipes:
 
         monkeypatch.setattr(_builder, "list_recipes", _counting)
 
-        client.get("/v1/deps")  # cache miss -> parses the local set once
-        n1 = len(calls)
-        client.get("/v1/deps")  # same signature -> cache hit -> no parse
-        n2 = len(calls)
+        r = _push(client, hdr, "cachetest", ["zlib"])
+        if r.status_code == 501:
+            pytest.skip("recipe distribution requires a DB backend")
+        after = client.get("/v1/deps").json()  # a miss: the pushed set changed
+        assert "cachetest" in after["forward"]
+        client.get("/v1/deps")  # a hit
+        assert calls == [], f"the local recipe set was re-parsed {len(calls)} time(s)"
 
-        assert n1 == 1, f"expected exactly one local parse on the miss, got {n1}"
-        assert n2 == 1, f"list_recipes re-ran on a cache hit ({n1} -> {n2})"
+    def test_a_push_reparses_only_its_own_bundle(self, server_env, monkeypatch):
+        """Each bundle is parsed once and cached on its stamp."""
+        client, admin_token, _tmp = server_env
+        hdr = {"Authorization": f"Bearer {admin_token}"}
+        for name in ("inc-a", "inc-b", "inc-c"):
+            r = _push(client, hdr, name, ["zlib"])
+            if r.status_code == 501:
+                pytest.skip("recipe distribution requires a DB backend")
+        client.get("/v1/deps")
+        r = _push(client, hdr, "inc-d", ["inc-a"])
+        assert r.status_code in (200, 201), r.text
+
+        opened: list[str] = []
+        real_open = tarfile.open
+
+        def _counting_open(name=None, mode="r", *a, **k):
+            if isinstance(name, str) and mode == "r:gz":
+                opened.append(name)
+            return real_open(name, mode, *a, **k)
+
+        monkeypatch.setattr(tarfile, "open", _counting_open)
+        after = client.get("/v1/deps").json()
+        assert after["forward"]["inc-d"] == ["inc-a"]
+        assert len(opened) == 1 and opened[0].endswith("inc-d.tar.gz"), opened
+
+    def test_private_org_recipes_stay_out_of_the_public_graph(self, server_env):
+        """/v1/deps is served to anyone, so a private org's recipes must not be in it."""
+        client, admin_token, _tmp = server_env
+        hdr = {"Authorization": f"Bearer {admin_token}"}
+        for slug, private in (("depsecret", True), ("depopen", False)):
+            r = client.post(
+                "/v1/orgs",
+                json={"slug": slug, "display_name": slug, "is_private": private},
+                headers=hdr,
+            )
+            if r.status_code == 501:
+                pytest.skip("organizations require a DB backend")
+            assert r.status_code in (200, 201, 409), r.text
+        assert _push(client, hdr, "hidden-recipe", ["zlib"], org="depsecret").is_success
+        assert _push(client, hdr, "open-recipe", ["zlib"], org="depopen").is_success
+
+        graph = client.get("/v1/deps").json()
+        assert "open-recipe" in graph["forward"]
+        assert "hidden-recipe" not in graph["forward"]
+        assert "hidden-recipe" not in graph["recipe_names"]
+        assert "hidden-recipe" not in graph["reverse"].get("zlib", [])

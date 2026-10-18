@@ -1425,6 +1425,11 @@ let currentSort = { key: 'platform', dir: 'asc' };
 async function init(name, org) {
   pkgName = name;
   pkgOrg = org || '';
+  // The recipe needs nothing else on the page, so it loads at once and on its
+  // own.  It used to load only after /v1/deps answered -- the whole catalog's
+  // dependency graph -- and when that request was slow or failed, the recipe
+  // section silently never appeared.
+  loadRecipeArtifacts();
   try {
     const orgParam = pkgOrg ? '?org=' + encodeURIComponent(pkgOrg) : '';
     const resp = await fetch('/v1/packages/' + encodeURIComponent(name) + orgParam);
@@ -1595,16 +1600,24 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     }
   }
 
-  // Load the recipe and everything that ships with it.
-  //
-  // Deliberately NOT gated on isMainline.  isMainline means "this name is in
-  // the recipe list bundled with the running server", which is false for an
-  // org package and for any recipe pushed after the last release — exactly
-  // the pages whose recipe was invisible before.  The endpoint decides what
-  // the caller may see; the page just asks.
-  loadRecipeArtifacts();
 }
 
+function copyRecipeHowto(btn) {
+  const text = document.getElementById('recipe-howto-cmds').textContent;
+  const done = () => {
+    const label = btn.querySelector('span:last-child');
+    const was = label.textContent;
+    label.textContent = 'Copied';
+    setTimeout(() => { label.textContent = was; }, 1500);
+  };
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => {});
+}
+
+// The recipe section loads on its own, and is NOT gated on isMainline.
+// isMainline means "this name is in the recipe list bundled with the running
+// server", which is false for an org package and for any recipe pushed after
+// the last release -- exactly the pages whose recipe was invisible before.
+// The endpoint decides what the caller may see; the page just asks.
 // Query string carrying the org scope (and any extra params) to the
 // recipe endpoints.  Public packages send nothing, so anonymous visitors
 // keep working unchanged.
@@ -1632,7 +1645,7 @@ async function loadRecipeArtifacts() {
         'prebuilt artifacts. Run cvcpkg recipe push ' + pkgName +
         ' to attach one.';
     }
-    ['recipe-archive-link', 'recipe-zip-link'].forEach(id => {
+    ['recipe-archive-link', 'recipe-zip-link', 'recipe-howto'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
@@ -2027,8 +2040,10 @@ async function loadBuildJobs(name) {
   const section = document.getElementById('build-jobs-section');
   if (!section) return;
   try {
+    // Public read: a token only adds the viewer's private orgs' jobs.
+    const tok = localStorage.getItem('cvcpkg_token') || '';
     const resp = await fetch('/v1/builds?recipe_name=' + encodeURIComponent(name) + '&limit=20',
-      { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('cvcpkg_token') || '') } });
+      { headers: tok ? { 'Authorization': 'Bearer ' + tok } : {} });
     if (resp.status === 401 || resp.status === 403) return;
     if (!resp.ok) return;
     const data = await resp.json();
@@ -2198,12 +2213,23 @@ def package_detail_html(name: str, *, org: str = "") -> str:
         </span>
       </h3>
       <div id="recipe-body" class="recipe-viewer">
-        <p class="has-text-grey-lighter is-size-7 mb-3">
-          Extract either archive into a <code>recipes/</code> directory and it is a
-          well-formed recipe directory &mdash;
-          <code>cvcpkg build {safe_name} --recipes-dir &lt;dir&gt;</code> will use it as-is.
-          Click any file to view it.
-        </p>
+        <div id="recipe-howto" class="mb-3">
+          <p class="has-text-grey-lighter is-size-7 mb-2">
+            The archive holds <code>{safe_name}/</code> (recipe.yaml, build scripts, patches) and
+            the shared <code>_common/</code> helpers they source. Extract it into a recipes
+            directory and point cvcpkg at it:
+          </p>
+          <pre class="has-background-dark has-text-light p-3 is-size-7" id="recipe-howto-cmds"
+               style="border-radius:6px;overflow-x:auto"><code>mkdir -p recipes
+curl -fsSL {_SITE_URL}/v1/recipe/{safe_name}/archive{'?org=' + safe_org if safe_org else ''} | tar -xz -C recipes
+cvcpkg install-deps recipes/{safe_name} --prefix ./prefix    # its dependencies, prebuilt
+cvcpkg build {safe_name} --recipes-dir recipes --no-deps --prefix ./prefix    # build and install
+cvcpkg pack {safe_name} --recipes-dir recipes --prefix ./prefix --output-dir ./dist    # package it</code></pre>
+          <button class="button is-small is-dark" type="button" onclick="copyRecipeHowto(this)">
+            <span class="icon is-small"><i class="fas fa-copy"></i></span><span>Copy commands</span>
+          </button>
+          <span class="has-text-grey is-size-7 ml-2">Click any file below to view it.</span>
+        </div>
         <div id="recipe-yaml"></div>
         <div id="recipe-artifacts"></div>
       </div>
@@ -3182,7 +3208,10 @@ function openLive(topics, handlers) {
     catch (e) { retry(); return; }
     let sentToken = false;
     ws.onopen = () => {
-      const hello = { type: 'hello', topics: topics };
+      // handlers.hello() adds per-connection fields (a log to tail, from where
+      // the page got to), rebuilt on every reconnect.
+      const hello = Object.assign({ type: 'hello', topics: topics },
+                                  handlers.hello ? handlers.hello() : {});
       const t = anonymous ? '' : (localStorage.getItem('cvcpkg_token') || '');
       if (t) { hello.token = t; sentToken = true; }
       ws.send(JSON.stringify(hello));
@@ -3357,7 +3386,10 @@ function openModal(id) {
   document.documentElement.classList.add('is-clipped');
   renderModal(true);
   clearInterval(modalTimer);
-  modalTimer = setInterval(() => loadJobs(selectedId), 15000);
+  // The live socket refreshes the job lists as jobs change; this is the fallback.
+  modalTimer = setInterval(() => {
+    if (!document.getElementById('live-badge').classList.contains('is-live')) loadJobs(selectedId);
+  }, 15000);
 }
 function closeModal() {
   selectedId = null;
@@ -3436,13 +3468,16 @@ async function fetchJobs(id, extra) {
   if (!resp.ok) throw new Error('HTTP ' + resp.status);
   return (await resp.json()).jobs || [];
 }
-const NO_JOBS_ACCESS = '<p class="has-text-grey is-size-7">Save a publisher or admin token on the ' +
-  '<a href="/builds">Build Jobs</a> page to see this builder’s jobs.</p>';
+const NO_JOBS_ACCESS = '<p class="has-text-grey is-size-7">This server requires a token to ' +
+  'read; save one on the <a href="/builds">Build Jobs</a> page to see this builder’s jobs.</p>';
+let _modalJobsTimer = null;
+function scheduleModalJobs() {
+  clearTimeout(_modalJobsTimer);
+  _modalJobsTimer = setTimeout(() => loadJobs(selectedId), 1000);
+}
 async function loadJobs(id) {
   const el = document.getElementById('modal-jobs');
   if (id === null || id === undefined) return;
-  // /v1/builds needs a publisher token; don't ask without one.
-  if (!localStorage.getItem('cvcpkg_token')) { el.innerHTML = NO_JOBS_ACCESS; return; }
   try {
     const [running, dispatched, recent] = await Promise.all([
       fetchJobs(id, '&status=running&limit=50'),
@@ -3494,6 +3529,9 @@ function onLive(msg) {
   } else if (msg.type === 'builder_removed') {
     builders.delete(msg.id);
     render();
+  } else if (msg.type === 'builds') {
+    // A job on the builder whose details are open changed: refresh its lists.
+    if (selectedId !== null && msg.jobs.some(j => j.builder_id === selectedId)) scheduleModalJobs();
   } else if (msg.type === 'resync') {
     loadBuilders();
   }
@@ -3513,7 +3551,7 @@ async function init() {
   await loadBuilders();
   const m = /^#builder-(\d+)$/.exec(location.hash);
   if (m) openModal(parseInt(m[1], 10));
-  openLive(['builders'], { onMessage: onLive, onState: onLiveState });
+  openLive(['builders', 'builds'], { onMessage: onLive, onState: onLiveState });
   // Relative heartbeat times age between pushes.
   setInterval(render, 30000);
 }
@@ -3559,7 +3597,7 @@ def builders_html() -> str:
     <p class="subtitle is-6 has-text-grey-light mt-1" id="builder-summary">Loading&hellip;</p>
 
     <div class="notification is-dark" id="auth-prompt" style="display:none">
-      <p>Enter your API token to view builders.</p>
+      <p>This server requires a token to read. Enter your API token.</p>
       <div class="field has-addons mt-2">
         <div class="control is-expanded">
           <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
@@ -3608,6 +3646,73 @@ const SERVER_VERSION = {_json.dumps(__version__)};
 </html>"""
 
 
+# The builds page's live updates: rows change in place as jobs move; a job the
+# page does not show yet (new, or now matching the filters) reloads page 1.
+_BUILDS_LIVE_JS = r"""
+const changedRows = new Set();
+let _reloadTimer = null;
+let _everLive = false;
+function scheduleReload() {
+  clearTimeout(_reloadTimer);
+  _reloadTimer = setTimeout(() => loadJobs(), 1000);
+}
+function jobMatchesFilters(j) {
+  const v = id => document.getElementById(id).value.trim();
+  if (v('filter-status') && j.status !== v('filter-status')) return false;
+  if (v('filter-platform') && j.platform !== v('filter-platform')) return false;
+  if (v('filter-arch') && j.arch !== v('filter-arch')) return false;
+  if (v('filter-config') && j.config !== v('filter-config')) return false;
+  if (v('filter-link') && j.link !== v('filter-link')) return false;
+  if (v('filter-recipe') && j.recipe_name !== v('filter-recipe')) return false;
+  const dag = v('filter-dag');
+  if (dag && !(dag.endsWith('*') ? (j.dag_id || '').startsWith(dag.slice(0, -1)) : j.dag_id === dag)) return false;
+  if (v('filter-builder') && String(j.builder_id) !== v('filter-builder')) return false;
+  return true;
+}
+function onBuildsLive(msg) {
+  if (msg.type === 'resync') { scheduleReload(); return; }
+  if (msg.type !== 'builds') return;
+  // DAG progress is computed from the whole page: reload it rather than patch.
+  const dagView = !!document.getElementById('filter-dag').value.trim();
+  let redraw = false, reload = false;
+  for (const j of msg.jobs) {
+    const i = currentJobs.findIndex(x => x.id === j.id);
+    if (i >= 0) {
+      if (dagView || !jobMatchesFilters(j)) { reload = true; continue; }
+      const was = currentJobs[i];
+      j.depends_on = was.depends_on;  // the live feed leaves them out
+      // Flash a row when the job moves, not on every log line it writes.
+      if (['status', 'builder_id', 'started_at', 'finished_at'].some(k => was[k] !== j[k])) {
+        changedRows.add(j.id);
+      }
+      currentJobs[i] = j;
+      redraw = true;
+    } else if (currentOffset === 0 && jobMatchesFilters(j)) {
+      reload = true;
+    }
+  }
+  if (reload) scheduleReload();
+  else if (redraw) renderJobs();
+}
+function onBuildsLiveState(state) {
+  liveUp = state === 'live';
+  setLiveBadge(document.getElementById('live-badge'), state);
+  if (state === 'live') {
+    clearInterval(_refreshTimer);
+    _refreshTimer = null;
+    if (_everLive) scheduleReload();  // catch up on what happened while away
+    _everLive = true;
+  } else if (state === 'offline') {
+    loadJobs();  // re-arms the fallback poll if jobs are active
+  }
+}
+// Running jobs' durations tick between updates.
+setInterval(() => {
+  if (currentJobs.some(j => j.status === 'running')) renderJobs();
+}, 5000);
+"""
+
+
 def builds_html() -> str:
     """Return HTML for the Builds Dashboard page."""
     return f"""\
@@ -3631,13 +3736,22 @@ def builds_html() -> str:
 
 <section class="section pt-2 has-background-black-bis">
   <div class="container">
-    <h1 class="title has-text-white">
-      <span class="icon mr-2"><i class="fas fa-hammer"></i></span> Build Jobs
-    </h1>
-    <p class="subtitle has-text-grey-light" id="builds-summary">Loading&hellip;</p>
+    <div class="level mb-2">
+      <div class="level-left">
+        <h1 class="title has-text-white mb-0">
+          <span class="icon mr-2"><i class="fas fa-hammer"></i></span> Build Jobs
+        </h1>
+      </div>
+      <div class="level-right">
+        <span id="live-badge" class="live-badge is-connecting is-size-7 has-text-grey-light">
+          <span class="live-dot"></span><span class="live-label">Connecting&hellip;</span>
+        </span>
+      </div>
+    </div>
+    <p class="subtitle has-text-grey-light mt-1" id="builds-summary">Loading&hellip;</p>
 
     <div class="notification is-dark" id="auth-prompt" style="display:none">
-      <p>Enter your API token to view build jobs.</p>
+      <p>This server requires a token to read. Enter your API token.</p>
       <div class="field has-addons mt-2">
         <div class="control is-expanded">
           <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
@@ -3799,11 +3913,15 @@ def builds_html() -> str:
 {_NAVBAR_JS}
 {_HELPERS_JS}
 {_BUILD_HELPERS_JS}
+{_LIVE_JS}
+{_BUILDS_LIVE_JS}
 
 let currentOffset = 0;
 const PAGE_SIZE = 50;
 let totalJobs = 0;
 let _refreshTimer = null;
+let currentJobs = [];
+let liveUp = false;
 
 function saveToken() {{
   const t = document.getElementById('token-input').value.trim();
@@ -3812,6 +3930,48 @@ function saveToken() {{
 
 function prevPage() {{ if (currentOffset >= PAGE_SIZE) {{ currentOffset -= PAGE_SIZE; loadJobs(); }} }}
 function nextPage() {{ if (currentOffset + PAGE_SIZE < totalJobs) {{ currentOffset += PAGE_SIZE; loadJobs(); }} }}
+
+function renderJobs() {{
+  const jobs = currentJobs;
+  const tbody = document.getElementById('builds-body');
+  if (jobs.length === 0) {{
+    tbody.innerHTML = '<tr><td colspan="12" class="has-text-centered has-text-grey py-4">No build jobs found.</td></tr>';
+  }} else {{
+  tbody.innerHTML = jobs.map(j => {{
+    const logLink = (j.status === 'running')
+      ? '<a class="button is-small is-info is-outlined" href="/build/' + j.id + '" title="Live Log">' +
+        '<span class="icon is-small"><i class="fas fa-stream"></i></span></a>'
+      : (j.status === 'succeeded' || j.status === 'failed')
+      ? '<a class="button is-small is-outlined" href="/build/' + j.id + '" title="View Log">' +
+        '<span class="icon is-small"><i class="fas fa-file-alt"></i></span></a>'
+      : '';
+    const dagLink = j.dag_id
+      ? '<a href="/builds?dag_id=' + encodeURIComponent(j.dag_id) + '" class="tag is-dark is-rounded is-small">' +
+        '<span class="icon is-small"><i class="fas fa-project-diagram"></i></span>&nbsp;' + esc(j.dag_id) + '</a>'
+      : '';
+    const errTip = (j.status === 'failed' && j.error_message)
+      ? ' title="' + esc(j.error_message.substring(0, 200)) + '"'
+      : '';
+    const builderName = j.builder_id ? 'b' + j.builder_id : '\\u2014';
+    return '<tr' + (changedRows.has(j.id) ? ' class="is-new"' : '') + '>' +
+      '<td class="has-text-grey-light">' + j.id + '</td>' +
+      '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
+      '<td><a href="' + (j.org_slug ? '/package/' + encodeURIComponent(j.org_slug) + '/' + encodeURIComponent(j.recipe_name) : '/package/' + encodeURIComponent(j.recipe_name)) +
+      '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a></td>' +
+      '<td>' + platformTag(j.platform) + '</td>' +
+      '<td class="has-text-grey-light">' + esc(j.arch) + '</td>' +
+      '<td class="has-text-grey-light">' + esc(j.config) + '</td>' +
+      '<td class="has-text-grey-light">' + esc(j.link) + '</td>' +
+      '<td class="has-text-grey-light">' + esc(builderName) + '</td>' +
+      '<td class="has-text-grey-light">' + fmtDuration(j.started_at, j.finished_at || (j.status === 'running' ? new Date().toISOString() : null)) + '</td>' +
+      '<td>' + dagLink + '</td>' +
+      '<td class="has-text-grey-light is-size-7">' + fmtDate(j.submitted_at) + '</td>' +
+      '<td>' + logLink + '</td>' +
+      '</tr>';
+  }}).join('');
+  }} // end else (jobs.length > 0)
+  changedRows.clear();
+}}
 
 async function loadJobs(resetOffset) {{
   if (resetOffset) currentOffset = 0;
@@ -3889,49 +4049,15 @@ async function loadJobs(resetOffset) {{
       dagSection.style.display = 'none';
     }}
 
-    const tbody = document.getElementById('builds-body');
-    if (jobs.length === 0) {{
-      tbody.innerHTML = '<tr><td colspan="12" class="has-text-centered has-text-grey py-4">No build jobs found.</td></tr>';
-    }} else {{
-    tbody.innerHTML = jobs.map(j => {{
-      const logLink = (j.status === 'running')
-        ? '<a class="button is-small is-info is-outlined" href="/build/' + j.id + '" title="Live Log">' +
-          '<span class="icon is-small"><i class="fas fa-stream"></i></span></a>'
-        : (j.status === 'succeeded' || j.status === 'failed')
-        ? '<a class="button is-small is-outlined" href="/build/' + j.id + '" title="View Log">' +
-          '<span class="icon is-small"><i class="fas fa-file-alt"></i></span></a>'
-        : '';
-      const dagLink = j.dag_id
-        ? '<a href="/builds?dag_id=' + encodeURIComponent(j.dag_id) + '" class="tag is-dark is-rounded is-small">' +
-          '<span class="icon is-small"><i class="fas fa-project-diagram"></i></span>&nbsp;' + esc(j.dag_id) + '</a>'
-        : '';
-      const errTip = (j.status === 'failed' && j.error_message)
-        ? ' title="' + esc(j.error_message.substring(0, 200)) + '"'
-        : '';
-      const builderName = j.builder_id ? 'b' + j.builder_id : '\\u2014';
-      return '<tr>' +
-        '<td class="has-text-grey-light">' + j.id + '</td>' +
-        '<td><a href="/build/' + j.id + '"><span class="tag ' + statusCls(j.status) + ' is-rounded"' + errTip + '>' + esc(j.status) + '</span></a></td>' +
-        '<td><a href="' + (j.org_slug ? '/package/' + encodeURIComponent(j.org_slug) + '/' + encodeURIComponent(j.recipe_name) : '/package/' + encodeURIComponent(j.recipe_name)) +
-        '" class="has-text-link">' + (j.org_slug ? esc(j.org_slug) + '/' : '') + esc(j.recipe_name) + '</a></td>' +
-        '<td>' + platformTag(j.platform) + '</td>' +
-        '<td class="has-text-grey-light">' + esc(j.arch) + '</td>' +
-        '<td class="has-text-grey-light">' + esc(j.config) + '</td>' +
-        '<td class="has-text-grey-light">' + esc(j.link) + '</td>' +
-        '<td class="has-text-grey-light">' + esc(builderName) + '</td>' +
-        '<td class="has-text-grey-light">' + fmtDuration(j.started_at, j.finished_at) + '</td>' +
-        '<td>' + dagLink + '</td>' +
-        '<td class="has-text-grey-light is-size-7">' + fmtDate(j.submitted_at) + '</td>' +
-        '<td>' + logLink + '</td>' +
-        '</tr>';
-    }}).join('');
-    }} // end else (jobs.length > 0)
+    currentJobs = jobs;
+    renderJobs();
 
-    // Auto-refresh when active (running/dispatched/pending) builds exist
+    // Without the live socket, poll while active (running/dispatched/pending)
+    // builds exist; with it, changes arrive as they happen.
     const hasActive = jobs.some(j => ['running', 'dispatched', 'pending'].includes(j.status));
-    if (hasActive && !_refreshTimer) {{
+    if (hasActive && !liveUp && !_refreshTimer) {{
       _refreshTimer = setInterval(() => loadJobs(), 15000);
-    }} else if (!hasActive && _refreshTimer) {{
+    }} else if ((!hasActive || liveUp) && _refreshTimer) {{
       clearInterval(_refreshTimer);
       _refreshTimer = null;
     }}
@@ -3960,11 +4086,93 @@ async function init() {{
   const builderParam = params.get('builder_id');
   if (builderParam) document.getElementById('filter-builder').value = builderParam;
   await loadJobs();
+  openLive(['builds'], {{ onMessage: onBuildsLive, onState: onBuildsLiveState }});
 }}
 document.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
 </html>"""
+
+
+# The build detail page's live view: the job's log streams over /v1/live/ws
+# (from the byte it got to, across reconnects) and its status and timings
+# update as the job moves.  Without the socket it falls back to the REST log
+# and a slow poll.
+_BUILD_DETAIL_LIVE_JS = r"""
+const TERMINAL = ['succeeded', 'failed', 'cancelled', 'timed_out'];
+let currentJob = null;
+let logNext = 0;          // the next log byte the page expects
+let logDone = false;
+let gotLiveLog = false;
+let fallbackTimer = null;
+
+function appendLog(text) {
+  if (!text) return;
+  const out = document.getElementById('log-output');
+  const atBottom = out.scrollTop + out.clientHeight >= out.scrollHeight - 40;
+  out.appendChild(document.createTextNode(text));
+  if (atBottom) out.scrollTop = out.scrollHeight;
+}
+function setLogLive(on) {
+  document.getElementById('log-live').style.display = on ? '' : 'none';
+}
+function onDetailLive(msg) {
+  if (msg.type === 'log' && msg.job === JOB_ID) {
+    if (msg.offset < logNext) return;  // already shown (a reconnect re-sends)
+    if (!gotLiveLog) { document.getElementById('log-output').textContent = ''; gotLiveLog = true; }
+    appendLog(msg.data);
+    logNext = msg.next;
+    setLogLive(!TERMINAL.includes((currentJob || {}).status));
+  } else if (msg.type === 'log_reset' && msg.job === JOB_ID) {
+    document.getElementById('log-output').textContent = '';
+    logNext = 0;
+  } else if (msg.type === 'log_end' && msg.job === JOB_ID) {
+    logDone = true;
+    setLogLive(false);
+    if (msg.status === 'not_found' || !gotLiveLog) {
+      if (!gotLiveLog) document.getElementById('log-output').textContent = '(no log available)';
+    } else {
+      document.getElementById('log-download').style.display = '';
+    }
+  } else if (msg.type === 'builds') {
+    const j = msg.jobs.find(x => x.id === JOB_ID);
+    if (j) {
+      j.depends_on = (currentJob && currentJob.depends_on) || j.depends_on;
+      currentJob = j;
+      populateMeta(j);
+    }
+  } else if (msg.type === 'resync') {
+    loadMeta();
+  }
+}
+function onDetailState(state) {
+  clearInterval(fallbackTimer);
+  fallbackTimer = null;
+  if (state === 'offline' && !logDone) {
+    // No socket (yet, or at all): show what there is and keep the header fresh.
+    if (!gotLiveLog) loadStaticLog();
+    fallbackTimer = setInterval(async () => {
+      const j = await loadMeta();
+      if (j) currentJob = j;
+      if (j && TERMINAL.includes(j.status)) { clearInterval(fallbackTimer); loadStaticLog(); }
+    }, 10000);
+  }
+}
+function startLive() {
+  openLive(['builds'], {
+    onMessage: onDetailLive,
+    onState: onDetailState,
+    hello: () => (logDone ? {} : { log: { job: JOB_ID, offset: logNext } }),
+  });
+  // Elapsed time ticks while the job runs.
+  setInterval(() => {
+    if (currentJob && currentJob.status === 'running' && currentJob.started_at) {
+      document.getElementById('meta-duration').textContent =
+        fmtDuration(currentJob.started_at, new Date().toISOString());
+    }
+  }, 1000);
+}
+"""
 
 
 def build_detail_html(job_id: int) -> str:
@@ -4005,7 +4213,7 @@ def build_detail_html(job_id: int) -> str:
     </div>
 
     <div class="notification is-dark" id="auth-prompt" style="display:none">
-      <p>Enter your API token to view build details.</p>
+      <p>This server requires a token to read. Enter your API token.</p>
       <div class="field has-addons mt-2">
         <div class="control is-expanded">
           <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
@@ -4092,8 +4300,10 @@ def build_detail_html(job_id: int) -> str:
 {_NAVBAR_JS}
 {_HELPERS_JS}
 {_BUILD_HELPERS_JS}
+{_LIVE_JS}
 
 const JOB_ID = {job_id};
+{_BUILD_DETAIL_LIVE_JS}
 
 function saveToken() {{
   const t = document.getElementById('token-input').value.trim();
@@ -4161,41 +4371,6 @@ function populateMeta(j) {{
   }}
 }}
 
-async function loadLog(isLive) {{
-  const output = document.getElementById('log-output');
-  const liveTag = document.getElementById('log-live');
-  const dlBtn = document.getElementById('log-download');
-
-  if (isLive) {{
-    liveTag.style.display = '';
-    try {{
-      const es = new EventSource('/v1/builds/' + JOB_ID + '/log/stream?token=' +
-        encodeURIComponent(localStorage.getItem('cvcpkg_token') || ''));
-      es.onmessage = (e) => {{
-        output.textContent += e.data + '\\n';
-        output.scrollTop = output.scrollHeight;
-      }};
-      es.addEventListener('done', (e) => {{
-        es.close();
-        liveTag.style.display = 'none';
-        dlBtn.style.display = '';
-        // Reload metadata to get final status
-        loadMeta();
-      }});
-      es.onerror = () => {{
-        es.close();
-        liveTag.style.display = 'none';
-        // Fall back to static log
-        loadStaticLog();
-      }};
-    }} catch (_) {{
-      loadStaticLog();
-    }}
-  }} else {{
-    loadStaticLog();
-  }}
-}}
-
 async function loadStaticLog() {{
   const output = document.getElementById('log-output');
   const dlBtn = document.getElementById('log-download');
@@ -4235,10 +4410,9 @@ async function init() {{
     return;
   }}
   const job = await resp.json();
+  currentJob = job;
   populateMeta(job);
-
-  const isLive = job.status === 'running' || job.status === 'dispatched';
-  await loadLog(isLive);
+  startLive();
 }}
 document.addEventListener('DOMContentLoaded', init);
 </script>
@@ -4746,7 +4920,7 @@ def recipes_html() -> str:
     <p class="subtitle has-text-grey-light" id="recipe-summary">Loading&hellip;</p>
 
     <div class="notification is-dark" id="auth-prompt" style="display:none">
-      <p>Enter your API token to view recipes.</p>
+      <p>This server requires a token to read. Enter your API token.</p>
       <div class="field has-addons mt-2">
         <div class="control is-expanded">
           <input class="input is-dark" id="token-input" type="password" placeholder="cvctok_&hellip;">
@@ -4825,18 +4999,26 @@ function renderRecipes(recipes) {{
 
 async function init() {{
   try {{
-    const resp = await fetch('/v1/recipes', {{ headers: authHeaders() }});
-    if (resp.status === 401 || resp.status === 403) {{
-      document.getElementById('auth-prompt').style.display = '';
-      document.getElementById('recipe-summary').textContent = 'Authentication required';
-      return;
+    // Public read (a token only adds the viewer's private orgs' recipes).
+    // The server pages at 1000; a registry holds a few thousand recipes.
+    allRecipes = [];
+    for (let offset = 0; ; ) {{
+      const resp = await fetch('/v1/recipes?limit=1000&offset=' + offset, {{ headers: authHeaders() }});
+      if (resp.status === 401 || resp.status === 403) {{
+        document.getElementById('auth-prompt').style.display = '';
+        document.getElementById('recipe-summary').textContent = 'Authentication required';
+        return;
+      }}
+      if (!resp.ok) {{
+        document.getElementById('recipe-summary').textContent = 'Error loading recipes';
+        return;
+      }}
+      const data = await resp.json();
+      const page = data.recipes || [];
+      allRecipes = allRecipes.concat(page);
+      offset += page.length;
+      if (page.length === 0 || offset >= (data.total || 0)) break;
     }}
-    if (!resp.ok) {{
-      document.getElementById('recipe-summary').textContent = 'Error loading recipes';
-      return;
-    }}
-    const data = await resp.json();
-    allRecipes = data.recipes || [];
     document.getElementById('recipe-summary').textContent = allRecipes.length + ' recipe(s) on server';
     document.getElementById('search-box').style.display = '';
     renderRecipes(allRecipes);

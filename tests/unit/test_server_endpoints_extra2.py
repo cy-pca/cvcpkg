@@ -69,8 +69,9 @@ class TestRecipeDistribution:
 
     def test_recipe_store_auth(self, env):
         c = env["client"]
-        assert c.get("/v1/recipes").status_code == 401
-        assert c.get("/v1/recipes", headers=_auth(env["reader"])).status_code == 403
+        # Listing is a public read; deleting still needs the right role.
+        assert c.get("/v1/recipes").status_code not in (401, 403)
+        assert c.get("/v1/recipes", headers=_auth(env["reader"])).status_code not in (401, 403)
         assert c.delete("/v1/recipes/zlib", headers=_auth(env["publisher"])).status_code == 403
 
 
@@ -164,8 +165,9 @@ class TestBuildJobs:
 
     def test_auth(self, env):
         c = env["client"]
-        assert c.get("/v1/builds").status_code == 401
-        assert c.get("/v1/builds", headers=_auth(env["reader"])).status_code == 403
+        # Listing is a public read; cancelling still needs a publisher.
+        assert c.get("/v1/builds").status_code not in (401, 403)
+        assert c.get("/v1/builds", headers=_auth(env["reader"])).status_code not in (401, 403)
         assert c.post("/v1/builds/1/cancel", headers=_auth(env["reader"])).status_code == 403
 
 

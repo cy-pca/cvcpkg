@@ -240,3 +240,101 @@ def test_the_loop_stops_with_its_last_subscriber():
         await hub.close()
 
     _run(main())
+
+
+# ── builds topic ────────────────────────────────────────────────
+
+
+def _job(i: int, at: datetime.datetime, org: str = "", status: str = "pending"):
+    from cvcpkg.server.models import BuildJobInfo
+
+    return BuildJobInfo(
+        id=i,
+        recipe_name=f"r{i}",
+        platform="linux",
+        arch="x86_64",
+        org_slug=org,
+        status=status,
+        updated_at=at,
+    )
+
+
+class FakeJobs:
+    def __init__(self) -> None:
+        self.jobs: dict[int, object] = {}
+
+    async def since(self, t):
+        return sorted(
+            (j for j in self.jobs.values() if j.updated_at >= t),
+            key=lambda j: (j.updated_at, j.id),
+        )
+
+    async def latest(self):
+        return max((j.updated_at for j in self.jobs.values()), default=None)
+
+
+def _builds_hub(db: FakeDb, jobs: FakeJobs) -> LiveHub:
+    return LiveHub(
+        fetch_events=db.since,
+        fetch_latest_id=db.latest,
+        fetch_builders=None,
+        fetch_private_orgs=db.private_orgs,
+        fetch_jobs_since=jobs.since,
+        fetch_latest_job_update=jobs.latest,
+        poll_interval=3600,
+    )
+
+
+def _job_updates(msgs):
+    return [(j["id"], j["status"]) for m in msgs if m["type"] == "builds" for j in m["jobs"]]
+
+
+def test_builds_push_each_change_once_including_late_commits():
+    async def main():
+        db, jobs = FakeDb(), FakeJobs()
+        t0 = datetime.datetime(2026, 10, 17, 12, tzinfo=datetime.timezone.utc)
+        jobs.jobs[1] = _job(1, t0)
+        hub = _builds_hub(db, jobs)
+        sub = Subscriber(topics=frozenset({"builds"}))
+        await hub.subscribe(sub)
+        _drain(sub)
+
+        sec = datetime.timedelta(seconds=1)
+        jobs.jobs[1] = _job(1, t0 + 2 * sec, status="running")
+        jobs.jobs[3] = _job(3, t0 + 2 * sec)
+        async with hub._lock:
+            await hub.tick()
+        assert sorted(_job_updates(_drain(sub))) == [(1, "running"), (3, "pending")]
+
+        # Job 2 changed at t0+1s but its transaction committed after the poll
+        # above: still inside the lookback, so it is found and sent once.
+        jobs.jobs[2] = _job(2, t0 + sec)
+        async with hub._lock:
+            await hub.tick()
+            await hub.tick()
+        assert _job_updates(_drain(sub)) == [(2, "pending")]
+        await hub.close()
+
+    _run(main())
+
+
+def test_builds_respect_private_orgs():
+    async def main():
+        db, jobs = FakeDb(), FakeJobs()
+        # The queue is empty, so the cursor starts at the clock: change after it.
+        t0 = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=5)
+        hub = _builds_hub(db, jobs)
+        anon = Subscriber(topics=frozenset({"builds"}))
+        member = Subscriber(topics=frozenset({"builds"}), member_orgs=frozenset({"hush"}))
+        await hub.subscribe(anon)
+        await hub.subscribe(member)
+        _drain(anon), _drain(member)
+        jobs.jobs[1] = _job(1, t0, org="hush")
+        jobs.jobs[2] = _job(2, t0, org="open")
+        async with hub._lock:
+            await hub.tick()
+        assert [i for i, _ in _job_updates(_drain(anon))] == [2]
+        assert sorted(i for i, _ in _job_updates(_drain(member))) == [1, 2]
+        await hub.close()
+
+    _run(main())
