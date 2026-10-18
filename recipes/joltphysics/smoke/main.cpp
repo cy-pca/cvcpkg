@@ -9,6 +9,10 @@
 // calls.  That is the property the physics tier's replay hash rests on, so the
 // smoke test checks it rather than assuming it.
 //
+// It also builds the same vehicle twice, each on a heap scribbled with a different byte, and
+// requires the two saved states to be identical before any wheel has touched the ground
+// (patches/wheel-contact-init.patch: unpatched Jolt saves uninitialized wheel contact fields).
+//
 // The plain wasm bundle is single-threaded: in a non-pthread Emscripten build
 // std::thread's constructor throws std::system_error("Not supported") at
 // runtime (verified with emsdk 5.0.7 / node 22), so JobSystemThreadPool is only
@@ -25,11 +29,15 @@
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorderImpl.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 #include <Jolt/RegisterTypes.h>
 
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // JPH_VERSION_ID expands to a cast through an unqualified `uint64`, which only
@@ -153,6 +161,71 @@ unsigned long long state_hash(const run_result &r) {
   return h;
 }
 
+#ifndef JPH_DISABLE_CUSTOM_ALLOCATOR
+// Allocations that fill each new block with g_fill, so uninitialized memory differs between two
+// runs on purpose rather than by luck.
+JPH::AllocateFunction g_allocate = nullptr;
+JPH::AlignedAllocateFunction g_aligned_allocate = nullptr;
+unsigned char g_fill = 0;
+
+void *scribbled_allocate(size_t n) {
+  void *p = g_allocate(n);
+  if (p)
+    std::memset(p, g_fill, n);
+  return p;
+}
+
+void *scribbled_aligned_allocate(size_t n, size_t alignment) {
+  void *p = g_aligned_allocate(n, alignment);
+  if (p)
+    std::memset(p, g_fill, n);
+  return p;
+}
+
+// A four-wheeled vehicle in the air, never stepped: VehicleConstraint::SaveState's bytes, with
+// every Jolt allocation pre-filled with `fill`.
+std::string vehicle_saved_state(unsigned char fill) {
+  g_allocate = JPH::Allocate;
+  g_aligned_allocate = JPH::AlignedAllocate;
+  JPH::Allocate = scribbled_allocate;
+  JPH::AlignedAllocate = scribbled_aligned_allocate;
+  g_fill = fill;
+  std::string saved;
+  {
+    BPLayerInterfaceImpl bp_layer_interface;
+    ObjectVsBroadPhaseLayerFilterImpl object_vs_bp_filter;
+    ObjectLayerPairFilterImpl object_vs_object_filter;
+    JPH::PhysicsSystem physics_system;
+    physics_system.Init(64, 0, 64, 64, bp_layer_interface, object_vs_bp_filter,
+                        object_vs_object_filter);
+    JPH::BodyInterface &bi = physics_system.GetBodyInterface();
+    JPH::BodyCreationSettings chassis(new JPH::BoxShape(JPH::Vec3(0.9f, 0.4f, 2.0f)),
+                                      JPH::RVec3(0.0, 3.0, 0.0), JPH::Quat::sIdentity(),
+                                      JPH::EMotionType::Dynamic, Layers::MOVING);
+    JPH::Body *body = bi.CreateBody(chassis);
+    bi.AddBody(body->GetID(), JPH::EActivation::Activate);
+    JPH::VehicleConstraintSettings settings;
+    for (int k = 0; k < 4; ++k) {
+      JPH::WheelSettingsWV *w = new JPH::WheelSettingsWV;
+      w->mPosition = JPH::Vec3(k % 2 ? -0.8f : 0.8f, -0.2f, k < 2 ? 1.4f : -1.4f);
+      settings.mWheels.push_back(w);
+    }
+    settings.mController = new JPH::WheeledVehicleControllerSettings;
+    {
+      JPH::Ref<JPH::VehicleConstraint> vehicle = new JPH::VehicleConstraint(*body, settings);
+      JPH::StateRecorderImpl recorder;
+      vehicle->SaveState(recorder);
+      saved = recorder.GetData();
+    }
+    bi.RemoveBody(body->GetID());
+    bi.DestroyBody(body->GetID());
+  }
+  JPH::Allocate = g_allocate;
+  JPH::AlignedAllocate = g_aligned_allocate;
+  return saved;
+}
+#endif
+
 bool all_at_rest(const run_result &r) {
   if (r.steps >= kMaxSteps)
     return false;
@@ -182,6 +255,20 @@ int main() {
     std::printf("FAIL: spheres did not come to rest on the floor\n");
     rc = 1;
   }
+
+#ifndef JPH_DISABLE_CUSTOM_ALLOCATOR
+  {
+    const std::string a5 = vehicle_saved_state(0xa5), x5a = vehicle_saved_state(0x5a);
+    const bool same = !a5.empty() && a5 == x5a;
+    std::printf("jolt smoke: a vehicle's saved state before it lands: %zu bytes, %s\n", a5.size(),
+                same ? "the same on two scribbled heaps" : "DIFFERENT on two scribbled heaps");
+    if (!same) {
+      std::printf("FAIL: VehicleConstraint::SaveState wrote uninitialized wheel fields "
+                  "(patches/wheel-contact-init.patch not applied?)\n");
+      rc = 1;
+    }
+  }
+#endif
 
 #ifdef JOLT_SMOKE_THREADS
   {

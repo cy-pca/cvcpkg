@@ -1,0 +1,42 @@
+cvcpkg: define a Jolt wheel's contact fields from construction.
+
+JPH::Wheel leaves mContactPosition, mContactPointVelocity, mContactNormal,
+mContactLongitudinal, mContactLateral and mAxlePlaneConstant uninitialized
+(Jolt's Vec3 default constructor deliberately does not initialize) until the
+wheel first touches the ground in VehicleConstraint::OnStep. But
+VehicleConstraint::SaveState writes mContactPosition, mContactNormal and
+mContactLateral for every wheel on every call. A vehicle saved before all its
+wheels landed (every vehicle, for its first steps) therefore wrote heap
+garbage into its saved state: two identical runs in one process saved, and
+hashed, different bytes. Found by libcvc's physics replay test
+(transfix/libcvc#698), where it broke the state hash for the first 8 steps.
+
+The values match what libcvc's own workaround sets (defined_wheel), so a
+consumer's state is the same with or without this patch: zero vectors, and a
+zero axle-plane constant. mSuspensionLength is already initialized (to the
+suspension's max length) by Wheel's constructor. Not yet reported upstream.
+
+--- a/Jolt/Physics/Vehicle/Wheel.h
++++ b/Jolt/Physics/Vehicle/Wheel.h
+@@ -125,12 +125,15 @@
+ 	SubShapeID				mContactSubShapeID;							///< Sub shape ID for ground
+ 	Body *					mContactBody = nullptr;						///< Body for ground
+ 	float					mSuspensionLength;							///< Current length of the suspension
+-	RVec3					mContactPosition;							///< Position of the contact point between wheel and ground
+-	Vec3					mContactPointVelocity;						///< Velocity of the contact point (m / s, not relative to the wheel but in world space)
+-	Vec3					mContactNormal;								///< Normal of the contact point between wheel and ground
+-	Vec3					mContactLongitudinal;						///< Vector perpendicular to normal in the forward direction
+-	Vec3					mContactLateral;							///< Vector perpendicular to normal and longitudinal direction in the right direction
+-	Real					mAxlePlaneConstant;							///< Constant for the contact plane of the axle, defined as ContactNormal . (WorldSpaceSuspensionPoint + SuspensionLength * WorldSpaceSuspensionDirection)
++	// cvcpkg: the contact fields below start defined. They are only written when the wheel
++	// touches the ground, but VehicleConstraint::SaveState writes three of them every step, so
++	// a vehicle whose wheels had not landed saved uninitialized memory into its state.
++	RVec3					mContactPosition = RVec3::sZero();		///< Position of the contact point between wheel and ground
++	Vec3					mContactPointVelocity = Vec3::sZero();		///< Velocity of the contact point (m / s, not relative to the wheel but in world space)
++	Vec3					mContactNormal = Vec3::sZero();				///< Normal of the contact point between wheel and ground
++	Vec3					mContactLongitudinal = Vec3::sZero();		///< Vector perpendicular to normal in the forward direction
++	Vec3					mContactLateral = Vec3::sZero();			///< Vector perpendicular to normal and longitudinal direction in the right direction
++	Real					mAxlePlaneConstant = 0;						///< Constant for the contact plane of the axle, defined as ContactNormal . (WorldSpaceSuspensionPoint + SuspensionLength * WorldSpaceSuspensionDirection)
+ 	float					mAntiRollBarImpulse = 0.0f;					///< Amount of impulse applied to the suspension from the anti-rollbars
+ 
+ 	float					mSteerAngle = 0.0f;							///< Rotation around the suspension direction, positive is to the left
