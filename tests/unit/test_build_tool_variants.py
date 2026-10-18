@@ -125,8 +125,12 @@ def test_a_build_tool_brings_its_own_closure(tmp_path):
     }
 
 
-def test_two_variants_of_one_package_are_refused(tmp_path, capsys):
+def test_build_tool_variant_clash_skips_the_tool(tmp_path, capsys):
     # The target links curl statically; the only cmake needs the shared curl.
+    # A build tool is run, not linked, so rather than fail the whole install, the
+    # clashing tool is left out of the prefix (it must be on PATH) and the target
+    # keeps its own static curl. This is what lets a static install succeed on a
+    # platform that publishes no static bundle for the tool (macOS cmake/perl).
     cat = _catalog(
         tmp_path,
         _bundle("curl", "static"),
@@ -134,11 +138,12 @@ def test_two_variants_of_one_package_are_refused(tmp_path, capsys):
         _bundle("cmake", "shared", deps=["curl"]),
     )
     ret, got = _install(tmp_path, cat, "curl", "cmake", "--link", "static", "--build-tool", "cmake")
-    assert ret
-    err = capsys.readouterr().err
-    assert "cmake (release/shared)" in err and "needs curl" in err
-    assert "One prefix cannot hold both variants" in err
-    assert got == {}
+    assert not ret
+    out = capsys.readouterr().out
+    assert "cmake (release/shared)" in out and "curl" in out
+    assert "on PATH" in out
+    # cmake and its shared curl are not installed; the target's static curl stays.
+    assert got == {"curl": ("release", "static")}
 
 
 def test_a_shared_dependency_that_is_the_same_bundle_is_not_a_clash(tmp_path):

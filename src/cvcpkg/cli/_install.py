@@ -396,6 +396,9 @@ def install(
 
     picked: dict[str, CatalogEntry] = {}
     source_only: list[str] = []
+    # Build tools left out of the prefix on a variant clash (see _merge_build_tools):
+    # run, not linked, so expected on PATH -- exempt from the unresolved check below.
+    skipped_build_tools: set[str] = set()
     requested_names = [c.name for c in reqs.components]
 
     # A `redistributable: false` recipe (the NVIDIA CUDA toolkit) is never in
@@ -525,7 +528,7 @@ def install(
                 picked = result.picked
                 local_built = result.local
             if tool_picked:
-                _merge_build_tools(
+                skipped_build_tools = _merge_build_tools(
                     picked, tool_picked, tool_variants, config=reqs.config, link=reqs.link
                 )
 
@@ -640,7 +643,10 @@ def install(
     unresolved = [
         c.display_name
         for c in reqs.components
-        if not c.exclude and c.name not in picked and c.name not in source_only
+        if not c.exclude
+        and c.name not in picked
+        and c.name not in source_only
+        and c.name not in skipped_build_tools
     ]
     if unresolved:
         hint = (
@@ -1140,27 +1146,41 @@ def _merge_build_tools(
     *,
     config: str,
     link: str,
-) -> None:
-    """Add the build tools' closure to *picked*, refusing a mixed-variant prefix.
+) -> set[str]:
+    """Add the build tools' closure to *picked*, isolating a mixed-variant clash.
 
-    A tool from another variant brings that variant's runtime deps (cmake's curl).
-    Where the install already resolved the same name for its own config/link, the
-    two are different bundles of one package and cannot share a prefix, so fail
-    with what to publish instead of overwriting one with the other.
+    A tool from another variant brings that variant's runtime deps (cmake's curl
+    or openssl). Where the install already resolved the same name for its own
+    config/link, the two are different bundles of one package and cannot share a
+    prefix. A build tool is run, not linked, so rather than fail the whole install
+    (the old behaviour), leave the fallback tools out of the prefix and rely on
+    them being on PATH -- the CI build-tools prefix, or the system. The target
+    keeps its own variant of the clashing dependency, which is the one it links.
+
+    This is what lets a static install succeed on a platform that publishes no
+    static bundle for a build tool (e.g. macOS cmake/perl are shared-only): the
+    shared cmake would otherwise drag shared openssl into a prefix whose target
+    needs static openssl.
+
+    Returns the names of build tools left out of the prefix (empty unless a clash
+    occurred). The caller exempts them from the "requested but unresolved" check:
+    they are run, not installed, so they are expected on PATH.
     """
     clashes = sorted(
         n for n, e in tool_picked.items() if n in picked and not _same_bundle(picked[n], e)
     )
     if clashes:
         tools = ", ".join(f"{n} ({c}/{lk})" for n, (c, lk) in sorted(tool_variants.items()))
-        raise click.ClickException(
-            f"build tool(s) {tools} have no {config}/{link} bundle, and the variant "
-            f"installed instead needs {', '.join(clashes)}, which this install also "
-            f"resolves as {config}/{link}. One prefix cannot hold both variants: "
-            f"publish the build tool(s) for {config}/{link}."
+        click.echo(
+            f"cvcpkg: build tool(s) {tools} have no {config}/{link} bundle, and their "
+            f"fallback variant needs {', '.join(clashes)} which this install resolves as "
+            f"{config}/{link}; not installing those tools into the prefix -- they must be "
+            f"on PATH (the CI build-tools prefix, or the system)."
         )
+        return set(tool_variants)
     for name, entry in tool_picked.items():
         picked.setdefault(name, entry)
+    return set()
 
 
 @cli.command("install-deps")
