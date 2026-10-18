@@ -1,0 +1,116 @@
+schema_version: 1
+recipe:
+  name: py-spy
+  upstream_version: "0.4.2"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/benfred/py-spy
+  license: "MIT"
+  tags: [python, profiler, debugging, tools]
+  description: >-
+    py-spy 0.4.2 — a sampling profiler for Python programs (CPython 2.3-2.7
+    and 3.3-3.14). It reads a running interpreter's memory from outside the process,
+    so it profiles a live server without restarting or instrumenting it:
+    `py-spy top --pid N`, `py-spy dump --pid N`, `py-spy record -o out.svg
+    --pid N`. A self-contained Rust binary with no Python or other runtime
+    dependency, so it installs on a host that has no pip or venv (prod and
+    builder machines). Repackaged from upstream's per-platform wheels.
+
+# The payload is upstream's prebuilt binary; nothing is compiled here. The
+# linux binaries are statically linked (x86_64 static-pie, aarch64 static),
+# so no builder's glibc floor applies to them.
+prebuilt_payload: true
+
+# Upstream publishes the binary only inside per-platform wheels (GitHub
+# release assets are the same wheels), each holding
+# py_spy-<v>.data/scripts/py-spy[.exe] and a dist-info with the license and a
+# CycloneDX SBOM. cvcpkg core downloads and sha256-verifies this platform's
+# wheel; build.sh / build.ps1 copy the binary out of it. Hashes are PyPI's
+# published sha256 digests for 0.4.2.
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/f9/34/dd7d3c763a00b7b965e25a5eab0acd1a345dbaf0f45fffe595278873a1c0/py_spy-0.4.2-py2.py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.whl
+      sha256: "aeb0323409199c785f730645e9f4bb7a7b9ca2c481f2c331a55642b5d13fa52f"
+    linux-arm64:
+      url: https://files.pythonhosted.org/packages/89/23/3eb4c23c684ebd667674ce1d076ae855e0621d1d9bd5e052aa3f7982f757/py_spy-0.4.2-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+      sha256: "142887e984a4e541071c99a4401ff8c3770f255d329dbd0f64e8c1dd51882cce"
+    # Upstream has no x86_64-only macOS wheel; the universal2 one carries
+    # both slices.
+    macos-x86_64:
+      url: https://files.pythonhosted.org/packages/ef/21/ec030145a0c7992bd4b9eafb2f06f56358b3a5339eab4a16534baf3c69aa/py_spy-0.4.2-py2.py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl
+      sha256: "1ccf688393105111684435f035bc14ec3f22117dd2b85b2414612cf27a22755a"
+    macos-arm64:
+      url: https://files.pythonhosted.org/packages/50/80/de5fd27243c2be03692ecd317bf0dbe24b4c6f78f689ce111e7277a7cb09/py_spy-0.4.2-py2.py3-none-macosx_11_0_arm64.whl
+      sha256: "a0e6f6810ccf0fc5e64e85e0182a5b626c4496eec01b14fb8755154b363a4831"
+    windows-x86_64:
+      url: https://files.pythonhosted.org/packages/6f/ed/1409cdb557e558a6c98003ab12fdd4284699e158c167c187cb0f124eea4c/py_spy-0.4.2-py2.py3-none-win_amd64.whl
+      sha256: "8b06a353c177677e4e1701b288d8c58e2f8d4208ee81a8048d9f72ba800918f8"
+
+# Only the build uses this interpreter: its zipfile module unpacks the wheel.
+# Nothing of python311 ships.
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime: []
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - glob: bin/py-spy
+      platforms: [linux, macos]
+    - glob: bin/py-spy.exe
+      platforms: [windows]
+    - share/licenses/py-spy/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries; nothing is compiled. Building py-spy from
+    source would need the rust recipe plus libunwind for --native on linux.
+
+notes:
+  - title: "Profiling another process needs privileges"
+    description: >-
+      py-spy reads the target's memory. On linux that takes ptrace rights:
+      run it as root (`sudo py-spy dump --pid N`), or as the target's user
+      when kernel.yama.ptrace_scope is 0. To profile a process inside a
+      Docker container from the host, run py-spy as root on the host with
+      the host-side PID (`docker top <container>` lists it). Running it inside
+      the container instead needs `--cap-add SYS_PTRACE`. macOS always needs
+      root. Windows needs a shell with the same or higher rights than the
+      target.
+  - title: "Windows: needs the VC++ runtime"
+    platforms: [windows]
+    description: >-
+      Upstream's py-spy.exe imports VCRUNTIME140.dll besides the UCRT and
+      system DLLs. The bundle does not ship it. Any machine with the Visual
+      C++ 2015-2022 redistributable (or Visual Studio) has it.
+  - title: "Verified platforms"
+    description: >-
+      linux-x86_64 is built and tested here. linux-arm64, macos (x86_64 and
+      arm64) and windows-x86_64 stage upstream's binaries for those platforms
+      through the same scripts but have not been built yet.
