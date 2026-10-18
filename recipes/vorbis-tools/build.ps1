@@ -32,9 +32,13 @@ $env:CHERE_INVOKING   = '1'
 # EXPORT, not a command-prefix assignment: `VAR=x cd dir && ./configure` scopes
 # the assignments to `cd` ALONE (see recipes/libogg), so configure never saw the
 # deps prefix and failed with "Ogg needed!" even with libogg installed there.
-$depsFlag = if ($msysDeps) {
-    "export PKG_CONFIG_PATH='$winDeps/lib/pkgconfig' PATH='${msysDeps}/bin:'`$PATH; "
-} else { '' }
+# The toolchain (msys2, make, mingw-w64-gcc: depends.build) is staged into
+# CVC_BUILD_PREFIX, link deps into CVC_DEPS_PREFIX.  Put both first on PATH,
+# EXPORTED, so configure and make use them over any MinGW the builder has.
+$toolRoots     = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysToolPaths = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+$pathFlag      = if ($msysToolPaths) { "export PATH='${msysToolPaths}:'`$PATH; " } else { '' }
+$depsFlag = $pathFlag + $(if ($winDeps) { "export PKG_CONFIG_PATH='$winDeps/lib/pkgconfig'; " } else { '' })
 $xiphFlags = if ($winDeps) { "--with-ogg='$winDeps' --with-vorbis='$winDeps'" } else { '' }
 
 # -std=gnu17: MinGW gcc 15+ defaults to C23, where the bundled getopt.c's

@@ -9,7 +9,9 @@ recipe:
   # cvc.5: Unix bundles ship no libtool .la (see build.sh).
   # cvc.6: Windows compiles as gnu17 (gcc 15's C23 default broke loop_wchar.h)
   # and, like Unix, ships no libtool .la files.
-  cvc_revision: 6
+  # cvc.7: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc, autotools)
+  # instead of using the builder's; see depends.build.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,7 +29,26 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
+    # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
+    # builder has.  The prod builder cmps-a91453 has an incomplete one: lame
+    # and libmp3lame died there with "configure: error: no acceptable ld found
+    # in $PATH" while they built on sandipaws.  As recipes/gmp.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: m4
+      platforms: [windows]
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime: []
   host_tools: []
 

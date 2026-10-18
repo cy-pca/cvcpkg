@@ -15,7 +15,9 @@ recipe:
   # cvc.4: Unix bundles ship no libtool .la, and libvorbisfile/libvorbisenc link
   # libm themselves (see build.sh).
   # cvc.5: Windows bundles ship no libtool .la either (see build.ps1).
-  cvc_revision: 5
+  # cvc.6: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
+  # instead of using the builder's; see depends.build.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -37,6 +39,17 @@ patches: []
 
 depends:
   build:
+    # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
+    # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
+    # builder has.  The prod builder cmps-a91453 has an incomplete one: lame
+    # and libmp3lame died there with "configure: error: no acceptable ld found
+    # in $PATH" while they built on sandipaws.  As recipes/gmp.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
     - name: libogg
     - pkg-config
   runtime:

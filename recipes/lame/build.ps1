@@ -25,9 +25,12 @@ $env:CHERE_INVOKING   = '1'
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
-$depsFlag = if ($msysDeps) {
-    "PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig' CPPFLAGS='-I$msysDeps/include' LDFLAGS='-L$msysDeps/lib' PATH='$msysDeps/bin:'`$PATH "
-} else { '' }
+# The toolchain (msys2, make, mingw-w64-gcc: depends.build) is staged into
+# CVC_BUILD_PREFIX, link deps into CVC_DEPS_PREFIX.  Put both first on PATH,
+# EXPORTED, so configure and make use them over any MinGW the builder has.
+$toolRoots     = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysToolPaths = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+$depsFlag       = if ($msysToolPaths) { "export PATH='${msysToolPaths}:'`$PATH; " } else { '' }
 
 # am_cv_func_iconv=no: with iconv found (the builder's ambient MinGW has a
 # libiconv), frontend/parse.c includes <langinfo.h> under HAVE_ICONV, and

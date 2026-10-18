@@ -11,7 +11,9 @@ recipe:
   # cvc.4: Windows: CC=cl cleared, NLS on so libintl is built, no ambient
   # iconv, drive-letter prefix; package.files scoped to what the runtime-only
   # Windows build installs.  Other platforms unchanged.
-  cvc_revision: 4
+  # cvc.5: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
+  # instead of using the builder's; see depends.build.
+  cvc_revision: 5
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
@@ -29,6 +31,18 @@ source:
 patches: []
 
 depends:
+  build:
+    # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
+    # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
+    # builder has.  The prod builder cmps-a91453 has an incomplete one: lame
+    # and libmp3lame died there with "configure: error: no acceptable ld found
+    # in $PATH" while they built on sandipaws.  As recipes/gmp.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime:
     # OpenBSD ships no iconv in libc, so gettext's bundled libxml/libtextstyle
     # can't find <iconv.h>.  Pull in cvcpkg's GNU libiconv there (linux/BSD-with-
