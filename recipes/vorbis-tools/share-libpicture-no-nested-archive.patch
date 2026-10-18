@@ -1,0 +1,41 @@
+cvcpkg: build libpicture.a from base64.o, not from libbase64.a.
+
+share/Makefile.am has `libpicture_a_LIBADD = libbase64.a`, so `ar` stores the
+whole libbase64.a archive as a MEMBER of libpicture.a.  GNU ld and lld skip
+such a member, but the macOS x86_64 runner's Xcode 16.4 ld64 rejects it and
+oggenc fails to link:
+  ld: archive member 'libbase64.a' not a mach-o file in '../share/libpicture.a'
+Add base64's object to libpicture.a instead (Makefile.in, which the build
+uses without autoreconf, and Makefile.am to match).
+
+--- a/share/Makefile.am
++++ b/share/Makefile.am
+@@ -11,7 +11,7 @@
+ libbase64_a_SOURCES = base64.c
+ 
+ libpicture_a_SOURCES = picture.c
+-libpicture_a_LIBADD = libbase64.a
++libpicture_a_LIBADD = base64.$(OBJEXT)
+ 
+ EXTRA_DIST = charmaps.h makemap.c charset_test.c charsetmap.h
+ 
+--- a/share/Makefile.in
++++ b/share/Makefile.in
+@@ -131,7 +131,7 @@
+ am_libgetopt_a_OBJECTS = getopt.$(OBJEXT) getopt1.$(OBJEXT)
+ libgetopt_a_OBJECTS = $(am_libgetopt_a_OBJECTS)
+ libpicture_a_AR = $(AR) $(ARFLAGS)
+-libpicture_a_DEPENDENCIES = libbase64.a
++libpicture_a_DEPENDENCIES = base64.$(OBJEXT)
+ am_libpicture_a_OBJECTS = picture.$(OBJEXT)
+ libpicture_a_OBJECTS = $(am_libpicture_a_OBJECTS)
+ libutf8_a_AR = $(AR) $(ARFLAGS)
+@@ -407,7 +407,7 @@
+ libgetopt_a_SOURCES = getopt.c getopt1.c
+ libbase64_a_SOURCES = base64.c
+ libpicture_a_SOURCES = picture.c
+-libpicture_a_LIBADD = libbase64.a
++libpicture_a_LIBADD = base64.$(OBJEXT)
+ EXTRA_DIST = charmaps.h makemap.c charset_test.c charsetmap.h
+ all: all-am
+ 
