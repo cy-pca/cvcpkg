@@ -5,7 +5,9 @@ recipe:
   # cvc.2: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
   # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
   # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
-  cvc_revision: 2
+  # cvc.3: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
+  # instead of using the builder's; see depends.build.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +29,17 @@ patches: []
 
 depends:
   build:
+    # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
+    # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
+    # builder has.  The prod builder cmps-a91453 has an incomplete one: lame
+    # and libmp3lame died there with "configure: error: no acceptable ld found
+    # in $PATH" while they built on sandipaws.  As recipes/gmp.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
     - pkg-config
   runtime: []
   host_tools: []

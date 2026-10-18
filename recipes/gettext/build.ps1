@@ -33,7 +33,14 @@ $env:CHERE_INVOKING  = '1'
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
-$cmd  = "cd '$srcMsys/gettext-runtime' && "
+# The toolchain (msys2, make, mingw-w64-gcc: depends.build) is staged into
+# CVC_BUILD_PREFIX, link deps into CVC_DEPS_PREFIX.  Put both first on PATH,
+# EXPORTED, so configure and make use them over any MinGW the builder has.
+$toolRoots     = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysToolPaths = ($toolRoots | ForEach-Object { (ConvertTo-CvcMsysPath $_) + '/bin' }) -join ':'
+$pathFlag      = if ($msysToolPaths) { "export PATH='${msysToolPaths}:'`$PATH; " } else { '' }
+
+$cmd  = "$pathFlag cd '$srcMsys/gettext-runtime' && "
 $cmd += "./configure --prefix='$winPrefix' "
 $cmd += "--host=x86_64-w64-mingw32 --disable-java --disable-csharp "
 $cmd += "--without-emacs --without-git --without-bzip2 --without-xz "
