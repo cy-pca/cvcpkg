@@ -16,7 +16,9 @@ recipe:
   # cvc.5: Windows builds with MSYS path conversion on.  MSYS_NO_PATHCONV=1 made
   # libtool's `cmd //c echo` start an interactive cmd.exe that hung every libtool
   # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
-  cvc_revision: 5
+  # cvc.6: Windows package.files names the DLL libtool builds (bin/libopus-0.dll);
+  # strict packing refused the old bin/opus-*.dll glob on the prod builder.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -86,6 +88,6 @@ package:
     - lib/libopus*
     - lib/pkgconfig/opus.pc
     - include/opus/
-    - bin/opus-*.dll
+    - bin/libopus-*.dll    # upstream's MinGW DLL is libopus-0.dll
   pkg_config:
     - opus

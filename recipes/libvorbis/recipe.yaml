@@ -14,7 +14,8 @@ recipe:
   # link on the dev Windows builder (see build.ps1).  Other platforms unchanged.
   # cvc.4: Unix bundles ship no libtool .la, and libvorbisfile/libvorbisenc link
   # libm themselves (see build.sh).
-  cvc_revision: 4
+  # cvc.5: Windows bundles ship no libtool .la either (see build.ps1).
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
