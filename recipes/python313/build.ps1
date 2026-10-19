@@ -73,6 +73,17 @@ if (-not (Get-Command ml64.exe -ErrorAction SilentlyContinue)) {
     throw 'ml64.exe not resolvable after sourcing vcvars64 — _decimal would fail'
 }
 
+# CPython's PCbuild\python.props maps only VisualStudioVersion 15.0-17.0 to a
+# platform toolset and otherwise falls back to v140, so under Visual Studio 2026
+# (18.0, GitHub's windows-latest image) MSBuild asked for the VS 2015 tools and
+# failed with MSB8020.  MSBuild reads environment variables as properties and
+# python.props only fills PlatformToolset when it is empty, so name VS 2026's
+# toolset here.  Visual Studio 2022 (the fleet, windows-2022) is unaffected.
+if ($env:VisualStudioVersion -eq '18.0' -and -not $env:PlatformToolset) {
+    $env:PlatformToolset = 'v145'
+    Write-Host "Visual Studio 18: PlatformToolset=v145"
+}
+
 # 1. Release x64. -e fetches CPython's own externals (OpenSSL, SQLite, bzip2,
 #    xz, libffi); --no-tkinter (no tcl/tk here); no --pgo (slow, flaky in CI).
 & .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter
