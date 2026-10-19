@@ -37,6 +37,12 @@ try {
     if (Test-Path 'bzip2.exe') { Copy-Item 'bzip2.exe' "$install\bin\" }
     if (Test-Path 'bzip2recover.exe') { Copy-Item 'bzip2recover.exe' "$install\bin\" }
     Copy-Item 'bzlib.h' "$install\include\"
+
+    # The license travels with the DLL: binary redistributions must reproduce
+    # its notice.  CPython's Windows bundle ships libbz2.dll in DLLs\ and
+    # appends this text to its LICENSE.txt (_common/python-externals.targets).
+    New-Item -ItemType Directory -Force -Path "$install\share\licenses\bzip2" | Out-Null
+    Copy-Item 'LICENSE' "$install\share\licenses\bzip2\"
 } finally {
     Pop-Location
 }

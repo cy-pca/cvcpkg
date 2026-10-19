@@ -47,7 +47,13 @@ recipe:
   # Python goes into the build: 3.13's tarball ships what PCbuild's code
   # generators make, and python311/312 run theirs with this python313.  Other
   # platforms rebuild unchanged.
-  cvc_revision: 9
+  # cvc.10: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts again, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.9 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -189,6 +195,7 @@ package:
     - { glob: "Lib/", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

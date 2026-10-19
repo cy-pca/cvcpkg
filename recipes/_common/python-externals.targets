@@ -13,6 +13,8 @@
 
   The DLLs these now import (libbz2, liblzma, sqlite3) are copied into the
   build directory by build-python.ps1, which PC\layout then ships in DLLs\.
+  The last block has LICENSE.txt take bzip2's, libffi's and OpenSSL's license
+  texts from the deps prefix too.
 -->
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
@@ -94,4 +96,21 @@
   <ItemGroup Condition="'$(MSBuildProjectName)' == '_ctypes'">
     <_LIBFFIDLL Remove="@(_LIBFFIDLL)" />
   </ItemGroup>
+
+  <!-- LICENSE.txt: regen.targets' _RegenLicense (python and pythoncore)
+       concatenates CPython's LICENSE, the CRT's and the license files of the
+       bzip2, libffi and OpenSSL that DLLs\ ships, which it expects in the
+       externals\ layout: $(bz2Dir)LICENSE, $(libffiDir)LICENSE,
+       $(opensslOutDir)LICENSE[.txt].  cvcpkg's builds install theirs in
+       share\licenses\<name>\.  Those items are defined in regen.targets, which
+       these projects import after this file, so they are swapped when the
+       target runs rather than at evaluation.  Same order as upstream's. -->
+  <Target Name="_CvcLicenseSources" BeforeTargets="_RegenLicense">
+    <ItemGroup>
+      <_LicenseSources Remove="$(bz2Dir)LICENSE;$(libffiDir)LICENSE;$(opensslOutDir)LICENSE;$(opensslOutDir)LICENSE.txt" />
+      <_LicenseSources Include="$(CvcDepsDir)share\licenses\bzip2\LICENSE;
+                                $(CvcDepsDir)share\licenses\libffi\LICENSE;
+                                $(CvcDepsDir)share\licenses\openssl\LICENSE.txt" />
+    </ItemGroup>
+  </Target>
 </Project>

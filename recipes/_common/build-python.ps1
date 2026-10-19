@@ -169,6 +169,18 @@ function Invoke-CvcPythonBuild {
     if (Select-String -LiteralPath $libcrypto.FullName -Pattern 'OPENSSL_Applink' -SimpleMatch -Quiet) {
         throw "deps: $($libcrypto.Name) was built with uplink; need openssl 3.4.1+cvc.9 or later (no-uplink)"
     }
+    # License texts.  python.org's LICENSE.txt carries those of the bzip2,
+    # libffi and OpenSSL it ships in DLLs\, and so does this one:
+    # python-externals.targets reads them from share\licenses\.  (xz's liblzma
+    # is 0BSD and sqlite public domain; zlib, linked in, asks for no notice in
+    # a binary.)  PCbuild only warns about a missing one, so check here.
+    $licenseFiles = foreach ($c in @(@('bzip2\LICENSE', 'bzip2 1.0.8+cvc.7'),
+                                     @('libffi\LICENSE', 'libffi 3.7.1+cvc.7'),
+                                     @('openssl\LICENSE.txt', 'openssl 3.4.1+cvc.10'))) {
+        $f = Join-Path $env:CVC_DEPS_PREFIX "share\licenses\$($c[0])"
+        if (-not (Test-Path -LiteralPath $f)) { throw "deps: no share\licenses\$($c[0]); need $($c[1]) or later" }
+        $f
+    }
 
     # ── 1. Release x64 through pcbuild.proj ─────────────────────────────────
     # The properties build.bat passes, minus the externals download.  No
@@ -270,6 +282,15 @@ function Invoke-CvcPythonBuild {
     if ($FreeThreaded) { $layoutArgs += '--include-freethreaded' }
     & $py PC\layout @layoutArgs
     if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
+    # LICENSE.txt holds each third-party text (whitespace aside), so a PCbuild
+    # that named its license items differently fails here, not with a warning.
+    $squash = { param($t) ($t -replace '\s+', ' ').Trim() }
+    $licenseTxt = & $squash (Get-Content -Raw -LiteralPath (Join-Path $env:CVC_INSTALL_DIR 'LICENSE.txt'))
+    foreach ($f in $licenseFiles) {
+        if (-not $licenseTxt.Contains((& $squash (Get-Content -Raw -LiteralPath $f)))) {
+            throw "LICENSE.txt lacks the text of $f"
+        }
+    }
     if ($FreeThreaded) {
         # --preset-default includes "alias", which with --include-freethreaded
         # also stages the free-threaded interpreter as a bare python.exe and

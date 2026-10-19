@@ -121,5 +121,12 @@ finally {
     Pop-Location
 }
 
+# The license travels with the DLLs, as Apache-2.0 asks.  CPython's Windows
+# bundle ships libcrypto/libssl in DLLs\ and appends this text to its
+# LICENSE.txt (_common/python-externals.targets), as python.org's does.
+$lic = Join-Path $env:CVC_INSTALL_DIR 'share\licenses\openssl'
+New-Item -ItemType Directory -Force -Path $lic | Out-Null
+Copy-Item (Join-Path $env:CVC_SOURCE_DIR 'LICENSE.txt') $lic
+
 # Ensure installed .pc/.cmake files are relocatable.
 Invoke-CvcRewriteInstallPaths
