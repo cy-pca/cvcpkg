@@ -1287,6 +1287,19 @@ _DEFAULT_BUILD_TIMEOUT = int(os.environ.get("CVCPKG_BUILD_TIMEOUT", "7200"))
 # its platform/arch before it is reaped as "unschedulable".  Gives an
 # ephemeral / just-restarted builder time to register after submission.
 _UNSCHEDULABLE_TTL = int(os.environ.get("CVCPKG_UNSCHEDULABLE_TTL", "1800"))
+# Builders are reaped as offline after this long without a heartbeat.
+_BUILDER_STALE_SECONDS = 180
+# No builder is reaped until the scheduler has run this long.  A restart (every
+# deploy) leaves each builder's last recorded heartbeat as old as the server's
+# downtime, and a builder needs up to its heartbeat interval (60 s) plus its
+# socket-reconnect backoff to beat again.  Reaping on the first ticks failed
+# whatever such builders were running as "went offline" and cancelled those
+# jobs' downstream (windows populate 2026-10-19: llvm, lz4, mpfr, libxslt on
+# cmps-a91453, each a few seconds after a restart).  A builder that is really
+# gone is still reaped once the grace has passed.
+_REAPER_STARTUP_GRACE = int(
+    os.environ.get("CVCPKG_REAPER_STARTUP_GRACE", str(_BUILDER_STALE_SECONDS))
+)
 
 # Heartbeat interval for the build-log SSE stream.  Must stay well below both
 # any fronting proxy's idle timeout and the client's stream read timeout
@@ -1543,6 +1556,7 @@ async def _build_scheduler_loop() -> None:
     """Continuously match ready jobs to available builders."""
     import asyncio
 
+    started = time.monotonic()
     while True:
         await asyncio.sleep(_SCHEDULER_INTERVAL)
         if not _use_db or _db_build_jobs is None or _db_builders is None:
@@ -1552,8 +1566,13 @@ async def _build_scheduler_loop() -> None:
             #    jobs that were still assigned to them — otherwise the
             #    jobs stay in "running" forever and the scheduler slot
             #    on any other builder that inherited the DAG is blocked
-            #    until the (long) build timeout kicks in.
-            reaped_builders = await _db_builders.reap_stale(max_age_seconds=180)
+            #    until the (long) build timeout kicks in.  Not straight
+            #    after startup: see _REAPER_STARTUP_GRACE.
+            reaped_builders = []
+            if time.monotonic() - started >= _REAPER_STARTUP_GRACE:
+                reaped_builders = await _db_builders.reap_stale(
+                    max_age_seconds=_BUILDER_STALE_SECONDS
+                )
             if reaped_builders:
                 _live_poke("builders")
             for builder in reaped_builders:
@@ -1561,7 +1580,7 @@ async def _build_scheduler_loop() -> None:
                 for job in orphaned:
                     err = (
                         f"builder #{builder.id} ({builder.name}) went offline "
-                        f"(no heartbeat for >180s) while job was {job.status}"
+                        f"(no heartbeat for >{_BUILDER_STALE_SECONDS}s) while job was {job.status}"
                     )
                     try:
                         failed = await _db_build_jobs.fail(job.id, error_message=err)
