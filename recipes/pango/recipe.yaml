@@ -76,9 +76,10 @@ build:
 package:
   files:
     # Unix shared/static artifacts (.so / .so.N / .dylib / .a).
-    - lib/libpango-1.0*
-    - lib/libpangocairo-1.0*
-    - lib/libpangoft2-1.0*
+    # Unix name; MSVC names them pango*-1.0.lib (the lib/pango*.lib entry below).
+    - { glob: "lib/libpango-1.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libpangocairo-1.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libpangoft2-1.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - lib/pkgconfig/pango*.pc
     - include/pango-1.0/
     # Windows (MSVC): import libraries under lib/, versioned runtime DLLs

@@ -66,7 +66,12 @@ build:
 
 package:
   files:
-    - lib/libharfbuzz*
+    - { glob: "lib/libharfbuzz*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC (build.ps1, meson): harfbuzz.lib, harfbuzz-subset.lib and
+    # harfbuzz-gobject.lib, with the DLLs in bin/ (windows populate 2026-10-19:
+    # "lib/libharfbuzz* matches nothing").
+    - { glob: "lib/harfbuzz*.lib", platforms: [windows] }
+    - { glob: "bin/harfbuzz*.dll", platforms: [windows] }
     - lib/pkgconfig/harfbuzz*.pc
     - lib/cmake/harfbuzz/
     - include/harfbuzz/

@@ -89,7 +89,10 @@ build:
 
 package:
   files:
-    - lib/libnetcdf*
+    # Unix name; MSVC (build.ps1, CMake): netcdf.lib, with netcdf.dll in bin/.
+    - { glob: "lib/libnetcdf*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi, cosmo] }
+    - { glob: "lib/netcdf.lib", platforms: [windows] }
+    - { glob: "bin/netcdf.dll", platforms: [windows] }
     - lib/cmake/netCDF/
     - lib/pkgconfig/netcdf*
     - include/netcdf.h
