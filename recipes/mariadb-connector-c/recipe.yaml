@@ -80,7 +80,9 @@ package:
   files:
     - lib/libmariadb*
     - lib/mariadb*
-    - lib/pkgconfig/libmariadb.pc
+    # Connector/C writes libmariadb.pc only off Windows (its CMake skips the
+    # pkg-config file under WIN32).
+    - { glob: "lib/pkgconfig/libmariadb.pc", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - include/mariadb/
   cmake_packages:
     - { name: mariadb, targets: ["mariadb::mariadb"] }
