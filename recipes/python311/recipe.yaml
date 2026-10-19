@@ -73,15 +73,17 @@ recipe:
     Security-support branch; recommended for codebases pinned to 3.11.x.
 
 source:
-  type: tarball
-  url: https://www.python.org/ftp/python/3.11.13/Python-3.11.13.tar.xz
-  sha256: "8fb5f9fbc7609fa822cb31549884575db7fd9657cbffb89510b5d7975963a83a"
-  strip_components: 1
+  # Built from the source package python311-src, which pins the upstream tarball
+  # (https://www.python.org/ftp/python/3.11.13/Python-3.11.13.tar.xz).
+  type: package
+  package: python311-src
 
 patches: []
 
 depends:
   build:
+    - name: python311-src
+      version: "==3.11.13"
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl

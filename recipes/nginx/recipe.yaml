@@ -19,18 +19,17 @@ recipe:
     nginx.conf.sample}, the man page and the default html pages.
 
 source:
-  type: tarball
-  # PGP-signed by Sergey Kandaurov (nginx.org/keys/pluknet.key,
-  # D6786CE303D9A9022998DC6CC8464D549AF75C0A); signature checked when this
-  # version was pinned.
-  url: https://nginx.org/download/nginx-1.30.5.tar.gz
-  sha256: "6c20565aa2325cb82216ae804f4a4ff1875179014759a381c42ddc8e11c4906d"
-  strip_components: 1
+  # Built from the source package nginx-src, which pins the upstream tarball
+  # (https://nginx.org/download/nginx-1.30.5.tar.gz).
+  type: package
+  package: nginx-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: nginx-src
+      version: "==1.30.5"
   runtime:
     - name: openssl
       version: "^3.0"

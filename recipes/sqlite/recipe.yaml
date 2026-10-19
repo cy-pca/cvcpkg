@@ -30,15 +30,17 @@ recipe:
     CPython's sqlite3 standard-library module.
 
 source:
-  type: tarball
-  url: https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz
-  sha256: "106642d8ccb36c5f7323b64e4152e9b719f7c0215acf5bfeac3d5e7f97b59254"
-  strip_components: 1
+  # Built from the source package sqlite-src, which pins the upstream tarball
+  # (https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz).
+  type: package
+  package: sqlite-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: sqlite-src
+      version: "==3.49.1"
   runtime: []
   host_tools: []
 

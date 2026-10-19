@@ -20,15 +20,17 @@ recipe:
     dependencies.  Required by GTK 4.
 
 source:
-  type: tarball
-  url: https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz
-  sha256: "072cda4b59dd098bba8c2363a6247299db1fa89411dc221c8b81b8ee8192e623"
-  strip_components: 1
+  # Built from the source package libepoxy-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/libepoxy/1.5/libepoxy-1.5.10.tar.xz).
+  type: package
+  package: libepoxy-src
 
 patches: []
 
 depends:
   build:
+    - name: libepoxy-src
+      version: "==1.5.10"
     - ninja
     - meson
     - pkg-config

@@ -17,15 +17,17 @@ recipe:
     is installed.  Requires libx265 at both build and runtime.
 
 source:
-  type: tarball
-  url: https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz
-  sha256: "a31699c6a89806b74b0151e5e6a7df65de4b49050482fe5ebf8a4379d7af8f29"
-  strip_components: 1
+  # Built from the source package x265-src, which pins the upstream tarball
+  # (https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz).
+  type: package
+  package: x265-src
 
 patches: []
 
 depends:
   build:
+    - name: x265-src
+      version: "==4.1"
     - name: x265
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]

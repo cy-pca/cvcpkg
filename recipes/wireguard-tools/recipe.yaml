@@ -21,17 +21,18 @@ recipe:
   tags: [networking, tools, vpn, crypto]
 
 source:
-  type: tarball
-  url: https://git.zx2c4.com/wireguard-tools/snapshot/wireguard-tools-1.0.20260223.tar.xz
-  mirror: https://github.com/WireGuard/wireguard-tools/archive/refs/tags/v1.0.20260223.tar.gz
-  sha256: "af459827b80bfd31b83b08077f4b5843acb7d18ad9a33a2ef532d3090f291fbf"
-  strip_components: 1
+  # Built from the source package wireguard-tools-src, which pins the upstream tarball
+  # (https://git.zx2c4.com/wireguard-tools/snapshot/wireguard-tools-1.0.20260223.tar.xz).
+  type: package
+  package: wireguard-tools-src
 
 patches: []
 
 # No cvcpkg build deps: a C compiler + make (host baseline) are all it needs.
 depends:
-  build: []
+  build:
+    - name: wireguard-tools-src
+      version: "==1.0.20260223"
   runtime: []
   host_tools: []
 

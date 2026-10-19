@@ -216,3 +216,118 @@ class TestGenerator:
         )
         assert self._load().main(["--recipes-dir", str(recipes), "wheel"]) == 1
         assert not (recipes / "wheel-src").exists()
+
+    def _recipe(self, recipes, name, url, sha, version="1.0", license="MIT"):
+        rd = recipes / name
+        rd.mkdir(parents=True)
+        (rd / "build.sh").write_text("#!/bin/sh\n")
+        (rd / "recipe.yaml").write_text(
+            textwrap.dedent(
+                f"""\
+                schema_version: 1
+                recipe:
+                  name: {name}
+                  upstream_version: "{version}"
+                  cvc_revision: 1
+                  license: {license}
+
+                source:
+                  type: tarball
+                  url: {url}
+                  sha256: "{sha}"
+                  strip_components: 1
+
+                patches: []
+
+                depends:
+                  build: []
+                  runtime: []
+
+                build:
+                  matrix:
+                    - platform: linux
+                      script: build.sh
+
+                package:
+                  files:
+                    - lib/
+                """
+            )
+        )
+        return rd
+
+    def test_recipes_of_one_tarball_share_a_source_package(self, tmp_path):
+        recipes = tmp_path / "recipes"
+        sdist = "https://files.pythonhosted.org/packages/aa/pyyaml-6.0.3.tar.gz"
+        for abi in ("cp311", "cp312", "cp313", "cp313t"):
+            self._recipe(recipes, f"pyyaml-{abi}", sdist, "a" * 64, "6.0.3")
+        ff = "https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz"
+        self._recipe(recipes, "ffmpeg", ff, "b" * 64, "7.1.2", "GPL-2.0-or-later")
+        self._recipe(recipes, "ffmpeg-lgpl", ff, "b" * 64, "7.1.2", "LGPL-2.1-or-later")
+        names = ["pyyaml-cp311", "pyyaml-cp312", "pyyaml-cp313", "pyyaml-cp313t"]
+        mod = self._load()
+        assert mod.main(["--recipes-dir", str(recipes), *names, "ffmpeg-lgpl", "ffmpeg"]) == 0
+
+        assert sorted(p.name for p in recipes.glob("*-src")) == ["ffmpeg-src", "pyyaml-src"]
+        for name in names:
+            new = yaml.safe_load((recipes / name / "recipe.yaml").read_text())
+            assert new["source"] == {"type": "package", "package": "pyyaml-src"}
+            assert {"name": "pyyaml-src", "version": "==6.0.3"} in new["depends"]["build"]
+        src = yaml.safe_load((recipes / "pyyaml-src" / "recipe.yaml").read_text())
+        assert src["recipe"]["upstream_version"] == "6.0.3"
+        assert src["source"]["url"] == sdist
+        assert src["package"]["files"] == ["src/pyyaml-src/"]
+        assert "pyyaml-cp313 and pyyaml-cp313t recipes build" in src["recipe"]["description"]
+        # The tarball holds both licenses' code.
+        ffsrc = yaml.safe_load((recipes / "ffmpeg-src" / "recipe.yaml").read_text())
+        assert ffsrc["recipe"]["license"] == "LGPL-2.1-or-later AND GPL-2.0-or-later"
+        (recipes / "_common").mkdir()
+        assert validate_recipe_dir(recipes / "pyyaml-src") == []
+        assert validate_recipe_dir(recipes / "pyyaml-cp312") == []
+
+        # A recipe added later for the same tarball joins the existing package.
+        self._recipe(recipes, "ffmpeg-cli", ff, "b" * 64, "7.1.2", "GPL-2.0-or-later")
+        assert mod.main(["--recipes-dir", str(recipes), "ffmpeg-cli"]) == 0
+        cli = yaml.safe_load((recipes / "ffmpeg-cli" / "recipe.yaml").read_text())
+        assert cli["source"] == {"type": "package", "package": "ffmpeg-src"}
+        assert sorted(p.name for p in recipes.glob("*-src")) == ["ffmpeg-src", "pyyaml-src"]
+
+    def test_two_pins_of_one_project_get_separate_packages(self, tmp_path):
+        recipes = tmp_path / "recipes"
+        old = "https://files.pythonhosted.org/packages/aa/numpy-2.2.6.tar.gz"
+        new = "https://files.pythonhosted.org/packages/bb/numpy-2.3.4.tar.gz"
+        self._recipe(recipes, "numpy-cp311", old, "c" * 64, "2.2.6")
+        for abi in ("cp312", "cp313"):
+            self._recipe(recipes, f"numpy-{abi}", new, "d" * 64, "2.3.4")
+        args = ["--recipes-dir", str(recipes), "numpy-cp311", "numpy-cp312", "numpy-cp313"]
+        assert self._load().main(args) == 0
+        assert (
+            yaml.safe_load((recipes / "numpy-src" / "recipe.yaml").read_text())["source"]["url"]
+            == new
+        )
+        lone = yaml.safe_load((recipes / "numpy-cp311" / "recipe.yaml").read_text())
+        assert lone["source"] == {"type": "package", "package": "numpy-cp311-src"}
+
+    def test_unrelated_names_need_src(self, tmp_path):
+        recipes = tmp_path / "recipes"
+        url = "https://download.qt.io/pyside-setup-everywhere-src-6.8.2.tar.xz"
+        self._recipe(recipes, "pyside6-cp312", url, "e" * 64, "6.8.2")
+        self._recipe(recipes, "shiboken6-cp312", url, "e" * 64, "6.8.2")
+        mod = self._load()
+        args = ["--recipes-dir", str(recipes), "pyside6-cp312", "shiboken6-cp312"]
+        assert mod.main(args) == 1
+        assert not list(recipes.glob("*-src"))
+        assert mod.main([*args, "--src", "pyside-setup-src"]) == 0
+        for name in ("pyside6-cp312", "shiboken6-cp312"):
+            new = yaml.safe_load((recipes / name / "recipe.yaml").read_text())
+            assert new["source"] == {"type": "package", "package": "pyside-setup-src"}
+
+    def test_an_existing_source_package_of_another_tarball_is_not_reused(self, tmp_path):
+        recipes = tmp_path / "recipes"
+        self._recipe(recipes, "geos", "https://download.osgeo.org/geos-3.14.1.tar.bz2", "f" * 64)
+        mod = self._load()
+        assert mod.main(["--recipes-dir", str(recipes), "geos"]) == 0
+        self._recipe(recipes, "geos-cp312", "https://example.org/geos-3.13.0.tar.gz", "0" * 64)
+        assert mod.main(["--recipes-dir", str(recipes), "geos-cp312"]) == 0
+        new = yaml.safe_load((recipes / "geos-cp312" / "recipe.yaml").read_text())
+        assert new["source"] == {"type": "package", "package": "geos-cp312-src"}

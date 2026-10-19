@@ -12,15 +12,17 @@ recipe:
   tags: [graphics, io, wasm, wasi]
 
 source:
-  type: tarball
-  url: https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz
-  sha256: "7d6fab70cf844bf6769077bd5d7a74893f8ffd4dfb42861745750c63c2a5c92c"
-  strip_components: 1
+  # Built from the source package libwebp-src, which pins the upstream tarball
+  # (https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.5.0.tar.gz).
+  type: package
+  package: libwebp-src
 
 patches: []
 
 depends:
   build:
+    - name: libwebp-src
+      version: "==1.5.0"
     - cmake
     - ninja
   runtime: []

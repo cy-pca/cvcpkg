@@ -16,15 +16,17 @@ recipe:
   tags: [networking, tools, crypto]
 
 source:
-  type: tarball
-  url: https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.4p1.tar.gz
-  sha256: "ef6026dd2aea8d56059638d5d3262902c892ceba9f88395835e0d06d3fb63238"
-  strip_components: 1
+  # Built from the source package openssh-src, which pins the upstream tarball
+  # (https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.4p1.tar.gz).
+  type: package
+  package: openssh-src
 
 patches: []
 
 depends:
   build:
+    - name: openssh-src
+      version: "==10.4.1"
     - pkg-config
   runtime:
     - name: openssl

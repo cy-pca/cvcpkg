@@ -14,15 +14,17 @@ recipe:
   tags: [tools]
 
 source:
-  type: tarball
-  url: https://www.netlib.org/f2c/src.tgz
-  sha256: "b2824a6f7b75ffe0193ce9ba55463191a7af7c2ffe10e371e372451e2b527e09"
-  strip_components: 1
+  # Built from the source package f2c-src, which pins the upstream tarball
+  # (https://www.netlib.org/f2c/src.tgz).
+  type: package
+  package: f2c-src
 
 patches: []
 
 depends:
-  build: []
+  build:
+    - name: f2c-src
+      version: "==20240504"
   host_tools: []
 
 build:

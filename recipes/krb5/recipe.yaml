@@ -23,15 +23,17 @@ recipe:
     SSPI instead — this recipe is Unix-only.
 
 source:
-  type: tarball
-  url: https://web.mit.edu/kerberos/dist/krb5/1.21/krb5-1.21.3.tar.gz
-  sha256: "b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35"
-  strip_components: 1
+  # Built from the source package krb5-src, which pins the upstream tarball
+  # (https://web.mit.edu/kerberos/dist/krb5/1.21/krb5-1.21.3.tar.gz).
+  type: package
+  package: krb5-src
 
 patches: []
 
 depends:
   build:
+    - name: krb5-src
+      version: "==1.21.3"
     - pkg-config
   runtime: []
   host_tools: []

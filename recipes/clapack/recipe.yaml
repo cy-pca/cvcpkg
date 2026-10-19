@@ -12,15 +12,17 @@ recipe:
   tags: [math, wasm]
 
 source:
-  type: tarball
-  url: https://www.netlib.org/clapack/clapack-3.2.1-CMAKE.tgz
-  sha256: "0b3f782bc24845d85f36bafbff0f2f1384dc72df730fda4e7924ec1a70baca5a"
-  strip_components: 1
+  # Built from the source package clapack-src, which pins the upstream tarball
+  # (https://www.netlib.org/clapack/clapack-3.2.1-CMAKE.tgz).
+  type: package
+  package: clapack-src
 
 patches: []
 
 depends:
   build:
+    - name: clapack-src
+      version: "==3.2.1"
     - cmake
     - ninja
   runtime: []

@@ -16,15 +16,17 @@ recipe:
     This is a rolling snapshot of the upstream stable branch.
 
 source:
-  type: tarball
-  url: https://code.videolan.org/videolan/x264/-/archive/stable/x264-stable.tar.gz
-  sha256: "1108b94cd4c6943bc569afff1f8ec8c6034594a80d2baebc2b043bb438847485"
-  strip_components: 1
+  # Built from the source package x264-src, which pins the upstream tarball
+  # (https://code.videolan.org/videolan/x264/-/archive/stable/x264-stable.tar.gz).
+  type: package
+  package: x264-src
 
 patches: []
 
 depends:
   build:
+    - name: x264-src
+      version: "==0.164.0"
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - pkg-config

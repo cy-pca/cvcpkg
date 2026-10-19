@@ -23,15 +23,17 @@ recipe:
   tags: [scripting, libraries]
 
 source:
-  type: tarball
-  url: https://www.lua.org/ftp/lua-5.4.9.tar.gz
-  sha256: "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6"
-  strip_components: 1
+  # Built from the source package lua-src, which pins the upstream tarball
+  # (https://www.lua.org/ftp/lua-5.4.9.tar.gz).
+  type: package
+  package: lua-src
 
 patches: []
 
 depends:
   build:
+    - name: lua-src
+      version: "==5.4.9"
     # Only for test.sh, which builds small embedding programs against a
     # relocated copy of the installed prefix through find_package(lua) and
     # through pkg-config. The cross targets (wasm, wasi, cosmo) test with the

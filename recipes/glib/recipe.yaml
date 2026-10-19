@@ -26,15 +26,17 @@ recipe:
     GStreamer.
 
 source:
-  type: tarball
-  url: https://download.gnome.org/sources/glib/2.80/glib-2.80.5.tar.xz
-  sha256: "9f23a9de803c695bbfde7e37d6626b18b9a83869689dd79019bf3ae66c3e6771"
-  strip_components: 1
+  # Built from the source package glib-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/glib/2.80/glib-2.80.5.tar.xz).
+  type: package
+  package: glib-src
 
 patches: []
 
 depends:
   build:
+    - name: glib-src
+      version: "==2.80.5"
     - ninja
     - meson
     - pkg-config

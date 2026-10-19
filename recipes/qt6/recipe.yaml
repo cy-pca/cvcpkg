@@ -22,20 +22,18 @@ recipe:
   tags: [graphics, wasm]
 
 source:
-  # Qt 6 is obtained differently per platform:
-  # Linux: apt (qt6-base-dev), macOS: brew (qt@6), Windows: aqtinstall.
-  # This recipe standardizes the interface; the build script handles
-  # the platform-specific acquisition method.
-  type: tarball
-  url: https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtbase-everywhere-src-6.8.2.tar.xz
-  sha256: "012043ce6d411e6e8a91fdc4e05e6bedcfa10fcb1347d3c33908f7fdd10dfe05"
-  strip_components: 1
+  # Built from the source package qt6-src, which pins the upstream tarball
+  # (https://download.qt.io/archive/qt/6.8/6.8.2/submodules/qtbase-everywhere-src-6.8.2.tar.xz).
+  type: package
+  package: qt6-src
 
 patches:
   - qyieldcpu-arm-acle-include.patch
 
 depends:
   build:
+    - name: qt6-src
+      version: "==6.8.2"
     - name: pcre2
       version: "^10.0"
     - cmake

@@ -12,15 +12,17 @@ recipe:
   tags: [graphics, io, wasm, wasi]
 
 source:
-  type: tarball
-  url: https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz
-  sha256: "67160e3457365ab96c5b3286a0903aa6e78bdc44c4bc737d2e486bcecb6ba976"
-  strip_components: 1
+  # Built from the source package tiff-src, which pins the upstream tarball
+  # (https://download.osgeo.org/libtiff/tiff-4.7.0.tar.gz).
+  type: package
+  package: tiff-src
 
 patches: []
 
 depends:
   build:
+    - name: tiff-src
+      version: "==4.7.0"
     - cmake
     - ninja
   runtime:

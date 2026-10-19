@@ -51,15 +51,17 @@ recipe:
     Latest stable release with the new free-threaded (no-GIL) build option.
 
 source:
-  type: tarball
-  url: https://www.python.org/ftp/python/3.13.3/Python-3.13.3.tar.xz
-  sha256: "40f868bcbdeb8149a3149580bb9bfd407b3321cd48f0be631af955ac92c0e041"
-  strip_components: 1
+  # Built from the source package python313-src, which pins the upstream tarball
+  # (https://www.python.org/ftp/python/3.13.3/Python-3.13.3.tar.xz).
+  type: package
+  package: python313-src
 
 patches: []
 
 depends:
   build:
+    - name: python313-src
+      version: "==3.13.3"
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl
