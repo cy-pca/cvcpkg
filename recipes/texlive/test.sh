@@ -68,7 +68,11 @@ got="$(cd "${dist}" 2>/dev/null && pwd -P || echo "${dist}")"
 [ "${got}" = "${want}" ] || { echo "FAIL: relocated TEXMFDIST is ${got}, expected ${want}"; exit 1; }
 echo "  OK: relocated kpsewhich reports TEXMFDIST inside the copy"
 fmt="$("$(tool "${MOVED}" kpsewhich)" -engine=pdftex pdflatex.fmt)"
-case "${fmt}" in "${MOVED}"/*|"$(cd "${MOVED}" && pwd -P)"/*) ;; *) echo "FAIL: pdflatex.fmt resolved to ${fmt}"; exit 1 ;; esac
+# kpsewhich answers with a native path (c:/Users/... on Windows, where MOVED is
+# /tmp/... in Git Bash): compare its directory as the shell resolves it, as the
+# TEXMFDIST check above does.
+fmtdir="$(cd "$(dirname "${fmt}")" 2>/dev/null && pwd -P || dirname "${fmt}")"
+case "${fmtdir}" in "${MOVED}"/*|"$(cd "${MOVED}" && pwd -P)"/*) ;; *) echo "FAIL: pdflatex.fmt resolved to ${fmt}"; exit 1 ;; esac
 echo "  OK: relocated pdflatex.fmt found inside the copy"
 compile "$(tool "${MOVED}" pdflatex)" relocated
 
