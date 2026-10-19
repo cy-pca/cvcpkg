@@ -25,6 +25,7 @@ source:
 
 patches:
   - grpc-link-abseil-sublibs.patch
+  - openbsd-ares-nameser.patch
 
 depends:
   build:

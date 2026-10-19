@@ -1,0 +1,23 @@
+Give ares_resolver.cc the ns_* enums on OpenBSD.
+
+c-ares defines ns_c_in, ns_t_srv, ... only without a system <arpa/nameser.h>,
+and OpenBSD's has none of them ("use of undeclared identifier 'ns_c_in'").
+grpc's event_engine/nameser.h defines them where GRPC_HAVE_ARPA_NAMESER is
+unset, which includes OpenBSD.  Guarded so Windows (no <arpa/nameser.h>, so
+c-ares defines them itself) does not see a second definition.
+
+--- a/src/core/lib/event_engine/ares_resolver.cc
++++ b/src/core/lib/event_engine/ares_resolver.cc
+@@ -38,6 +38,12 @@
+ #if ARES_VERSION >= 0x011200
+ // c-ares 1.18.0 or later starts to provide ares_nameser.h as a public header.
+ #include <ares_nameser.h>
++#if defined(GPR_OPENBSD)
++// cvcpkg: c-ares defines the BIND 8 ns_* enums only when the system has no
++// <arpa/nameser.h>, and OpenBSD's has none of them; grpc's own header defines
++// them where GRPC_HAVE_ARPA_NAMESER is unset, which includes OpenBSD.
++#include "src/core/lib/event_engine/nameser.h"  // IWYU pragma: keep
++#endif
+ #else
+ #include "src/core/lib/event_engine/nameser.h"  // IWYU pragma: keep
+ #endif
