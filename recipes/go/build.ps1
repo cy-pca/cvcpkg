@@ -35,7 +35,10 @@ $header = @(
     '# restore upstream behaviour.'
 )
 $body = $lines | ForEach-Object { if ($_ -eq 'GOTOOLCHAIN=auto') { 'GOTOOLCHAIN=local' } else { $_ } }
-[System.IO.File]::WriteAllLines($envFile, [string[]]($header + $body))
+# LF, as upstream ships it: WriteAllLines would use CRLF here, and Go reads the
+# `\r` as part of the value ('go: invalid GOTOOLCHAIN "local\r"', windows
+# populate 2026-10-19).
+[System.IO.File]::WriteAllText($envFile, ((($header + $body) -join "`n") + "`n"))
 
 $bin = Join-Path $env:CVC_INSTALL_DIR 'bin'
 New-Item -ItemType Directory -Force -Path $bin | Out-Null

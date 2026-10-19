@@ -62,9 +62,11 @@ build:
 package:
   files:
     - bin/flex*
-    - lib/libfl*
+    # The windows build ships the scanner generator only: no libfl, no man page
+    # (windows populate, 2026-10-19).
+    - { glob: "lib/libfl*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - include/FlexLexer.h
-    - share/man/man1/flex*
+    - { glob: "share/man/man1/flex*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
 
 toolchain:
   cc:

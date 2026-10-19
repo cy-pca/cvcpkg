@@ -15,4 +15,5 @@ cvc_cmake_build \
     -DBUILD_TESTING=OFF \
     -DMAXMINDDB_BUILD_BINARIES=ON \
     -DMAXMINDDB_INSTALL=ON \
-    -DCMAKE_INSTALL_LIBDIR=lib
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_INSTALL_MANDIR=share/man  # GNUInstallDirs says man/ on OpenBSD

@@ -72,9 +72,11 @@ build:
 
 package:
   files:
-    - lib/libimgui*
-    - lib/imgui.lib
-    - lib/cmake/imgui/
+    # build.ps1 compiles a static imgui.lib by hand and writes no CMake
+    # package (windows populate, 2026-10-19: the unscoped globs failed).
+    - { glob: "lib/libimgui*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
+    - { glob: "lib/imgui.lib", platforms: [windows] }
+    - { glob: "lib/cmake/imgui/", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
     - include/imgui/
 
 abi:
