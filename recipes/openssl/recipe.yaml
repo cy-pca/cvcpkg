@@ -25,7 +25,15 @@ recipe:
   # NetBSD, whose loader rejects objects patchelf has grown, gets
   # $ORIGIN:$ORIGIN/../lib:$ORIGIN/.. at link time through LD_RUN_PATH. The
   # ldd check in build.sh runs on all three.
-  cvc_revision: 8
+  #
+  # Bumped 8 -> 9: Windows configures with no-uplink, as CPython builds its
+  # own OpenSSL.  With uplink, libcrypto routes every FILE* call through an
+  # OPENSSL_Applink the executable must export and exits the process when it
+  # does not: CPython's ssl.SSLContext.load_dh_params (test_ssl) died with
+  # "OPENSSL_Uplink(...): no OPENSSL_Applink" against cvcpkg's libcrypto.
+  # Every Windows consumer links the UCRT, the case uplink is not needed for.
+  # Other platforms rebuild unchanged.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

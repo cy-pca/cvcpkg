@@ -88,7 +88,15 @@ recipe:
   # patchelf one byte longer, with a third PT_LOAD ld.elf_so refuses ("math.
   # cpython-312.so: wrong number of segments (3 != 2)").  build-python.sh now
   # reserves that room in LDFLAGS_NODIST, which stays out of sysconfig.
-  cvc_revision: 17
+  # cvc.18: Windows builds from cvcpkg's libraries and downloads nothing.
+  # PCbuild\build.bat -e ran CPython's get_externals.bat, which fetched bzip2,
+  # sqlite, xz and zlib sources and a PREBUILT libffi and OpenSSL from GitHub
+  # mid-build, while the openssl/zlib/bzip2/xz/sqlite deps declared here went
+  # unused.  _common/build-python.ps1 (shared by python311/312/313/313t) runs
+  # pcbuild.proj directly against the deps, libffi included (its edge now
+  # covers windows), and ships the DLLs the modules import in DLLs\.  Other
+  # platforms rebuild unchanged.
+  cvc_revision: 18
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -126,7 +134,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]  # not windows: CPython fetches its own libffi via get_externals
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -151,7 +159,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]  # not windows: CPython fetches its own libffi via get_externals
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
