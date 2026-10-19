@@ -26,10 +26,18 @@ for _root in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
 done
 unset _root
 
+# No PKINIT on OpenBSD: its OpenSSL backend builds against the system libcrypto,
+# which there is LibreSSL, and that lacks the OpenSSL 3 API it uses
+# (EVP_PKEY_DHX, EVP_PKEY_param_check, d2i_DHxparams; populate 2026-10-19).
+# The plugin is not part of package.files on any platform.
+_extra=()
+if [ "$(uname -s)" = OpenBSD ]; then _extra+=(--disable-pkinit); fi
+
 # krb5 ships its configure inside the src/ subdirectory.
 cd "${CVC_SOURCE_DIR}/src"
 
 ./configure \
+    ${_extra[@]+"${_extra[@]}"} \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
     --disable-static \
