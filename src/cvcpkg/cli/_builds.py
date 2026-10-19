@@ -813,31 +813,49 @@ def _wait_for_dags(
     skipped_ids: list[int] = []
     building: list[str] = []
     unclaimed: list[tuple[str, dict]] = []
+    infos: dict[int, dict] = {}
     with httpx.Client(timeout=30) as client:
         for jid in all_job_ids:
             resp = client.get(f"{base}/v1/builds/{jid}", headers=headers)
-            if resp.status_code >= 400:
-                continue
-            info = resp.json()
-            status = info.get("status")
-            if status == "succeeded":
-                continue
-            if status == "unschedulable" and not fail_on_unschedulable:
-                skipped_ids.append(jid)
-                continue
-            if status not in terminal:
-                # Only reachable when we stopped at the deadline.  Split by
-                # whether a builder ever picked the job up: "running" is a
-                # genuinely slow build and a legitimate soft pass, while
-                # pending/dispatched means nothing claimed it and the run
-                # verified nothing at all.
-                label = f"#{jid} {info.get('recipe_name', '?')} ({status})"
-                if status in _UNCLAIMED_STATUSES:
-                    unclaimed.append((label, info))
-                else:
-                    building.append(label)
-                continue
-            failed_ids.append(jid)
+            if resp.status_code < 400:
+                infos[jid] = resp.json()
+    for jid, info in infos.items():
+        status = info.get("status")
+        if status == "succeeded":
+            continue
+        if status == "unschedulable" and not fail_on_unschedulable:
+            skipped_ids.append(jid)
+            continue
+        if status not in terminal:
+            # Only reachable when we stopped at the deadline.  Split by
+            # whether a builder ever picked the job up: "running" is a
+            # genuinely slow build and a legitimate soft pass, while
+            # pending/dispatched means nothing claimed it and the run
+            # verified nothing at all.
+            label = f"#{jid} {info.get('recipe_name', '?')} ({status})"
+            # ...unless it is "pending" only because a job it depends on
+            # has not succeeded yet: the scheduler cannot hand it to anyone
+            # before then.  That is the dependency's state, not this job's,
+            # so it goes with "building" and the dependency decides the
+            # outcome (still running: soft pass; never claimed: reported
+            # by name).  pr-381's four openbsd python jobs failed the check
+            # as "never claimed" while their openssl was still compiling.
+            waiting_on = [
+                d
+                for d in info.get("depends_on") or []
+                if d in infos and infos[d].get("status") != "succeeded"
+            ]
+            if status == "pending" and waiting_on:
+                building.append(
+                    f"#{jid} {info.get('recipe_name', '?')} "
+                    f"(waiting on {', '.join(f'#{d}' for d in sorted(waiting_on))})"
+                )
+            elif status in _UNCLAIMED_STATUSES:
+                unclaimed.append((label, info))
+            else:
+                building.append(label)
+            continue
+        failed_ids.append(jid)
 
     # A real failure is reported even if we timed out: a slow build alongside a
     # failed one must not turn the failure into a pass.
