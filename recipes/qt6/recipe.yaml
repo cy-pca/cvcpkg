@@ -129,10 +129,17 @@ build:
 
 package:
   files:
+    # macOS builds Qt as frameworks: a module's library and headers live in
+    # lib/Qt<Module>.framework/, and Qt writes no pkg-config files for a
+    # framework build (nor on Windows by default).  Scoping these never drops
+    # files -- packing takes the whole staged tree; package.files declares
+    # what must exist (macos-15-intel populate 39171736755: "lib/pkgconfig/Qt6*
+    # matches nothing").
     - lib/libQt6*
     - lib/Qt6*
+    - { glob: "lib/Qt*.framework/", platforms: [macos] }
     - lib/cmake/Qt6*/
-    - lib/pkgconfig/Qt6*
+    - { glob: "lib/pkgconfig/Qt6*", platforms: [linux, freebsd, openbsd, netbsd] }
     - include/Qt*/
     # Qt 6.8 installs moc/rcc/uic into libexec/ on Unix; Windows keeps its
     # tools and Qt6*.dll in bin/, and the wasm build copies the host tools
