@@ -30,6 +30,13 @@ recipe:
   # cvc.5: patch JPH_STACK_ALLOC to __builtin_alloca on GCC/Clang. Jolt includes no
   #   header for alloca outside MSVC; on NetBSD the bare call resolved to libc alloca(3)
   #   (ld: "most likely will not work") and the cvc.4 smoke consumer segfaulted there.
+  # cvc.6: patches/wheel-contact-init.patch. JPH::Wheel leaves its contact fields
+  #   uninitialized until the wheel first touches the ground, but VehicleConstraint::SaveState
+  #   writes three of them every step, so a vehicle saved (and hashed) heap garbage until all
+  #   its wheels landed. The patch defines them from construction (see `notes:` below). The
+  #   smoke test now builds one vehicle twice on heaps scribbled with different bytes and
+  #   requires identical saved states; cvc.5 fails it, cvc.6 passes. No ABI change: the
+  #   layout and JPH_VERSION_ID are the same, and the sphere scene's hash is unchanged.
   # wasm/cosmo/openbsd variants never reached the catalog (the live catalog has
   # no cross-target bundle for ANY package touched by 82d7acb8, so this is not
   # a Jolt-specific failure); (2) CROSS_PLATFORM_DETERMINISTIC=ON on EVERY
@@ -41,7 +48,7 @@ recipe:
   # Distribution, i.e. no profiler). (3) test.sh builds + runs a find_package
   # consumer, natively and under node for wasm (JPH::RegisterTypes aborts on a
   # config mismatch, so it is a real ABI check).
-  cvc_revision: 5
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -70,6 +77,7 @@ source:
 
 patches:
   - patches/netbsd-builtin-alloca.patch
+  - patches/wheel-contact-init.patch
 
 depends:
   build:
@@ -143,3 +151,26 @@ test:
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "Vehicle wheels: uninitialized contact fields in saved state (patched)"
+    platforms: [linux, macos, freebsd, openbsd, netbsd, windows, wasm, wasm-mt, cosmo]
+    description: >-
+      Upstream Jolt 5.6.0 leaves a JPH::Wheel's contact position, contact
+      point velocity, normal, longitudinal and lateral directions and axle
+      plane constant uninitialized until the wheel first touches the ground,
+      yet VehicleConstraint::SaveState writes the position, normal and
+      lateral direction for every wheel on every call.  A vehicle saved
+      before all of its wheels have landed (every vehicle, for its first
+      simulation steps) therefore records whatever the heap held, so two
+      identical runs save, and hash, different bytes: a cross-run and
+      cross-platform determinism leak for anything that compares
+      StateRecorder output (replays, lockstep, state hashes).  libcvc's
+      physics replay test found it (transfix/libcvc#698).  This build
+      carries patches/wheel-contact-init.patch, which initializes those
+      fields to zero (mSuspensionLength was already initialized), and the
+      recipe's smoke test checks it.  Not yet reported upstream; drop the
+      patch when an upstream release initializes them.  Consumers on an
+      unpatched Jolt can work around it by overriding
+      VehicleController::ConstructWheel to return a wheel subclass that
+      sets those protected fields, as libcvc does.
