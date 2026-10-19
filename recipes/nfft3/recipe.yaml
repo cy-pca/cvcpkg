@@ -24,6 +24,13 @@ depends:
     - autoconf
     - automake
     - libtool
+    # The Windows toolchain (build.ps1), instead of the builder's own MSYS2.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime:
     - fftw3
   host_tools: []
@@ -49,8 +56,9 @@ build:
     - platform: windows
       script: build.ps1
       note: >
-        Windows builds use MSYS2/mingw64 (autotools+gcc), then
-        gendef + MSVC lib /def: to produce an MSVC-friendly import lib.
+        Windows builds with cvcpkg's msys2 + mingw-w64-gcc (autotools)
+        through Invoke-CvcMsysAutotoolsBuild, which also copies the import
+        library to nfft3.lib for MSVC consumers.
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
@@ -75,7 +83,8 @@ package:
     - include/nfft3mp.h
     # No nfft3util.h: NFFT 3.5 installs nfft3.h and nfft3mp.h only.
     - { glob: "bin/libnfft3*", platforms: [windows] }  # Windows DLLs
-    - { glob: "bin/libfftw3*", platforms: [windows] }  # bundled mingw FFTW DLLs
+    # FFTW comes from the fftw3 package (depends.runtime), no longer bundled.
+    - { glob: "lib/nfft3.lib", platforms: [windows] }  # MSVC import library
   cmake_packages: []
   pkg_config:
     - nfft3
