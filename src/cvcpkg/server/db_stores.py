@@ -25,6 +25,7 @@ require_sqlalchemy()
 from sqlalchemy import and_, distinct, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from cvcpkg.semver import version_sort_key
 from cvcpkg.server import principals as _principals_mod
@@ -979,14 +980,11 @@ def _archive_filename(r) -> str:
     return (r.archive_url or "").rsplit("/", 1)[-1]
 
 
-def _archive_url_like(filename: str):
-    """``archive_url LIKE '%/<filename>'``, with *filename*'s LIKE wildcards escaped.
-
-    Unescaped, the ``_`` that every sanitised archive name is full of matches
-    any character, so ``a_b.tar.zst`` would also match ``a-b.tar.zst``.
-    """
-    esc = filename.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return PackageRow.archive_url.like(f"%/{esc}", escape="\\")
+def _archive_name_is(filename: str):
+    """The row(s) whose stored archive file is *filename*: an indexed equality on
+    ``archive_name`` (migration 034), not ``archive_url LIKE '%/<filename>'``,
+    which no index could serve, so it scanned the whole table."""
+    return PackageRow.archive_name == filename
 
 
 def _removed_dict(r) -> dict:
@@ -1082,7 +1080,7 @@ async def _remove_bundles(
         if not fname:
             continue
         still = (
-            await session.execute(select(PackageRow.id).where(_archive_url_like(fname)).limit(1))
+            await session.execute(select(PackageRow.id).where(_archive_name_is(fname)).limit(1))
         ).first()
         if not still:
             deleted[i] = archive_store.delete(storage_uri, fname)
@@ -1203,16 +1201,11 @@ class DbPackageIndex:
 
     async def get_archive_org(self, archive_name: str) -> str | None:
         """org_slug of the package whose archive_url ends with '/<archive_name>'
-        (any yank state), or None when no package matches. LIKE wildcards in the
-        name are escaped so the suffix match stays exact (no truncation, unlike
-        scanning a capped get_bundles page)."""
-        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        (any yank state), or None when no package matches."""
         async with get_session() as session:
             return (
                 await session.execute(
-                    select(PackageRow.org_slug)
-                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
-                    .limit(1)
+                    select(PackageRow.org_slug).where(_archive_name_is(archive_name)).limit(1)
                 )
             ).scalar()
 
@@ -1229,7 +1222,7 @@ class DbPackageIndex:
                     select(
                         PackageRow.name, PackageRow.version, PackageRow.platform, PackageRow.arch
                     )
-                    .where(_archive_url_like(archive_name))
+                    .where(_archive_name_is(archive_name))
                     .order_by(PackageRow.yanked.asc(), PackageRow.id.desc())
                     .limit(1)
                 )
@@ -1251,13 +1244,10 @@ class DbPackageIndex:
         since been published again -- the latter must keep downloading even
         though a tombstone for the older incarnation still exists.
         """
-        esc = archive_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         async with get_session() as session:
             row = (
                 await session.execute(
-                    select(PackageRow.yanked)
-                    .where(PackageRow.archive_url.like(f"%/{esc}", escape="\\"))
-                    .limit(1)
+                    select(PackageRow.yanked).where(_archive_name_is(archive_name)).limit(1)
                 )
             ).scalar()
         return None if row is None else bool(row)
@@ -4298,6 +4288,18 @@ class DbBuildJobStore:
         rows = (await session.execute(q)).scalars().all()
         return list(rows)
 
+    async def _load_dep_ids_for(self, session, job_ids: list[int]) -> dict[int, list[int]]:
+        """Prerequisite job IDs for several jobs in one query, keyed by job ID."""
+        out: dict[int, list[int]] = {}
+        if not job_ids:
+            return out
+        q = select(BuildJobDepRow.job_id, BuildJobDepRow.depends_on_job_id).where(
+            BuildJobDepRow.job_id.in_(job_ids)
+        )
+        for job_id, dep_id in (await session.execute(q)).all():
+            out.setdefault(job_id, []).append(dep_id)
+        return out
+
     async def create(
         self,
         recipe_name: str,
@@ -5081,30 +5083,28 @@ class DbBuildJobStore:
         Returns jobs ordered by priority (desc) then id (asc).
         """
         async with get_session() as session:
-            # Subquery: jobs that have unmet dependencies
-            # A dependency is "unmet" if the depended-on job is not succeeded
-            unmet_sub = (
+            # A pending job is blocked while any job it depends on has not
+            # succeeded.  NOT EXISTS correlated on the pending job, so postgres
+            # looks up only that job's edges (ix_build_job_deps_job_id).  This was
+            # a NOT IN over every unmet edge in the table, which joined all of
+            # build_job_deps (~40k rows on cvcpkg.org) against build_jobs on
+            # every scheduler tick, i.e. every 5 s.
+            dep_job = aliased(BuildJobRow)
+            unmet = (
                 select(BuildJobDepRow.job_id)
-                .join(
-                    BuildJobRow,
-                    BuildJobRow.id == BuildJobDepRow.depends_on_job_id,
-                )
-                .where(BuildJobRow.status != BuildJobStatus.succeeded)
-                .distinct()
+                .join(dep_job, dep_job.id == BuildJobDepRow.depends_on_job_id)
+                .where(BuildJobDepRow.job_id == BuildJobRow.id)
+                .where(dep_job.status != BuildJobStatus.succeeded)
             )
-
             q = (
                 select(BuildJobRow)
                 .where(BuildJobRow.status == BuildJobStatus.pending)
-                .where(BuildJobRow.id.notin_(unmet_sub))
+                .where(~unmet.exists())
                 .order_by(BuildJobRow.priority.desc(), BuildJobRow.id)
             )
             rows = (await session.execute(q)).scalars().all()
-            results = []
-            for row in rows:
-                dep_ids = await self._load_dep_ids(session, row.id)
-                results.append(self._row_to_info(row, dep_ids))
-            return results
+            dep_ids = await self._load_dep_ids_for(session, [row.id for row in rows])
+            return [self._row_to_info(row, dep_ids.get(row.id, [])) for row in rows]
 
     async def dispatch(self, job_id: int, builder_id: int) -> BuildJobInfo | None:
         """Mark a pending job as dispatched to *builder_id*.

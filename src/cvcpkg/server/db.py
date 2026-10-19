@@ -51,7 +51,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 from sqlalchemy.pool import NullPool, StaticPool
 
 
@@ -75,6 +75,14 @@ class PackageRow(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     archive_url: Mapped[str] = mapped_column(Text, nullable=False)
+    # The stored file's name: ``archive_url`` after its last "/".  Every download
+    # resolves its row by this, and ``archive_url LIKE '%/<name>'`` cannot use an
+    # index, so that was a sequential scan of this table per lookup (2-3 per
+    # download on cvcpkg.org).  Kept in step with archive_url by
+    # ``_sync_archive_name`` below; migration 034 backfilled existing rows.
+    archive_name: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default="", index=True
+    )
     published_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -202,6 +210,16 @@ class PackageRow(Base):
             unique=True,
         ),
     )
+
+    @validates("archive_url")
+    def _sync_archive_name(self, _key: str, value: str) -> str:
+        self.archive_name = archive_name_of(value)
+        return value
+
+
+def archive_name_of(archive_url: str) -> str:
+    """The stored file name an ``archive_url`` points at: what follows its last "/"."""
+    return (archive_url or "").rstrip("/").rsplit("/", 1)[-1]
 
 
 class PackageTombstoneRow(Base):

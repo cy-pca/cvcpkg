@@ -388,3 +388,40 @@ def test_lockfile_reads_legacy_v1_schema(tmp_path):
     assert lock.platform == "linux"
     assert lock.bundles[0].name == "zlib"
     assert lock.bundles[0].version == "1.3.1+cvc.1"
+
+
+def test_migration_034_backfills_and_indexes_archive_name(tmp_path):
+    """Download lookups match ``archive_name`` exactly instead of scanning
+    ``archive_url LIKE '%/<file>'``; 034 fills it in for rows that predate it."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "archive_name.db"
+    p = _alembic_upgrade(db, "033")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    for name, url in (
+        ("zlib", "/v1/download/zlib-1.3+cvc.1-linux-x86_64-release-shared.tar.zst"),
+        ("a_b", "https://mirror.example/v1/download/a_b-1.0-linux-x86_64-release-shared.tar.zst"),
+        ("empty", ""),
+    ):
+        con.execute(
+            "INSERT INTO packages (name, version, platform, arch, sha256, archive_url) "
+            "VALUES (?, '1', 'linux', 'x86_64', 'x', ?)",
+            (name, url),
+        )
+    con.commit()
+    con.close()
+
+    p = _alembic_upgrade(db, "034")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    names = dict(con.execute("SELECT name, archive_name FROM packages").fetchall())
+    indexes = {r[1] for r in con.execute("PRAGMA index_list(packages)")}
+    con.close()
+    assert names == {
+        "zlib": "zlib-1.3+cvc.1-linux-x86_64-release-shared.tar.zst",
+        "a_b": "a_b-1.0-linux-x86_64-release-shared.tar.zst",
+        "empty": "",
+    }
+    assert "ix_packages_archive_name" in indexes
