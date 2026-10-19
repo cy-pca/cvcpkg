@@ -2,7 +2,16 @@ schema_version: 1
 recipe:
   name: alsa-lib
   upstream_version: "1.2.16"
-  cvc_revision: 1
+  # cvc.2: make libasound's config directory relocatable. The cvc.1 build baked
+  # the ephemeral sandbox --prefix (/tmp/cvcpkg-builder/.../install/share/alsa)
+  # into libasound as the compiled-in ALSA_CONFIG_DIR, so once cvcpkg relocated
+  # the package to a consumer prefix that path was dead and any program opening
+  # ALSA failed with "Cannot access file .../share/alsa/alsa.conf" (it blocked
+  # real audio playback in the Ariadne conference app on Linux). The
+  # relocatable-config-dir.patch resolves the config tree relative to the loaded
+  # libasound.so via dladdr (<origin>/../share/alsa), mirroring upstream's own
+  # dlmisc.c plugin-dir logic, so it "just works" wherever the prefix lands.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -21,7 +30,8 @@ source:
   sha256: "122b1e3166d55fe19bcde656535d7a36f2ab10e66c72c6ad2f43f20ffded0a96"
   strip_components: 1
 
-patches: []
+patches:
+  - relocatable-config-dir.patch
 
 depends:
   build:
@@ -43,3 +53,14 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+
+notes:
+  - title: "Relocatable ALSA config directory"
+    description: >-
+      libasound finds its configuration tree (alsa.conf and the files it
+      includes) relative to the installed library's own location: at runtime
+      <prefix>/lib/libasound.so.2 resolves the config dir to
+      <prefix>/share/alsa via dladdr, so the package works wherever cvcpkg
+      unpacks it. Setting the ALSA_CONFIG_DIR environment variable still
+      overrides this. Plugin modules are not shipped; the plugin directory
+      likewise self-resolves (upstream dlmisc.c) if ever added.

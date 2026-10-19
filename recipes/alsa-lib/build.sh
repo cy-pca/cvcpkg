@@ -18,6 +18,13 @@ cd "${CVC_SOURCE_DIR}"
 # alsa-lib ships a pre-generated ./configure — no autoreconf needed.
 # --disable-python: don't pull in a python interpreter / build the mixer pymods.
 # --disable-old-symbols: drop obsolete versioned symbols we don't need.
+#
+# The config dir is NOT fixed via --prefix/--with-configdir: autotools bakes
+# whatever we pass as an ABSOLUTE compiled-in ALSA_CONFIG_DIR, and the prefix
+# here is an ephemeral build sandbox that no longer exists after cvcpkg
+# relocates the package. relocatable-config-dir.patch instead makes libasound
+# resolve its config tree from its own .so location at runtime (dladdr), so it
+# works at any consumer prefix. See the cvc.2 note in recipe.yaml.
 ./configure --prefix="${CVC_INSTALL_DIR}" "${_link[@]}" \
     --disable-python \
     --disable-old-symbols
