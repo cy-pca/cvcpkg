@@ -21,7 +21,7 @@ cd "${CVC_SOURCE_DIR}"
 # clang away from the SDK, so x264's compiler probe failed there with "No
 # working C compiler found".  --enable-cli is the default, and x264 has no
 # --disable-static/--disable-shared (configure ignored all three).
-./configure \
+bash ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --disable-lavf \
     --disable-swscale \
@@ -29,7 +29,14 @@ cd "${CVC_SOURCE_DIR}"
     --extra-cflags="${CPPFLAGS:-}" \
     --extra-ldflags="${LDFLAGS:-}"
 
-make -j "${CVC_JOBS}" x264
+# x264's Makefile is GNU make; the BSDs' make is not.
+MAKE=make
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly)
+        command -v gmake >/dev/null 2>&1 && MAKE=gmake
+        ;;
+esac
+"${MAKE}" -j "${CVC_JOBS}" x264
 
 mkdir -p "${CVC_INSTALL_DIR}/bin"
 install -m 755 x264 "${CVC_INSTALL_DIR}/bin/x264"

@@ -31,6 +31,10 @@ depends:
     - ninja
     - meson
     - pkg-config
+    # src/xkbcomp/parser.y needs bison: FreeBSD's byacc rejects it ("syntax
+    # error" at line 88) and OpenBSD has byacc only as `yacc`, which meson's
+    # find_program does not look for.
+    - bison
     - name: xkbcommon
     - name: libxcb
   runtime:
