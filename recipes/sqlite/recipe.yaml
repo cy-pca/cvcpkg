@@ -17,7 +17,13 @@ recipe:
   # bin/sqlite3* is now scoped to the platforms that build one.
   # Windows sqlite3.pc also had the build dir as its prefix and said
   # "Version: 3"; it now uses ${pcfiledir} and the real version.
-  cvc_revision: 5
+  # cvc.6: the Windows sqlite3.dll exports the API.  Makefile.msc only marks
+  # SQLITE_API dllexport for its DYNAMIC_SHELL/FOR_WIN10 builds, so the DLL had
+  # an empty export table and sqlite3.lib linked nothing (CPython's _sqlite3 is
+  # the first consumer to try).  It is also built against the DLL C runtime
+  # (/MD) instead of Makefile.msc's default /MT.  Other platforms rebuild
+  # unchanged.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

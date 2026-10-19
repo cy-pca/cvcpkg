@@ -37,7 +37,15 @@ recipe:
   # so the BSD bundles carry the CWD-relative RPATH "RIGIN" instead (freebsd
   # "RIGIN", openbsd "RIGIN:RIGIN", netbsd "/usr/pkg/lib:RIGIN"), and libffi
   # links only libc, so it needs no RPATH of its own.
-  cvc_revision: 5
+  #
+  # rev 5 -> 6: Windows builds with MSVC (libffi's msvcc.sh under the msys2
+  # shell, as CPython builds its own) instead of MinGW-w64 gcc. The MinGW DLL
+  # had gcc's 16-byte long double and imported msvcrt.dll, so an MSVC consumer
+  # (CPython's _ctypes) got c_longdouble wrong. Same DLL name and exports, so
+  # glib keeps loading it. The shell and make are now declared build deps; the
+  # cvc.5 Windows build took them from an ambient C:\msys64. Other platforms
+  # rebuild unchanged.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -62,6 +70,13 @@ depends:
     # OpenBSD only: post-install SONAME (see build.sh and the rev 5 note).
     - name: patchelf
       platforms: [openbsd]
+    # Windows: configure and make run in the MSYS2 shell; the compiler is MSVC
+    # (see build.ps1), so no MinGW gcc and no autotools (the tarball ships
+    # configure).
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
   runtime: []
   host_tools: []
 
@@ -108,6 +123,9 @@ package:
     - lib/libffi*
     - lib/pkgconfig/libffi*
     - include/ffi*.h
+    # Windows: the DLL, and ffi.lib, the name MSVC resolves libffi.pc's -lffi to.
+    - { glob: "bin/libffi-*.dll", platforms: [windows] }
+    - { glob: "lib/ffi.lib", platforms: [windows] }
   pkg_config:
     - libffi
 

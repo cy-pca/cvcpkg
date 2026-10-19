@@ -21,9 +21,13 @@ try {
     & nmake /nologo /f makefile.msc
     if ($LASTEXITCODE -ne 0) { throw "bzip2 nmake failed" }
 
-    # DLL: compile the six library sources with LIBBZ2_DLL to export the API.
+    # DLL: the library sources again, linked with upstream's libbz2.def, which
+    # is the export list. bzlib.h marks nothing __declspec(dllexport), so
+    # without the .def (cvc.5 and earlier) the DLL exported no function at all,
+    # its import library was empty, and every MSVC consumer failed to link
+    # BZ2_*. The import library replaces makefile.msc's static libbz2.lib.
     $libSrc = @('blocksort.c','huffman.c','crctable.c','randtable.c','compress.c','decompress.c','bzlib.c')
-    & cl /nologo /O2 /W3 /MD /DBZ_LIB /DLIBBZ2_DLL $libSrc /link /DLL /IMPLIB:libbz2.lib /OUT:libbz2.dll
+    & cl /nologo /O2 /W3 /MD /DWIN32 /D_FILE_OFFSET_BITS=64 $libSrc /link /DLL /DEF:libbz2.def /IMPLIB:libbz2.lib /OUT:libbz2.dll
     if ($LASTEXITCODE -ne 0) { throw "libbz2.dll build failed" }
 
     Copy-Item 'libbz2.dll'  "$install\bin\"

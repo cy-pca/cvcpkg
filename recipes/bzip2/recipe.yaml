@@ -22,7 +22,12 @@ recipe:
   # scripts that only the Unix `make install` creates; makefile.msc builds
   # just bzip2.exe and bzip2recover.exe) and would fail wasm/wasi/cosmo too,
   # which install the library only.  No file in any bundle changes.
-  cvc_revision: 5
+  # cvc.6: the Windows libbz2.dll exports the API.  It was linked without
+  # upstream's libbz2.def, and bzlib.h marks nothing dllexport, so the DLL had
+  # no export table and libbz2.lib/bz2.lib were empty import libraries: nothing
+  # MSVC could link BZ2_* from it (CPython's _bz2 is the first consumer to try).
+  # Other platforms rebuild unchanged.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
