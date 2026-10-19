@@ -158,7 +158,8 @@ package:
   files:
     # Python wrapping libraries (libvtkWrappingPythonCore, libvtkPythonInterpreter,
     # libvtkPythonContext2D) — linux/macOS .so, windows import .lib + bin .dll.
-    - lib/libvtk*Python*
+    # Unix name; MSVC names them vtk*Python*.lib (the .lib entry below).
+    - { glob: "lib/libvtk*Python*", platforms: [linux, wasm, wasm-mt] }
     - lib/vtk*Python*.lib
     - bin/vtk*Python*
     # wasm STATIC build: the compiled modules aggregate into _vtkmodules_static.a

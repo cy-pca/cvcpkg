@@ -88,7 +88,8 @@ package:
   files:
     # Python wrapping libraries (libvtkWrappingPythonCore, libvtkPythonInterpreter,
     # libvtkPythonContext2D) — linux/macOS .so, windows import .lib + bin .dll.
-    - lib/libvtk*Python*
+    # Unix name; MSVC names them vtk*Python*.lib (the .lib entry below).
+    - { glob: "lib/libvtk*Python*", platforms: [linux] }
     - lib/vtk*Python*.lib
     - bin/vtk*Python*
     # The importable Python package (site-packages layout differs per platform).
