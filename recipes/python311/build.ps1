@@ -70,6 +70,17 @@ if (-not (Get-Command ml64.exe -ErrorAction SilentlyContinue)) {
 
 # Release x64. -e fetches externals; --no-tkinter (no tcl/tk here). No --pgo: the
 # profile-guided build reruns the test suite and is slow + flaky in CI.
+# CPython's PCbuild\python.props maps only VisualStudioVersion 15.0-17.0 to a
+# platform toolset and otherwise falls back to v140, so under Visual Studio 2026
+# (18.0, GitHub's windows-latest image) MSBuild asked for the VS 2015 tools and
+# failed with MSB8020.  MSBuild reads environment variables as properties and
+# python.props only fills PlatformToolset when it is empty, so name VS 2026's
+# toolset here.  Visual Studio 2022 (the fleet, windows-2022) is unaffected.
+if ($env:VisualStudioVersion -eq '18.0' -and -not $env:PlatformToolset) {
+    $env:PlatformToolset = 'v145'
+    Write-Host "Visual Studio 18: PlatformToolset=v145"
+}
+
 & .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter
 if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)" }
 
