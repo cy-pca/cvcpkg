@@ -21,7 +21,10 @@ source:
   type: package
   package: aspell-src
 
-patches: []
+patches:
+  # common/file_util.cpp's WIN32 branch calls asc_isalpha without including
+  # asc_ctype.hpp (MinGW g++ 16).  Harmless on other platforms.
+  - file_util-asc-ctype.patch
 
 depends:
   build:
