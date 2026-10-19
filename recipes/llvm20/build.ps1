@@ -15,14 +15,18 @@ if (-not (Test-Path $srcLlvm)) {
 
 $LinkJobs = [Math]::Max(1, [Math]::Min(2, [int]$env:CVC_JOBS))
 
+# Quote every -DNAME=$value: PowerShell passes an unquoted argument that
+# starts with '-' to a native command verbatim, so CMake got the literal
+# text '$env:CVC_INSTALL_DIR' / '$LinkJobs' (windows populate 2026-10-19:
+# "Invalid pool defined by property 'JOB_POOLS': link_job_pool=$LinkJobs").
 cmake -G Ninja `
     -S $srcLlvm `
     -B $env:CVC_BUILD_DIR `
-    -DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR `
+    "-DCMAKE_INSTALL_PREFIX=$env:CVC_INSTALL_DIR" `
     -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON `
     -DCMAKE_CXX_STANDARD=17 `
-    -DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX `
+    "-DCMAKE_PREFIX_PATH=$env:CVC_DEPS_PREFIX" `
     -DLLVM_TARGETS_TO_BUILD="X86;AArch64;WebAssembly" `
     -DLLVM_BUILD_LLVM_DYLIB=ON `
     -DLLVM_LINK_LLVM_DYLIB=ON `
@@ -34,7 +38,7 @@ cmake -G Ninja `
     -DLLVM_ENABLE_LIBXML2=OFF `
     -DLLVM_ENABLE_TERMINFO=OFF `
     -DLLVM_ENABLE_BINDINGS=OFF `
-    -DLLVM_PARALLEL_LINK_JOBS=$LinkJobs
+    "-DLLVM_PARALLEL_LINK_JOBS=$LinkJobs"
 
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 
