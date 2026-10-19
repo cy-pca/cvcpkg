@@ -17,7 +17,10 @@ $fftw = ($env:CVC_DEPS_PREFIX -replace '\\', '/')
 
 # No OpenMP: the bundle would have to ship MinGW's libgomp; the BSD builds go
 # without it too (build.sh).  -static-libgcc keeps libgcc_s out of the DLL's
-# imports.
+# imports.  CFLAGS as build.sh: left unset, configure picks -march=native,
+# which ties the DLL to the builder's CPU.  The DLL links fftw3.dll through
+# fftw3's GNU-named import library (lib/libfftw3.dll.a, fftw3 cvc.6); without
+# it libtool drops -lfftw3 and builds nfft3 static-only.
 Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @(
     '--with-pic',
     '--disable-examples',
@@ -25,6 +28,7 @@ Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @(
     '--disable-openmp',
     "--with-fftw3-includedir=$fftw/include",
     "--with-fftw3-libdir=$fftw/lib",
+    'CFLAGS=-O3 -ffast-math',
     'LDFLAGS=-static-libgcc'
 )
 

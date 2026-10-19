@@ -2,7 +2,9 @@ schema_version: 1
 recipe:
   name: fftw3
   upstream_version: "3.3.10"
-  cvc_revision: 5
+  cvc_revision: 6
+  # cvc.6: Windows also ships lib/libfftw3.dll.a (the import library under its
+  # GNU name) so MinGW/libtool consumers such as nfft3 link the DLL.
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
