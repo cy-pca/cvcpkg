@@ -1,0 +1,29 @@
+Give the BSDs' shared-library link the system library directory.
+
+shlib.conf links shared libraries on FreeBSD and OpenBSD with a bare
+`ld -Bshareable`.  ld.lld (the system linker on both) has no default
+search path -- the clang driver normally supplies /usr/lib -- so linking
+util/verto's libverto.so against -lm failed with "ld: error: unable to
+find library -lm" on both (cvcpkg fleet populate, 2026-10-19).  configure
+sources this file, so -L/usr/lib here reaches every shared library.
+
+--- a/src/config/shlib.conf
++++ b/src/config/shlib.conf
+@@ -327,7 +327,7 @@
+ 	CC_LINK_SHARED='$(CC) $(PROG_LIBPATH) $(PROG_RPATH_FLAGS) $(CFLAGS) $(LDFLAGS)'
+ 	CXX_LINK_SHARED='$(CXX) $(PROG_LIBPATH) $(PROG_RPATH_FLAGS) $(CXXFLAGS) $(LDFLAGS)'
+ 	SHLIBEXT=.so
+-	LDCOMBINE='ld -Bshareable'
++	LDCOMBINE='ld -Bshareable -L/usr/lib'
+ 	SHLIB_RPATH_FLAGS='--enable-new-dtags -rpath $(SHLIB_RDIRS)'
+ 	SHLIB_EXPFLAGS='$(SHLIB_RPATH_FLAGS) $(SHLIB_DIRS) $(SHLIB_EXPLIBS)'
+ 	CC_LINK_STATIC='$(CC) $(PROG_LIBPATH) $(CFLAGS) $(LDFLAGS)'
+@@ -341,7 +341,7 @@
+ 	PICFLAGS=-fpic
+ 	SHLIBVEXT='.so.$(LIBMAJOR).$(LIBMINOR)'
+ 	SHLIBEXT=.so
+-	LDCOMBINE='ld -Bshareable'
++	LDCOMBINE='ld -Bshareable -L/usr/lib'
+ 	SHLIB_RPATH_FLAGS='-R$(SHLIB_RDIRS)'
+ 	SHLIB_EXPFLAGS='$(SHLIB_RPATH_FLAGS) $(SHLIB_DIRS) $(SHLIB_EXPLIBS)'
+ 	RPATH_FLAG=-R

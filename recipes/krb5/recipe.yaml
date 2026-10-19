@@ -28,7 +28,10 @@ source:
   type: package
   package: krb5-src
 
-patches: []
+patches:
+  # FreeBSD/OpenBSD: shlib.conf's `ld -Bshareable` gets -L/usr/lib (lld has no default
+  # search path; "unable to find library -lm" linking libverto).
+  - bsd-ldcombine-libpath.patch
 
 depends:
   build:
