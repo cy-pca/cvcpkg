@@ -1,0 +1,28 @@
+Drop the AGL framework from WrapOpenGL on Apple platforms.
+
+The macOS 26 SDK (Xcode 26) no longer ships AGL.framework, the long-deprecated
+Carbon OpenGL glue.  qtbase 6.8.2's FindWrapOpenGL.cmake looks it up and, when
+find_library fails, links "-framework AGL" anyway, so QtGui stopped linking on
+GitHub's macos-latest image: "ld: framework 'AGL' not found".  Nothing in
+qtbase uses AGL; upstream Qt removed the lookup (FindWrapOpenGL.cmake on the
+dev branch no longer mentions AGL).  OpenGL.framework is still linked.
+
+--- a/cmake/FindWrapOpenGL.cmake
++++ b/cmake/FindWrapOpenGL.cmake
+@@ -37,16 +37,7 @@
+             set(__opengl_fw_path "-framework OpenGL")
+         endif()
+ 
+-        find_library(WrapOpenGL_AGL NAMES AGL)
+-        if(WrapOpenGL_AGL)
+-            set(__opengl_agl_fw_path "${WrapOpenGL_AGL}")
+-        endif()
+-        if(NOT __opengl_agl_fw_path)
+-            set(__opengl_agl_fw_path "-framework AGL")
+-        endif()
+-
+         target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_fw_path})
+-        target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE ${__opengl_agl_fw_path})
+     else()
+         target_link_libraries(WrapOpenGL::WrapOpenGL INTERFACE OpenGL::GL)
+     endif()

@@ -29,6 +29,9 @@ source:
 
 patches:
   - qyieldcpu-arm-acle-include.patch
+  # macOS 26 SDK: AGL.framework is gone, and qtbase 6.8.2 links it anyway.
+  # Apple-only code path, and no macOS cvc.7 was ever published, so no bump.
+  - macos-no-agl-framework.patch
 
 depends:
   build:
