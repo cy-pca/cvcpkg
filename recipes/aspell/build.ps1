@@ -8,15 +8,19 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-$env:CFLAGS   = "-O2 -Wno-error=implicit-function-declaration"
 # -Wno-template-body: GCC 15+ (mingw-w64-gcc 16) rejects template bodies that
 # use members only an instantiation would supply (vector_hash-t.hpp: 'has no
 # member named e'), which aspell 0.60.8 has; checked again at instantiation.
-$env:CXXFLAGS = "-O2 -Wno-error=implicit-function-declaration -Wno-template-body"
-
+# The flags go to configure as arguments: Invoke-CvcMsysAutotoolsBuild clears
+# CFLAGS/CXXFLAGS from the environment, so the $env: settings this used to make
+# never reached g++ (windows populate 2026-10-19 still failed on
+# -Wtemplate-body).  Each is one shell word: the helper joins ConfigureArgs
+# unquoted.
 Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @(
     '--disable-dependency-tracking',
-    '--disable-nls'
+    '--disable-nls',
+    "CFLAGS='-O2 -Wno-error=implicit-function-declaration'",
+    "CXXFLAGS='-O2 -Wno-error=implicit-function-declaration -Wno-template-body'"
 )
 
 # Emit a pkg-config file — Aspell doesn't ship one.  Use MSYS-style
