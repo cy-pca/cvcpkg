@@ -68,6 +68,14 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    # Threaded wasm: same build script; env-wasm.sh injects -pthread via the
+    # CVC_WASM_THREADS hook. A wasm-mt libcvc links it for the .ari loader
+    # (Emscripten won't mix -pthread and non-pthread objects in one module).
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
