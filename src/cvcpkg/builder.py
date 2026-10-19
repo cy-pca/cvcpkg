@@ -1798,6 +1798,32 @@ def _writable(path: Path) -> int | None:
     return mode
 
 
+def _relativize_elf_needed(install_dir: Path, temp_prefixes: Sequence[Path | str | None]) -> None:
+    """Make every NEEDED that names a library by this build's scratch path a bare name.
+
+    A dependency without a DT_SONAME (all of OpenBSD's) that the link line
+    named by absolute path -- meson does -- is NEEDED by that path:
+    xkbcommon-x11 on OpenBSD NEEDED ``<job prefix>/lib/libxcb.so.2.0`` and
+    failed the pack-time gate (dev fleet, 2026-10-19).  The bare name resolves
+    through the RPATH this pass sets, like every other dependency.  See
+    :func:`cvcpkg.linkage.relativize_elf_needed`.
+    """
+    roots = [str(p).rstrip("/") + "/" for p in temp_prefixes if p]
+    roots += [str(Path(p).resolve()).rstrip("/") + "/" for p in temp_prefixes if p]
+    for obj, link in _linkage.iter_objects(install_dir):
+        if link.format != "elf" or not any(n.startswith("/") for n in link.needed):
+            continue
+        restore = _writable(obj)
+        try:
+            changed = _linkage.relativize_elf_needed(obj, under=roots)
+        finally:
+            if restore is not None:
+                obj.chmod(restore)
+        rel = obj.relative_to(install_dir).as_posix()
+        for old in changed:
+            print(f"cvcpkg: relocated {rel}: NEEDED {old} -> {old.rsplit('/', 1)[1]}")
+
+
 def _scrub_elf_rpaths(
     install_dir: Path,
     temp_prefixes: Sequence[Path | str | None],
@@ -2220,6 +2246,7 @@ def _make_relocatable(ctx: BuildContext) -> None:
         )
         if lib_pass:
             _patch_elf_rpath(ctx.install_dir, patchelf)
+        _relativize_elf_needed(ctx.install_dir, temp_prefixes)
         lib_dir = ctx.install_dir / "lib"
         _scrub_elf_rpaths(
             ctx.install_dir,

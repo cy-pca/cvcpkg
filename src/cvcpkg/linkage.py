@@ -121,6 +121,8 @@ class _ElfDynamic:
     tags: list[tuple[int, int]]
     str_off: int | None = None  # file offset of the dynamic string table
     strings: bytes = b""
+    dyn_off: int | None = None  # file offset of the dynamic section (entry i at + i*size)
+    ent_fmt: str = ""  # struct format of one dynamic entry (tag, value)
 
     def string(self, at: int) -> str:
         stop = self.strings.find(b"\0", at)
@@ -182,7 +184,7 @@ def _parse_elf(f: BinaryIO) -> _ElfDynamic | None:
         if tag == _DT_NULL:
             break
         tags.append((tag, val))
-    dyn = _ElfDynamic(kind, tags)
+    dyn = _ElfDynamic(kind, tags, dyn_off=dynamic[0], ent_fmt=ent_fmt)
     strtab = next((v for t, v in tags if t == _DT_STRTAB), None)
     strsz = next((v for t, v in tags if t == _DT_STRSZ), None)
     if strtab is None or not strsz:
@@ -248,6 +250,45 @@ def rewrite_elf_rpath(path: Path | str, value: str) -> bool:
             f.seek(dyn.str_off + at)
             f.write(encoded + b"\0" * (old_len - len(encoded) + 1))
     return True
+
+
+def relativize_elf_needed(path: Path | str, under: Sequence[str] = ("/",)) -> list[str]:
+    """Point each absolute DT_NEEDED of the ELF at *path* at its basename, in place.
+
+    A library without a DT_SONAME (OpenBSD's convention: its libxcb.so.2.0
+    carries none) is recorded in a consumer's DT_NEEDED as the path it was
+    linked by, and meson links dependencies by absolute path, so xkbcommon-x11
+    on OpenBSD NEEDED ``<job>/cvcpkg-prefix-.../lib/libxcb.so.2.0``.  Only
+    entries whose path starts with one of *under* are changed.
+
+    The basename is the tail of that very string in ``.dynstr``, so only the
+    entry's value moves to it: nothing is written to ``.dynstr``, nothing grows
+    (NetBSD refuses a grown object), and a tail-merged string that shares those
+    bytes is left intact.  The loader then finds the library by name through
+    the object's RPATH, as for any other dependency.  Returns the old values of
+    the entries it rewrote.
+    """
+    changed: list[str] = []
+    with open(path, "r+b") as f:
+        if f.read(4) != _ELF_MAGIC:
+            return changed
+        dyn = _parse_elf(f)
+        if dyn is None or dyn.str_off is None or dyn.dyn_off is None:
+            return changed
+        size = struct.calcsize(dyn.ent_fmt)
+        for i, (tag, val) in enumerate(dyn.tags):
+            if tag != _DT_NEEDED:
+                continue
+            name = dyn.string(val)
+            if not name.startswith("/") or not any(name.startswith(u) for u in under):
+                continue
+            base = name.rsplit("/", 1)[1]
+            if not base:
+                continue
+            f.seek(dyn.dyn_off + i * size)
+            f.write(struct.pack(dyn.ent_fmt, tag, val + len(name.encode()) - len(base.encode())))
+            changed.append(name)
+    return changed
 
 
 def _read_macho_any(f: BinaryIO, head: bytes) -> Linkage | None:
