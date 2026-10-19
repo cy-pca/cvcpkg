@@ -233,6 +233,16 @@ function Invoke-CvcPythonBuild {
     }
     & $py PC\layout @layoutArgs
     if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
+    if ($FreeThreaded) {
+        # --preset-default includes "alias", which with --include-freethreaded
+        # also stages the free-threaded interpreter as a bare python.exe and
+        # pythonw.exe: python313's names.  Ship only the t-suffixed ones, as
+        # _common/build-python.sh does for the POSIX free-threaded columns.
+        foreach ($n in 'python.exe', 'python.pdb', 'pythonw.exe', 'pythonw.pdb') {
+            $p = Join-Path $env:CVC_INSTALL_DIR $n
+            if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force }
+        }
+    }
 
     # ── 4. Teach the interpreter where the prefix's DLLs live ───────────────
     # Windows has no RPATH, and since Python 3.8 the loader no longer searches

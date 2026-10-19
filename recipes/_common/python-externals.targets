@@ -2,7 +2,8 @@
 <!--
   recipes/_common/python-externals.targets - link CPython's modules against
   cvcpkg's bzip2, xz, zlib and sqlite instead of the copies PCbuild compiles
-  from externals\ sources.
+  from externals\ sources (and, in 3.13, build _decimal from the libmpdec in
+  CPython's own tarball).
 
   _common/build-python.ps1 passes this as /p:ForceImportAfterCppTargets.  The
   C++ targets import it at the end of every PCbuild project, after the
@@ -73,6 +74,20 @@
   <ItemGroup Condition="'$(MSBuildProjectName)' == '_ssl'">
     <ClCompile Remove="$(opensslIncludeDir)\applink.c" />
   </ItemGroup>
+
+  <!-- _decimal (3.13): python-externals.props points mpdecimalDir at the
+       bundled libmpdec 2.5.1, whose mpdecimal.h supports MSVC itself.
+       Modules\_decimal\windows\mpdecimal.h is a shim for mpdecimal 4.0.0's
+       mpdecimal64vc.h, which the bundled copy does not have, so take its
+       directory off the include path (3.11/3.12 have neither). -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_decimal'">
+    <ClInclude Remove="$(mpdecimalDir)libmpdec\*vc.h;$(mpdecimalDir)libmpdec\vccompat.h" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_decimal'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$([MSBuild]::Unescape($([System.String]::Copy('%(AdditionalIncludeDirectories)').Replace('..\Modules\_decimal\windows;', ''))))</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
 
   <!-- _ctypes: libffi.props copies $(libffiOutDir)libffi-8.dll, but cvcpkg
        installs DLLs in bin\, not beside the import library. -->

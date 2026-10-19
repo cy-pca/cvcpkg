@@ -34,5 +34,12 @@
     <bz2Dir>$(CvcDepsDir)include\</bz2Dir>
     <lzmaDir>$(CvcDepsDir)include\</lzmaDir>
     <zlibDir>$(CvcDepsDir)include\</zlibDir>
+
+    <!-- _decimal (3.13): PCbuild compiles mpdecimal 4.0.0 from externals\;
+         use the libmpdec CPython bundles in its own tarball instead, as 3.11
+         and 3.12's PCbuild and cvcpkg's POSIX builds (configured without the
+         system libmpdec) do.  python-externals.targets drops the include path
+         of the 4.0.0 header shim. -->
+    <mpdecimalDir>$(PySourcePath)Modules\_decimal\</mpdecimalDir>
   </PropertyGroup>
 </Project>
