@@ -226,9 +226,9 @@ function Invoke-CvcCMakeBuild {
 
 # ── Relocatability helper ───────────────────────────────────────────
 #
-# Rewrite absolute $env:CVC_INSTALL_DIR paths inside installed .pc and
-# .cmake files so downstream consumers keep working when the package is
-# unpacked at a different prefix.  .pc files anchor at ${pcfiledir}
+# Rewrite absolute $env:CVC_INSTALL_DIR (and $env:CVC_DEPS_PREFIX) paths
+# inside installed .pc and .cmake files so downstream consumers keep working
+# when the package is unpacked at a different prefix.  .pc files anchor at ${pcfiledir}
 # and .cmake files at ${CMAKE_CURRENT_LIST_DIR}; the ../ suffix is
 # computed per-file from its depth under $env:CVC_INSTALL_DIR.  CMake
 # on Windows writes paths with forward slashes into generated files,
@@ -259,7 +259,26 @@ function Invoke-CvcRewriteInstallPaths {
     # Defined further down this file; by the time a build.ps1 calls us the
     # whole file has been dot-sourced, so the ordering is fine.
     $rootMsys = ConvertTo-CvcMsysPath $root
-    $forms = @($rootBack, $rootFwd, $rootMsys) | Sort-Object -Unique
+    $rootForms = @($rootBack, $rootFwd, $rootMsys) | Sort-Object -Unique
+    # The DEPS prefix too, as rewrite-install-paths.sh does on Unix. A CMake
+    # export can bake an absolute path to a dependency that lived under
+    # $env:CVC_DEPS_PREFIX at build time: classic FindZLIB hands back
+    # ${ZLIB_LIBRARIES} (an absolute .../lib/z.lib), not ZLIB::ZLIB, and it lands
+    # in INTERFACE_LINK_LIBRARIES. assimp 6.0.5+cvc.6's Windows bundle shipped
+    # 'C:/Users/tfx/cvcpkg-builder/cvcpkg-job-assimp-*/cvcpkg-prefix-assimp-*/lib/z.lib',
+    # so every consumer's link failed. In cvcpkg's flat install every dependency
+    # sits at the consumer's prefix, so a deps-prefix path takes the same
+    # per-file anchor as an install-dir path. Install-dir forms are rewritten
+    # first: they are the more specific match where the two prefixes overlap.
+    $depsForms = @()
+    if ($env:CVC_DEPS_PREFIX) {
+        $deps = $env:CVC_DEPS_PREFIX.TrimEnd('\','/')
+        if ($deps) {
+            $depsForms = @($deps, ($deps -replace '\\','/'), (ConvertTo-CvcMsysPath $deps)) |
+                Sort-Object -Unique
+        }
+    }
+    $forms = @($rootForms) + @($depsForms)
 
     $files = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -eq '.pc' -or $_.Extension -eq '.cmake' }
