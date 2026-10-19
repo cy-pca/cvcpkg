@@ -25,6 +25,16 @@ source "${_COMMON_DIR}/rewrite-install-paths.sh"
 _cvc_apple_tool() { xcrun -f "$1" 2>/dev/null || echo "/usr/bin/$1"; }
 export CC="${CC:-$(_cvc_apple_tool clang)}"
 export CXX="${CXX:-$(_cvc_apple_tool clang++)}"
+# The archiver and symbol tools must match that compiler too.  meson takes
+# llvm-ar for a clang build when one is on PATH, and with cvcpkg's llvm 18 in
+# the prefix it could not read Apple clang's LTO bitcode: matplotlib-cp312
+# failed with "llvm-ar: error: ... Unknown attribute kind (102) (Producer:
+# 'APPLE_1_2100.1.1.101_0' Reader: 'LLVM 18.1.8')" (macOS arm64 populate,
+# 2026-10-18).  meson, autotools and cc-rs all honour AR / RANLIB / NM; an
+# explicit value still wins.
+export AR="${AR:-$(_cvc_apple_tool ar)}"
+export RANLIB="${RANLIB:-$(_cvc_apple_tool ranlib)}"
+export NM="${NM:-$(_cvc_apple_tool nm)}"
 export MACOSX_DEPLOYMENT_TARGET
 
 # `xcrun -f clang` is the toolchain's clang by absolute path, which -- unlike the
