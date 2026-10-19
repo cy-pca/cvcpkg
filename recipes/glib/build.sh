@@ -121,5 +121,18 @@ for _f in "${CVC_INSTALL_DIR}"/lib/libintl* "${CVC_INSTALL_DIR}"/include/libintl
     fi
 done
 
+# NetBSD: g_get_num_processors() did not compile there (netbsd-cpu-set.patch).
+# Check that the staged libglib loads and counts at least one processor.
+if [[ "${CVC_PLATFORM}" == "netbsd" && "${_default_lib}" == "shared" ]]; then
+    _t="${CVC_BUILD_DIR}/cvc-nprocs"
+    printf '%s\n' '#include <glib.h>' '#include <stdio.h>' \
+        'int main (void) { guint n = g_get_num_processors (); printf ("g_get_num_processors: %u\n", n); return n > 0 ? 0 : 1; }' \
+        > "${_t}.c"
+    "${CC:-cc}" -I"${CVC_INSTALL_DIR}/include/glib-2.0" -I"${CVC_INSTALL_DIR}/lib/glib-2.0/include" \
+        "${_t}.c" -o "${_t}" -L"${CVC_INSTALL_DIR}/lib" -lglib-2.0 \
+        -Wl,-rpath-link,"${CVC_DEPS_PREFIX}/lib"
+    LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib:${LD_LIBRARY_PATH:-}" "${_t}"
+fi
+
 # Make installed .pc/.cmake files relocatable.
 cvc_rewrite_install_paths
