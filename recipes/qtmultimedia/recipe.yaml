@@ -83,12 +83,20 @@ build:
 
 package:
   files:
-    - lib/libQt6Multimedia*
-    - lib/Qt6Multimedia*
+    # macOS builds Qt as frameworks: a module's library and headers live in
+    # lib/Qt<Module>.framework/, and Qt writes no pkg-config files for a
+    # framework build (nor on Windows by default).  Scoping these never drops
+    # files -- packing takes the whole staged tree; package.files declares
+    # what must exist (macos-15-intel populate 39171736755: "lib/pkgconfig/Qt6*
+    # matches nothing").
+    - { glob: "lib/libQt6Multimedia*", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
+    - { glob: "lib/Qt6Multimedia*", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
+    - { glob: "lib/QtMultimedia.framework/", platforms: [macos] }
+    - { glob: "lib/QtMultimediaWidgets.framework/", platforms: [macos] }
     - lib/cmake/Qt6Multimedia*/
-    - lib/pkgconfig/Qt6Multimedia*
-    - include/QtMultimedia/
-    - include/QtMultimediaWidgets/
+    - { glob: "lib/pkgconfig/Qt6Multimedia*", platforms: [linux, freebsd, openbsd, netbsd] }
+    - { glob: "include/QtMultimedia/", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
+    - { glob: "include/QtMultimediaWidgets/", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
     # Qt 6's media backends (Qt 5's mediaservice/ and audio/ are gone).
     - plugins/multimedia/
   cmake_packages:
