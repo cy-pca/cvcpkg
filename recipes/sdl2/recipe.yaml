@@ -96,9 +96,14 @@ build:
 package:
   files:
     # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
-    - lib/libSDL2*
+    - { glob: "lib/libSDL2*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - lib/pkgconfig/sdl2.pc
-    - lib/cmake/SDL2/
+    - { glob: "lib/cmake/SDL2/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC (build.ps1): SDL installs its CMake package in cmake/ at the prefix
+    # root, where CMake looks for it on Windows (as pcre2), and names its import
+    # library SDL2.lib, so the Unix entries above match nothing there (windows
+    # populate 2026-10-19).
+    - { glob: "cmake/SDL2Config.cmake", platforms: [windows] }
     - include/SDL2/
     # Windows static + shared artifacts (import/static .lib + runtime .dll).
     - lib/SDL2*.lib

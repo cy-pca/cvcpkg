@@ -155,7 +155,10 @@ build:
 package:
   files:
     - lib/libcurl*
-    - lib/curl*.lib
+    # MSVC's CMake build names the shared library's import library
+    # libcurl_imp.lib (curl's lib/CMakeLists.txt); "lib/curl*.lib" matched
+    # nothing (windows populate 2026-10-19).
+    - { glob: "lib/libcurl_imp.lib", platforms: [windows] }
     - lib/pkgconfig/libcurl*
     # Only the CMake build (build.ps1, windows) installs a CURL config package;
     # the autotools build used everywhere else does not, so declaring it for
