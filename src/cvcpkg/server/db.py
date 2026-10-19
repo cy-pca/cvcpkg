@@ -932,6 +932,16 @@ class BuildJobRow(Base):
     __table_args__ = (
         Index("ix_build_jobs_updated_at", "updated_at"),
         Index("ix_build_jobs_dag_id", "dag_id"),
+        # ``GET /v1/builds?dag_id=<prefix>*`` (how populate runs poll their DAGs)
+        # filters with ``dag_id LIKE '<prefix>%'``.  Under a non-C collation a plain
+        # btree index cannot serve LIKE, so every such poll scanned the whole table
+        # twice (count + page); pattern_ops makes the prefix an index range.  See
+        # migration 035.  Other dialects get an ordinary index of the same name.
+        Index(
+            "ix_build_jobs_dag_id_pattern",
+            "dag_id",
+            postgresql_ops={"dag_id": "varchar_pattern_ops"},
+        ),
         Index("ix_build_jobs_org_slug", "org_slug"),
         Index("ix_build_jobs_status", "status"),
         Index("ix_build_jobs_platform_arch", "platform", "arch"),

@@ -4460,9 +4460,13 @@ class DbBuildJobStore:
                 count_q = count_q.where(BuildJobRow.org_slug == org_slug)
             if dag_id is not None:
                 if dag_id.endswith("*"):
+                    # A literal LIKE pattern (not startswith's ``:p || '%'``), so
+                    # postgres plans it against ix_build_jobs_dag_id_pattern; the
+                    # prefix's own LIKE wildcards are escaped, so "_" is literal.
                     prefix = dag_id[:-1]
-                    q = q.where(BuildJobRow.dag_id.startswith(prefix))
-                    count_q = count_q.where(BuildJobRow.dag_id.startswith(prefix))
+                    esc = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+                    q = q.where(BuildJobRow.dag_id.like(esc + "%", escape="\\"))
+                    count_q = count_q.where(BuildJobRow.dag_id.like(esc + "%", escape="\\"))
                 else:
                     q = q.where(BuildJobRow.dag_id == dag_id)
                     count_q = count_q.where(BuildJobRow.dag_id == dag_id)

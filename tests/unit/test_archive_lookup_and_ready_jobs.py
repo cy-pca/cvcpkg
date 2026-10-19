@@ -126,3 +126,22 @@ class TestFindReadyJobs:
             assert after_ok.id in {j.id for j in ready}
 
         asyncio.run(go())
+
+
+class TestListJobsDagPrefix:
+    def test_prefix_filter_matches_and_treats_underscore_literally(self, db):
+        from cvcpkg.server.db_stores import DbBuildJobStore
+
+        async def go():
+            st = DbBuildJobStore()
+            for dag in ("populate-1_a-x", "populate-1_a-y", "populate-1xa-z", "other"):
+                await st.create("r", "linux", "x86_64", "t", dag_id=dag)
+            jobs, total = await st.list_jobs(dag_id="populate-1_a*", limit=1000)
+            assert total == 2
+            assert sorted(j.dag_id for j in jobs) == ["populate-1_a-x", "populate-1_a-y"]
+            jobs, total = await st.list_jobs(dag_id="populate-*", limit=1000)
+            assert total == 3
+            jobs, total = await st.list_jobs(dag_id="populate-1_a-x", limit=1000)
+            assert total == 1
+
+        asyncio.run(go())

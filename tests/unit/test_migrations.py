@@ -425,3 +425,16 @@ def test_migration_034_backfills_and_indexes_archive_name(tmp_path):
         "empty": "",
     }
     assert "ix_packages_archive_name" in indexes
+
+
+def test_migration_035_creates_the_dag_id_prefix_index(tmp_path):
+    """``/v1/builds?dag_id=<prefix>*`` polls need an index LIKE can use; 035
+    adds it (pattern_ops on postgres, an ordinary index on SQLite)."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "dag_prefix.db"
+    p = _alembic_upgrade(db, "035")
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    indexes = {r[1] for r in con.execute("PRAGMA index_list(build_jobs)")}
+    con.close()
+    assert "ix_build_jobs_dag_id_pattern" in indexes
