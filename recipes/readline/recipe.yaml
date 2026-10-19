@@ -9,7 +9,14 @@ recipe:
   # cvc.5: link the cvcpkg ncurses (libncursesw) instead of the build host's
   # libtinfo, and require ncursesw in readline.pc; the old .pc required an
   # ncurses.pc nothing ships, so pkg-config rejected readline everywhere.
-  cvc_revision: 5
+  # cvc.6: republish NetBSD on dev.  Dev's NetBSD 8.3+cvc.5 was yanked on
+  # 2026-10-16 (a pre-2.5.1 pack patchelf'd its RPATH, adding a third PT_LOAD
+  # that ld.elf_so refuses), and a yanked variant cannot be published again
+  # under the same version.  So every dev DAG that needs it re-adds readline
+  # for NetBSD, and nothing that depends on it there can land (cy-pca/cvcpkg#381's
+  # build-on-dev: python312/python313 waited on it).  No content change; other
+  # platforms rebuild unchanged.
+  cvc_revision: 6
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"
