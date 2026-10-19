@@ -1471,6 +1471,19 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     env["CVC_FULL_VERSION"] = ctx.recipe.full_version
     env["CVC_RECIPE_DIR"] = str(ctx.recipe.recipe_dir)
 
+    # Scratch for the build's tools (compilers, pip, configure scripts) inside
+    # this build's own work dir, so it is deleted with the build and is on the
+    # volume a builder measures and sweeps.  In the system /tmp, what a killed or
+    # crashed build left behind accumulated until /tmp filled, and then every
+    # job on that builder failed in its first second (openbsd-build-2, populate
+    # 2026-10-19: "[Errno 28] No space left on device" on 9 jobs).  POSIX hosts
+    # only: Windows tools read TMP/TEMP, and some MSVC builds are sensitive to
+    # the longer path.
+    if sys.platform != "win32":
+        tmp = ctx.work_dir / "tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env["TMPDIR"] = str(tmp.resolve())
+
     # CVC_DEPS_PREFIX tells build.sh where to find previously-built
     # dependencies.  When building into a shared prefix this equals
     # install_dir; callers building into isolated per-component dirs

@@ -2418,10 +2418,12 @@ def builder_run(
                 f"cvcpkg-builder: reclaimed {_startup_gc.removed} orphaned job "
                 f"dir(s), {_startup_gc.freed_mib:.0f} MiB"
             )
+    # Under the work dir when there is one (the volume the builder measures and
+    # sweeps; builder_gc never deletes this name), not the system temp dir.
     cache_dir = (
         Path(recipe_cache_dir)
         if recipe_cache_dir
-        else Path(tempfile.gettempdir()) / "cvcpkg-recipe-cache"
+        else (work_root or Path(tempfile.gettempdir())) / "cvcpkg-recipe-cache"
     )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
