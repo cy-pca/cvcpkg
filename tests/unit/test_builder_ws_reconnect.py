@@ -1092,3 +1092,94 @@ def test_catch_up_starts_every_missed_dispatch_not_one_per_sweep(monkeypatch, tm
     assert result.exit_code == 0, result.output
     assert server.claims == {1: 1, 2: 1, 3: 1}, result.output
     assert server.recipe_fetches == {1: 1, 2: 1, 3: 1}, result.output
+
+
+# -- a slow disk sweep never stalls the loop -------------------------------
+
+
+def _stuck_sweep(monkeypatch) -> tuple[threading.Event, threading.Event, list[float]]:
+    """Make the periodic work-dir sweep hang until released, as the 2.5.1 sweep
+    did on Windows over leaked ReadOnly job roots (each tree failed seven
+    rmtree attempts; ~50 of them held the loop for 20+ minutes).  Returns
+    (started, release, call times)."""
+    import cvcpkg.builder_gc as builder_gc
+
+    started, release = threading.Event(), threading.Event()
+    calls: list[float] = []
+
+    def sweep(*a, max_age_seconds=0, **k):
+        if max_age_seconds <= 0:
+            return builder_gc.GcResult()  # the startup sweep, before registering
+        calls.append(time.time())
+        started.set()
+        release.wait(15)
+        return builder_gc.GcResult()
+
+    monkeypatch.setattr(builder_gc, "sweep_work_dir", sweep)
+    monkeypatch.setenv("CVCPKG_BUILDER_GC_INTERVAL", "0.2")
+    return started, release, calls
+
+
+def test_a_stuck_gc_sweep_does_not_stall_the_socket(monkeypatch, tmp_path):
+    """sandipaws-dev, 2026-10-19: the hourly sweep ran on the socket loop's
+    thread and hung there.  The socket stayed up (the websockets library's own
+    thread answered the server's pings), so the builder never saw a dropped
+    connection to reconnect from -- but no heartbeat went out and nothing was
+    read, the server marked it offline and failed its running job.  While the
+    sweep is stuck, the loop must still answer the server and take work."""
+    started, release, calls = _stuck_sweep(monkeypatch)
+    sent_at: dict[str, float] = {}
+
+    def on_connect(server, conn, index):
+        def later():
+            if not started.wait(5):
+                return
+            time.sleep(0.2)
+            sent_at["ping"] = time.time()
+            conn.push({"type": "ping"})
+            server.dispatch(1)
+            conn.push({"type": "job.dispatch", "job": server.job(1)})
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                with server.lock:
+                    if {"type": "pong"} in server.ws_sent:
+                        sent_at["pong"] = time.time()
+                        return
+                time.sleep(0.02)
+
+        threading.Thread(target=later, daemon=True).start()
+
+    server = _FakeServer(on_connect=on_connect)
+    try:
+        result = _run(monkeypatch, tmp_path, server, ["--max-runtime", "2.5"])
+    finally:
+        release.set()
+
+    assert result.exit_code == 0, result.output
+    assert started.is_set(), "the periodic sweep never ran:\n" + result.output
+    assert "ping" in sent_at, result.output
+    assert "pong" in sent_at, (
+        "no pong within 1 s: the loop stopped reading the socket while the sweep ran:\n"
+        + result.output
+    )
+    assert server.claims == {1: 1}, result.output
+    # One sweep at a time: while it is stuck, the next due ones are skipped.
+    assert len(calls) == 1, calls
+    assert "connection lost" not in result.output
+
+
+def test_a_stuck_gc_sweep_does_not_stall_long_poll(monkeypatch, tmp_path):
+    """Same on the HTTP path: heartbeats and polls go on while the sweep runs."""
+    started, release, calls = _stuck_sweep(monkeypatch)
+    server = _FakeServer()
+    try:
+        result = _run(monkeypatch, tmp_path, server, ["--no-websocket", "--max-runtime", "1.5"])
+    finally:
+        release.set()
+
+    assert result.exit_code == 0, result.output
+    assert started.is_set(), "the periodic sweep never ran:\n" + result.output
+    assert len(calls) == 1, calls
+    assert any(calls[0] + 0.3 < t < calls[0] + 1.0 for t in _long_polls(server)), (
+        "the long-poll loop stopped while the sweep ran:\n" + result.output
+    )

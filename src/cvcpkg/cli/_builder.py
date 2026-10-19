@@ -4172,7 +4172,7 @@ def builder_run(
                             break  # connection lost
 
                     if gc_interval > 0 and now - last_gc >= gc_interval:
-                        _run_periodic_gc()
+                        _start_periodic_gc()
                         last_gc = now
 
                     _apply_pending_update()
@@ -4459,6 +4459,25 @@ def builder_run(
         except Exception as exc:  # noqa: BLE001 - hygiene must never kill the loop
             click.echo(f"cvcpkg-builder: gc error (ignored): {exc}", err=True)
 
+    # The sweep runs on its own thread, never on the loop's.  The loop is what
+    # sends heartbeats and reads the socket, and a sweep can take far longer
+    # than a heartbeat interval: on Windows, leaked ReadOnly job roots made
+    # every tree fail its seven rmtree attempts, and an hourly sweep of ~50 of
+    # them held sandipaws-dev's loop for 20+ minutes (2026-10-19).  Its socket
+    # stayed ESTABLISHED -- the websockets library's own thread kept answering
+    # the server's pings -- so nothing ever "lost" the connection, but no
+    # heartbeat went out: the server marked the builder offline and failed its
+    # running job.  One sweep at a time; a due sweep is skipped while the last
+    # one is still going.
+    gc_thread: threading.Thread | None = None
+
+    def _start_periodic_gc() -> None:
+        nonlocal gc_thread
+        if gc_thread is not None and gc_thread.is_alive():
+            return
+        gc_thread = threading.Thread(target=_run_periodic_gc, name="cvcpkg-builder-gc", daemon=True)
+        gc_thread.start()
+
     # Time-boxed / drain-mode controls for ephemeral (CI) runners.
     run_deadline = (time.time() + max_runtime) if max_runtime else None
 
@@ -4527,7 +4546,7 @@ def builder_run(
                 last_heartbeat = now
 
             if gc_interval > 0 and now - last_gc >= gc_interval:
-                _run_periodic_gc()
+                _start_periodic_gc()
                 last_gc = now
 
             # A builder.update received on a socket that has since dropped
