@@ -24,13 +24,12 @@ recipe:
     Exception, libquadmath is LGPL-2.1+; the texts are in
     share/licenses/gcc-runtime/.
 
-# The GCC release itself, for the license texts; the libraries come from the
-# gfortran build dependency (see build.sh).
+# Nothing to fetch: the libraries and the license texts both come from the
+# gfortran build dependency (see build.sh), which installs the texts from the
+# GCC 11.4.0 tree it was built from (gcc-src).  This used to download the
+# whole 76 MB GCC tarball for those three files.
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/gcc/gcc-11.4.0/gcc-11.4.0.tar.xz
-  sha256: "3f2db222b007e8a4a23cd5ba56726ef08e8b1f1eb2055ee72c1402cea73a8dd9"
-  strip_components: 1
+  type: none
 
 patches: []
 
