@@ -30,6 +30,35 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.2
+
+**A release so the builder fleet picks up the builder and pack fixes below.**
+Builders self-update only to a server version newer than their own, so the
+fleet stayed on v2.5.1 code through them; the 2026-10-19 populate hit several.
+
+- **Pack: a NEEDED that names a scratch-prefix library by path becomes its
+  basename** (#379).  OpenBSD libraries have no SONAME, and CMake and meson link
+  dependencies by full path, so bundles carried `NEEDED /…/cvcpkg-prefix-*/lib/…`
+  and failed the loader-path gate (openal-soft on OpenBSD).
+- **Builder: a POSIX build's TMPDIR lives in its own work dir, and the recipe
+  cache under `--work-dir`** (#398).  Scratch in the system /tmp accumulated
+  until it filled, and the builder then failed every job in its first second
+  with ENOSPC while reporting a healthy work volume (openbsd-build-2).
+- **Server: no offline reaping straight after a restart** (#392).  Every deploy
+  failed the running jobs of builders still reconnecting ("went offline") and
+  cancelled their downstream.  Server-side; live since the 2026-10-19 deploys.
+- **Builder: FreeBSD's `libdata/pkgconfig` is merged into `lib/pkgconfig`**
+  after every build (#376).
+- **Builder: a Windows job's noarch Python deps go into `Lib\site-packages`**
+  (#342); `package.files` counts a dangling symlink as shipped (#337).
+- **Pack refuses an any/noarch bundle holding a platform wheel** (#345).
+- **install-deps:** build tools resolve from another config/link when theirs is
+  unpublished (#321), and a build-tool variant clash is isolated instead of
+  failing (#355).
+- **submit-dag** weighs the glibc floor in its joint capability check (#332).
+
 - **Builds, build logs and recipes are public reads.** `GET /v1/builds`,
   `/v1/builds/{id}`, `/v1/builds/{id}/log` (and its stream) and
   `GET /v1/recipes` no longer need a publisher token. As for builders and
