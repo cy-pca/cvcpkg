@@ -28,7 +28,7 @@ Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @(
     '--disable-openmp',
     "--with-fftw3-includedir=$fftw/include",
     "--with-fftw3-libdir=$fftw/lib",
-    'CFLAGS=-O3 -ffast-math',
+    "CFLAGS='-O3 -ffast-math'",  # one shell word: the helper joins args unquoted
     'LDFLAGS=-static-libgcc'
 )
 
