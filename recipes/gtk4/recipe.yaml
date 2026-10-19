@@ -28,16 +28,17 @@ recipe:
   tags: [graphics, gui]
 
 source:
-  # gtk-4.16.7.tar.xz from gnome.org; sha256 recorded once we do a
-  # verified vendored fetch.  Until then, the build script downloads
-  # the tarball with checksum verification against a mirror.
-  type: prebuilt
-  url: https://download.gnome.org/sources/gtk/4.16/gtk-4.16.7.tar.xz
+  # Built from the source package gtk4-src, which pins the upstream tarball
+  # (https://download.gnome.org/sources/gtk/4.16/gtk-4.16.7.tar.xz).
+  type: package
+  package: gtk4-src
 
 patches: []
 
 depends:
   build:
+    - name: gtk4-src
+      version: "==4.16.7"
     - ninja
     - meson
     - pkg-config
