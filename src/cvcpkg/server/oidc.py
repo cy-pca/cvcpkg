@@ -410,18 +410,41 @@ def id_token_claims(id_token: str) -> dict:
     return body if isinstance(body, dict) else {}
 
 
-def nonce_matches(id_token: str, expected: str) -> bool:
-    """True if *id_token* carries exactly *expected* as its ``nonce`` claim.
+def id_token_nonce(id_token: str) -> str | None:
+    """The ``nonce`` claim from an id_token's payload, or None.
 
-    A missing id_token or a missing nonce claim is a mismatch, not a pass: the
-    nonce was sent on the authorization request, so an IdP that honours the
-    spec echoes it, and silently accepting its absence would make the whole
-    check opt-out by the very party it guards against.
+    Payload-only decode, no signature check (see ``id_token_claims``).  None
+    means there is no string nonce to check — the IdP omitted the claim (some
+    OIDC providers never echo it) or there was no parseable id_token.
     """
-    if not expected:
-        return False
     got = id_token_claims(id_token).get("nonce")
-    return isinstance(got, str) and hmac.compare_digest(got, expected)
+    return got if isinstance(got, str) else None
+
+
+def nonce_ok(id_token: str, expected: str) -> bool:
+    """Enforce-if-present: refuse a login only for a nonce that is present but WRONG.
+
+    An IdP that echoes the nonce it was handed on the authorize request MUST
+    echo *expected* — a different value is a token mix-up, and is refused.  An
+    IdP that returns no nonce at all is **not** refused on that basis: the
+    authorization-code flow already binds this callback to this attempt through
+    the ``state`` nonce + the single-use signed transaction cookie + PKCE, and
+    the token itself arrives over a direct server-to-server TLS exchange with
+    client authentication.  Per OIDC Core the id_token ``nonce`` is REQUIRED
+    only for the implicit and hybrid flows; for the code flow it is
+    defence-in-depth, which this applies whenever the IdP gives it something to
+    check.
+
+    Being tolerant of a missing nonce is deliberate: real OpenID providers do
+    not all carry it back — the WordPress/daggerhart OP behind tx.wtf is one,
+    and a fail-closed check there refuses every otherwise-valid login.  Full
+    id_token signature validation stays the separate, opt-in
+    ``CVCPKG_OIDC_VERIFY_ID_TOKEN`` work.
+    """
+    got = id_token_nonce(id_token)
+    if got is None:
+        return True
+    return bool(expected) and hmac.compare_digest(got, expected)
 
 
 # Discovery is fetched on both legs of every login (authorize + callback).  The

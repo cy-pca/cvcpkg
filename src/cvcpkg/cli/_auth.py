@@ -69,13 +69,40 @@ _server_opt = click.option(
 )
 
 
+def _default_provider_index(choices: list[dict]) -> int:
+    """1-based index of the server's default provider in *choices*.
+
+    Prefers the explicit ``default: true`` marker; then a provider whose id is
+    literally ``default`` (the bare ``CVCPKG_OIDC_*`` provider's stable slug, so
+    an older server that lists providers but sends no marker still resolves);
+    and finally falls back to the first entry.
+    """
+    for i, c in enumerate(choices, 1):
+        if c.get("default"):
+            return i
+    for i, c in enumerate(choices, 1):
+        if str(c.get("id", "")) == "default":
+            return i
+    return 1
+
+
 def _prompt_provider(choices: list[dict]) -> str:
-    """Interactively pick one of several OIDC providers; returns its id."""
+    """Interactively pick one of several OIDC providers; returns its id.
+
+    The numbered list is shown in the order the server sent it, and the numeric
+    choice indexes that same list, so the selection never diverges from what is
+    displayed.  Pressing Enter picks the server's default provider (the ``[1]``
+    the prompt offers), not whichever id sorts first.
+    """
     click.echo("This server offers several identity providers:")
+    default_idx = _default_provider_index(choices)
     for i, c in enumerate(choices, 1):
         name = c.get("display_name") or c.get("id") or "?"
-        click.echo(f"  {i}. {name}  ({c.get('id', '')})")
-    idx = click.prompt("Choose a provider", type=click.IntRange(1, len(choices)), default=1)
+        marker = "  [default]" if i == default_idx else ""
+        click.echo(f"  {i}. {name}  ({c.get('id', '')}){marker}")
+    idx = click.prompt(
+        "Choose a provider", type=click.IntRange(1, len(choices)), default=default_idx
+    )
     return str(choices[idx - 1].get("id", ""))
 
 
