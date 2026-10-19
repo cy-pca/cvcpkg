@@ -732,6 +732,8 @@ class TestOtherWritersRespectAFinishedJob:
 
             monkeypatch.setattr(builders, "reap_stale", reap_stale)
             monkeypatch.setattr(jobs, "list_active_by_builder", list_then_complete)
+            # Past the post-restart grace (see the next test).
+            monkeypatch.setattr(app_mod, "_REAPER_STARTUP_GRACE", 0)
             cascade = AsyncMock(wraps=jobs.cancel_downstream)
             monkeypatch.setattr(jobs, "cancel_downstream", cascade)
             monkeypatch.setattr(app_mod, "_use_db", True)
@@ -764,5 +766,45 @@ class TestOtherWritersRespectAFinishedJob:
             assert abandoned.status == "failed"
             assert "went offline" in abandoned.error_message
             assert any(c.args and c.args[0] == x.id for c in cascade.call_args_list)
+
+        run(_t())
+
+    def test_scheduler_reaps_no_builder_straight_after_startup(self, monkeypatch):
+        """A restart must not fail a live builder's jobs as "went offline".
+
+        Every builder's last heartbeat is as old as the server's downtime when
+        the scheduler starts; the builders beat again once they reconnect.
+        """
+        import cvcpkg.server.app as app_mod
+
+        async def _t():
+            builders, jobs = await _stores()
+            b = await builders.register("bx", "linux", "x86_64", "root")
+            x = await jobs.create("x", "linux", "x86_64", "ci")
+            await jobs.claim(x.id, b.id)
+
+            reap_stale = AsyncMock(return_value=[await builders.get(b.id)])
+            monkeypatch.setattr(builders, "reap_stale", reap_stale)
+            monkeypatch.setattr(app_mod, "_REAPER_STARTUP_GRACE", 3600)
+            monkeypatch.setattr(app_mod, "_use_db", True)
+            monkeypatch.setattr(app_mod, "_db_builders", builders)
+            monkeypatch.setattr(app_mod, "_db_build_jobs", jobs)
+
+            ticks = {"n": 0}
+
+            async def two_ticks(_secs):
+                ticks["n"] += 1
+                if ticks["n"] > 2:
+                    raise asyncio.CancelledError
+
+            monkeypatch.setattr(asyncio, "sleep", two_ticks)
+            emit = AsyncMock()
+            monkeypatch.setattr(app_mod, "emit_webhook_event", emit)
+            with pytest.raises(asyncio.CancelledError):
+                await app_mod._build_scheduler_loop()
+
+            reap_stale.assert_not_awaited()
+            assert (await jobs.get(x.id)).status == "running"
+            assert all(c.args[0] != "build.failed" for c in emit.call_args_list)
 
         run(_t())
