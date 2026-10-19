@@ -45,7 +45,12 @@ recipe:
   # glib keeps loading it. The shell and make are now declared build deps; the
   # cvc.5 Windows build took them from an ambient C:\msys64. Other platforms
   # rebuild unchanged.
-  cvc_revision: 6
+  #
+  # rev 6 -> 7: Windows installs LICENSE in share/licenses/libffi/. CPython's
+  # Windows bundle ships libffi-8.dll in DLLs\ and builds its LICENSE.txt from
+  # this file, as python.org's does; without it the libffi text was missing
+  # there. Other platforms rebuild unchanged.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -126,6 +131,8 @@ package:
     # Windows: ffi.lib, the name MSVC resolves libffi.pc's -lffi to (a shared
     # build also ships bin/libffi-8.dll; a static one has no DLL).
     - { glob: "lib/ffi.lib", platforms: [windows] }
+    # Only build.ps1 installs the license so far (see rev 7).
+    - { glob: "share/licenses/libffi/", platforms: [windows] }
   pkg_config:
     - libffi
 

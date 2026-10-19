@@ -53,7 +53,13 @@ recipe:
   # package.files declares the Windows tree, and the Unix entries are scoped
   # off windows (the strict pack check would have failed on every one).  Other
   # platforms rebuild unchanged.
-  cvc_revision: 11
+  # cvc.12: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.11 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -185,6 +191,7 @@ package:
     - { glob: "Lib/", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
   cmake_packages:
     - { name: Python3t, targets: ["Python3t::Python", "Python3t::Interpreter"] }
 

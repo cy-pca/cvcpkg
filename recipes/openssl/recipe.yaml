@@ -33,7 +33,12 @@ recipe:
   # "OPENSSL_Uplink(...): no OPENSSL_Applink" against cvcpkg's libcrypto.
   # Every Windows consumer links the UCRT, the case uplink is not needed for.
   # Other platforms rebuild unchanged.
-  cvc_revision: 9
+  #
+  # Bumped 9 -> 10: Windows installs LICENSE.txt in share/licenses/openssl/.
+  # CPython's Windows bundle ships libcrypto/libssl in DLLs\ and builds its
+  # LICENSE.txt from this file, as python.org's does; without it the OpenSSL
+  # text was missing there.  Other platforms rebuild unchanged.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -141,6 +146,8 @@ package:
     - { glob: "lib/pkgconfig/libcrypto*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - include/openssl/
     - bin/openssl*
+    # Only build.ps1 installs the license so far (see cvc_revision 10).
+    - { glob: "share/licenses/openssl/", platforms: [windows] }
   cmake_packages:
     - { name: OpenSSL, targets: ["OpenSSL::SSL", "OpenSSL::Crypto"] }
 
