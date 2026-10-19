@@ -58,5 +58,5 @@ package:
   files:
     - { glob: "lib/python3.13/site-packages/decouple.py", platforms: [any] }
     - { glob: "lib/python3.13/site-packages/*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/decouple/", platforms: [windows] }
+    - { glob: "Lib/site-packages/decouple.py", platforms: [windows] }
     - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

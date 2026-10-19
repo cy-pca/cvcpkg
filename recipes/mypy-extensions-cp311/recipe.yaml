@@ -57,5 +57,5 @@ package:
   files:
     - { glob: "lib/python3.11/site-packages/mypy_extensions.py", platforms: [any] }
     - { glob: "lib/python3.11/site-packages/mypy_extensions-*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/mypy_extensions/", platforms: [windows] }
+    - { glob: "Lib/site-packages/mypy_extensions.py", platforms: [windows] }
     - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }

@@ -60,5 +60,5 @@ package:
     - { glob: "lib/python3.13/site-packages/peutils.py", platforms: [any] }
     - { glob: "lib/python3.13/site-packages/ordlookup/", platforms: [any] }
     - { glob: "lib/python3.13/site-packages/pefile-*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/pefile/", platforms: [windows] }
+    - { glob: "Lib/site-packages/pefile.py", platforms: [windows] }
     - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
