@@ -34,7 +34,9 @@ ANCHOR = "${CMAKE_CURRENT_LIST_DIR}/../../.."
 
 def _rewrite(tmp_path: Path, deps: Path | None) -> None:
     """Dot-source env-windows.ps1 and run Invoke-CvcRewriteInstallPaths."""
-    env = {k: v for k, v in os.environ.items() if k.upper() not in ("CVC_MSVC_ROOT", "CVC_DEPS_PREFIX")}
+    env = {
+        k: v for k, v in os.environ.items() if k.upper() not in ("CVC_MSVC_ROOT", "CVC_DEPS_PREFIX")
+    }
     env.update(
         CVC_INSTALL_DIR=str(tmp_path / "install"),
         CVC_SOURCE_DIR=str(tmp_path / "src"),
