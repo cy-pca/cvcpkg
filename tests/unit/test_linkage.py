@@ -15,6 +15,7 @@ from cvcpkg.linkage import (
     origin_dirs,
     read_linkage,
     relative_to_prefixes,
+    relativize_elf_needed,
     rewrite_elf_rpath,
 )
 from tests.unit._binfixtures import elf, macho, macho_slice
@@ -131,6 +132,37 @@ def test_rewrite_elf_rpath_never_grows(tmp_path):
     assert not rewrite_elf_rpath(elf(tmp_path / "y"), "")  # no RPATH to rewrite
     (tmp_path / "z").write_bytes(b"not an elf")
     assert not rewrite_elf_rpath(tmp_path / "z", "")
+
+
+@pytest.mark.parametrize("bits,little", [(64, True), (32, False)])
+def test_relativize_elf_needed_points_at_the_basename(tmp_path, bits, little):
+    # OpenBSD: libxcb has no SONAME and meson linked it by absolute path.
+    so = elf(
+        tmp_path / "libxkbcommon-x11.so.0.0.0",
+        kind="dyn",
+        needed=[f"{JOB}/lib/libxcb.so.2.0", "libc.so.100.3", "/usr/lib/libm.so.10.1"],
+        runpath="$ORIGIN",
+        bits=bits,
+        little=little,
+    )
+    before = so.read_bytes()
+    assert relativize_elf_needed(so, under=[f"{JOB}/"]) == [f"{JOB}/lib/libxcb.so.2.0"]
+    link = read_linkage(so)
+    # Only the scratch-prefix entry moves; a system path outside *under* stays.
+    assert link.needed == ("libxcb.so.2.0", "libc.so.100.3", "/usr/lib/libm.so.10.1")
+    assert link.rpaths == ("$ORIGIN",)
+    after = so.read_bytes()
+    assert len(after) == len(before)
+    # .dynstr is untouched: the absolute string is still there in full.
+    assert f"{JOB}/lib/libxcb.so.2.0".encode() in after
+    # Idempotent.
+    assert relativize_elf_needed(so, under=[f"{JOB}/"]) == []
+
+
+def test_relativize_elf_needed_ignores_non_elf(tmp_path):
+    (tmp_path / "z").write_bytes(b"not an elf")
+    assert relativize_elf_needed(tmp_path / "z") == []
+    assert relativize_elf_needed(elf(tmp_path / "s", needed=["libz.so.1"])) == []
 
 
 # ── builder paths ───────────────────────────────────────────────
