@@ -64,6 +64,22 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" && -x "${CVC_DEPS_PREFIX}/bin/ninja" ]]; then
     _CVC_NINJA="${CVC_DEPS_PREFIX}/bin/ninja"
 fi
 
+# OpenBSD's linker resolves -lfoo only as libfoo.so or libfoo.so.MAJOR.MINOR, and
+# its libtool accepts only those names.  CMake installs Linux-style
+# libfoo.so.X.Y.Z (and libfoo.so.X) with no libfoo.so namelink there, so a
+# consumer's -lfoo failed: imagemagick, "ld: error: unable to find library
+# -ltiff" (populate 2026-10-19).  Give each such library its libfoo.so.X.Y name.
+cvc_openbsd_lib_names() {
+    local lib="${1:-${CVC_INSTALL_DIR}/lib}" f base mm
+    [[ -d "${lib}" ]] || return 0
+    for f in "${lib}"/lib*.so.[0-9]*.[0-9]*.[0-9]*; do
+        [[ -f "${f}" ]] || continue
+        base="${f##*/}"   # libtiff.so.6.1.0
+        mm="${base%.*}"   # libtiff.so.6.1
+        [[ -e "${lib}/${mm}" ]] || ln -s "${base}" "${lib}/${mm}"
+    done
+}
+
 cvc_cmake_build() {
     cmake -G Ninja \
         -S "${CVC_SOURCE_DIR}" \
@@ -80,6 +96,7 @@ cvc_cmake_build() {
         "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
+    cvc_openbsd_lib_names
     cvc_rewrite_install_paths
 }
 
