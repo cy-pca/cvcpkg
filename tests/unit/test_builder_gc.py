@@ -9,6 +9,7 @@ three CUDA builds with ENOSPC (2026-08-02).
 from __future__ import annotations
 
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -320,3 +321,79 @@ class TestSweepCache:
     def test_missing_cache_is_not_an_error(self, tmp_path):
         res = sweep_cache(tmp_path / "nope", max_age_seconds=1)
         assert res.removed == 0
+
+
+def _readonly_tree(root: Path) -> Path:
+    """A job root whose payload is read-only, like a staged perl-src."""
+    tree = root / "cvcpkg-job-expat-abcd1234" / "cvcpkg-prefix-expat-x" / "src" / "perl-src"
+    tree.mkdir(parents=True)
+    for name in ("Artistic", ".editorconfig", "asan_ignore"):
+        f = tree / name
+        f.write_text("x")
+        os.chmod(f, stat.S_IREAD)
+    return root / "cvcpkg-job-expat-abcd1234"
+
+
+@pytest.fixture
+def windows_unlink(monkeypatch):
+    """Make os.unlink refuse a file without the write bit, as Windows does.
+
+    POSIX only needs write permission on the directory, so without this the
+    read-only tests would pass on Linux with or without the fix.
+    """
+    real = os.unlink
+
+    def unlink(path, *, dir_fd=None):
+        if not os.stat(path, dir_fd=dir_fd, follow_symlinks=False).st_mode & stat.S_IWUSR:
+            raise PermissionError(13, "Access is denied", str(path))
+        return real(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+
+
+class TestReadOnlyTrees:
+    """Windows will not unlink a ReadOnly file; retrying never helps.
+
+    On sandipaws (2026-10-19) every job that staged perl-src left its whole
+    root behind, and the next startup sweep spun on ~450k files without
+    deleting any, so the builder could not register.
+    """
+
+    def test_sweep_removes_a_read_only_orphan(self, tmp_path, windows_unlink):
+        job = _readonly_tree(tmp_path)
+        res = sweep_work_dir(tmp_path)
+        assert res.removed == 1
+        assert not job.exists()
+
+    def test_remove_tree_clears_read_only_files(self, tmp_path, windows_unlink):
+        from cvcpkg.builder_gc import remove_tree
+
+        job = _readonly_tree(tmp_path)
+        assert remove_tree(job) == []
+        assert not job.exists()
+
+    def test_remove_tree_on_a_real_read_only_tree(self, tmp_path):
+        # Unpatched: exercises the real ReadOnly attribute on the Windows runner.
+        from cvcpkg.builder_gc import remove_tree
+
+        job = _readonly_tree(tmp_path)
+        assert remove_tree(job) == []
+        assert not job.exists()
+
+    def test_remove_tree_reports_what_survived(self, tmp_path, monkeypatch):
+        import cvcpkg.builder_gc as gc
+
+        def refuse(path, *, dir_fd=None):
+            raise PermissionError(13, "Access is denied", str(path))
+
+        monkeypatch.setattr(os, "unlink", refuse)
+        monkeypatch.setattr(gc.time, "sleep", lambda _s: None)
+        job = _readonly_tree(tmp_path)
+        errors = gc.remove_tree(job)
+        assert job.exists()
+        assert errors and "Access is denied" in errors[0]
+
+    def test_remove_tree_of_a_missing_path(self, tmp_path):
+        from cvcpkg.builder_gc import remove_tree
+
+        assert remove_tree(tmp_path / "gone") == []

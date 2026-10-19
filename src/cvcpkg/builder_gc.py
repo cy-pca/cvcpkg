@@ -43,6 +43,7 @@ from __future__ import annotations
 import os
 import shutil
 import socket
+import stat
 import sys
 import time
 from collections.abc import Iterable
@@ -259,7 +260,7 @@ def _candidates(work_dir: Path) -> list[Path]:
 _LAST_RMTREE_ERRORS: list[str] = []
 
 
-def _rmtree(path: Path) -> None:
+def _rmtree(path: Path) -> list[str]:
     """``shutil.rmtree`` with retries, collecting errors instead of hiding them.
 
     Windows needs both.  Measured on the windows-latest runner (forensics in
@@ -272,14 +273,30 @@ def _rmtree(path: Path) -> None:
     handles — so backoff alone cannot be relied on.  The collected errors
     exist to confirm or refute exactly that on the next failure.  POSIX
     succeeds on the first attempt and never sleeps.
+
+    A read-only file is the other Windows failure, and no amount of retrying
+    fixes it: Windows refuses to unlink a file with the ReadOnly attribute.
+    Source packages ship such trees (every file under perl-src is ReadOnly),
+    so a failed delete clears the bit and redoes the call once.  Without that,
+    on sandipaws every job that staged perl-src left its 7,738-file root
+    behind, and the next startup sweep spun on ~450k files for over ten
+    minutes without deleting any, before the builder could register
+    (2026-10-19).
     """
-    _LAST_RMTREE_ERRORS.clear()
+    errors: list[str] = []
 
     def _note(func: Any, p: Any, exc: Any) -> None:
         if isinstance(exc, tuple):  # onerror-style exc_info triple
             exc = exc[1]
-        if len(_LAST_RMTREE_ERRORS) < 8:
-            _LAST_RMTREE_ERRORS.append(f"{getattr(func, '__name__', '?')}({p}): {exc!r}")
+        if isinstance(exc, PermissionError):
+            try:
+                os.chmod(p, stat.S_IWRITE)
+                func(p)
+                return
+            except OSError as again:
+                exc = again
+        if len(errors) < 8:
+            errors.append(f"{getattr(func, '__name__', '?')}({p}): {exc!r}")
 
     kwargs: dict[str, Any] = {"onexc": _note} if sys.version_info >= (3, 12) else {"onerror": _note}
     delay = 0.1
@@ -287,11 +304,26 @@ def _rmtree(path: Path) -> None:
         if attempt:
             time.sleep(delay)
             delay *= 2
-        _LAST_RMTREE_ERRORS.clear()
+        errors.clear()
         shutil.rmtree(path, **kwargs)
         if not path.exists():
-            _LAST_RMTREE_ERRORS.clear()
-            return
+            errors.clear()
+            break
+    _LAST_RMTREE_ERRORS[:] = errors
+    return list(errors)
+
+
+def remove_tree(path: Path) -> list[str]:
+    """Delete *path* the way the sweeps do; return why, if any of it survived.
+
+    For a builder's own cleanup of a finished job root, which used
+    ``shutil.rmtree(ignore_errors=True)`` and so leaked, silently, every tree
+    holding a read-only file on Windows.  An empty list means it is gone.
+    Thread-safe: the errors are this call's own.
+    """
+    if not path.exists():
+        return []
+    return _rmtree(path)
 
 
 def sweep_work_dir(
