@@ -291,6 +291,7 @@ function Invoke-CvcPythonBuild {
             throw "LICENSE.txt lacks the text of $f"
         }
     }
+    Write-Host "LICENSE.txt carries the license texts of $(($licenseFiles | ForEach-Object { Split-Path -Leaf (Split-Path -Parent $_) }) -join ', ')"
     if ($FreeThreaded) {
         # --preset-default includes "alias", which with --include-freethreaded
         # also stages the free-threaded interpreter as a bare python.exe and
