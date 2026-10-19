@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: graphene
   upstream_version: "1.10.8"
-  cvc_revision: 2
+  cvc_revision: 3
+  # cvc.3: republish so every platform's bundle has graphene-gobject-1.0.pc.
+  # The OpenBSD cvc.2 bundle shipped only graphene-1.0.pc (built before glib was
+  # on OpenBSD, so -Dgobject_types had nothing to build against), and gtk4 then
+  # failed there: "Dependency 'graphene-gobject-1.0' is required but not found"
+  # (populate job 22082).  The recipe is unchanged; the strict pack check now
+  # requires the .pc it declares.
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
