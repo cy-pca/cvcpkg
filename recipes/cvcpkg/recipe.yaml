@@ -4,15 +4,12 @@ recipe:
   # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
-  upstream_version: "2.5.1"
-  # Bumped 1 -> 2: refreeze with pyinstaller-cp312 cvc.4, whose NetBSD
-  # bootloader loads a TLS pad after libpython (netbsd-tls-pad.patch there).
-  # 2.5.1+cvc.1 for NetBSD took 19 s per invocation, even `--version`; the
-  # other platforms' binaries are unchanged.
-  # Bumped 2 -> 3: build.ps1 also looks in lib\python3.12\site-packages, where
-  # a fleet builder leaves the noarch deps (prod job #20190 failed without
-  # it), so the Windows column builds on the fleet.  Other platforms unchanged.
-  cvc_revision: 3
+  upstream_version: "2.5.2"
+  # 2.5.2: the release that carries #379 (scratch-prefix NEEDED -> basename) and
+  # #398 (job TMPDIR) to the fleet; the single-file builders self-update from
+  # this package.  (2.5.1 took cvc.2 for the NetBSD TLS-pad refreeze and cvc.3
+  # for build.ps1's lib\python3.12\site-packages lookup; both are in the recipe.)
+  cvc_revision: 1
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -33,8 +30,8 @@ recipe:
 # GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
 source:
   type: tarball
-  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.1.tar.gz
-  sha256: "eae7ec720671ed5fef6f8d3b6ccc6015df26dd9daeec1478b07b7fb8bc29f578"
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.2.tar.gz
+  sha256: "d8811924e7ad6ce9d1fbe6b8f7a6e6d96a693debf6bc014adc094d7aec10ca8c"
   strip_components: 1
 
 # Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and
