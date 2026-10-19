@@ -63,5 +63,5 @@ package:
   files:
     - { glob: "lib/python3.13t/site-packages/_pyinstaller_hooks_contrib/", platforms: [any] }
     - { glob: "lib/python3.13t/site-packages/pyinstaller_hooks_contrib-*.dist-info/", platforms: [any] }
-    - { glob: "Lib/site-packages/pyinstaller_hooks_contrib/", platforms: [windows] }
+    - { glob: "Lib/site-packages/_pyinstaller_hooks_contrib/", platforms: [windows] }
     - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
