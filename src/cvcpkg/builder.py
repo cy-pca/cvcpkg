@@ -2149,6 +2149,35 @@ def _patch_macos_install_names(
             print(f"cvcpkg: relocated {rel}: {' '.join(args)}")
 
 
+def _merge_libdata_pkgconfig(install_dir: Path) -> None:
+    """Move ``libdata/pkgconfig`` (FreeBSD's .pc directory) into ``lib/pkgconfig``.
+
+    meson's pkgconfig module installs .pc files to ``<prefix>/libdata/pkgconfig``
+    on FreeBSD, and some CMake projects do on every BSD, while cvcpkg's layout,
+    every recipe's ``package.files`` and every consumer's PKG_CONFIG_PATH use
+    ``lib/pkgconfig``: pixman and harfbuzz built on FreeBSD shipped no .pc at
+    the declared path (dev fleet, 2026-10-19).  wayland's build.sh did this move
+    by hand; now every build gets it.  Both directories sit two levels below the
+    prefix, so a ``${pcfiledir}``-relative .pc still resolves.
+    """
+    src = install_dir / "libdata" / "pkgconfig"
+    if not src.is_dir() or src.is_symlink():
+        return
+    dest = install_dir / "lib" / "pkgconfig"
+    dest.mkdir(parents=True, exist_ok=True)
+    for entry in sorted(src.iterdir()):
+        target = dest / entry.name
+        if target.exists() or target.is_symlink():
+            raise BuildError(
+                f"{entry.name} is installed to both libdata/pkgconfig and lib/pkgconfig"
+            )
+        shutil.move(str(entry), str(target))
+    src.rmdir()
+    libdata = install_dir / "libdata"
+    if not any(libdata.iterdir()):
+        libdata.rmdir()
+
+
 def _make_relocatable(ctx: BuildContext) -> None:
     """Rewrite the installed tree so the bundle runs from any install prefix.
 
@@ -2256,6 +2285,7 @@ def run_build(
         # [unverified] patchelf's handling of Haiku-produced ELF has not been
         # exercised against a real Haiku host; _patch_elf_rpath is best-effort
         # (it ignores patchelf failures), so the worst case is the status quo.
+        _merge_libdata_pkgconfig(ctx.install_dir)
         _make_relocatable(ctx)
         return
 
@@ -2321,6 +2351,8 @@ def run_build(
     if returncode != 0:
         raise BuildError(f"Build script for {ctx.recipe.name} exited with code {returncode}")
 
+    # One .pc directory, lib/pkgconfig, whatever the platform's convention.
+    _merge_libdata_pkgconfig(ctx.install_dir)
     # Make shared bundles relocatable: rewrite absolute build-tree paths so
     # consumers load the libraries without LD_LIBRARY_PATH/DYLD_*.
     _make_relocatable(ctx)
