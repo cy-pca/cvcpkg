@@ -138,7 +138,8 @@ function Invoke-CvcPythonBuild {
     }
     foreach ($c in @(@('libbz2.dll', 'BZ2_bzlibVersion', 'bzip2 1.0.8+cvc.6'),
                      @('sqlite3.dll', 'sqlite3_libversion', 'sqlite 3.49.1+cvc.6'))) {
-        if (-not ((& dumpbin /nologo /exports (Join-Path $depsBin $c[0])) -match " $($c[1])$")) {
+        # An incrementally linked DLL lists "name = @ILT+n(name)", hence ( |$).
+        if (-not ((& dumpbin /nologo /exports (Join-Path $depsBin $c[0])) -match " $($c[1])( |$)")) {
             throw "deps: $($c[0]) exports no $($c[1]); need $($c[2]) or later"
         }
     }
