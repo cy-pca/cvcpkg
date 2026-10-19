@@ -8,7 +8,12 @@ recipe:
   # FindZLIB's ${ZLIB_LIBRARIES}), so `find_package(assimp)` + link assimp::assimp
   # failed on every consumer. Fixed by the shared cvc_rewrite_install_paths helper
   # now relocating $CVC_DEPS_PREFIX paths too; this bump ships the corrected bundle.
-  cvc_revision: 6
+  # cvc.7: the same fix on Windows. The first Windows build of cvc.6 (2026-10-19)
+  # shipped assimpTargets*.cmake naming the builder's
+  # .../cvcpkg-prefix-assimp-*/lib/z.lib: _common/env-windows.ps1's
+  # Invoke-CvcRewriteInstallPaths relocated only $env:CVC_INSTALL_DIR paths.
+  # It now relocates $env:CVC_DEPS_PREFIX ones too, as the Unix helper does.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
