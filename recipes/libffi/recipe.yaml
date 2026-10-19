@@ -123,8 +123,8 @@ package:
     - lib/libffi*
     - lib/pkgconfig/libffi*
     - include/ffi*.h
-    # Windows: the DLL, and ffi.lib, the name MSVC resolves libffi.pc's -lffi to.
-    - { glob: "bin/libffi-*.dll", platforms: [windows] }
+    # Windows: ffi.lib, the name MSVC resolves libffi.pc's -lffi to (a shared
+    # build also ships bin/libffi-8.dll; a static one has no DLL).
     - { glob: "lib/ffi.lib", platforms: [windows] }
   pkg_config:
     - libffi
