@@ -40,8 +40,17 @@ patches: []
 
 depends:
   # pkgconf is standalone C — no external deps (unlike 0.29.2's bundled glib,
-  # which linked libiconv on OpenBSD).
-  build: []
+  # which linked libiconv on OpenBSD).  Windows builds it with meson + ninja
+  # (build.ps1, Invoke-CvcMesonBuild), and the meson recipe's meson.cmd runs on
+  # the prefix's python.exe, so those come from their recipes: without them a
+  # from-source Windows closure stopped at "meson not found on PATH".
+  build:
+    - name: meson
+      platforms: [windows]
+    - name: ninja
+      platforms: [windows]
+    - name: python312
+      platforms: [windows]
   runtime: []
   host_tools: []
 

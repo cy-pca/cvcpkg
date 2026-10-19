@@ -241,31 +241,44 @@ class TestCvcRequirements:
 class TestResolveBuildOrderIntegration:
     """Verify resolve_build_order works with the real recipe set."""
 
+    @staticmethod
+    def _platforms(recipes):
+        return sorted({m.platform for r in recipes for m in r.build_matrix} - {"any"})
+
     def test_all_recipes_resolve(self):
-        """All real recipes should resolve to a valid build order."""
+        """All real recipes resolve to a valid build order on every platform.
+
+        Per platform, as builds resolve it: a platform-scoped dependency is an
+        edge only on its platforms, so the union of all platforms' edges may
+        cycle (pkg-config needs python312 on Windows, python312 needs readline
+        everywhere else, readline needs pkg-config).
+        """
         recipes = list_recipes(RECIPES_DIR)
-        ordered = resolve_build_order(recipes)
-        assert len(ordered) == len(recipes)
+        for plat in self._platforms(recipes):
+            ordered = resolve_build_order(recipes, plat)
+            assert len(ordered) == len(recipes), plat
 
     def test_deps_come_before_dependants(self):
-        """Every recipe's build deps should appear earlier in the order."""
+        """Every recipe's build deps on a platform appear earlier in its order."""
         recipes = list_recipes(RECIPES_DIR)
-        ordered = resolve_build_order(recipes)
-        name_to_idx = {r.name: i for i, r in enumerate(ordered)}
-
-        for r in ordered:
-            depends = r.raw.get("depends", {}).get("build", [])
-            for dep in depends:
-                dep_name = dep if isinstance(dep, str) else dep["name"]
-                if dep_name in name_to_idx:
-                    assert (
-                        name_to_idx[dep_name] < name_to_idx[r.name]
-                    ), f"{dep_name} should come before {r.name}"
+        for plat in self._platforms(recipes):
+            ordered = resolve_build_order(recipes, plat)
+            name_to_idx = {r.name: i for i, r in enumerate(ordered)}
+            for r in ordered:
+                for dep in r.raw.get("depends", {}).get("build", []):
+                    if isinstance(dep, dict) and dep.get("platforms"):
+                        if plat not in dep["platforms"] and "any" not in dep["platforms"]:
+                            continue
+                    dep_name = dep if isinstance(dep, str) else dep["name"]
+                    if dep_name in name_to_idx:
+                        assert (
+                            name_to_idx[dep_name] < name_to_idx[r.name]
+                        ), f"{plat}: {dep_name} should come before {r.name}"
 
     def test_no_duplicate_names(self):
         """Each recipe name should appear exactly once in the order."""
         recipes = list_recipes(RECIPES_DIR)
-        ordered = resolve_build_order(recipes)
+        ordered = resolve_build_order(recipes, "linux")
         names = [r.name for r in ordered]
         assert len(names) == len(set(names))
 
