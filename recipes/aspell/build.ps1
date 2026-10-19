@@ -19,6 +19,12 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Invoke-CvcMsysAutotoolsBuild -ConfigureArgs @(
     '--disable-dependency-tracking',
     '--disable-nls',
+    # MinGW has no <dlfcn.h>, so configure compiles the filters in, but its
+    # AC_CHECK_LIB(dl, dlopen) still succeeds against a stray libdl and defines
+    # HAVE_LIBDL, under which common/filter.cpp includes <dlfcn.h> ("dlfcn.h: No
+    # such file or directory").  Say no to libdl and ask for compiled-in filters.
+    '--enable-compile-in-filters',
+    'ac_cv_lib_dl_dlopen=no',
     "CFLAGS='-O2 -Wno-error=implicit-function-declaration'",
     "CXXFLAGS='-O2 -Wno-error=implicit-function-declaration -Wno-template-body'"
 )
