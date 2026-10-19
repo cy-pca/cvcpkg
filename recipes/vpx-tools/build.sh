@@ -51,6 +51,12 @@ case "$(uname -s)" in
         ;;
 esac
 
+# vpxenc/vpxdec use pthreads, but configure adds -lpthread only for linux
+# targets: FreeBSD failed with "undefined symbol: pthread_create" (populate
+# 2026-10-19).  NetBSD's driver already links it.
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|DragonFly) export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-pthread" ;;
+esac
 "${CVC_SOURCE_DIR}/configure" "${CONFIGURE_ARGS[@]}"
 "${MAKE}" -j "${CVC_JOBS}" target=libs
 "${MAKE}" -j "${CVC_JOBS}" target=examples vpxenc vpxdec

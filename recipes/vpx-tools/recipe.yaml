@@ -20,7 +20,10 @@ source:
   sha256: "e935eded7d81631a538bfae703fd1e293aad1c7fd3407ba00440c95105d2011e"
   strip_components: 1
 
-patches: []
+patches:
+  # As recipes/libvpx: configure checks for diff with `diff --version`, which
+  # OpenBSD's diff does not accept ("diff missing: Try installing diffutils").
+  - configure-diff-check.patch
 
 depends:
   build:
