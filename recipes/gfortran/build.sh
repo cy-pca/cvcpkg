@@ -8,23 +8,21 @@ set -euo pipefail
 : "${CVC_JOBS:=$(nproc 2>/dev/null || echo 4)}"
 
 # GMP, MPFR and MPC in-tree: GCC configures and links them statically into the
-# compiler, so cc1/f951 NEED nothing of ours at run time. Versions and sha512s
-# are the ones this GCC release pins in contrib/prerequisites.sha512 (what its
-# own contrib/download_prerequisites fetches, over plain http); fetched here
-# over https and checked against that file, so the trust chain starts at the
-# sha256-pinned GCC tarball. ISL (graphite loop optimizations) is left out.
+# compiler, so cc1/f951 NEED nothing of ours at run time.  They come from the
+# gmp-src, mpfr-src and mpc-src source packages (depends.build), copied into
+# the tree under the names GCC's top-level configure looks for.  ISL
+# (graphite loop optimizations) is left out.
+# shellcheck disable=SC1091
+. "$(dirname "$0")/../_common/stage-source.sh"   # cvc_source_dir_of
 cd "${CVC_SOURCE_DIR}"
-_infra=https://gcc.gnu.org/pub/gcc/infrastructure
-for _tarball in gmp-6.1.0.tar.bz2 mpfr-3.1.6.tar.bz2 mpc-1.0.3.tar.gz; do
-    _dir=${_tarball%%-*}
-    if [[ -d "${_dir}" ]]; then
-        continue
+for _dep in gmp mpfr mpc; do
+    _src="$(cvc_source_dir_of "${_dep}-src")"
+    if [[ ! -f "${_src}/configure" ]]; then
+        echo "gfortran build.sh: ${_dep}-src is not staged at ${_src}" >&2
+        exit 1
     fi
-    curl -fsSL --retry 5 --retry-delay 3 -o "${_tarball}" "${_infra}/${_tarball}"
-    grep "  ${_tarball}\$" contrib/prerequisites.sha512 | sha512sum -c -
-    mkdir "${_dir}"
-    tar -xf "${_tarball}" -C "${_dir}" --strip-components=1
-    rm -f "${_tarball}"
+    rm -rf "${_dep}"
+    cp -pR "${_src}" "${_dep}"
 done
 
 # The Debian/Ubuntu triplet, as the fleet's own GCC uses: GCC then finds the

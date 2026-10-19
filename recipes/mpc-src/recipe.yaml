@@ -1,0 +1,41 @@
+schema_version: 1
+recipe:
+  name: mpc-src
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: cvcpkg group
+  maintainer_email: info@cvcpkg.org
+  maintainer_url: https://cvcpkg.org
+  homepage: https://www.multiprecision.org/mpc/
+  license: LGPL-3.0-or-later
+  tags: [source]
+  description: >-
+    The unmodified upstream source of GNU MPC 1.3.1: its release tarball,
+    verified against the sha256 below and staged at src/mpc-src/.  gfortran
+    builds MPC in-tree from it, beside gmp-src and mpfr-src, so a GCC build
+    fetches nothing itself (it used to download GCC's own pinned prerequisites
+    from gcc.gnu.org during the build).  There is no binary mpc recipe: GCC's
+    in-tree build links it statically.
+
+source:
+  type: tarball
+  url: https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz
+  sha256: "ab642492f5cf882b74aa0cb730cd410a81edcdbec895183ce930e706c1c759b8"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - src/mpc-src/

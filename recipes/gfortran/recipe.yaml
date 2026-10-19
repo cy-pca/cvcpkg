@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: gfortran
   upstream_version: "11.4.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -20,21 +20,33 @@ recipe:
     fleet compiles everything else with, so objects from both mix and the
     runtime libraries are ABI-identical; consumers get those libraries at run
     time from the gcc-runtime package, which is copied out of this build.
-    GMP, MPFR and MPC are built in-tree (static), at the versions and sha512s
-    the GCC tarball itself pins, so the compiler needs nothing at run time but
-    glibc and binutils.
+    GMP, MPFR and MPC are built in-tree (static) from the gmp-src, mpfr-src
+    and mpc-src source packages, so the compiler needs nothing at run time but
+    glibc and binutils, and the build downloads nothing itself.
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/gcc/gcc-11.4.0/gcc-11.4.0.tar.xz
-  sha256: "3f2db222b007e8a4a23cd5ba56726ef08e8b1f1eb2055ee72c1402cea73a8dd9"
-  strip_components: 1
+  # Built from the source package gcc-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/gcc/gcc-11.4.0/gcc-11.4.0.tar.xz).
+  type: package
+  package: gcc-src
 
 patches: []
 
 depends:
   # $ORIGIN run paths on the runtime libraries in lib64/ (build.sh).
   build:
+    - name: gcc-src
+      version: "==11.4.0"
+    # Built in-tree into the compiler (build.sh).  cvc.1 downloaded the
+    # versions GCC 11.4 pins (gmp 6.1.0, mpfr 3.1.6, mpc 1.0.3) from
+    # gcc.gnu.org during the build; GCC 11 needs gmp >= 4.3.2, mpfr >= 3.1.0
+    # and mpc >= 1.0.0, so the current releases serve.
+    - name: gmp-src
+      version: "==6.3.0"
+    - name: mpfr-src
+      version: "==4.2.1"
+    - name: mpc-src
+      version: "==1.3.1"
     - name: patchelf
       platforms: [linux]
   runtime: []

@@ -4,7 +4,6 @@
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
-: "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
 
 # The gfortran on PATH must be cvcpkg's (its build prefix's bin/ comes first),
 # not one the builder happens to have: the libraries have to match the GCC the
@@ -46,8 +45,10 @@ for _soname in libgfortran.so.5 libquadmath.so.0 libgomp.so.1; do
 done
 
 mkdir -p "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime"
-cp "${CVC_SOURCE_DIR}"/COPYING3 "${CVC_SOURCE_DIR}"/COPYING.RUNTIME \
-    "${CVC_SOURCE_DIR}"/COPYING.LIB "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime/"
+# The same three files gfortran installs from the GCC tree it was built from.
+_licenses="$(dirname "$(dirname "${_gfc}")")/share/licenses/gfortran"
+cp "${_licenses}"/COPYING3 "${_licenses}"/COPYING.RUNTIME \
+    "${_licenses}"/COPYING.LIB "${CVC_INSTALL_DIR}/share/licenses/gcc-runtime/"
 
 # Each library must load on its own, from here, with nothing else on the path.
 for _so in ${_copied[@]+"${_copied[@]}"}; do
