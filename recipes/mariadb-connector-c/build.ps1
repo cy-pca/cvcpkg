@@ -15,6 +15,10 @@ Invoke-CvcCMakeBuild @(
     # without linking libcrypto, giving LNK2019 for every OpenSSL symbol.
     # It is an Enterprise-only auth plugin not used by typical clients.
     '-DCLIENT_PLUGIN_PARSEC=OFF',
+    # remote_io needs libcurl, which is not a dependency of this recipe: it was
+    # built only when cmake's curl happened to be in the deps prefix, and MSVC
+    # then failed it on C4267 under /WX (windows populate 2026-10-19).
+    '-DCLIENT_PLUGIN_REMOTE_IO=OFF',
     '-DINSTALL_LIBDIR=lib',
     '-DINSTALL_INCLUDEDIR=include/mariadb',
     '-DINSTALL_PLUGINDIR=lib/mariadb/plugin'
