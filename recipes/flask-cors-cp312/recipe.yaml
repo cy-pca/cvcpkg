@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/70/74/0fc0fa68d62f21daef41017dafab19ef4b36551521260987eb3a5394c7ba/flask_cors-6.0.2.tar.gz
-  sha256: "6e118f3698249ae33e429760db98ce032a8bf9913638d085ca0f4c5534ad2423"
-  strip_components: 1
+  # Built from the source package flask-cors-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/70/74/0fc0fa68d62f21daef41017dafab19ef4b36551521260987eb3a5394c7ba/flask_cors-6.0.2.tar.gz).
+  type: package
+  package: flask-cors-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: flask-cors-src
+      version: "==6.0.2"
     - name: python312
     - name: flask-cp312
     - name: werkzeug-cp312

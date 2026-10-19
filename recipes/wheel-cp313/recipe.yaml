@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/8a/98/2d9906746cdc6a6ef809ae6338005b3f21bb568bea3165cfc6a243fdc25c/wheel-0.45.1.tar.gz
-  sha256: "661e1abd9198507b1409a20c02106d9670b2576e916d58f520316666abca6729"
-  strip_components: 1
+  # Built from the source package wheel-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/8a/98/2d9906746cdc6a6ef809ae6338005b3f21bb568bea3165cfc6a243fdc25c/wheel-0.45.1.tar.gz).
+  type: package
+  package: wheel-src
 
 python:
   interpreter: python313
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: wheel-src
+      version: "==0.45.1"
     - name: python313
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

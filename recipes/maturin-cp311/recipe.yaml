@@ -27,10 +27,10 @@ recipe:
 # prebuilt maturin wheel would defeat the point AND has no BSD build. The sha256
 # was recomputed from the downloaded tarball and matches the PyPI JSON digest.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/e7/b3/addd877f871fb1860d46d3a4f206ecb10b946c85846805e6367631926fd3/maturin-1.14.1.tar.gz
-  sha256: "9d6577a62cd08e0ceba7a0db06fb098e0c9b1b3429bad747a4f3a18215a1b3df"
-  strip_components: 1
+  # Built from the source package maturin-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/e7/b3/addd877f871fb1860d46d3a4f206ecb10b946c85846805e6367631926fd3/maturin-1.14.1.tar.gz).
+  type: package
+  package: maturin-src
 
 python:
   interpreter: python311
@@ -40,6 +40,8 @@ patches: []
 
 depends:
   build:
+    - name: maturin-src
+      version: "==1.14.1"
     # The interpreter that drives pip, and whose site-packages the shim lands in.
     - name: python311
     # PEP-517 backend: maturin's bootstrap backend re-exports setuptools.build_meta

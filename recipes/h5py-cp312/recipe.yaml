@@ -31,10 +31,10 @@ recipe:
 # verifies this tarball and extracts it (strip_components: 1) to CVC_SOURCE_DIR;
 # build.sh compiles it against HDF5_DIR=$CVC_DEPS_PREFIX.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/db/33/acd0ce6863b6c0d7735007df01815403f5589a21ff8c2e1ee2587a38f548/h5py-3.16.0.tar.gz
-  sha256: "a0dbaad796840ccaa67a4c144a0d0c8080073c34c76d5a6941d6818678ef2738"
-  strip_components: 1
+  # Built from the source package h5py-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/db/33/acd0ce6863b6c0d7735007df01815403f5589a21ff8c2e1ee2587a38f548/h5py-3.16.0.tar.gz).
+  type: package
+  package: h5py-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -47,6 +47,8 @@ patches: []
 
 depends:
   build:
+    - name: h5py-src
+      version: "==3.16.0"
     # The interpreter the extensions are compiled against and installed into.
     - name: python312
     # HDF5 headers + libhdf5.so.310 to link against (HDF5_DIR=$CVC_DEPS_PREFIX).

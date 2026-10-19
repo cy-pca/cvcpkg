@@ -22,10 +22,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/46/7d/901c6e333fb031b5bfbd1532099200cf859f12aa83689be494eade6685ec/zlib_ng-1.0.0.tar.gz
-  sha256: "c753cea73f9e803c246e9bf01a59eb652897ed8a19334ada0f968394c7f61650"
-  strip_components: 1
+  # Built from the source package zlib-ng-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/46/7d/901c6e333fb031b5bfbd1532099200cf859f12aa83689be494eade6685ec/zlib_ng-1.0.0.tar.gz).
+  type: package
+  package: zlib-ng-src
 
 python:
   interpreter: python313
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: zlib-ng-src
+      version: "==1.0.0"
     - name: python313
     - name: setuptools-cp313
     - name: setuptools-scm-cp313

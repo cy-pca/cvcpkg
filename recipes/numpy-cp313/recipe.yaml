@@ -36,10 +36,10 @@ recipe:
 # verifies this tarball and extracts it (strip_components) to CVC_SOURCE_DIR;
 # build.sh compiles it with meson-python against the prefix's OpenBLAS.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz
-  sha256: "f3a3570c4a2a16746ac2c31a7c7c7b0c186b95ce902e33db6f28094ed7387dda"
-  strip_components: 1
+  # Built from the source package numpy-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d0/ad/fed0499ce6a338d2a03ebae59cd15093910c8875328855781952abf6c2fe/numpy-2.4.6.tar.gz).
+  type: package
+  package: numpy-src
 
 # Interpreter/ABI metadata: exported to build.sh as CVC_PYTHON_ABI /
 # CVC_PYTHON_INTERPRETER so cvc_python_exe resolves the prefix's python3.13 and
@@ -52,6 +52,8 @@ patches: []
 
 depends:
   build:
+    - name: numpy-src
+      version: "==2.4.6"
     - name: python313
     # Native CLIs meson-python shells out to (on PATH in the build prefix).
     - name: pkg-config

@@ -21,10 +21,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/df/a0/9c823651872e6a0face3f0311de2a40c8bbcb9c8dcb15680bd019ac56ac7/pycares-5.0.1.tar.gz
-  sha256: "5a3c249c830432631439815f9a818463416f2a8cbdb1e988e78757de9ae75081"
-  strip_components: 1
+  # Built from the source package pycares-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/df/a0/9c823651872e6a0face3f0311de2a40c8bbcb9c8dcb15680bd019ac56ac7/pycares-5.0.1.tar.gz).
+  type: package
+  package: pycares-src
 
 python:
   interpreter: python312
@@ -37,6 +37,8 @@ patches:
 
 depends:
   build:
+    - name: pycares-src
+      version: "==5.0.1"
     - name: python312
     - name: setuptools-cp312
     - name: wheel-cp312

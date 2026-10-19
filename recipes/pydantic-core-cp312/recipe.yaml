@@ -45,10 +45,10 @@ recipe:
 # already present in the build prefix. The sha256 was recomputed from the
 # downloaded tarball and matches upstream's own sdist digest in the PyPI JSON API.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz
-  sha256: "62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1"
-  strip_components: 1
+  # Built from the source package pydantic-core-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz).
+  type: package
+  package: pydantic-core-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -64,6 +64,8 @@ patches: []
 
 depends:
   build:
+    - name: pydantic-core-src
+      version: "==2.46.4"
     # The interpreter the extension is compiled against and installed into.
     - name: python312
     # The PEP-517 backend pydantic-core declares (`build-backend = 'maturin'`).

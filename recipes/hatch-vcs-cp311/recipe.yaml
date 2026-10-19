@@ -21,10 +21,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/f5/c9/54bb4fa27b4e4a014ef3bb17710cdf692b3aa2cbc7953da885f1bf7e06ea/hatch_vcs-0.4.0.tar.gz
-  sha256: "093810748fe01db0d451fabcf2c1ac2688caefd232d4ede967090b1c1b07d9f7"
-  strip_components: 1
+  # Built from the source package hatch-vcs-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/f5/c9/54bb4fa27b4e4a014ef3bb17710cdf692b3aa2cbc7953da885f1bf7e06ea/hatch_vcs-0.4.0.tar.gz).
+  type: package
+  package: hatch-vcs-src
 
 python:
   interpreter: python311
@@ -34,6 +34,8 @@ patches: []
 
 depends:
   build:
+    - name: hatch-vcs-src
+      version: "==0.4.0"
     - name: python311
     - name: hatchling-cp311
     # PEP-517 build backend, from this sdist's [build-system] requires.

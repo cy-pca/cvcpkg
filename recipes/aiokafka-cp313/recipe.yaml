@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/89/5f/dfc1180fd22d1acdc91949ec36e97199c43742dacb057cb8efed3679ed04/aiokafka-0.14.0.tar.gz
-  sha256: "8ffdc945798ba4d3d132b705d4244d0a1f493925efb57c637a2ca88ee82794e1"
-  strip_components: 1
+  # Built from the source package aiokafka-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/89/5f/dfc1180fd22d1acdc91949ec36e97199c43742dacb057cb8efed3679ed04/aiokafka-0.14.0.tar.gz).
+  type: package
+  package: aiokafka-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: aiokafka-src
+      version: "==0.14.0"
     - name: python313
     - name: async-timeout-cp313
     - name: packaging-cp313

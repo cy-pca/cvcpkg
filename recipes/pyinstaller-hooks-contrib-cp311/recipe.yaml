@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/94/5b/c9fe0db5e83ee1c39b2258fa21d23b15e1a60786b6c5990ee5074ead8bb6/pyinstaller_hooks_contrib-2026.6.tar.gz
-  sha256: "bef5002c32f4f50bd55b005da12cff64eca8783e7eaf86a06a62410164bab725"
-  strip_components: 1
+  # Built from the source package pyinstaller-hooks-contrib-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/94/5b/c9fe0db5e83ee1c39b2258fa21d23b15e1a60786b6c5990ee5074ead8bb6/pyinstaller_hooks_contrib-2026.6.tar.gz).
+  type: package
+  package: pyinstaller-hooks-contrib-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: pyinstaller-hooks-contrib-src
+      version: "==2026.6"
     - name: python311
     - name: packaging-cp311
     - name: setuptools-cp311

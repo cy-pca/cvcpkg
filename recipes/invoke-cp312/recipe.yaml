@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/33/f6/227c48c5fe47fa178ccf1fda8f047d16c97ba926567b661e9ce2045c600c/invoke-3.0.3.tar.gz
-  sha256: "437b6a622223824380bfb4e64f612711a6b648c795f565efc8625af66fb57f0c"
-  strip_components: 1
+  # Built from the source package invoke-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/33/f6/227c48c5fe47fa178ccf1fda8f047d16c97ba926567b661e9ce2045c600c/invoke-3.0.3.tar.gz).
+  type: package
+  package: invoke-src
 
 python:
   interpreter: python312
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: invoke-src
+      version: "==3.0.3"
     - name: python312
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

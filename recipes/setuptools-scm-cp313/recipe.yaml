@@ -25,10 +25,10 @@ recipe:
 # present in the build prefix. The sha256 was recomputed from the downloaded
 # tarball and matches upstream's own sdist digest in the PyPI JSON API.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/b9/19/7ae64b70b2429c48c3a7a4ed36f50f94687d3bfcd0ae2f152367b6410dff/setuptools_scm-8.3.1.tar.gz
-  sha256: "3d555e92b75dacd037d32bafdf94f97af51ea29ae8c7b234cf94b7a5bd242a63"
-  strip_components: 1
+  # Built from the source package setuptools-scm-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/b9/19/7ae64b70b2429c48c3a7a4ed36f50f94687d3bfcd0ae2f152367b6410dff/setuptools_scm-8.3.1.tar.gz).
+  type: package
+  package: setuptools-scm-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -41,6 +41,8 @@ patches: []
 
 depends:
   build:
+    - name: setuptools-scm-src
+      version: "==8.3.1"
     # The interpreter this pure-Python package installs under.
     - name: python313
     # PEP-517 backend (pyproject requires setuptools>=61); the in-tree

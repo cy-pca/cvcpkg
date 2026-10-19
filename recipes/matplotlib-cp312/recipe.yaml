@@ -35,10 +35,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/68/dd/fa2e1a45fce2d09f4aea3cee169760e672c8262325aa5796c49d543dc7e6/matplotlib-3.10.0.tar.gz
-  sha256: "b886d02a581b96704c9d1ffe55709e49b4d2d52709ccebc4be42db856e511278"
-  strip_components: 1
+  # Built from the source package matplotlib-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/68/dd/fa2e1a45fce2d09f4aea3cee169760e672c8262325aa5796c49d543dc7e6/matplotlib-3.10.0.tar.gz).
+  type: package
+  package: matplotlib-src
 
 python:
   interpreter: python312
@@ -48,6 +48,8 @@ patches: []
 
 depends:
   build:
+    - name: matplotlib-src
+      version: "==3.10.0"
     - name: python312
     # Native feature libraries (see build.sh): freetype + qhull are what
     # -Dsystem-freetype/-Dsystem-qhull link; zlib/libpng/bzip2 are

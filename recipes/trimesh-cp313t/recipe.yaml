@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/a8/45/5b9943631f265073bb96ca4cc2a9de05d151cd8c1a6896fcbaac132a1355/trimesh-5.0.0.tar.gz
-  sha256: "0195003198baaf2550aebe612254ba2f01c385cec46c37ecc5beca8291f79a13"
-  strip_components: 1
+  # Built from the source package trimesh-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/a8/45/5b9943631f265073bb96ca4cc2a9de05d151cd8c1a6896fcbaac132a1355/trimesh-5.0.0.tar.gz).
+  type: package
+  package: trimesh-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: trimesh-src
+      version: "==5.0.0"
     - name: python313t
     - name: numpy-cp313t
     # PEP-517 build backend, from this sdist's [build-system] requires.

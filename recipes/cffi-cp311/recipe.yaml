@@ -39,10 +39,10 @@ recipe:
 # already present in the build prefix. The sha256 is upstream's own sdist digest
 # from the PyPI JSON API, re-derived from the downloaded tarball.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz
-  sha256: "44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529"
-  strip_components: 1
+  # Built from the source package cffi-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz).
+  type: package
+  package: cffi-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -57,6 +57,8 @@ patches: []
 
 depends:
   build:
+    - name: cffi-src
+      version: "==2.0.0"
     # The interpreter the extension is compiled against and installed into.
     - name: python311
     # PEP-517 backend (cffi's pyproject requires setuptools>=66.1). Build-only,

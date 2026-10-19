@@ -28,10 +28,10 @@ recipe:
 # own vendored OpenBLAS, which is exactly the non-hermeticity this recipe
 # exists to avoid — the same reason numpy-cp312 builds from source.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz
-  sha256: "67b2ad2ad54c72ca6d04975a9b2df8c3638c34ddd5b28738e94fc2b57929d378"
-  strip_components: 1
+  # Built from the source package scipy-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz).
+  type: package
+  package: scipy-src
 
 python:
   interpreter: python312
@@ -41,6 +41,8 @@ patches: []
 
 depends:
   build:
+    - name: scipy-src
+      version: "==1.18.0"
     - name: python312
     - name: numpy-cp312
     - name: cython-cp312

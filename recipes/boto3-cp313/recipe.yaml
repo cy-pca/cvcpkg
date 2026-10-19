@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/2d/2c/e9a853d4ca66f7ce1bf820674bcd9e6dd1934c27a4c545c67d3b69338d9b/boto3-1.43.49.tar.gz
-  sha256: "e58e0704805f720b94e40a56588eadd6da05d3693bde78b573116b11ae56710f"
-  strip_components: 1
+  # Built from the source package boto3-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/2d/2c/e9a853d4ca66f7ce1bf820674bcd9e6dd1934c27a4c545c67d3b69338d9b/boto3-1.43.49.tar.gz).
+  type: package
+  package: boto3-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: boto3-src
+      version: "==1.43.49"
     - name: python313
     - name: botocore-cp313
     - name: jmespath-cp313

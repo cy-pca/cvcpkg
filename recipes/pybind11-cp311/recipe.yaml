@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d2/c1/72b9622fcb32ff98b054f724e213c7f70d6898baa714f4516288456ceaba/pybind11-2.13.6.tar.gz
-  sha256: "ba6af10348c12b24e92fa086b39cfba0eff619b61ac77c406167d813b096d39a"
-  strip_components: 1
+  # Built from the source package pybind11-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d2/c1/72b9622fcb32ff98b054f724e213c7f70d6898baa714f4516288456ceaba/pybind11-2.13.6.tar.gz).
+  type: package
+  package: pybind11-src
 
 python:
   interpreter: python311
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: pybind11-src
+      version: "==2.13.6"
     - name: python311
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

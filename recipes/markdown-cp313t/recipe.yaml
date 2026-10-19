@@ -26,10 +26,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/29/6f/da4c6aea59b3001f2e8c0ec7497475aadaf3b021c10cab5b2858f0f32b26/markdown-3.10.3.tar.gz
-  sha256: "3589362618f743188b4d955b874402bc814f4f83f544dc207719f4baa7d9c45f"
-  strip_components: 1
+  # Built from the source package markdown-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/29/6f/da4c6aea59b3001f2e8c0ec7497475aadaf3b021c10cab5b2858f0f32b26/markdown-3.10.3.tar.gz).
+  type: package
+  package: markdown-src
 
 python:
   interpreter: python313t
@@ -39,6 +39,8 @@ patches: []
 
 depends:
   build:
+    - name: markdown-src
+      version: "==3.10.3"
     - name: python313t
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be
