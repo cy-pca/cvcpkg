@@ -37,6 +37,9 @@ recipe:
   #   smoke test now builds one vehicle twice on heaps scribbled with different bytes and
   #   requires identical saved states; cvc.5 fails it, cvc.6 passes. No ABI change: the
   #   layout and JPH_VERSION_ID are the same, and the sphere scene's hash is unchanged.
+  #   Later, still cvc.6: package.files scopes lib/libJolt* to the non-Windows platforms. The
+  #   strict declared-files check failed the Windows pack on it (MSVC names the library
+  #   Jolt.lib); no built file changes, and Windows had no cvc.6 yet.
   # wasm/cosmo/openbsd variants never reached the catalog (the live catalog has
   # no cross-target bundle for ANY package touched by 82d7acb8, so this is not
   # a Jolt-specific failure); (2) CROSS_PLATFORM_DETERMINISTIC=ON on EVERY
@@ -136,7 +139,7 @@ build:
 package:
   files:
     # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
-    - lib/libJolt*
+    - { glob: "lib/libJolt*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, cosmo] }
     # Windows import/static lib + runtime DLL (MSVC).
     - lib/Jolt.lib
     - bin/Jolt.dll
