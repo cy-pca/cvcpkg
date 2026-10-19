@@ -1,0 +1,16 @@
+Declare asc_isalpha where file_util.cpp uses it.
+
+Its WIN32 branch of need_dir() calls asc_isalpha (asc_ctype.hpp) without
+including that header; MinGW g++ 16 stops on it ("asc_isalpha was not declared
+in this scope", windows populate 2026-10-19).  Harmless elsewhere.
+
+--- a/common/file_util.cpp
++++ b/common/file_util.cpp
+@@ -13,6 +13,7 @@
+ #include "fstream.hpp"
+ #include "errors.hpp"
+ #include "string_list.hpp"
++#include "asc_ctype.hpp"
+ 
+ #ifdef USE_FILE_LOCKS
+ #  include <fcntl.h>

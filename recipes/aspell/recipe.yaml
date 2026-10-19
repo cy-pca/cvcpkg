@@ -21,12 +21,30 @@ source:
   type: package
   package: aspell-src
 
-patches: []
+patches:
+  # common/file_util.cpp's WIN32 branch calls asc_isalpha without including
+  # asc_ctype.hpp (MinGW g++ 16).  Harmless on other platforms.
+  - file_util-asc-ctype.patch
 
 depends:
   build:
     - name: aspell-src
       version: "==0.60.8"
+    # The Windows toolchain (build.ps1 via Invoke-CvcMsysAutotoolsBuild), as
+    # nfft3: without these the build used whatever MSYS2 the builder had, and
+    # a clean runner stops at "MSYS2 autotools not found on PATH".
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime: []
   host_tools: []
 
