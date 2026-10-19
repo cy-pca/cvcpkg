@@ -49,6 +49,11 @@ case "$(uname -s)" in
         ;;
 esac
 
+# libvpx.so links with --no-undefined but configure adds -lpthread only for
+# linux targets: FreeBSD failed with "undefined symbol: pthread_create".
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly) export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-pthread" ;;
+esac
 "${CVC_SOURCE_DIR}/configure" "${CONFIGURE_ARGS[@]}"
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install

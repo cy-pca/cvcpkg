@@ -49,6 +49,11 @@ cleanup() {
 trap cleanup EXIT
 mkdir -p "${T}/logs" "${T}/html"
 echo "hello from cvcpkg nginx" > "${T}/html/index.html"
+# Run as root (the BSD builders), nginx's worker drops to `nobody`, and
+# mktemp -d made the server root 0700: every request got 403 ("index.html is
+# forbidden (13: Permission denied)").  The tree holds nothing private.
+chmod 0755 "${T}" "${T}/html"
+chmod 0644 "${T}/html/index.html"
 
 free_port() {
     local cand

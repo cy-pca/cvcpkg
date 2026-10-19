@@ -31,6 +31,26 @@ if ! "${MAKE}" --version 2>/dev/null | grep -qi 'gnu make'; then
     fi
 fi
 
+# The Makefile's install target runs `install -v ...`, and OpenBSD's install(1)
+# has no -v ("install: unknown option -- v").  Where -v is refused, put a shim
+# that drops it ahead of the system install on PATH.
+_probe="$(mktemp -d)"
+if ! install -v -d "${_probe}/d" >/dev/null 2>&1; then
+    mkdir -p "${_probe}/shim"
+    _real_install="$(command -v install)"
+    cat > "${_probe}/shim/install" <<SH
+#!/bin/sh
+n=\$#
+while [ "\$n" -gt 0 ]; do
+    a=\$1; shift; n=\$((n - 1))
+    [ "\$a" = -v ] || set -- "\$@" "\$a"
+done
+exec ${_real_install} "\$@"
+SH
+    chmod 0755 "${_probe}/shim/install"
+    export PATH="${_probe}/shim:${PATH}"
+fi
+
 # `install` depends on the `wg` target, so this both builds and installs.
 # WITH_WGQUICK/WITH_BASHCOMPLETION are forced on (they otherwise auto-enable
 # only when their target dirs already exist, which they don't in a fresh

@@ -33,6 +33,10 @@ depends:
     - ninja
     - meson
     - pkg-config
+    # src/xkbcomp/parser.y needs bison: FreeBSD's byacc rejects it ("syntax
+    # error" at line 88) and OpenBSD has byacc only as `yacc`, which meson's
+    # find_program does not look for.
+    - bison
     # build.sh sets -Denable-tools=false, and libxkbcommon itself does not link
     # wayland -- the wayland bits only feed the (disabled) interactive-wayland
     # tool and wayland-scanner codegen.  Build-time only; must not ship.

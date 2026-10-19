@@ -27,8 +27,18 @@ else
     CONFIGURE_ARGS+=(--enable-shared --disable-static)
 fi
 
-./configure "${CONFIGURE_ARGS[@]}"
-make -j "${CVC_JOBS}"
-make install
+# configure's shebang is #!/bin/bash, and the BSDs keep bash in /usr/local/bin
+# or /usr/pkg/bin ("bad interpreter: No such file or directory" on the dev
+# fleet's FreeBSD), so run it through the bash on PATH.
+# x264's Makefile is GNU make; the BSDs' make is not.
+MAKE=make
+case "$(uname -s)" in
+    FreeBSD|OpenBSD|NetBSD|DragonFly)
+        command -v gmake >/dev/null 2>&1 && MAKE=gmake
+        ;;
+esac
+bash ./configure "${CONFIGURE_ARGS[@]}"
+"${MAKE}" -j "${CVC_JOBS}"
+"${MAKE}" install
 
 cvc_rewrite_install_paths
