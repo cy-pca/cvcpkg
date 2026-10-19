@@ -43,7 +43,9 @@ recipe:
   # mid-build, while the openssl/zlib/bzip2/xz/sqlite deps declared here went
   # unused.  _common/build-python.ps1 (shared by python311/312/313/313t) runs
   # pcbuild.proj directly against the deps, libffi included (its edge now
-  # covers windows), and ships the DLLs the modules import in DLLs\.  Other
+  # covers windows), and ships the DLLs the modules import in DLLs\.  No
+  # Python goes into the build: 3.13's tarball ships what PCbuild's code
+  # generators make, and python311/312 run theirs with this python313.  Other
   # platforms rebuild unchanged.
   cvc_revision: 9
   maintainer: "cvcpkg group"

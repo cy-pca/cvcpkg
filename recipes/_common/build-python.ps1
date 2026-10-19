@@ -2,7 +2,8 @@
 # recipes (python311, python312, python313, python313t); the counterpart of
 # _common/build-python.sh.
 #
-# Dot-source it and call Invoke-CvcPythonBuild (-FreeThreaded for python313t):
+# Dot-source it and call Invoke-CvcPythonBuild (-FreeThreaded for python313t,
+# -NoPythonForBuild for 3.13, which needs no Python to build):
 #
 #   . (Join-Path $SCRIPT_DIR "../_common/build-python.ps1")
 #   Invoke-CvcPythonBuild
@@ -21,40 +22,60 @@
 # pass, and every external library is the recipe's cvcpkg dependency in
 # CVC_DEPS_PREFIX: python-externals.props points PCbuild at them and
 # python-externals.targets swaps the libraries PCbuild compiles from source
-# (bzip2, xz, zlib, sqlite) for cvcpkg's.
+# (bzip2, xz, zlib, sqlite) for cvcpkg's.  Nor is a host Python used: the
+# one PCbuild runs its code generators with is cvcpkg's too (see below).
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'env-windows.ps1')
 
 function Invoke-CvcPythonBuild {
-    param([switch]$FreeThreaded)
+    param([switch]$FreeThreaded, [switch]$NoPythonForBuild)
 
     if (-not $env:CVC_DEPS_PREFIX) { throw 'CVC_DEPS_PREFIX must be set (the openssl/zlib/bzip2/xz/sqlite/libffi deps)' }
     Set-Location $env:CVC_SOURCE_DIR
 
     # ── The Python that runs CPython's code generators ──────────────────────
-    # PCbuild runs Tools\build scripts with a host Python on every build:
+    # PCbuild runs Tools\build scripts with a Python on every build:
     # deepfreeze.py in 3.11 and 3.12, generate_global_objects.py in 3.13.
-    # Name it, so PCbuild never calls find_python.bat, whose last resort is
-    # downloading one from nuget.org.  It must be 3.10 or newer: a python.exe
-    # on PATH (the Microsoft Store's stub prints a message instead and is
-    # skipped), else what the py launcher picks, as find_python.bat would.
-    # Looked up on the full PATH, before the trim below.  It is the one build
-    # input that is not a cvcpkg package: a cvcpkg CPython would have to exist
-    # before the first one could be built.
-    $hostPython = $null
-    $probe = 'import sys; print(sys.executable if sys.version_info >= (3, 10) else "")'
-    $candidates = @(Get-Command python.exe -All -ErrorAction SilentlyContinue | ForEach-Object { , @($_.Source) })
-    $launcher = Get-Command py.exe -ErrorAction SilentlyContinue
-    if ($launcher) { $candidates += , @($launcher.Source, '-3') }
-    foreach ($c in $candidates) {
-        $exe = & $c[0] @($c | Select-Object -Skip 1) -c $probe 2>$null
-        if ($LASTEXITCODE -eq 0 -and "$exe".Trim()) { $hostPython = "$exe".Trim(); break }
+    # Naming it keeps PCbuild from calling find_python.bat, which takes
+    # whatever the host has and, failing that, downloads one from nuget.org.
+    #
+    # 3.11 and 3.12 need one: deepfreeze.c is not in the source tarball.  It
+    # is cvcpkg's python313, from the build prefix (their Windows build edge),
+    # never a host python.exe or py launcher.
+    #
+    # 3.13 needs none (-NoPythonForBuild: python313, which no cvcpkg CPython
+    # can come before, and python313t).  3.13 has no deepfreeze and
+    # the tarball ships every generated file; PCbuild skips the generators it
+    # gates on Inputs/Outputs, as the outputs are up to date.  The exception
+    # is generate_global_objects.py, whose target has no Inputs/Outputs, so it
+    # always runs.  It rewrites only the headers whose content it would
+    # change, which for an unpatched tarball is none, and step 1 checks that
+    # with the interpreter just built.  A stub stands in for PythonForBuild:
+    # it skips that one script and fails the build on any other, so a
+    # generator that really has to run is never skipped silently.
+    if ($NoPythonForBuild) {
+        $stub = Join-Path $env:CVC_BUILD_DIR 'no-python-for-build.cmd'
+        Set-Content -LiteralPath $stub -Encoding Ascii -Value @(
+            '@echo off'
+            'if /i "%~nx1"=="generate_global_objects.py" ('
+            '  echo PythonForBuild: none; skipped %1, whose outputs the source tarball ships'
+            '  exit /b 0'
+            ')'
+            'echo error: this build has no Python, and PCbuild ran a code generator: %* 1>&2'
+            'exit /b 1'
+        )
+        $env:PythonForBuild = "`"$stub`""
+        Write-Host 'PythonForBuild: none (the source tarball ships the generated files)'
+    } else {
+        $buildPython = if ($env:CVC_BUILD_PREFIX) { Join-Path $env:CVC_BUILD_PREFIX 'python.exe' }
+        if (-not $buildPython -or -not (Test-Path -LiteralPath $buildPython)) {
+            throw "no python.exe in the build prefix ($env:CVC_BUILD_PREFIX); PCbuild needs one to run its code generators, and the recipe gets it from its Windows build edge on python313"
+        }
+        $ver = & $buildPython -I -c 'import sys; print(sys.version.split()[0])'
+        if ($LASTEXITCODE -ne 0) { throw "$buildPython does not run ($LASTEXITCODE)" }
+        $env:PythonForBuild = "`"$buildPython`""
+        Write-Host "PythonForBuild: $buildPython (Python $ver)"
     }
-    if (-not $hostPython) {
-        throw 'no Python 3.10+ (python.exe on PATH, or the py launcher); PCbuild needs one to run its code generators'
-    }
-    $env:PythonForBuild = "`"$hostPython`""
-    Write-Host "PythonForBuild: $hostPython"
 
     # ── Trim PATH to essentials before building ─────────────────────────────
     # The workflow's "Install system build tools" step dumps the ENTIRE machine
@@ -69,7 +90,7 @@ function Invoke-CvcPythonBuild {
     # Rebuild a lean PATH from only the tools the CPython build needs; vcvars
     # then adds the MSVC toolset with plenty of headroom. Capture the tool dirs
     # from the full PATH *before* trimming it.
-    $keep = @(Split-Path $hostPython)
+    $keep = @()
     foreach ($tool in 'git.exe', 'cmake.exe') {
         $c = Get-Command $tool -ErrorAction SilentlyContinue
         if ($c) { $keep += (Split-Path $c.Source) }
@@ -172,6 +193,30 @@ function Invoke-CvcPythonBuild {
     if (Test-Path (Join-Path $env:CVC_SOURCE_DIR 'externals')) {
         throw 'PCbuild created externals\ — something fetched CPython''s bundled externals'
     }
+    $buildDir = Join-Path $env:CVC_SOURCE_DIR 'PCbuild\amd64'
+    if ($FreeThreaded) {
+        $built = Get-ChildItem -LiteralPath $buildDir -Filter 'python3.*t.exe' | Select-Object -First 1
+        if (-not $built) { throw "no python3.Xt.exe in $buildDir" }
+        $py = $built.FullName
+    } else {
+        $py = Join-Path $buildDir 'python.exe'
+    }
+
+    # With no PythonForBuild the stub skipped generate_global_objects.py.  Run
+    # it now with the interpreter just built, which takes its Lib\ from the
+    # source tree, and require the headers it writes (all in Include\internal)
+    # to come out unchanged: they are what python3XX.dll was compiled with.
+    if ($NoPythonForBuild) {
+        $internal = Join-Path $env:CVC_SOURCE_DIR 'Include\internal'
+        $hashes = { Get-ChildItem -LiteralPath $internal -Filter '*.h' -File | Get-FileHash | ForEach-Object { "$($_.Hash) $($_.Path)" } }
+        $before = & $hashes
+        & $py Tools\build\generate_global_objects.py
+        if ($LASTEXITCODE -ne 0) { throw "generate_global_objects.py failed ($LASTEXITCODE)" }
+        if (Compare-Object $before @(& $hashes)) {
+            throw 'generate_global_objects.py changed Include\internal: this source needs its generators run, and a -NoPythonForBuild build has no Python for them'
+        }
+        Write-Host 'generate_global_objects.py, run by the built interpreter, left Include\internal unchanged'
+    }
 
     # ── 2. The cvcpkg DLLs the modules import, next to them ─────────────────
     # _ssl/_hashlib import libssl/libcrypto, _ctypes libffi, _sqlite3 sqlite3,
@@ -182,7 +227,6 @@ function Invoke-CvcPythonBuild {
     # extension module's dependencies in the module's own directory, so they
     # load under -S, in a venv, and in an embedding application, none of which
     # run the prefix's cvcpkg-dll-directories.pth.
-    $buildDir = Join-Path $env:CVC_SOURCE_DIR 'PCbuild\amd64'
     # Import tables name DLLs in any case (bzip2's .def says LIBBZ2); copy the
     # file under its own name.  Hashtable keys compare case-insensitively.
     $depsDlls = @{}
@@ -223,14 +267,7 @@ function Invoke-CvcPythonBuild {
     # modules.
     $layoutArgs = @('--copy', $env:CVC_INSTALL_DIR, '--preset-default', '--include-pip',
                     '--include-dev', '--include-stable', '--precompile')
-    if ($FreeThreaded) {
-        $layoutArgs += '--include-freethreaded'
-        $built = Get-ChildItem -LiteralPath $buildDir -Filter 'python3.*t.exe' | Select-Object -First 1
-        if (-not $built) { throw "no python3.Xt.exe in $buildDir" }
-        $py = $built.FullName
-    } else {
-        $py = Join-Path $buildDir 'python.exe'
-    }
+    if ($FreeThreaded) { $layoutArgs += '--include-freethreaded' }
     & $py PC\layout @layoutArgs
     if ($LASTEXITCODE -ne 0) { throw "PC\layout failed ($LASTEXITCODE)" }
     if ($FreeThreaded) {

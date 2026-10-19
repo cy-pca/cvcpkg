@@ -48,7 +48,8 @@ recipe:
   # handed to python, with a flag PCbuild does not have.  It is now python313's
   # build, _common/build-python.ps1, with -FreeThreaded (DisableGil, then
   # PC\layout --include-freethreaded), against the cvcpkg
-  # openssl/zlib/bzip2/xz/sqlite/libffi deps with nothing downloaded.
+  # openssl/zlib/bzip2/xz/sqlite/libffi deps with nothing downloaded, and no
+  # Python to run PCbuild's code generators with (3.13 needs none).
   # package.files declares the Windows tree, and the Unix entries are scoped
   # off windows (the strict pack check would have failed on every one).  Other
   # platforms rebuild unchanged.

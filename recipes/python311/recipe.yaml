@@ -67,7 +67,9 @@ recipe:
   # pcbuild.proj directly against the deps, libffi included (its edge now
   # covers windows), and ships the DLLs the modules import in DLLs\.  New on
   # Windows too: python3.dll (--include-stable, which python312 already had)
-  # and the smoke check.  Other platforms rebuild unchanged.
+  # and the smoke check.  The Python PCbuild runs deepfreeze.py and its other
+  # code generators with is cvcpkg's python313 (a Windows build edge), not
+  # the host's.  Other platforms rebuild unchanged.
   cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -93,6 +95,11 @@ depends:
   build:
     - name: python311-src
       version: "==3.11.13"
+    # The Python PCbuild runs deepfreeze.py and its other code generators with
+    # (_common/build-python.ps1).  python313 builds with none.
+    - name: python313
+      version: "^3.13"
+      platforms: [windows]
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl

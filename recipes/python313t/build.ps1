@@ -6,7 +6,8 @@
 # --include-freethreaded, which stages python3.13t.exe, pythonw3.13t.exe,
 # python313t.dll, python3t.dll and the *.cp313t-win_amd64.pyd modules.  The
 # interpreter has no bare python.exe: consumers find it as python3.13t.exe
-# (_common/python-wheel.ps1).
+# (_common/python-wheel.ps1).  Like python313 it takes no Python to run
+# PCbuild's code generators with (-NoPythonForBuild).
 #
 # This used to run `python ./PCbuild\build.bat ... --experimental-instdir`,
 # which handed a batch file to python with a flag PCbuild does not have, so
@@ -15,4 +16,4 @@ $ErrorActionPreference = 'Stop'
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $SCRIPT_DIR "../_common/build-python.ps1")
 
-Invoke-CvcPythonBuild -FreeThreaded
+Invoke-CvcPythonBuild -FreeThreaded -NoPythonForBuild

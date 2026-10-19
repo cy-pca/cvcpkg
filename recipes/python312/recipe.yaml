@@ -94,7 +94,9 @@ recipe:
   # mid-build, while the openssl/zlib/bzip2/xz/sqlite deps declared here went
   # unused.  _common/build-python.ps1 (shared by python311/312/313/313t) runs
   # pcbuild.proj directly against the deps, libffi included (its edge now
-  # covers windows), and ships the DLLs the modules import in DLLs\.  Other
+  # covers windows), and ships the DLLs the modules import in DLLs\.  The
+  # Python PCbuild runs deepfreeze.py and its other code generators with is
+  # cvcpkg's python313 (a Windows build edge), not the host's.  Other
   # platforms rebuild unchanged.
   cvc_revision: 18
   maintainer: "cvcpkg group"
@@ -121,6 +123,11 @@ depends:
   build:
     - name: python312-src
       version: "==3.12.10"
+    # The Python PCbuild runs deepfreeze.py and its other code generators with
+    # (_common/build-python.ps1).  python313 builds with none.
+    - name: python313
+      version: "^3.13"
+      platforms: [windows]
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl
