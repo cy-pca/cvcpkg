@@ -20,15 +20,18 @@ recipe:
     Only the library is built; the lame frontend binary is omitted.
 
 source:
-  type: tarball
-  url: https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download
-  sha256: "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
-  strip_components: 1
+  # Built from lame-src, the source package of the lame recipe: both build from
+  # the same upstream tarball
+  # (https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download).
+  type: package
+  package: lame-src
 
 patches: []
 
 depends:
   build:
+    - name: lame-src
+      version: "==3.100"
     # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
     # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
     # builder has.  The prod builder cmps-a91453 has an incomplete one: lame

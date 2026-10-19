@@ -25,5 +25,11 @@ case "$(uname -s)" in
         ;;
 esac
 
-"${MAKE}" -j "${CVC_JOBS}" AUTOMAKE=true ACLOCAL=true AUTOCONF=true AUTOHEADER=true
-"${MAKE}" install AUTOMAKE=true ACLOCAL=true AUTOCONF=true AUTOHEADER=true
+# MAKEINFO=true: the shipped doc/libtool.info is used as is.  Built from the
+# libtool-src package, the tree comes with one mtime throughout, so the touch
+# above leaves configure newer than doc/stamp-vti; its rule then rewrites
+# doc/version.texi with libtool.texi's (new) date, and make would rebuild the
+# manual with a makeinfo most hosts lack (Windows: "makeinfo: command not
+# found", Error 127).
+"${MAKE}" -j "${CVC_JOBS}" AUTOMAKE=true ACLOCAL=true AUTOCONF=true AUTOHEADER=true MAKEINFO=true
+"${MAKE}" install AUTOMAKE=true ACLOCAL=true AUTOCONF=true AUTOHEADER=true MAKEINFO=true

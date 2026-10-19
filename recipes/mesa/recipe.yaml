@@ -22,15 +22,17 @@ recipe:
     No hardware drivers, no Vulkan, no gbm, no video codecs, no OpenCL.
 
 source:
-  type: tarball
-  url: https://archive.mesa3d.org/mesa-25.3.6.tar.xz
-  sha256: "59217efeac3b64e7ced958324b9db7494f1e0741aeb22d780276514cc1b8f206"
-  strip_components: 1
+  # Built from the source package mesa-src, which pins the upstream tarball
+  # (https://archive.mesa3d.org/mesa-25.3.6.tar.xz).
+  type: package
+  package: mesa-src
 
 patches: []
 
 depends:
   build:
+    - name: mesa-src
+      version: "==25.3.6"
     - meson
     - ninja
     - pkg-config

@@ -18,15 +18,17 @@ recipe:
     Required by HarfBuzz, Fontconfig, Cairo, and Pango.
 
 source:
-  type: tarball
-  url: https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz
-  sha256: "0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
-  strip_components: 1
+  # Built from the source package freetype-src, which pins the upstream tarball
+  # (https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz).
+  type: package
+  package: freetype-src
 
 patches: []
 
 depends:
   build:
+    - name: freetype-src
+      version: "==2.13.3"
     - cmake
     - ninja
   runtime:

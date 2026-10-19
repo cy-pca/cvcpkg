@@ -16,10 +16,10 @@ recipe:
     GNU Automake — generates Makefile.in files for autoconf.
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/automake/automake-1.17.tar.xz
-  sha256: "8920c1fc411e13b90bf704ef9db6f29d540e76d232cb3b2c9f4dc4cc599bd990"
-  strip_components: 1
+  # Built from the source package automake-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/automake/automake-1.17.tar.xz).
+  type: package
+  package: automake-src
 
 patches: []
 
@@ -30,6 +30,8 @@ depends:
   # depends.get("runtime", depends.get("build", [])).
   runtime: []
   build:
+    - name: automake-src
+      version: "==1.17"
     - autoconf
     # Windows builds (and runs) automake inside the MSYS subsystem of the MSYS2
     # bootstrap, with its MSYS perl; the cvcpkg perl there is a native Strawberry

@@ -15,10 +15,10 @@ recipe:
     the system libtool is not GNU-compatible.
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/libtool/libtool-2.5.4.tar.xz
-  sha256: "f81f5860666b0bc7d84baddefa60d1cb9fa6fceb2398cc3baca6afaa60266675"
-  strip_components: 1
+  # Built from the source package libtool-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/libtool/libtool-2.5.4.tar.xz).
+  type: package
+  package: libtool-src
 
 patches: []
 
@@ -28,6 +28,8 @@ depends:
   # cross-compiling, so a native Windows build needs m4 as a real build dep).
   # Its scripts and libltdl run inside MSYS2, hence msys2 at runtime too.
   build:
+    - name: libtool-src
+      version: "==2.5.4"
     - name: msys2
       platforms: [windows]
     - name: make

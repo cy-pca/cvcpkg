@@ -16,10 +16,10 @@ recipe:
     host's (which on BSD/macOS may be BSD make or an older version).
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz
-  sha256: "dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3"
-  strip_components: 1
+  # Built from the source package make-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz).
+  type: package
+  package: make-src
 
 patches: []
 
@@ -30,6 +30,8 @@ depends:
   # see notes); with no make in the bootstrap, build.sh uses GNU Make's own
   # make-less build.sh instead.
   build:
+    - name: make-src
+      version: "==4.4.1"
     - name: msys2
       platforms: [windows]
   runtime:

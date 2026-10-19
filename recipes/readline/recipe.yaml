@@ -19,15 +19,17 @@ recipe:
   tags: [utils]
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz
-  sha256: "fe5383204467828cd495ee8d1d3c037a7eba1389c22bc6a041f627976f9061cc"
-  strip_components: 1
+  # Built from the source package readline-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz).
+  type: package
+  package: readline-src
 
 patches: []
 
 depends:
   build:
+    - name: readline-src
+      version: "==8.3"
     - pkg-config
     - ncurses
   runtime:

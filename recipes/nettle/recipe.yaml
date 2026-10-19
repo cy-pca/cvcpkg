@@ -19,15 +19,17 @@ recipe:
     is irrelevant for TLS control traffic).
 
 source:
-  type: tarball
-  url: https://ftp.gnu.org/gnu/nettle/nettle-3.10.1.tar.gz
-  sha256: "b0fcdd7fc0cdea6e80dcf1dd85ba794af0d5b4a57e26397eee3bc193272d9132"
-  strip_components: 1
+  # Built from the source package nettle-src, which pins the upstream tarball
+  # (https://ftp.gnu.org/gnu/nettle/nettle-3.10.1.tar.gz).
+  type: package
+  package: nettle-src
 
 patches: []
 
 depends:
   build:
+    - name: nettle-src
+      version: "==3.10.1"
     - make
     - m4
     - name: gmp

@@ -33,15 +33,17 @@ recipe:
     WebRTC, and many streaming applications.
 
 source:
-  type: tarball
-  url: https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz
-  sha256: "6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1"
-  strip_components: 1
+  # Built from the source package libopus-src, which pins the upstream tarball
+  # (https://ftp.osuosl.org/pub/xiph/releases/opus/opus-1.6.1.tar.gz).
+  type: package
+  package: libopus-src
 
 patches: []
 
 depends:
   build:
+    - name: libopus-src
+      version: "==1.6.1"
     # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
     # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
     # builder has.  The prod builder cmps-a91453 has an incomplete one: lame

@@ -30,15 +30,17 @@ recipe:
     Depends on libogg.
 
 source:
-  type: tarball
-  url: https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz
-  sha256: "0e982409a9c3fc82ee06e08205b1355e5c6aa4c36bca58146ef399621b0ce5ab"
-  strip_components: 1
+  # Built from the source package libvorbis-src, which pins the upstream tarball
+  # (https://ftp.osuosl.org/pub/xiph/releases/vorbis/libvorbis-1.3.7.tar.gz).
+  type: package
+  package: libvorbis-src
 
 patches: []
 
 depends:
   build:
+    - name: libvorbis-src
+      version: "==1.3.7"
     # Windows: the MinGW toolchain is a declared build dep, staged into the BUILD
     # prefix (build.ps1 puts its bin first on PATH), not whatever MSYS2 the
     # builder has.  The prod builder cmps-a91453 has an incomplete one: lame

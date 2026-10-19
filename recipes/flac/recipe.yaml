@@ -15,15 +15,17 @@ recipe:
     addon (acodec) and many audio applications.
 
 source:
-  type: tarball
-  url: https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz
-  sha256: "f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920"
-  strip_components: 1
+  # Built from the source package flac-src, which pins the upstream tarball
+  # (https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz).
+  type: package
+  package: flac-src
 
 patches: []
 
 depends:
   build:
+    - name: flac-src
+      version: "==1.5.0"
     - cmake
     - ninja
     - pkg-config

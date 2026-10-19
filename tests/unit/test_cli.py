@@ -5028,9 +5028,23 @@ class TestBuildsSubmitDagCLI:
 
         return FakeClient
 
+    # nasm builds from its source package, so its jobs need a builder that can
+    # (every current builder advertises source_packages).
     _REGISTRY = [
-        {"name": "lin", "platform": "linux", "arch": "x86_64", "status": "online"},
-        {"name": "sandipaws-dev", "platform": "windows", "arch": "x86_64", "status": "offline"},
+        {
+            "name": "lin",
+            "platform": "linux",
+            "arch": "x86_64",
+            "status": "online",
+            "capabilities": {"source_packages": True},
+        },
+        {
+            "name": "sandipaws-dev",
+            "platform": "windows",
+            "arch": "x86_64",
+            "status": "offline",
+            "capabilities": {"source_packages": True},
+        },
     ]
 
     def _submit(self, monkeypatch, *extra):
