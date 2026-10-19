@@ -99,13 +99,10 @@ if [[ "${CVC_PLATFORM}" == "macos" && "${CVC_LINK}" == "shared" ]]; then
 fi
 
 # OpenBSD's <arpa/nameser.h> predates the BIND 8 enums (ns_c_in, ns_t_srv,
-# ...), and c-ares only defines them itself when the system has no nameser.h at
-# all, so grpc's c-ares resolvers (ares_resolver.cc, grpc_ares_wrapper.cc) find
-# neither:  error: use of undeclared identifier 'ns_c_in'. Supply the three
-# they use, with their RFC 1035 / RFC 2782 values.
-if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
-    export CXXFLAGS="${CXXFLAGS:-} -Dns_c_in=1 -Dns_t_srv=33 -Dns_t_txt=16"
-fi
+# ...): openbsd-ares-nameser.patch gives ares_resolver.cc grpc's own definitions.
+# (These were once -D macros on the command line, which then broke
+# grpc_ares_wrapper.cc: its iomgr/nameser.h defines the same names as enumerators,
+# "expected identifier", populate 2026-10-19.)
 
 cvc_cmake_build \
     ${_extra_cmake_flags[@]+"${_extra_cmake_flags[@]}"} \
