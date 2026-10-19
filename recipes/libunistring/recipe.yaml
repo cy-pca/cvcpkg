@@ -2,7 +2,8 @@ schema_version: 1
 recipe:
   name: libunistring
   upstream_version: "1.3"
-  cvc_revision: 3
+  cvc_revision: 4
+  # cvc.4: ships no libtool .la (see build.sh).
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

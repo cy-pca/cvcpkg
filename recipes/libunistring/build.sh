@@ -34,6 +34,13 @@ command -v gmake >/dev/null 2>&1 && MAKE=gmake
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
 
+# Strip libtool archives (.la), as recipes/iconv and recipes/libx11 do.
+# libunistring.la's dependency_libs named libiconv.la, which iconv stopped
+# shipping (iconv cvc.5), so a downstream libtool link through it failed:
+# "libiconv.la is not a valid libtool archive" (idn2 on OpenBSD, populate
+# 2026-10-19).  The shared library and its NEEDED entries carry the link.
+find "${CVC_INSTALL_DIR}" -name '*.la' -delete
+
 if command -v cvc_rewrite_install_paths >/dev/null 2>&1; then
     cvc_rewrite_install_paths
 fi
