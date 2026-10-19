@@ -120,8 +120,18 @@ jobs:
           recipes = list_recipes(Path('recipes'))
           print(f'Loaded {len(recipes)} recipes')
 
-          ordered = resolve_build_order(recipes)
-          print('Build order:')
+          # Per platform, as every build resolves it: a platform-scoped
+          # dependency is only an edge on its platforms, so a Windows-only
+          # edge (pkg-config -> python312, which runs meson there) does not
+          # close a cycle through Linux-only ones (python312 -> readline ->
+          # pkg-config).  Any cycle within one platform still fails here.
+          platforms = sorted({m.platform for r in recipes for m in r.build_matrix} - {'any'})
+          for plat in platforms:
+              resolve_build_order(recipes, plat)
+          print(f'No dependency cycle on {len(platforms)} platforms: {\" \".join(platforms)}')
+
+          ordered = resolve_build_order(recipes, 'linux')
+          print('Build order (linux):')
           for i, r in enumerate(ordered, 1):
               deps = r.raw.get('depends', {}).get('build', [])
               dep_names = [d if isinstance(d, str) else d['name'] for d in deps]
