@@ -67,6 +67,11 @@ depends:
   host_tools: []
 
 build:
+  # DYNAMIC_ARCH compiles every x86_64 kernel set; on a 4-core BSD builder
+  # sharing its CPUs with a second job that ran past the server's 2h default
+  # (OpenBSD, populate job 20773, cvc.10; FreeBSD took 45 min).  4h.  A
+  # build-metadata change, not a cvc_revision bump: it changes no bundle.
+  timeout_seconds: 14400
   matrix:
     - platform: linux
       script: build.sh
