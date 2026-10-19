@@ -33,10 +33,10 @@ recipe:
 # build.sh compiles the wheel with the prefix's own interpreter.  The sdist
 # ships pre-generated C, so no Cython is needed.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/23/ad/28ecd7cb894d172f3c9c80a075eeeb2017ac62e3632cee05a5f9493547eb/lxml-6.1.3.tar.gz
-  sha256: "45222d94ddd511536f3b2f7d9deae3b2339b4ce0f075f1ca25703b07cad9dd21"
-  strip_components: 1
+  # Built from the source package lxml-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/23/ad/28ecd7cb894d172f3c9c80a075eeeb2017ac62e3632cee05a5f9493547eb/lxml-6.1.3.tar.gz).
+  type: package
+  package: lxml-src
 
 python:
   interpreter: python313
@@ -46,6 +46,8 @@ patches: []
 
 depends:
   build:
+    - name: lxml-src
+      version: "==6.1.3"
     - name: python313
     # PEP-517 backend (setuptools.build_meta); --no-build-isolation means pip
     # will NOT fetch it, so it must be in the build prefix (build.sh bridges it

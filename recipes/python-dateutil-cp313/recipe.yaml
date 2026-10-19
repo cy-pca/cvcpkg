@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz
-  sha256: "37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"
-  strip_components: 1
+  # Built from the source package python-dateutil-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz).
+  type: package
+  package: python-dateutil-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: python-dateutil-src
+      version: "==2.9.0"
     - name: python313
     - name: six-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

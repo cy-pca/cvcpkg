@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/bc/2c/da2832f435371cd6c95b64325f981b3babe71e4aa4a71798b00ce2073100/botocore-1.43.49.tar.gz
-  sha256: "7de02863c95b8008b1400c92a1a00996f25ad38944c07f7b620949f8798d1fdf"
-  strip_components: 1
+  # Built from the source package botocore-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/bc/2c/da2832f435371cd6c95b64325f981b3babe71e4aa4a71798b00ce2073100/botocore-1.43.49.tar.gz).
+  type: package
+  package: botocore-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: botocore-src
+      version: "==1.43.49"
     - name: python313
     - name: jmespath-cp313
     - name: python-dateutil-cp313

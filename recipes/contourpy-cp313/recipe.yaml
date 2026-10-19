@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/25/c2/fc7193cc5383637ff390a712e88e4ded0452c9fbcf84abe3de5ea3df1866/contourpy-1.3.1.tar.gz
-  sha256: "dfd97abd83335045a913e3bcc4a09c0ceadbe66580cf573fe961f4a825efa699"
-  strip_components: 1
+  # Built from the source package contourpy-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/25/c2/fc7193cc5383637ff390a712e88e4ded0452c9fbcf84abe3de5ea3df1866/contourpy-1.3.1.tar.gz).
+  type: package
+  package: contourpy-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: contourpy-src
+      version: "==1.3.1"
     - name: python313
     - name: numpy-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

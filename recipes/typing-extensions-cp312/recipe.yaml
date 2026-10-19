@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/72/94/1a15dd82efb362ac84269196e94cf00f187f7ed21c242792a923cdb1c61f/typing_extensions-4.15.0.tar.gz
-  sha256: "0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"
-  strip_components: 1
+  # Built from the source package typing-extensions-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/72/94/1a15dd82efb362ac84269196e94cf00f187f7ed21c242792a923cdb1c61f/typing_extensions-4.15.0.tar.gz).
+  type: package
+  package: typing-extensions-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: typing-extensions-src
+      version: "==4.15.0"
     - name: python312
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

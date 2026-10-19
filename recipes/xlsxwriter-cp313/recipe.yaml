@@ -23,10 +23,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/46/2c/c06ef49dc36e7954e55b802a8b231770d286a9758b3d936bd1e04ce5ba88/xlsxwriter-3.2.9.tar.gz
-  sha256: "254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c"
-  strip_components: 1
+  # Built from the source package xlsxwriter-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/46/2c/c06ef49dc36e7954e55b802a8b231770d286a9758b3d936bd1e04ce5ba88/xlsxwriter-3.2.9.tar.gz).
+  type: package
+  package: xlsxwriter-src
 
 python:
   interpreter: python313
@@ -36,6 +36,8 @@ patches: []
 
 depends:
   build:
+    - name: xlsxwriter-src
+      version: "==3.2.9"
     - name: python313
     # PEP-517 backend (setuptools.build_meta); --no-build-isolation means pip
     # will NOT fetch it, so it must be in the build prefix (build.sh bridges it

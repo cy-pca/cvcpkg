@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/48/f8/1ca5781d6be9cb9f73f7d40f4958c4bd1226a60598e3e39e1d6aaf838c4b/google_resumable_media-2.10.0.tar.gz
-  sha256: "e324bc9d0fdae4c52a08ae90456edc4e71ece858399e1217ac0eb3a51d6bc6ee"
-  strip_components: 1
+  # Built from the source package google-resumable-media-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/48/f8/1ca5781d6be9cb9f73f7d40f4958c4bd1226a60598e3e39e1d6aaf838c4b/google_resumable_media-2.10.0.tar.gz).
+  type: package
+  package: google-resumable-media-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: google-resumable-media-src
+      version: "==2.10.0"
     - name: python312
     - name: google-crc32c-cp312
     # PEP-517 build backend, from this sdist's [build-system] requires.

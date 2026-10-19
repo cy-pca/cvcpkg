@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/0a/a6/982f3a013b42e914a2420631afcaecb729c49525cc6cc58e15d27ee4cb4b/aiohttp_fast_zlib-0.3.0.tar.gz
-  sha256: "963a09de571b67fa0ef9cb44c5a32ede5cb1a51bc79fc21181b1cddd56b58b28"
-  strip_components: 1
+  # Built from the source package aiohttp-fast-zlib-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/0a/a6/982f3a013b42e914a2420631afcaecb729c49525cc6cc58e15d27ee4cb4b/aiohttp_fast_zlib-0.3.0.tar.gz).
+  type: package
+  package: aiohttp-fast-zlib-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: aiohttp-fast-zlib-src
+      version: "==0.3.0"
     - name: python313
     - name: aiohttp-cp313
     - name: zlib-ng-cp313

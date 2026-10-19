@@ -66,10 +66,10 @@ recipe:
 # source is a SECOND source that build.sh fetches (a recipe `source:` block is a
 # single tarball); it is sha256-pinned there.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/a3/fb/b6761fa2d5266f2cdb24c3b91f4023070ab7848381417678e7a289a1d52a/pymupdf-1.28.2.tar.gz
-  sha256: "5e0be7908a715aa20333caddd73f1d6f01e4cd0c26e869fa2dd0b7f344da2249"
-  strip_components: 1
+  # Built from the source package pymupdf-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/a3/fb/b6761fa2d5266f2cdb24c3b91f4023070ab7848381417678e7a289a1d52a/pymupdf-1.28.2.tar.gz).
+  type: package
+  package: pymupdf-src
 
 python:
   interpreter: python311
@@ -79,6 +79,8 @@ patches: []
 
 depends:
   build:
+    - name: pymupdf-src
+      version: "==1.28.2"
     - name: python311
     # PyMuPDF's PEP-517 backend is `pipcl` (pyproject build-backend = "setup",
     # backend-path = ["."]); pipcl itself declares pip + packaging.  pip ships

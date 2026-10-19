@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/9b/98/518d8e5081007684232226f475082b30087d0f585e8457db087298259f49/click-8.4.1.tar.gz
-  sha256: "918b5633eddf6b41c32d4f454bf0de810065c74e3f7dbf8ee5452f8be88d3e96"
-  strip_components: 1
+  # Built from the source package click-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/9b/98/518d8e5081007684232226f475082b30087d0f585e8457db087298259f49/click-8.4.1.tar.gz).
+  type: package
+  package: click-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: click-src
+      version: "==8.4.1"
     - name: python313
     - name: colorama-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

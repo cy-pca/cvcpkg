@@ -22,10 +22,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/31/83/bcd7f2e7dfcf601258a4eab92155816218e8f8adf6608d5f7d39da7ba863/maxminddb-3.1.1.tar.gz
-  sha256: "b19a938c481518f19a2c534ffdcb3bc59582f0fbbdcf9f81ac9adf912a0af686"
-  strip_components: 1
+  # Built from the source package maxminddb-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/31/83/bcd7f2e7dfcf601258a4eab92155816218e8f8adf6608d5f7d39da7ba863/maxminddb-3.1.1.tar.gz).
+  type: package
+  package: maxminddb-src
 
 python:
   interpreter: python311
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: maxminddb-src
+      version: "==3.1.1"
     - name: python311
     - name: setuptools-cp311
     - name: setuptools-scm-cp311

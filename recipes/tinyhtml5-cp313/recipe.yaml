@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/b1/1f/cfe2f6b30557c92b3f31d41707e09cef5c1efbd87392bc6c0430c46b0e4d/tinyhtml5-2.1.0.tar.gz
-  sha256: "60a50ec3d938a37e491efa01af895853060943dcebb5627de5b10d188b338a67"
-  strip_components: 1
+  # Built from the source package tinyhtml5-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/b1/1f/cfe2f6b30557c92b3f31d41707e09cef5c1efbd87392bc6c0430c46b0e4d/tinyhtml5-2.1.0.tar.gz).
+  type: package
+  package: tinyhtml5-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: tinyhtml5-src
+      version: "==2.1.0"
     - name: python313
     - name: webencodings-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

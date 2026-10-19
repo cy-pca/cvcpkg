@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/0e/00/16258bfa547559b2c936b50c882b4f0a36ebf6b69639eb763d8fa5e8d6cb/slack_sdk-3.42.0.tar.gz
-  sha256: "873db9e1f632ac650ffdbf9d8ba825f3e9e7e576a1e4f9604ccb2a15b3727e3d"
-  strip_components: 1
+  # Built from the source package slack-sdk-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/0e/00/16258bfa547559b2c936b50c882b4f0a36ebf6b69639eb763d8fa5e8d6cb/slack_sdk-3.42.0.tar.gz).
+  type: package
+  package: slack-sdk-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: slack-sdk-src
+      version: "==3.42.0"
     - name: python312
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

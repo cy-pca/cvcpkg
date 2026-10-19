@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/9b/22/a2d928e0e42baad0471d12ec44c71152ac870486e8298dddb2893b888c29/aiodns-4.0.4.tar.gz
-  sha256: "cb10e0c0d2591636716ad2fe402e977c16d71bdaf76bb8cb49e8a6633596f736"
-  strip_components: 1
+  # Built from the source package aiodns-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/9b/22/a2d928e0e42baad0471d12ec44c71152ac870486e8298dddb2893b888c29/aiodns-4.0.4.tar.gz).
+  type: package
+  package: aiodns-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: aiodns-src
+      version: "==4.0.4"
     - name: python311
     - name: pycares-cp311
     # PEP-517 build backend, from this sdist's [build-system] requires.

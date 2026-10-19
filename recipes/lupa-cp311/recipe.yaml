@@ -32,10 +32,10 @@ recipe:
 # sha256 is upstream's own sdist digest from the PyPI JSON API, re-derived from
 # the downloaded tarball.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/c3/a6/0f869fbb07c393f15473b1eefefb7b5bec162fb7481803d040ed4dc46002/lupa-2.8.tar.gz
-  sha256: "d8022641b9ec8ecf2c5ecbe9f47e5a70e0b87c4b5ae921b92cb02a638e0acd08"
-  strip_components: 1
+  # Built from the source package lupa-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/c3/a6/0f869fbb07c393f15473b1eefefb7b5bec162fb7481803d040ed4dc46002/lupa-2.8.tar.gz).
+  type: package
+  package: lupa-src
 
 python:
   interpreter: python311
@@ -52,6 +52,8 @@ patches:
 
 depends:
   build:
+    - name: lupa-src
+      version: "==2.8"
     # The interpreter the extensions are compiled against and installed into.
     - name: python311
     # PEP-517 backend (pyproject: setuptools; bdist_wheel is built into it).

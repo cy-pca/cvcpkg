@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/74/e1/adf05724d5838fa9fe2ada64bf390bbf37b77e3714189ae9f17a2c6d0470/faker-40.31.0.tar.gz
-  sha256: "af163a937aec99dca5abaeb94dd5008c51c26c6e9af1a26c8db4b3c4e7ca4403"
-  strip_components: 1
+  # Built from the source package faker-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/74/e1/adf05724d5838fa9fe2ada64bf390bbf37b77e3714189ae9f17a2c6d0470/faker-40.31.0.tar.gz).
+  type: package
+  package: faker-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: faker-src
+      version: "==40.31.0"
     - name: python313t
     - name: tzdata-cp313t
     # PEP-517 build backend, from this sdist's [build-system] requires.

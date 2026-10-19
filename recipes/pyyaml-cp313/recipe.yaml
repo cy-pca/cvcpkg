@@ -45,10 +45,10 @@ recipe:
 # already present in the build prefix. The sha256 is upstream's own sdist digest
 # from the PyPI JSON API, re-derived from the downloaded tarball.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz
-  sha256: "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f"
-  strip_components: 1
+  # Built from the source package pyyaml-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz).
+  type: package
+  package: pyyaml-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -63,6 +63,8 @@ patches: []
 
 depends:
   build:
+    - name: pyyaml-src
+      version: "==6.0.3"
     # The interpreter the extension is compiled against and installed into.
     - name: python313
     # PEP-517 backend. pyproject's build-backend is the in-tree

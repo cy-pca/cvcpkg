@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/b1/59/67cd42db7c549c0c106d2b56d2d2ec1915c459e0a92722029efc5359e871/urwid-3.0.5.tar.gz
-  sha256: "24be27ffafdb68c09cd95dc21b60ccfd02843320b25ce5feee1708b34fad5a23"
-  strip_components: 1
+  # Built from the source package urwid-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/b1/59/67cd42db7c549c0c106d2b56d2d2ec1915c459e0a92722029efc5359e871/urwid-3.0.5.tar.gz).
+  type: package
+  package: urwid-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: urwid-src
+      version: "==3.0.5"
     - name: python313t
     - name: wcwidth-cp313t
     # PEP-517 build backend, from this sdist's [build-system] requires.

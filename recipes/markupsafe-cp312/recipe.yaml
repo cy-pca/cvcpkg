@@ -36,10 +36,10 @@ recipe:
 # already present in the build prefix. The sha256 is upstream's own sdist digest
 # from the PyPI JSON API, re-derived from the downloaded tarball.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz
-  sha256: "722695808f4b6457b320fdc131280796bdceb04ab50fe1795cd540799ebe1698"
-  strip_components: 1
+  # Built from the source package markupsafe-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/7e/99/7690b6d4034fffd95959cbe0c02de8deb3098cc577c67bb6a24fe5d7caa7/markupsafe-3.0.3.tar.gz).
+  type: package
+  package: markupsafe-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -54,6 +54,8 @@ patches: []
 
 depends:
   build:
+    - name: markupsafe-src
+      version: "==3.0.3"
     # The interpreter the extension is compiled against and installed into.
     - name: python312
     # PEP-517 backend. markupsafe's pyproject requires setuptools>=77; the base

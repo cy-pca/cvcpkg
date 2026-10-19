@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz
-  sha256: "d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32"
-  strip_components: 1
+  # Built from the source package attrs-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz).
+  type: package
+  package: attrs-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: attrs-src
+      version: "==26.1.0"
     - name: python313t
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

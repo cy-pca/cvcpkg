@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d9/9a/4019b524b03a13438637b11538c82781a5eda427394380381af8f04f467a/pynacl-1.6.2.tar.gz
-  sha256: "018494d6d696ae03c7e656e5e74cdfd8ea1326962cc401bcf018f1ed8436811c"
-  strip_components: 1
+  # Built from the source package pynacl-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d9/9a/4019b524b03a13438637b11538c82781a5eda427394380381af8f04f467a/pynacl-1.6.2.tar.gz).
+  type: package
+  package: pynacl-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: pynacl-src
+      version: "==1.6.2"
     - name: python311
     - name: cffi-cp311
     # PEP-517 build backend, from this sdist's [build-system] requires.

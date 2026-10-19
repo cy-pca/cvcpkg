@@ -21,10 +21,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/06/f0/18d39dbd1971d6d62c4629cc7fa67f74821b0dc1f5a77af43719de7936a7/uvloop-0.22.1.tar.gz
-  sha256: "6c84bae345b9147082b17371e3dd5d42775bddce91f885499017f4607fdaf39f"
-  strip_components: 1
+  # Built from the source package uvloop-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/06/f0/18d39dbd1971d6d62c4629cc7fa67f74821b0dc1f5a77af43719de7936a7/uvloop-0.22.1.tar.gz).
+  type: package
+  package: uvloop-src
 
 python:
   interpreter: python311
@@ -34,6 +34,8 @@ patches: []
 
 depends:
   build:
+    - name: uvloop-src
+      version: "==0.22.1"
     - name: python311
     - name: setuptools-cp311
     - name: wheel-cp311

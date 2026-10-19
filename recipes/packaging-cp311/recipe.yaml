@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d0/63/68dbb6eb2de9cb10ee4c9c14a0148804425e13c4fb20d61cce69f53106da/packaging-24.2.tar.gz
-  sha256: "c228a6dc5e932d346bc5739379109d49e8853dd8223571c7c5b55260edc0b97f"
-  strip_components: 1
+  # Built from the source package packaging-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d0/63/68dbb6eb2de9cb10ee4c9c14a0148804425e13c4fb20d61cce69f53106da/packaging-24.2.tar.gz).
+  type: package
+  package: packaging-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: packaging-src
+      version: "==24.2"
     - name: python311
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

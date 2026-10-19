@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/c0/37/5628dd55bf2b34257fc7603f0fe97c40e3aaf24265f416a9c85c95ca1436/black-26.5.1.tar.gz
-  sha256: "dd321f668053961824bcc1be1cc1df748b2d7e4fa28086b08331e577b0100a73"
-  strip_components: 1
+  # Built from the source package black-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/c0/37/5628dd55bf2b34257fc7603f0fe97c40e3aaf24265f416a9c85c95ca1436/black-26.5.1.tar.gz).
+  type: package
+  package: black-src
 
 python:
   interpreter: python312
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: black-src
+      version: "==26.5.1"
     - name: python312
     - name: click-cp312
     - name: mypy-extensions-cp312

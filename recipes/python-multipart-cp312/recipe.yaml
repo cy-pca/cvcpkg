@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz
-  sha256: "be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e"
-  strip_components: 1
+  # Built from the source package python-multipart-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz).
+  type: package
+  package: python-multipart-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: python-multipart-src
+      version: "==0.0.32"
     - name: python312
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

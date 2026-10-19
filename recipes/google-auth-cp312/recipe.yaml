@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/58/66/b4ba60005743e01933e22b4f62313e063f7460458b7d8a358427b4930013/google_auth-2.56.0.tar.gz
-  sha256: "f90fa030b569a92654b9d690665a073841df33d57487be53db583a9a0867a553"
-  strip_components: 1
+  # Built from the source package google-auth-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/58/66/b4ba60005743e01933e22b4f62313e063f7460458b7d8a358427b4930013/google_auth-2.56.0.tar.gz).
+  type: package
+  package: google-auth-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: google-auth-src
+      version: "==2.56.0"
     - name: python312
     - name: cryptography-cp312
     - name: pyasn1-modules-cp312

@@ -54,10 +54,10 @@ recipe:
 # already present in the build prefix. The sha256 was recomputed from the
 # downloaded tarball and matches upstream's own sdist digest in the PyPI JSON API.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/9f/a9/db8f313fdcd85d767d4973515e1db101f9c71f95fced83233de224673757/cryptography-48.0.0.tar.gz
-  sha256: "5c3932f4436d1cccb036cb0eaef46e6e2db91035166f1ad6505c3c9d5a635920"
-  strip_components: 1
+  # Built from the source package cryptography-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/9f/a9/db8f313fdcd85d767d4973515e1db101f9c71f95fced83233de224673757/cryptography-48.0.0.tar.gz).
+  type: package
+  package: cryptography-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -73,6 +73,8 @@ patches: []
 
 depends:
   build:
+    - name: cryptography-src
+      version: "==48.0.0"
     # The interpreter the extension is compiled against and installed into.
     - name: python312
     # The PEP-517 backend cryptography declares (`build-backend = "maturin"`).

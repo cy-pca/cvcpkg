@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/25/e2/dfa73fe78f773018dcaebc6d09b819bc10d328ff5a6b4a66efa1e3d71f52/hatchling-1.31.0.tar.gz
-  sha256: "6b48ad4068a482ed7239b3a8215bc55b47aad3345d58dfc94e553c5d2d46211b"
-  strip_components: 1
+  # Built from the source package hatchling-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/25/e2/dfa73fe78f773018dcaebc6d09b819bc10d328ff5a6b4a66efa1e3d71f52/hatchling-1.31.0.tar.gz).
+  type: package
+  package: hatchling-src
 
 python:
   interpreter: python311
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: hatchling-src
+      version: "==1.31.0"
     - name: python311
     - name: packaging-cp311
     - name: pathspec-cp311

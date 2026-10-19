@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz
-  sha256: "231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c"
-  strip_components: 1
+  # Built from the source package urllib3-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz).
+  type: package
+  package: urllib3-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: urllib3-src
+      version: "==2.7.0"
     - name: python311
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

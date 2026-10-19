@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz
-  sha256: "677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6"
-  strip_components: 1
+  # Built from the source package pyasn1-modules-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz).
+  type: package
+  package: pyasn1-modules-src
 
 python:
   interpreter: python311
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: pyasn1-modules-src
+      version: "==0.4.2"
     - name: python311
     - name: pyasn1-cp311
     # PEP-517 build backend, from this sdist's [build-system] requires.

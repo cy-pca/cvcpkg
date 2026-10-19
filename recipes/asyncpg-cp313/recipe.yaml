@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/fe/cc/d18065ce2380d80b1bcce927c24a2642efd38918e33fd724bc4bca904877/asyncpg-0.31.0.tar.gz
-  sha256: "c989386c83940bfbd787180f2b1519415e2d3d6277a70d9d0f0145ac73500735"
-  strip_components: 1
+  # Built from the source package asyncpg-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/fe/cc/d18065ce2380d80b1bcce927c24a2642efd38918e33fd724bc4bca904877/asyncpg-0.31.0.tar.gz).
+  type: package
+  package: asyncpg-src
 
 python:
   interpreter: python313
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: asyncpg-src
+      version: "==0.31.0"
     - name: python313
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

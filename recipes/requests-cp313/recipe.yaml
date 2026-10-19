@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz
-  sha256: "f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed"
-  strip_components: 1
+  # Built from the source package requests-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz).
+  type: package
+  package: requests-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: requests-src
+      version: "==2.34.2"
     - name: python313
     - name: certifi-cp313
     - name: charset-normalizer-cp313

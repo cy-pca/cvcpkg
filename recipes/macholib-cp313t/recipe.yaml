@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz
-  sha256: "f408c93ab2e995cd2c46e34fe328b130404be143469e41bc366c807448979362"
-  strip_components: 1
+  # Built from the source package macholib-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/10/2f/97589876ea967487978071c9042518d28b958d87b17dceb7cdc1d881f963/macholib-1.16.4.tar.gz).
+  type: package
+  package: macholib-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: macholib-src
+      version: "==1.16.4"
     - name: python313t
     - name: altgraph-cp313t
     # PEP-517 build backend, from this sdist's [build-system] requires.

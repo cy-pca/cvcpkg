@@ -21,10 +21,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/6f/a2/f2a38eb05b747ed3e54e1be33be339d4a14c1f5cc6a6e2b342b5e8160d51/coincurve-21.0.0.tar.gz
-  sha256: "8b37ce4265a82bebf0e796e21a769e56fdbf8420411ccbe3fafee4ed75b6a6e5"
-  strip_components: 1
+  # Built from the source package coincurve-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/6f/a2/f2a38eb05b747ed3e54e1be33be339d4a14c1f5cc6a6e2b342b5e8160d51/coincurve-21.0.0.tar.gz).
+  type: package
+  package: coincurve-src
 
 python:
   interpreter: python313
@@ -35,6 +35,8 @@ patches:
 
 depends:
   build:
+    - name: coincurve-src
+      version: "==21.0.0"
     - name: python313
     - name: hatchling-cp313
     - name: packaging-cp313

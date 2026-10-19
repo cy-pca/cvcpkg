@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz
-  sha256: "ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464"
-  strip_components: 1
+  # Built from the source package typing-inspection-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz).
+  type: package
+  package: typing-inspection-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: typing-inspection-src
+      version: "==0.4.2"
     - name: python313
     - name: typing-extensions-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

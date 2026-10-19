@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/85/9f/01a1a99704853cb63f253eea009390c88e7131c67e66a0a02099a8c917cb/pywin32-ctypes-0.2.3.tar.gz
-  sha256: "d162dc04946d704503b2edc4d55f3dba5c1d539ead017afa00142c38b9885755"
-  strip_components: 1
+  # Built from the source package pywin32-ctypes-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/85/9f/01a1a99704853cb63f253eea009390c88e7131c67e66a0a02099a8c917cb/pywin32-ctypes-0.2.3.tar.gz).
+  type: package
+  package: pywin32-ctypes-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: pywin32-ctypes-src
+      version: "==0.2.3"
     - name: python312
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

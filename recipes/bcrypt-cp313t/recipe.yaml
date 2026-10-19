@@ -47,10 +47,10 @@ recipe:
 # recomputed from the downloaded tarball and matches upstream's own sdist digest
 # in the PyPI JSON API.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d4/36/3329e2518d70ad8e2e5817d5a4cac6bba05a47767ec416c7d020a965f408/bcrypt-5.0.0.tar.gz
-  sha256: "f748f7c2d6fd375cc93d3fba7ef4a9e3a092421b8dbf34d8d4dc06be9492dfdd"
-  strip_components: 1
+  # Built from the source package bcrypt-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d4/36/3329e2518d70ad8e2e5817d5a4cac6bba05a47767ec416c7d020a965f408/bcrypt-5.0.0.tar.gz).
+  type: package
+  package: bcrypt-src
 
 # Interpreter/ABI metadata: the builder exports these to build.sh as
 # CVC_PYTHON_INTERPRETER / CVC_PYTHON_ABI so cvc_python_exe resolves the prefix's
@@ -75,6 +75,8 @@ patches: []
 
 depends:
   build:
+    - name: bcrypt-src
+      version: "==5.0.0"
     # The interpreter the extension is compiled against and installed into.
     - name: python313t
     # PEP-517 backend: bcrypt names setuptools.build_meta explicitly ("to disable

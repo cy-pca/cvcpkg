@@ -29,10 +29,10 @@ recipe:
 # sha256-verifies this tarball and extracts it to CVC_SOURCE_DIR, which is what
 # lets patches/ below apply to a real source tree.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/d5/4d/ec706c3fcf39e26888c35b39615ff4d5865d184069666c47492cff1fbe50/pyinstaller-6.21.0.tar.gz
-  sha256: "bb9fab705983e393a2d1cac77d6972513057ad800215fd861dc15ff5272e98fd"
-  strip_components: 1
+  # Built from the source package pyinstaller-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/d5/4d/ec706c3fcf39e26888c35b39615ff4d5865d184069666c47492cff1fbe50/pyinstaller-6.21.0.tar.gz).
+  type: package
+  package: pyinstaller-src
 
 python:
   interpreter: python311
@@ -71,6 +71,8 @@ patches:
 
 depends:
   build:
+    - name: pyinstaller-src
+      version: "==6.21.0"
     - name: python311
     # PEP-517 backend, imported by the build interpreter under --no-build-isolation.
     - name: hatchling-cp311

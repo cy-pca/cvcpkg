@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/e1/97/373dcd5844ec0ea5893e13c39a2c67e7537987ad8de3842fe078db4582fa/python-decouple-3.8.tar.gz
-  sha256: "ba6e2657d4f376ecc46f77a3a615e058d93ba5e465c01bbe57289bfb7cce680f"
-  strip_components: 1
+  # Built from the source package python-decouple-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/e1/97/373dcd5844ec0ea5893e13c39a2c67e7537987ad8de3842fe078db4582fa/python-decouple-3.8.tar.gz).
+  type: package
+  package: python-decouple-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: python-decouple-src
+      version: "==3.8"
     - name: python313
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

@@ -22,10 +22,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz
-  sha256: "9bad61a4268dac112f1c5cd4630a56ede601b6ed420300677a869083d70a4c44"
-  strip_components: 1
+  # Built from the source package werkzeug-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/dd/b2/381be8cfdee792dd117872481b6e378f85c957dd7c5bca38897b08f765fd/werkzeug-3.1.8.tar.gz).
+  type: package
+  package: werkzeug-src
 
 python:
   interpreter: python313t
@@ -35,6 +35,8 @@ patches: []
 
 depends:
   build:
+    - name: werkzeug-src
+      version: "==3.1.8"
     - name: python313t
     - name: markupsafe-cp313t
     # PEP-517 build backend, from this sdist's [build-system] requires.

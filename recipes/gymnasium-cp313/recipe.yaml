@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/4d/ff/14b6880d703dfaca204490979d3254ccd280c99550798993319902873658/gymnasium-1.3.0.tar.gz
-  sha256: "6939e86e835d6b71b6ba6bfd360487420876deafc79bfb7bacba83a7c446bcf3"
-  strip_components: 1
+  # Built from the source package gymnasium-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/4d/ff/14b6880d703dfaca204490979d3254ccd280c99550798993319902873658/gymnasium-1.3.0.tar.gz).
+  type: package
+  package: gymnasium-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: gymnasium-src
+      version: "==1.3.0"
     - name: python313
     - name: cloudpickle-cp313
     - name: farama-notifications-cp313

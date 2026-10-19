@@ -20,10 +20,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/ed/aa/02910bdb8e2f1444f6654d5b296cd827d126f82209050ee7b1000f92ac4b/alembic-1.20.0.tar.gz
-  sha256: "db505480647bc60386c5369402f4a57a506b7539c9e9ef5e270d45cbbe4939bf"
-  strip_components: 1
+  # Built from the source package alembic-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/ed/aa/02910bdb8e2f1444f6654d5b296cd827d126f82209050ee7b1000f92ac4b/alembic-1.20.0.tar.gz).
+  type: package
+  package: alembic-src
 
 python:
   interpreter: python312
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: alembic-src
+      version: "==1.20.0"
     - name: python312
     - name: mako-cp312
     - name: sqlalchemy-cp312

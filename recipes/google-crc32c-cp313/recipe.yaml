@@ -24,10 +24,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/03/41/4b9c02f99e4c5fb477122cd5437403b552873f014616ac1d19ac8221a58d/google_crc32c-1.8.0.tar.gz
-  sha256: "a428e25fb7691024de47fecfbff7ff957214da51eddded0da0ae0e0f03a2cf79"
-  strip_components: 1
+  # Built from the source package google-crc32c-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/03/41/4b9c02f99e4c5fb477122cd5437403b552873f014616ac1d19ac8221a58d/google_crc32c-1.8.0.tar.gz).
+  type: package
+  package: google-crc32c-src
 
 python:
   interpreter: python313
@@ -37,6 +37,8 @@ patches: []
 
 depends:
   build:
+    - name: google-crc32c-src
+      version: "==1.8.0"
     - name: python313
     # PEP-517 build backend, from this sdist's [build-system] requires.
     # --no-build-isolation means pip will NOT fetch it, so it has to be

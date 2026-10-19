@@ -25,10 +25,10 @@ recipe:
 
 # From-source sdist, sha256 as published by PyPI for this exact version.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz
-  sha256: "334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc"
-  strip_components: 1
+  # Built from the source package anyio-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz).
+  type: package
+  package: anyio-src
 
 python:
   interpreter: python313
@@ -38,6 +38,8 @@ patches: []
 
 depends:
   build:
+    - name: anyio-src
+      version: "==4.13.0"
     - name: python313
     - name: idna-cp313
     # PEP-517 build backend, from this sdist's [build-system] requires.

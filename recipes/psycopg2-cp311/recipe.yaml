@@ -21,10 +21,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/91/81/6ea19b8b28feb9405c8c87a307776614d6e404bdb98467d1ce10a39d2c1d/psycopg2-2.9.13.tar.gz
-  sha256: "d36784fc2dae69523ba4b79c7d1d1b4d6e83e87836874f111262f4db940b16a6"
-  strip_components: 1
+  # Built from the source package psycopg2-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/91/81/6ea19b8b28feb9405c8c87a307776614d6e404bdb98467d1ce10a39d2c1d/psycopg2-2.9.13.tar.gz).
+  type: package
+  package: psycopg2-src
 
 python:
   interpreter: python311
@@ -34,6 +34,8 @@ patches: []
 
 depends:
   build:
+    - name: psycopg2-src
+      version: "==2.9.13"
     - name: python311
     - name: setuptools-cp311
     - name: libpq

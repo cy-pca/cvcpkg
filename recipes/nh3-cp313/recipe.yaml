@@ -20,10 +20,10 @@ recipe:
 # sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
 # extracts it to CVC_SOURCE_DIR.
 source:
-  type: tarball
-  url: https://files.pythonhosted.org/packages/5e/1b/ef84624f14954d270f74060a19fc550dd4f06656399447569afb584d8c06/nh3-0.3.6.tar.gz
-  sha256: "f3736c9dd3d1856f80cd031715b84ca75cda2bbb1ac802c3da26bfce590838d7"
-  strip_components: 1
+  # Built from the source package nh3-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/5e/1b/ef84624f14954d270f74060a19fc550dd4f06656399447569afb584d8c06/nh3-0.3.6.tar.gz).
+  type: package
+  package: nh3-src
 
 python:
   interpreter: python313
@@ -33,6 +33,8 @@ patches: []
 
 depends:
   build:
+    - name: nh3-src
+      version: "==0.3.6"
     - name: python313
     - name: maturin-cp313
     - name: rust
