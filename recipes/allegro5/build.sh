@@ -33,7 +33,16 @@ if [[ "${CVC_PLATFORM}" == "macos" ]]; then
 else
     _origin='$ORIGIN'
 fi
-export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${_origin} -Wl,-rpath,${_origin}/../lib${LDFLAGS:+ ${LDFLAGS}}"
+# OpenBSD gets no RUNPATH flags: its ld.so does not expand $ORIGIN (cvcpkg
+# drops RPATH there), and the shell expanding $ORIGIN to nothing left
+# `-Wl,-rpath, -Wl,-rpath,/../lib`, which OpenBSD's toolchain reads as an input
+# file "/../lib" ("ld: error: cannot open /../lib"), failing even CMake's
+# compiler check (populate 2026-10-19).
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib${LDFLAGS:+ ${LDFLAGS}}"
+else
+    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib -Wl,-rpath,${_origin} -Wl,-rpath,${_origin}/../lib${LDFLAGS:+ ${LDFLAGS}}"
+fi
 
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _shared=OFF
