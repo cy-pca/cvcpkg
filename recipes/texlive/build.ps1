@@ -114,7 +114,7 @@ $profileLines = @(
     'instopt_adjustpath 0',
     'instopt_adjustrepo 0',
     'instopt_letter 0',
-    'instopt_portable 0',
+    'instopt_portable 1',
     'instopt_write18_restricted 1',
     'tlpdbopt_autobackup 0',
     'tlpdbopt_create_formats 1',
@@ -126,6 +126,13 @@ $profileLines = @(
     'tlpdbopt_post_code 1',
     'tlpdbopt_w32_multi_user 0'
 )
+# instopt_portable 1: on Windows install-tl forces tlpdbopt_desktop_integration
+# to 1 whatever the profile says ("always menu shortcuts") and, unless the
+# install is portable, runs create_uninstaller -- Start-menu shortcuts and an
+# HKCU uninstall entry in the BUILDER's account (USERPROFILE above does not
+# redirect the shell folders).  Portable skips all of that; its only effect on
+# the tree is texmf.cnf/texmfcnf.lua pointing the per-user trees into the
+# install, which step 4 takes back out.
 $profilePath = Join-Path $w 'texlive.profile'
 [System.IO.File]::WriteAllLines($profilePath, [string[]]$profileLines)
 
@@ -138,6 +145,36 @@ foreach ($v in 'TEXMFCNF', 'TEXMFHOME', 'TEXMFVAR', 'TEXMFCONFIG', 'TEXINPUTS', 
 }
 $env:USERPROFILE = $scratchHome
 $env:HOME = $scratchHome
+
+# install-tl's TLWinGoo requires Win32::Shortcut when it loads, for desktop and
+# Start-menu shortcuts.  Strawberry Perl 5.40's portable zip does not ship it
+# ("Can't locate Win32/Shortcut.pm in @INC", windows populate 2026-10-19), and
+# this portable install creates no shortcut (see instopt_portable above), so a
+# build-time stub satisfies the require and the two constants TLWinGoo imports;
+# its new() dies if anything does try.  It is not installed, and the tree's own
+# tlperl carries the real module.
+& $perl -MWin32::Shortcut -e 1 2>$null
+if ($LASTEXITCODE -ne 0) {
+    $stubLib = Join-Path $w 'perl-stub'
+    New-Item -ItemType Directory -Force -Path (Join-Path $stubLib 'Win32') | Out-Null
+    $stub = @'
+package Win32::Shortcut;
+# cvcpkg build-time stub (recipes/texlive/build.ps1): install-tl creates no
+# shortcut in this build, but TLWinGoo requires the module when it loads.
+use strict;
+use warnings;
+use Exporter 'import';
+our @EXPORT_OK = qw(SW_SHOWNORMAL SW_SHOWMINNOACTIVE);
+use constant SW_SHOWNORMAL      => 1;
+use constant SW_SHOWMINNOACTIVE => 7;
+sub new { die "Win32::Shortcut is a build-time stub; shortcuts are not created\n" }
+1;
+'@
+    [System.IO.File]::WriteAllText((Join-Path $stubLib 'Win32\Shortcut.pm'), $stub)
+    $env:PERL5LIB = if ($env:PERL5LIB) { "$stubLib;$env:PERL5LIB" } else { $stubLib }
+    Write-Host "perl has no Win32::Shortcut; using the build-time stub in $stubLib"
+}
+
 & $perl (Join-Path $itl 'install-tl') -profile $profilePath -repository $mirror `
     -no-verify-downloads -no-interaction -no-gui
 if ($LASTEXITCODE -ne 0) { throw "install-tl failed ($LASTEXITCODE)" }
@@ -150,6 +187,18 @@ if (-not (Test-Path (Join-Path $bin 'pdflatex.exe'))) { throw 'install-tl did no
 $cnf = Join-Path $texdir 'texmf.cnf'
 $text = [System.IO.File]::ReadAllText($cnf)
 foreach ($form in @($t, $texdir)) { $text = $text.Replace($form, '$SELFAUTOPARENT') }
+# Undo the portable install's per-user redirection (see instopt_portable), so
+# TEXMFHOME/TEXMFVAR/TEXMFCONFIG are kpathsea's ~/texmf, ~/.texlive2025/... as on
+# the other platforms; the dropped lines are exactly the ones install-tl adds.
+$portableLines = @('TEXMFHOME = $TEXMFLOCAL', 'TEXMFVAR = $TEXMFSYSVAR',
+                   'TEXMFCONFIG = $TEXMFSYSCONFIG', 'ASYMPTOTE_HOME = $TEXMFCONFIG/asymptote')
+$text = (($text -split "`r?`n") | Where-Object { $portableLines -notcontains $_.Trim() }) -join "`n"
+$lua = Join-Path $texdir 'texmfcnf.lua'
+if (Test-Path $lua) {
+    $luaDrop = @('TEXMFHOME = "$TEXMFLOCAL",', 'TEXMFVAR = "$TEXMFSYSVAR",', 'TEXMFCONFIG = "$TEXMFSYSCONFIG",')
+    $luaText = ([System.IO.File]::ReadAllLines($lua) | Where-Object { $luaDrop -notcontains $_.Trim() }) -join "`n"
+    [System.IO.File]::WriteAllText($lua, $luaText + "`n")
+}
 [System.IO.File]::WriteAllText($cnf, $text)
 if ($text.Contains(($env:CVC_INSTALL_DIR -replace '\\', '/')) -or $text.Contains($env:CVC_INSTALL_DIR)) {
     throw 'texmf.cnf still names the staging prefix'
@@ -168,13 +217,22 @@ $itlScript = (Join-Path $itl 'install-tl')
 $forms = @(@($itlScript, 'install-tl'), @(($itlScript -replace '\\', '/'), 'install-tl'),
            @($texdir, '<texlive>'), @($t, '<texlive>'))
 $genDirs = @((Join-Path $texdir 'texmf-dist\web2c'), (Join-Path $texdir 'texmf-var'))
-foreach ($f in (Get-ChildItem $genDirs -Recurse -File)) {
+# Text files only, as build.sh's `grep -I`: the formats fmtutil dumps (tex.fmt,
+# mf.base, ...) are binary and record their input files' paths, which only
+# diagnostics read, and a text round trip would corrupt them.  A NUL in the
+# first 8000 bytes marks a file binary, as grep decides it.
+$genFiles = Get-ChildItem $genDirs -Recurse -File | Where-Object {
+    $fs = [System.IO.File]::OpenRead($_.FullName)
+    try { $buf = New-Object byte[] 8000; $n = $fs.Read($buf, 0, $buf.Length) } finally { $fs.Dispose() }
+    [Array]::IndexOf($buf, [byte]0, 0, $n) -lt 0
+}
+foreach ($f in $genFiles) {
     $raw = [System.IO.File]::ReadAllText($f.FullName)
     $new = $raw
     foreach ($pair in $forms) { $new = $new.Replace($pair[0], $pair[1]) }
     if ($new -ne $raw) { [System.IO.File]::WriteAllText($f.FullName, $new) }
 }
-$leftover = Get-ChildItem $genDirs -Recurse -File |
+$leftover = $genFiles |
     Select-String -SimpleMatch -Pattern $env:CVC_INSTALL_DIR, ($env:CVC_INSTALL_DIR -replace '\\', '/'),
                                         $env:CVC_BUILD_DIR, ($env:CVC_BUILD_DIR -replace '\\', '/') |
     Where-Object { $_.Line -notmatch '^\s*(%|#|--)' }
