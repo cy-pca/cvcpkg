@@ -128,9 +128,14 @@ build:
 package:
   files:
     # Unix static + shared artifacts (.a / .so / .so.N / .dylib).
-    - lib/libSDL3*
+    - { glob: "lib/libSDL3*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
     - lib/pkgconfig/sdl3.pc
-    - lib/cmake/SDL3/
+    - { glob: "lib/cmake/SDL3/", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
+    # MSVC (build.ps1): SDL installs its CMake package in cmake/ at the prefix
+    # root, where CMake looks for it on Windows (as pcre2), and names its import
+    # library SDL3.lib, so the Unix entries above match nothing there (windows
+    # populate 2026-10-19).
+    - { glob: "cmake/SDL3Config.cmake", platforms: [windows] }
     - include/SDL3/
     # Windows static + shared artifacts (import/static .lib + runtime .dll).
     - lib/SDL3*.lib
