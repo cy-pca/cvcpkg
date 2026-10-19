@@ -195,8 +195,11 @@ package:
     - { glob: "include/python3.11/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     # Windows layout (python.org / PC\layout tree at the prefix root): python.exe,
     # python3XX.dll, the stdlib (Lib/), extension modules (DLLs/), embed headers +
-    # import lib (include/, libs/python3XX.lib), and pip (Scripts/). This is exactly
-    # what find_package(Python3 Development.Embed) locates via Python3_ROOT_DIR.
+    # import lib (include/, libs/python3XX.lib). This is exactly what
+    # find_package(Python3 Development.Embed) locates via Python3_ROOT_DIR.  No
+    # Scripts/: PC\layout --include-pip puts pip in Lib/site-packages and writes
+    # no launchers, so a declared Scripts/ failed the strict pack check (prod
+    # populate job 21318, 2026-10-19).
     - { glob: "python*.exe", platforms: [windows] }
     - { glob: "python3*.dll", platforms: [windows] }
     - { glob: "vcruntime*.dll", platforms: [windows] }
@@ -204,7 +207,6 @@ package:
     - { glob: "DLLs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
-    - { glob: "Scripts/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 
