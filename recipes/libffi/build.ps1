@@ -110,4 +110,11 @@ if ($env:CVC_LINK -eq 'static') {
 # libffi.pc says -lffi, which MSVC (and meson, for glib) looks up as ffi.lib.
 Copy-Item (Join-Path $lib $msvcLib) (Join-Path $lib 'ffi.lib') -Force
 
+# The license travels with the library, as MIT asks.  CPython's Windows bundle
+# ships libffi-8.dll in DLLs\ and appends this text to its LICENSE.txt
+# (_common/python-externals.targets).
+$lic = Join-Path $env:CVC_INSTALL_DIR 'share\licenses\libffi'
+New-Item -ItemType Directory -Force -Path $lic | Out-Null
+Copy-Item (Join-Path $env:CVC_SOURCE_DIR 'LICENSE') $lic
+
 Invoke-CvcRewriteInstallPaths

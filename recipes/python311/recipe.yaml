@@ -67,8 +67,16 @@ recipe:
   # pcbuild.proj directly against the deps, libffi included (its edge now
   # covers windows), and ships the DLLs the modules import in DLLs\.  New on
   # Windows too: python3.dll (--include-stable, which python312 already had)
-  # and the smoke check.  Other platforms rebuild unchanged.
-  cvc_revision: 12
+  # and the smoke check.  The Python PCbuild runs deepfreeze.py and its other
+  # code generators with is cvcpkg's python313 (a Windows build edge), not
+  # the host's.  Other platforms rebuild unchanged.
+  # cvc.13: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts again, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.12 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 13
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -93,6 +101,11 @@ depends:
   build:
     - name: python311-src
       version: "==3.11.13"
+    # The Python PCbuild runs deepfreeze.py and its other code generators with
+    # (_common/build-python.ps1).  python313 builds with none.
+    - name: python313
+      version: "^3.13"
+      platforms: [windows]
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: openssl
@@ -206,6 +219,7 @@ package:
     - { glob: "Lib/", platforms: [windows] }
     - { glob: "DLLs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }

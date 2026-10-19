@@ -48,11 +48,18 @@ recipe:
   # handed to python, with a flag PCbuild does not have.  It is now python313's
   # build, _common/build-python.ps1, with -FreeThreaded (DisableGil, then
   # PC\layout --include-freethreaded), against the cvcpkg
-  # openssl/zlib/bzip2/xz/sqlite/libffi deps with nothing downloaded.
+  # openssl/zlib/bzip2/xz/sqlite/libffi deps with nothing downloaded, and no
+  # Python to run PCbuild's code generators with (3.13 needs none).
   # package.files declares the Windows tree, and the Unix entries are scoped
   # off windows (the strict pack check would have failed on every one).  Other
   # platforms rebuild unchanged.
-  cvc_revision: 11
+  # cvc.12: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.11 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -184,6 +191,7 @@ package:
     - { glob: "Lib/", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
   cmake_packages:
     - { name: Python3t, targets: ["Python3t::Python", "Python3t::Interpreter"] }
 
