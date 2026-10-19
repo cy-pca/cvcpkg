@@ -342,9 +342,20 @@ class TestWheelMatrixRecipes:
                 assert f"-{abi}-" in entry["url"], f"{abi}/{pkey} url is not a {abi} wheel"
         else:
             # From-source sdist: a single pinned tarball, compiled per platform via
-            # the build matrix (see the from-source python-packages plan).
-            assert r.source.type == "tarball", f"numpy-{abi}: unexpected source {r.source.type}"
+            # the build matrix (see the from-source python-packages plan).  The
+            # tarball is either the recipe's own source or, since the sdists moved
+            # to shared source packages (docs/source-recipes.md), that of the
+            # numpy-src recipe it builds from, which it must declare in
+            # depends.build.
             src = r.raw["source"]
+            if r.source.type == "package":
+                build_deps = [
+                    d if isinstance(d, str) else d["name"] for d in r.raw["depends"]["build"]
+                ]
+                assert r.source.package in build_deps, f"numpy-{abi}: source package not a dep"
+                src = Recipe.load(self.REPO / "recipes" / r.source.package).raw["source"]
+            else:
+                assert r.source.type == "tarball", f"numpy-{abi}: unexpected source {r.source.type}"
             assert src.get("url", "").startswith("https://"), f"numpy-{abi} sdist not https"
             assert len(src.get("sha256", "")) == 64, f"numpy-{abi} sdist sha256 malformed"
             assert r.build_matrix, f"numpy-{abi} from-source has no build matrix"
