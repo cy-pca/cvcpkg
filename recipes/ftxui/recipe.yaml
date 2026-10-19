@@ -52,6 +52,20 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    # wasm: cross-compiled with em++ (see build-wasm.sh — it also drops the
+    # -sUSE_PTHREADS FTXUI's CMake forces on every Emscripten build). Static
+    # only; wasm has no shared libraries. This is the browser terminal backend:
+    # libcvc's `ari` web target runs a .ari document through xterm.js.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # Threaded wasm: same build script; env-wasm.sh injects -pthread via the
+    # CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   files:
