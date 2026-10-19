@@ -177,6 +177,30 @@ if grep -rIn -e "${CVC_BUILD_DIR}" -e "${CVC_INSTALL_DIR}" "${TEXDIR}" | grep -v
     echo "staging paths left in the TeX Live tree (above)" >&2; exit 1
 fi
 
+# ── 4b. macOS: nothing from XQuartz ───────────────────────────────────
+# universal-darwin's mf (METAFONT with an X11 window) and xdvi-xaw link
+# XQuartz's libraries in /opt/X11 (libX11, libXt, libXaw, ...), which a clean
+# Mac does not have, so the bundle failed cvcpkg's loader-path gate (the
+# 2026-10-18 macOS arm64 populate).  mf-nowin is the same METAFONT without the
+# window, and it is what fmtutil builds mf.base with, so mf becomes a link to
+# it.  xdvi is an X11 previewer with no X-less build: it goes, with its
+# wrapper script and any link left dangling.
+if [ "$(uname -s)" = Darwin ]; then
+    if [ -x "${BIN}/mf-nowin" ]; then
+        rm -f "${BIN}/mf" && ln -s mf-nowin "${BIN}/mf"
+    fi
+    for f in "${BIN}"/*; do
+        if [ -f "${f}" ] && [ ! -L "${f}" ] && otool -L "${f}" 2>/dev/null | grep -q '/opt/X11/'; then
+            echo "texlive: dropping $(basename "${f}"), which links XQuartz (/opt/X11)"
+            rm -f "${f}"
+        fi
+    done
+    rm -f "${BIN}/xdvi"
+    for f in "${BIN}"/*; do
+        if [ -L "${f}" ] && [ ! -e "${f}" ]; then rm -f "${f}"; fi
+    done
+fi
+
 # ── 5. bin/ links ─────────────────────────────────────────────────────
 mkdir -p "${CVC_INSTALL_DIR}/bin"
 for t in "${TOOLS[@]}"; do
