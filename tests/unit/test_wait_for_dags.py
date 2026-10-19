@@ -52,9 +52,15 @@ class _FakeClient:
     as "nothing could have claimed the job" (hard fail).
     """
 
-    def __init__(self, jobs: dict[int, str], builders: list[dict] | None = None):
+    def __init__(
+        self,
+        jobs: dict[int, str],
+        builders: list[dict] | None = None,
+        deps: dict[int, list[int]] | None = None,
+    ):
         self._jobs = jobs
         self._builders = builders
+        self._deps = deps or {}
 
     def __call__(self, *a, **k):
         return self
@@ -92,6 +98,7 @@ class _FakeClient:
                 "recipe_name": f"r{jid}",
                 "platform": "linux",
                 "arch": "x86_64",
+                "depends_on": self._deps.get(jid, []),
             }
         )
 
@@ -101,10 +108,10 @@ def _fast_clock(monkeypatch):
     monkeypatch.setattr(_builds, "time", _FakeClock())
 
 
-def _patch_httpx(monkeypatch, jobs, builders=None):
+def _patch_httpx(monkeypatch, jobs, builders=None, deps=None):
     import httpx
 
-    monkeypatch.setattr(httpx, "Client", _FakeClient(jobs, builders))
+    monkeypatch.setattr(httpx, "Client", _FakeClient(jobs, builders, deps))
 
 
 def test_empty_dag_list_returns_immediately(monkeypatch):
@@ -332,3 +339,49 @@ def test_queued_and_dead_together_still_fail(monkeypatch):
         _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
     assert "never claimed" in str(exc.value)
     assert "r2" in str(exc.value)
+
+
+# ── A job pending on its own dependency is not "never claimed" ──
+#
+# The scheduler hands a job out only once every job it depends on has
+# succeeded, so at the deadline a dependent of a still-compiling job is
+# "pending" through no fault of any builder.  pr-381's four openbsd python
+# jobs failed the check as "never claimed" while their openssl was building.
+# The dependency's own state decides the outcome instead.
+
+
+def test_pending_on_a_running_dependency_is_a_soft_pass(monkeypatch, capsys):
+    _patch_httpx(
+        monkeypatch, {1: "running", 2: "pending"}, builders=[_LINUX_BUILDER], deps={2: [1]}
+    )
+    with pytest.raises(SystemExit) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert exc.value.code == WAIT_TIMEOUT_EXIT_CODE
+    assert "#2 r2 (waiting on #1)" in capsys.readouterr().out
+
+
+def test_pending_on_a_never_claimed_dependency_fails_naming_the_dependency(monkeypatch):
+    # The blocked job is not blamed; the dependency nothing claimed is.
+    import click
+
+    _patch_httpx(
+        monkeypatch, {1: "pending", 2: "pending"}, builders=[_LINUX_BUILDER], deps={2: [1]}
+    )
+    with pytest.raises(click.ClickException) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert "1 job(s) were never claimed" in str(exc.value)
+    assert "#1 r1" in str(exc.value)
+    assert "#2" not in str(exc.value)
+
+
+def test_pending_after_its_dependencies_succeeded_still_fails(monkeypatch):
+    # Dependencies done and an idle capable builder: the ca-bundle pathology,
+    # which a dependency list must not hide.
+    import click
+
+    _patch_httpx(
+        monkeypatch, {1: "succeeded", 2: "pending"}, builders=[_LINUX_BUILDER], deps={2: [1]}
+    )
+    with pytest.raises(click.ClickException) as exc:
+        _wait_for_dags("http://s", "t", ["dag"], wait_timeout=30)
+    assert "#2 r2" in str(exc.value)
