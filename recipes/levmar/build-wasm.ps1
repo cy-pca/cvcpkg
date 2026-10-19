@@ -5,7 +5,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-wasm.ps1"
 
-$levmarSrc = Join-Path $scriptDir '..\..\third-party\levmar'
+# The vendored source is staged at CVC_SOURCE_DIR (as build-wasm.sh uses it);
+# third-party\levmar exists only in a checkout, not in a builder's recipe bundle.
+$levmarSrc = $env:CVC_SOURCE_DIR
 
 Invoke-CvcWasmCMakeBuild -SourceDir $levmarSrc -ExtraArgs @(
     '-DUSE_BLAS=ON',
