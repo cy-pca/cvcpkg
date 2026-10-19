@@ -66,10 +66,12 @@ build:
 
 package:
   files:
-    - lib/libbrotlicommon*
-    - lib/libbrotlidec*
-    - lib/libbrotlienc*
-    - lib/brotli*.lib
+    # MSVC names the libraries brotli*.lib/.dll (no lib prefix): the windows
+    # populate of 2026-10-19 failed on the unscoped lib/libbrotli* globs.
+    - { glob: "lib/libbrotlicommon*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    - { glob: "lib/libbrotlidec*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    - { glob: "lib/libbrotlienc*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
+    - { glob: "lib/brotli*.lib", platforms: [windows] }
     - lib/pkgconfig/libbrotli*.pc
     - include/brotli/
     - bin/brotli*

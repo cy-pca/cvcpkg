@@ -22,7 +22,11 @@ cd "${SRC}/jam"
 # Jam bootstraps itself: the Makefile first builds a `jam0` with the host cc,
 # then rebuilds `jam` with jam0.  Some trees ship a make.sh instead.
 if [[ -f Makefile ]]; then
-    make CC="${CC:-cc}" CFLAGS="${CFLAGS:--O2}"
+    # GNU make: the BSD makes reject the Makefile's conditionals ("Need an
+    # operator in 'endif'" on OpenBSD).
+    _make=make
+    command -v gmake >/dev/null 2>&1 && _make=gmake
+    "${_make}" CC="${CC:-cc}" CFLAGS="${CFLAGS:--O2}"
 elif [[ -f build.sh ]]; then
     CC="${CC:-cc}" ./build.sh
 else

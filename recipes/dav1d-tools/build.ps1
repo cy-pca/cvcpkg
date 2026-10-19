@@ -7,8 +7,10 @@ Invoke-CvcMesonBuild -MesonArgs @(
     '-Denable_tests=false',
     '-Denable_tools=true',
     '-Denable_examples=false',
-    '-Denable_docs=false',
-    '-Ddefault_library=shared'
+    '-Denable_docs=false'
+    # No -Ddefault_library: Invoke-CvcMesonBuild passes --default-library from
+    # CVC_LINK, and meson refuses both ("Got argument default_library as both
+    # -Ddefault_library= and --default-library"; windows populate 2026-10-19).
 )
 
 # Only keep the tool binary; the library comes from the dav1d recipe.
