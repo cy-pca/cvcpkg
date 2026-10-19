@@ -166,23 +166,26 @@ package:
     # and no CMake package; the flat include/Magick*, lib/cmake/ImageMagick/ and
     # share/imagemagick/ layout is the Windows/wasm builds', so those entries are
     # scoped (strict globs failed linux on them, 2026-10-14).
-    - lib/libMagick*
-    - lib/ImageMagick*
+    # Windows repackages the official installer (build.ps1): CORE_RL_*.lib and
+    # the canonical aliases below, flat include/Magick*, no pkg-config, no CMake
+    # package and (7.1.2) no legacy convert.exe; the windows populate of
+    # 2026-10-19 failed on these entries.
+    - { glob: "lib/libMagick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
+    - { glob: "lib/ImageMagick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
     - lib/CORE_RL_*.lib
     - lib/Magick++.lib
     - lib/MagickCore.lib
     - lib/MagickWand.lib
-    - { glob: "lib/cmake/ImageMagick/", platforms: [windows, wasm, wasm-mt, wasi] }
-    - lib/pkgconfig/Magick*
-    - lib/pkgconfig/ImageMagick*
+    - { glob: "lib/cmake/ImageMagick/", platforms: [wasm, wasm-mt, wasi] }
+    - { glob: "lib/pkgconfig/Magick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
+    - { glob: "lib/pkgconfig/ImageMagick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
     - { glob: "include/Magick++/", platforms: [windows, wasm, wasm-mt, wasi] }
     - { glob: "include/Magick++.h", platforms: [windows, wasm, wasm-mt, wasi] }
     - { glob: "include/MagickCore/", platforms: [windows, wasm, wasm-mt, wasi] }
     - { glob: "include/MagickWand/", platforms: [windows, wasm, wasm-mt, wasi] }
-    - include/ImageMagick*/
+    - { glob: "include/ImageMagick*/", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
     - bin/magick*
     - bin/Magick*
-    - bin/convert.exe
     - bin/CORE_RL_*.dll
     - bin/IM_MOD_RL_*.dll
     - bin/FILTER_*.dll

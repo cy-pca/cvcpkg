@@ -38,6 +38,12 @@ depends:
     # generated Makefile builds under OpenBSD, whose bmake cannot parse it and
     # where no gmake exists for the build.sh fallback to find.
     - make
+    # The MinGW toolchain build.ps1 builds with (as recipes/lame), not whatever
+    # MinGW the builder happens to have.
+    - name: msys2
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime: []
   host_tools: []
 
