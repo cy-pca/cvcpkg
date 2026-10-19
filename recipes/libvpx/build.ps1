@@ -24,7 +24,12 @@ if ($jobs -le 0) { $jobs = 4 }
 New-Item -ItemType Directory -Force -Path $env:CVC_BUILD_DIR | Out-Null
 
 $env:MSYSTEM          = 'MINGW64'
-$env:MSYS_NO_PATHCONV = '1'
+# Leave MSYS2's argument path conversion ON (no MSYS_NO_PATHCONV), as
+# recipes/lame does: the native nasm and gcc are handed MSYS /c/... paths, which
+# they cannot open ("nasm: fatal: unable to open input file
+# `/c/.../src/vpx_ports/emms_mmx.asm'", windows populate 2026-10-19);
+# conversion turns them into C:/... for native programs.
+Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
 $env:CHERE_INVOKING   = '1'
 
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |

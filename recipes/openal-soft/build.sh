@@ -19,7 +19,13 @@ else
     _libtype=SHARED
 fi
 
+# OpenBSD has a sys/audioio.h, so CMake enables the Solaris backend, which
+# then fails on Solaris-only constants (AUDIO_ENCODING_LINEAR, AUDIO_SETINFO);
+# OpenBSD's audio goes through the sndio backend.
+_extra=()
+if [ "$(uname -s)" = OpenBSD ]; then _extra+=(-DALSOFT_BACKEND_SOLARIS=OFF); fi
 cvc_cmake_build \
+    ${_extra[@]+"${_extra[@]}"} \
     -DLIBTYPE="${_libtype}" \
     -DALSOFT_EXAMPLES=OFF \
     -DALSOFT_UTILS=OFF \

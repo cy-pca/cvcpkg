@@ -81,7 +81,8 @@ package:
     - lib/libgeos*
     - lib/geos*
     - lib/cmake/GEOS/
-    - lib/pkgconfig/geos.pc
+    # GEOS's CMake writes geos.pc everywhere but Windows.
+    - { glob: "lib/pkgconfig/geos.pc", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo] }
     - include/geos.h
     - include/geos_c.h
     - include/geos/

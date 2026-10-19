@@ -70,7 +70,10 @@ build:
 
 package:
   files:
-    - lib/libepoxy*
+    # MSVC (windows): epoxy.lib + bin/epoxy-0.dll, no lib prefix.
+    - { glob: "lib/libepoxy*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/epoxy.lib", platforms: [windows] }
+    - { glob: "bin/epoxy*.dll", platforms: [windows] }
     - lib/pkgconfig/epoxy.pc
     - include/epoxy/
   pkg_config:
