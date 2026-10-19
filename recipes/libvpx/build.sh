@@ -51,8 +51,12 @@ esac
 
 # libvpx.so links with --no-undefined but configure adds -lpthread only for
 # linux targets: FreeBSD failed with "undefined symbol: pthread_create".
+# OpenBSD's compiler driver links neither libc nor libpthread into a shared
+# library, so there every libc and pthread symbol was undefined (memset,
+# fopen, pthread_cond_wait, ...): name both.
 case "$(uname -s)" in
-    FreeBSD|OpenBSD|NetBSD|DragonFly) export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-pthread" ;;
+    OpenBSD) export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-pthread -lpthread -lc" ;;
+    FreeBSD|NetBSD|DragonFly) export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-pthread" ;;
 esac
 "${CVC_SOURCE_DIR}/configure" "${CONFIGURE_ARGS[@]}"
 "${MAKE}" -j "${CVC_JOBS}"
