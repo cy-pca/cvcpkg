@@ -8,7 +8,11 @@ recipe:
   # (/private/var/folders/.../cvcpkg-openssl-.../install/lib), recorded from an
   # openssl bundle whose install names were still absolute; packaging now
   # rewrites such references to @rpath and refuses to pack any that remain.
-  cvc_revision: 5
+  # Bumped 5 -> 6: no recipe change; rebuild against c-ares 1.34.8+cvc.2. The
+  # macOS +cvc.5 dylibs load @rpath/libcares.2.19.3.dylib, the full-version file
+  # of the c-ares they were linked with, and abort since c-ares 1.34.8 replaced it
+  # (libcares.2.19.7). c-ares +cvc.2 names itself @rpath/libcares.2.dylib.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
