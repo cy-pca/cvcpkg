@@ -1,63 +1,47 @@
-# recipes/swig/build.ps1 — install SWIG on Windows.
+# recipes/swig/build.ps1 — build SWIG from source on Windows (MSVC + CMake).
 #
-# On Windows, SWIG upstream ships a prebuilt swigwin zip that contains
-# the swig.exe binary and all runtime files. We adopt it directly
-# rather than building from source.
+# This used to adopt upstream's prebuilt swigwin zip, downloaded from
+# SourceForge during the build with whatever curl.exe was first on PATH.  In a
+# builder's job that is cvcpkg's curl (the deps prefix comes first), which has
+# no CA bundle, so the download failed ("curl: (60) SSL certificate problem",
+# windows populate 2026-10-19), and the bundle was an upstream binary anyway.
+# Now: the recipe's own pinned source, SWIG's CMake build, cvcpkg's bison
+# (the parser is generated from the git tag's .y) and pcre2.
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-. "$scriptDir\..\\_common\\env-windows.ps1"
+. "$scriptDir\..\_common\env-windows.ps1"
 
-$swigVer = '4.4.1'
+$deps = $env:CVC_DEPS_PREFIX
+# cvcpkg's bison finds its skeletons through BISON_PKGDATADIR (as build.sh).
+$env:BISON_PKGDATADIR = Join-Path $deps 'share\bison'
 
-# Download the prebuilt Windows distribution.
-# Use curl.exe (built into Windows 10+) instead of Invoke-WebRequest because
-# SourceForge returns an HTML mirror-picker page (not the actual zip) unless
-# the client follows multiple redirects to a CDN mirror.  curl with -L handles
-# this; Invoke-WebRequest with -UseBasicParsing does not (it stops at the
-# first 200 response which is the HTML page).
-$swigUrl = "https://downloads.sourceforge.net/project/swig/swigwin/swigwin-${swigVer}/swigwin-${swigVer}.zip"
-$swigZip = Join-Path $env:CVC_BUILD_DIR "swigwin-${swigVer}.zip"
-$swigDir = Join-Path $env:CVC_BUILD_DIR "swigwin-${swigVer}"
+Invoke-CvcCMakeBuild @(
+    "-DCMAKE_PREFIX_PATH=$deps",
+    "-DBISON_EXECUTABLE=$(Join-Path $deps 'bin\bison.exe')",
+    '-DWITH_PCRE=ON'
+)
 
-Write-Host "Downloading swigwin-${swigVer}..."
-& curl.exe -sSL -o $swigZip $swigUrl
-if ($LASTEXITCODE -ne 0) {
-    throw "curl failed with exit code $LASTEXITCODE downloading $swigUrl"
-}
-$zipSize = (Get-Item $swigZip).Length
-if ($zipSize -lt 1MB) {
-    throw "swigwin zip is suspiciously small ($zipSize bytes) — likely an HTML mirror page rather than the archive"
-}
-Expand-Archive -Path $swigZip -DestinationPath $env:CVC_BUILD_DIR -Force
+$swigExe = Join-Path $env:CVC_INSTALL_DIR 'bin\swig.exe'
+if (-not (Test-Path $swigExe)) { throw "swig: no $swigExe after install" }
+$swigVer = (& $swigExe -version | Select-String -Pattern 'SWIG Version (\S+)').Matches[0].Groups[1].Value
+if (-not $swigVer) { throw "swig: could not read the version from swig -version" }
+# On Windows SWIG's CMake build installs its runtime library as bin\Lib, which
+# is where swig.exe looks (<exedir>\Lib) and what `swig -swiglib` reports, so
+# CMake's module-mode FindSWIG finds it too.  (The swigwin bundle also carried
+# a share\swig\<ver> copy; nothing on Windows reads it.)
+$binLib = Join-Path $env:CVC_INSTALL_DIR 'bin\Lib'
+if (-not (Test-Path (Join-Path $binLib 'swig.swg'))) { throw "swig: no runtime library at $binLib" }
 
-# Stage into install prefix.
-New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\bin" | Out-Null
-New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\share\swig\$swigVer" | Out-Null
-New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\lib\cmake\SWIG" | Out-Null
-
-Copy-Item "$swigDir\swig.exe" "$env:CVC_INSTALL_DIR\bin\swig.exe"
-Copy-Item -Recurse "$swigDir\Lib\*" "$env:CVC_INSTALL_DIR\share\swig\$swigVer\" -Force
-
-# swigwin's swig.exe resolves its runtime library as <exedir>\Lib — that is
-# compiled in, and `swig -swiglib` reports it verbatim. Staging the library
-# only under share/swig/<ver> left the binary pointing at a directory that
-# does not exist, so CMake's module-mode FindSWIG (which shells out to
-# `swig -swiglib`) failed with "Could NOT find SWIG (missing: SWIG_DIR)" even
-# with the bundle installed — every consumer had to set SWIG_LIB by hand.
-# The generated SWIGConfig.cmake below only helps callers who reach SWIG via
-# config mode; find_package(SWIG COMPONENTS python) does not. Stage the
-# library where the binary actually looks, so the bundle is self-describing.
-New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\bin\Lib" | Out-Null
-Copy-Item -Recurse "$swigDir\Lib\*" "$env:CVC_INSTALL_DIR\bin\Lib\" -Force
-
-# Generate CMake config.
+# CMake config package, for callers that reach SWIG in config mode.
+$cfgDir = Join-Path $env:CVC_INSTALL_DIR 'lib\cmake\SWIG'
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
 @"
 set(SWIG_EXECUTABLE "`${CMAKE_CURRENT_LIST_DIR}/../../../bin/swig.exe")
-set(SWIG_DIR "`${CMAKE_CURRENT_LIST_DIR}/../../../share/swig/$swigVer")
+set(SWIG_DIR "`${CMAKE_CURRENT_LIST_DIR}/../../../bin/Lib")
 set(SWIG_VERSION "$swigVer")
 set(SWIG_FOUND TRUE)
-"@ | Set-Content "$env:CVC_INSTALL_DIR\lib\cmake\SWIG\SWIGConfig.cmake"
+"@ | Set-Content (Join-Path $cfgDir 'SWIGConfig.cmake')
 
 @"
 set(PACKAGE_VERSION "$swigVer")
@@ -67,4 +51,10 @@ if("`${PACKAGE_FIND_VERSION}" VERSION_LESS_EQUAL PACKAGE_VERSION)
         set(PACKAGE_VERSION_EXACT TRUE)
     endif()
 endif()
-"@ | Set-Content "$env:CVC_INSTALL_DIR\lib\cmake\SWIG\SWIGConfigVersion.cmake"
+"@ | Set-Content (Join-Path $cfgDir 'SWIGConfigVersion.cmake')
+
+# The library must run from the bundle: `swig -swiglib` answers from <exedir>.
+$reported = (& $swigExe -swiglib | Select-Object -First 1).Trim()
+if ($reported.TrimEnd('\','/') -ne $binLib.TrimEnd('\','/')) {
+    throw "swig -swiglib reports '$reported', expected '$binLib'"
+}
