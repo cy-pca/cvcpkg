@@ -33,6 +33,9 @@ patches: []
 depends:
   build:
     - cmake
+    # build.ps1's CMake build (Invoke-CvcCMakeBuild drives Ninja).
+    - name: ninja
+      platforms: [windows]
     - autoconf
     - automake
     # bison generates SWIG's parser at build time; nothing in the shipped
@@ -78,7 +81,7 @@ package:
     # (`swig -swiglib` reports <exedir>\Lib); without it FindSWIG's module
     # mode cannot locate SWIG_DIR. POSIX installs it under share/swig/ instead.
     - { glob: "bin/Lib/", platforms: [windows] }
-    - share/swig/
+    - { glob: "share/swig/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - lib/cmake/SWIG/
   cmake_packages:
     - { name: SWIG, targets: [] }
