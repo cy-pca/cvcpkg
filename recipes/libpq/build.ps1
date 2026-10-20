@@ -84,7 +84,11 @@ Set-Location $env:CVC_SOURCE_DIR
     '-Dzstd=disabled',
     '-Dlz4=disabled',
     '-Dnls=disabled',
-    '-Dgssapi=enabled'
+    # No GSSAPI on Windows: the krb5 recipe has no Windows build (recipe.yaml
+    # declares it for the Unix platforms only), so meson found no gssapi and
+    # stopped (populate job 22351).  Windows libpq authenticates Kerberos and
+    # Negotiate through SSPI (secur32), which meson enables on its own.
+    '-Dgssapi=disabled'
 ))
 if ($LASTEXITCODE -ne 0) { throw "meson setup failed" }
 
