@@ -84,6 +84,13 @@ Set-Location $env:CVC_SOURCE_DIR
     '-Dzstd=disabled',
     '-Dlz4=disabled',
     '-Dnls=disabled',
+    # The whole project builds (below), so keep the server-side PL languages
+    # and TAP tests off: left on auto, meson enabled plpython against whatever
+    # Python was on PATH (a hosted runner's own).  build.sh disables plpython.
+    '-Dplperl=disabled',
+    '-Dplpython=disabled',
+    '-Dpltcl=disabled',
+    '-Dtap_tests=disabled',
     # No GSSAPI on Windows: the krb5 recipe has no Windows build (recipe.yaml
     # declares it for the Unix platforms only), so meson found no gssapi and
     # stopped (populate job 22351).  Windows libpq authenticates Kerberos and
@@ -93,7 +100,10 @@ Set-Location $env:CVC_SOURCE_DIR
 if ($LASTEXITCODE -ne 0) { throw "meson setup failed" }
 
 Set-Location $env:CVC_BUILD_DIR
-& ninja -j $env:CVC_JOBS 'src/interfaces/libpq:pq'
+# Build the whole project, as build.sh does; package.files keeps just libpq.
+# 'src/interfaces/libpq:pq' was meson-compile target syntax, which ninja
+# rejects ("unknown target"), and 'ninja install' builds everything anyway.
+& ninja -j $env:CVC_JOBS
 if ($LASTEXITCODE -ne 0) { throw "ninja build failed" }
 
 & ninja install
