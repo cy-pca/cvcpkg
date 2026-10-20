@@ -122,6 +122,16 @@ depends:
     # libcurl itself is never patched there (see the 7 -> 8 note).
     - name: patchelf
       platforms: [linux, freebsd, openbsd, netbsd]
+    # Windows builds with CMake + Ninja (Invoke-CvcCMakeBuild). Declared so
+    # the build never depends on a cmake that happens to be on the builder's
+    # PATH (Visual Studio's optional CMake component); job 22208 failed with
+    # "The term 'cmake' is not recognized" on a builder without it. The other
+    # platforms use curl's autotools build. No cycle: cmake's Windows package
+    # is Kitware's prebuilt binary and has no curl runtime dependency.
+    - name: cmake
+      platforms: [windows]
+    - name: ninja
+      platforms: [windows]
   runtime:
     - name: openssl
       version: "^3.0"
