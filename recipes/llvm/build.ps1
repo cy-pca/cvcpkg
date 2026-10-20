@@ -18,6 +18,10 @@ $LinkJobs = [Math]::Max(1, [Math]::Min(2, [int]$env:CVC_JOBS))
 # starts with '-' to a native command verbatim, so CMake got the literal
 # text '$env:CVC_INSTALL_DIR' / '$LinkJobs' (windows populate 2026-10-19:
 # "Invalid pool defined by property 'JOB_POOLS': link_job_pool=$LinkJobs").
+# LLVM_ENABLE_DIA_SDK=OFF: CMake turns DIA (PDB reading) on whenever it finds
+# Visual Studio's DIA SDK, whose headers need ATL; Build Tools without the ATL
+# component then fail in DIASupport.h ("Cannot open include file: 'atlbase.h'",
+# llvm20 on sandipaws, populate 2026-10-19).  The bundle never shipped DIA.
 cmake -G Ninja `
     -S $srcLlvm `
     -B $env:CVC_BUILD_DIR `
@@ -32,6 +36,7 @@ cmake -G Ninja `
     -DLLVM_LINK_LLVM_DYLIB=ON `
     -DLLVM_INCLUDE_TESTS=OFF `
     -DLLVM_INCLUDE_BENCHMARKS=OFF `
+    -DLLVM_ENABLE_DIA_SDK=OFF `
     -DLLVM_INCLUDE_EXAMPLES=OFF `
     -DLLVM_ENABLE_ZLIB=FORCE_ON `
     -DLLVM_ENABLE_ZSTD=OFF `
