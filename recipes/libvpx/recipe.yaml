@@ -77,6 +77,9 @@ package:
     - lib/libvpx*
     - lib/pkgconfig/vpx.pc
     - include/vpx/
-    - bin/libvpx-*.dll
+    # No DLL on Windows: libvpx's configure supports shared libraries only on
+    # ELF and Mach-O targets ("disabling shared" for x86_64-win64-gcc), so the
+    # Windows bundle is the static lib/libvpx.a (populate 2026-10-19: bin/libvpx-*.dll
+    # matched nothing).
   pkg_config:
     - vpx
