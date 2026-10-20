@@ -30,6 +30,14 @@ depends:
     - name: nasm
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - pkg-config
+    # Windows builds with MinGW-w64 under MSYS2 (build.ps1). Declared, as
+    # aspell and nfft3 do, rather than reached through x264's host_tools.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
   runtime:
     - name: x264
   host_tools: []
