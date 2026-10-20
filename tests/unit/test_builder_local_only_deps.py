@@ -118,6 +118,8 @@ def _fake_server(job, recipes, packages, posted):
                 return _Resp(200, content=interp_archive)
             if url.endswith("/v1/download/patchelf.tar.gz"):
                 return _Resp(200, content=patchelf_archive)
+            if "/v1/download/" in url:
+                return _Resp(404)
             if url.endswith(("/next-job", "/next-claimable")):
                 if not handed_out["done"]:
                     handed_out["done"] = True
@@ -233,6 +235,29 @@ def test_an_ordinary_missing_dep_is_still_skipped(monkeypatch, tmp_path):
     posted, events, output = _run(monkeypatch, tmp_path, recipes, {})
     assert events == ["pack with "], output
     assert posted.get("complete"), output
+
+
+def test_a_failed_catalog_lookup_fails_the_job(monkeypatch, tmp_path):
+    # The server answers an unknown name with 200 and no rows, so an error
+    # status is a failed lookup; the job must not build without the dep.
+    recipes = {"app": _recipe("app", ["fribidi"]), "fribidi": _recipe("fribidi")}
+    posted, events, output = _run(monkeypatch, tmp_path, recipes, {"fribidi": (403, [])})
+    assert events == [], output
+    assert not posted.get("complete"), output
+    [fail] = posted.get("fail") or [None]
+    assert fail is not None, output
+    assert "dep fribidi: catalog lookup failed (HTTP 403)" in fail["error_message"]
+
+
+def test_a_failed_dep_download_fails_the_job(monkeypatch, tmp_path):
+    row = dict(_INTERP_ROW, name="fribidi", archive_url="/v1/download/fribidi.tar.gz")
+    recipes = {"app": _recipe("app", ["fribidi"]), "fribidi": _recipe("fribidi")}
+    posted, events, output = _run(monkeypatch, tmp_path, recipes, {"fribidi": (200, [row])})
+    assert events == [], output
+    assert not posted.get("complete"), output
+    [fail] = posted.get("fail") or [None]
+    assert fail is not None, output
+    assert "dep fribidi: download failed (HTTP 404)" in fail["error_message"]
 
 
 def test_a_published_variant_still_wins(monkeypatch, tmp_path):
