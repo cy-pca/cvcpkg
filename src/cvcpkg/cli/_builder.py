@@ -100,27 +100,34 @@ def _symlink_merge_into(src_root: Path, dst_root: Path) -> None:
 # the server has just closed ("Server disconnected without sending a
 # response"), and a loaded server drops the odd connection outright.  On
 # 2026-10-13 that failed pycares-, nh3- and uvloop-cp312 before they built
-# anything.  The GETs are idempotent, so transport errors are retried.
+# anything.  The GETs are idempotent, so transport errors are retried, and so
+# are the statuses a proxy or a loaded server sends for a passing fault.
 _DEP_GET_ATTEMPTS = 4
+_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 def _get_retrying(
     client, url: str, *, attempts: int = _DEP_GET_ATTEMPTS, sleep=time.sleep, **kwargs
 ):
-    """``client.get(url, **kwargs)``, retrying transport errors with backoff.
+    """``client.get(url, **kwargs)``, retrying transient failures with backoff.
 
-    Only connection-level failures (httpx.TransportError: disconnects, connect
-    errors, timeouts) are retried; an HTTP error status is returned as is for
-    the caller to handle.  The last attempt's exception propagates.
+    Connection-level failures (httpx.TransportError: disconnects, connect
+    errors, timeouts) and transient statuses (429 and 5xx gateway or overload
+    errors) are retried.  Any other status is returned as is for the caller to
+    handle.  After the last attempt, its exception propagates or its response
+    is returned.
     """
     httpx = require_httpx()
     for attempt in range(1, attempts + 1):
         try:
-            return client.get(url, **kwargs)
+            resp = client.get(url, **kwargs)
         except httpx.TransportError:
             if attempt == attempts:
                 raise
-            sleep(min(2**attempt, 30) + random.random())
+        else:
+            if resp.status_code not in _TRANSIENT_STATUSES or attempt == attempts:
+                return resp
+        sleep(min(2**attempt, 30) + random.random())
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -3139,13 +3146,23 @@ def builder_run(
                     f"{base}/v1/packages/{dep_name}",
                     headers=headers,
                 )
-                if resp.status_code >= 400:
+                if resp.status_code == 404:
                     local_dir = _local_only_recipe(dep_name)
                     if local_dir is not None:
                         local[dep_name] = local_dir
                         continue
                     log_cb(f"  dep {dep_name}: not found on server (skipping)\n")
                     continue
+                if resp.status_code >= 400:
+                    # The server answers an unknown name with 200 and no rows,
+                    # so an error here is a failed lookup, not a missing dep.
+                    # Building on without it fails later and less clearly, or
+                    # quietly drops an optional feature: pango on Windows
+                    # (2026-10-20, job 22400) logged fribidi as "not found on
+                    # server" on a flaky network and then failed in meson.
+                    raise RuntimeError(
+                        f"dep {dep_name}: catalog lookup failed (HTTP {resp.status_code})"
+                    )
 
                 # Newest first, so an exact match below picks the newest build
                 # of a dep rather than whichever the server happened to list
@@ -3180,8 +3197,11 @@ def builder_run(
                 log_cb(f"  Installing dep: {dep_name} ({match.get('version', '')})\n")
                 dl_resp = _get_retrying(client, archive_url)
                 if dl_resp.status_code >= 400:
-                    log_cb(f"  dep {dep_name}: download failed ({dl_resp.status_code})\n")
-                    continue
+                    # The catalog lists this variant, so a failed download is
+                    # a fault, not a dep to build without.
+                    raise RuntimeError(
+                        f"dep {dep_name}: download failed (HTTP {dl_resp.status_code})"
+                    )
 
                 # Extract into prefix.  The catalog's archive_url suffix
                 # (typically .tar.zst) is purely cosmetic - the server

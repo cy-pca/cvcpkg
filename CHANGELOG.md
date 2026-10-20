@@ -30,6 +30,15 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Builder: a failed dependency lookup fails the job instead of skipping the
+  dep.**  The catalog answers an unknown name with 200 and no rows. Yet the
+  builder logged any error status from `/v1/packages/{name}` as "not found on
+  server (skipping)", and also skipped a dep whose download failed, then built
+  without it. pango on Windows (2026-10-20) lost fribidi that way on a flaky
+  network and failed in meson. Such an error now fails the job and names the
+  dep. A 404 is still a missing dep. The builder's catalog GETs now also retry
+  429 and 5xx responses, as they already did transport errors.
+
 ---
 
 ## v2.5.2
