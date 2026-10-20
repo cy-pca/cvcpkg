@@ -38,6 +38,20 @@ if ($cvcRoots) {
     $env:CMAKE_PREFIX_PATH = ($cvcRoots -join ';')
 }
 
+# cvcpkg's Windows bison is winflexbison, which looks for its m4 skeletons in
+# <exe dir>\data, but the bison recipe stages them in share\bison.  Without
+# this, any build that ran bison failed: "bison.EXE: <prefix>\bin\data/m4sugar/
+# m4sugar.m4: cannot open" (libpq's backend parsers, 2026-10-20).
+if (-not $env:BISON_PKGDATADIR) {
+    foreach ($root in $cvcRoots) {
+        $bisonData = Join-Path $root 'share\bison'
+        if (Test-Path -LiteralPath (Join-Path $bisonData 'm4sugar\m4sugar.m4')) {
+            $env:BISON_PKGDATADIR = $bisonData
+            break
+        }
+    }
+}
+
 # On Windows we ALWAYS build with MSVC (cl.exe).  A prior builder image
 # happened to have Strawberry Perl's g++ ahead of cl on PATH, and the
 # Ninja generator silently picked it, producing GNU-ar '.a' archives
