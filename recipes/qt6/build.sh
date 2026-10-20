@@ -22,6 +22,11 @@ fi
 # messages.
 if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     CMAKE_EXTRA+=(-DFEATURE_backtrace=OFF)
+    # qelfparser_p.cpp names ELFOSABI_AIX, which OpenBSD's <elf.h> spells
+    # ELFOSABI_MONTEREY (AIX's old name, value 7): "use of undeclared
+    # identifier 'ELFOSABI_AIX'" (job 22627).  It has every other ELFOSABI_*
+    # the parser uses.
+    export CXXFLAGS="${CXXFLAGS:-} -DELFOSABI_AIX=7"
 fi
 
 cmake -G Ninja \
