@@ -33,7 +33,10 @@ MESON_OPTS=(
 )
 
 case "${CVC_PLATFORM}" in
-    linux)
+    # The BSDs too: cvcpkg builds libglvnd and libx11 there, and gtk4's X11
+    # backend failed on OpenBSD with "'epoxy/glx.h' file not found" (populate
+    # 2026-10-20, job 22626) against a GLX-less cvc.3.
+    linux|freebsd|openbsd|netbsd)
         # EGL's headers (and libEGL, which epoxy dlopens) come from cvcpkg's
         # libglvnd.  Nothing pointed meson there, so the build used the build
         # host's /usr/include/EGL and failed on runners without it
