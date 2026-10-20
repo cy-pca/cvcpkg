@@ -23,7 +23,10 @@ if ($env:CVC_DEPS_PREFIX) {
     -DENABLE_TESTS=OFF
 if ($LASTEXITCODE -ne 0) { throw 'x265-cli cmake configure failed' }
 
-& cmake --build $env:CVC_BUILD_DIR --target x265 -j $env:CVC_JOBS
+# x265's CLI target is 'cli' (OUTPUT_NAME x265).  '--target x265' only
+# worked where ninja took it as the output file's path; on Windows that
+# file is x265.exe, so ninja said "unknown target 'x265'" (job 22616).
+& cmake --build $env:CVC_BUILD_DIR --target cli -j $env:CVC_JOBS
 if ($LASTEXITCODE -ne 0) { throw 'x265-cli cmake build failed' }
 
 $binary = Get-ChildItem $env:CVC_BUILD_DIR -Filter 'x265.exe' | Select-Object -First 1
