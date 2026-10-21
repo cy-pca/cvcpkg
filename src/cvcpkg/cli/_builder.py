@@ -3941,7 +3941,18 @@ def builder_run(
                     active_job_roots.discard(job_root)
                 heartbeat_unwatch(job_root)
                 if job_root.is_dir():
-                    shutil.rmtree(job_root, ignore_errors=True)
+                    # Not rmtree(ignore_errors=True): on Windows that left every
+                    # job root holding a read-only file (all of perl-src) in place,
+                    # 7,738 files per job, without a word (sandipaws, 2026-10-19).
+                    from cvcpkg.builder_gc import remove_tree
+
+                    leftover = remove_tree(job_root)
+                    if leftover:
+                        click.echo(
+                            f"  [{job_id}] could not remove {job_root}: {leftover[0]}"
+                            f"{f' (+{len(leftover) - 1} more)' if len(leftover) > 1 else ''}",
+                            err=True,
+                        )
             # NB: the slot count is released by _run_job_guarded's finally,
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.

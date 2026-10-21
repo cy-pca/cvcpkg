@@ -30,6 +30,16 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: Windows builders leaked every job root holding a read-only file.**
+  Job cleanup used `rmtree(ignore_errors=True)`, and Windows refuses to unlink
+  a file with the ReadOnly attribute. Every file a staged `perl-src` ships has
+  it, so each such job left ~7,700 files behind, without a word. The startup
+  sweep retried the same deletes and never cleared the attribute. On
+  sandipaws-dev (2026-10-19) it spun on ~450,000 files for over ten minutes
+  before the builder could register.
+  - Both paths now share `builder_gc.remove_tree`, which clears the read-only
+    bit and redoes a failed delete.
+  - Job cleanup logs any tree it still cannot remove.
 - **Builder: a failed dependency lookup fails the job instead of skipping the
   dep.**  The catalog answers an unknown name with 200 and no rows. Yet the
   builder logged any error status from `/v1/packages/{name}` as "not found on
