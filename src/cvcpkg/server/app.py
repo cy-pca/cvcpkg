@@ -7329,10 +7329,26 @@ def create_app(
         return _oidc_providers_map.get(pid)
 
     def _oidc_provider_choices() -> list[dict]:
-        """[{id, display_name}] for the picker / /v1/auth/providers, id-ordered."""
+        """``[{id, display_name, default}]`` for the picker / /v1/auth/providers.
+
+        The default provider is listed FIRST and carries ``default: true``; the
+        rest follow id-ordered.  The default is the conventional ``default``
+        slug (the bare ``CVCPKG_OIDC_*`` provider), else the first configured
+        provider.  ``cvcpkg login`` makes the marked provider the numeric prompt
+        default, so pressing Enter picks the server's real default issuer
+        instead of whichever id happens to sort first — without the marker the
+        client cannot tell which provider is the default.
+        """
+        if not _oidc_providers_list:
+            return []
+        default_id = next(
+            (p.id for p in _oidc_providers_list if p.id == "default"),
+            _oidc_providers_list[0].id,
+        )
+        ordered = sorted(_oidc_providers_list, key=lambda p: (p.id != default_id, p.id))
         return [
-            {"id": p.id, "display_name": p.display_name}
-            for p in sorted(_oidc_providers_list, key=lambda p: p.id)
+            {"id": p.id, "display_name": p.display_name, "default": p.id == default_id}
+            for p in ordered
         ]
 
     # Fail at construction, not at the first login.  A group map that grants a
@@ -7599,10 +7615,14 @@ def create_app(
             )
 
         # The nonce was minted on the authorize leg and carried in the signed
-        # txn cookie; until now it was sent and never checked, so the reply was
-        # never bound to this login attempt.  See oidc.nonce_matches for what
-        # this does and does not prove.
-        if not _oidc.nonce_matches(tokens.get("id_token", ""), str(txn.get("nonce", ""))):
+        # txn cookie.  It is enforce-if-present: an IdP that echoes a nonce must
+        # echo ours (a different one is a refused mix-up), but one that returns
+        # no nonce is not refused on that basis — the state nonce + single-use
+        # signed txn cookie + PKCE already bind this callback to this attempt.
+        # Some OpenID providers never carry a nonce back (tx.wtf's daggerhart OP
+        # is one); fail-closed here would refuse every otherwise-valid login.
+        # See oidc.nonce_ok for what this does and does not prove.
+        if not _oidc.nonce_ok(tokens.get("id_token", ""), str(txn.get("nonce", ""))):
             return HTMLResponse(
                 admin_ui.login_html(error="OIDC nonce mismatch — login refused."),
                 status_code=400,

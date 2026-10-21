@@ -145,6 +145,14 @@ class TestProviderDiscovery:
         provs = {p["id"]: p["display_name"] for p in r.json()["providers"]}
         assert provs == {"default": "tx.wtf", "ringb": "Ring B"}
 
+    def test_providers_endpoint_marks_and_orders_default_first(self, two_idp_server):
+        # The client makes [1] the marked default; without this the numeric
+        # default is whichever id sorts first, not the server's real default.
+        client, _ = two_idp_server
+        provs = client.get("/v1/auth/providers").json()["providers"]
+        assert provs[0] == {"id": "default", "display_name": "tx.wtf", "default": True}
+        assert provs[1] == {"id": "ringb", "display_name": "Ring B", "default": False}
+
     def test_login_page_renders_a_picker(self, two_idp_server):
         client, _ = two_idp_server
         html = client.get("/login").text
