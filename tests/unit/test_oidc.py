@@ -326,7 +326,10 @@ class TestOidcFlow:
 
 
 class TestNonceBinding:
-    """The nonce was minted and sent but never checked until 2026-09."""
+    """Enforce-if-present: a nonce the IdP echoes must be ours, but an IdP that
+    omits it is not refused — some OpenID providers (the daggerhart OP behind
+    tx.wtf) never carry a nonce back, and the state nonce + single-use signed
+    txn cookie + PKCE already bind the callback to this attempt."""
 
     def test_idp_echoing_a_different_nonce_is_refused(self, oidc_server):
         client, st = oidc_server
@@ -340,7 +343,29 @@ class TestNonceBinding:
         assert "nonce mismatch" in r.text
         assert _SESSION_COOKIE not in r.cookies
 
-    def test_idp_omitting_the_id_token_is_refused(self, oidc_server, monkeypatch):
+    def test_idp_omitting_the_nonce_claim_completes(self, oidc_server, monkeypatch):
+        # The tx.wtf case: a valid id_token that simply carries no nonce claim.
+        # Regression for the fail-closed check that refused every such login.
+        client, st = oidc_server
+
+        async def no_nonce(endpoint, cfg, *, code, verifier, **kw):
+            body = (
+                base64.urlsafe_b64encode(json.dumps({"sub": "joe"}).encode()).rstrip(b"=").decode()
+            )
+            return {"access_token": "at-123", "id_token": f"hdr.{body}.sig"}
+
+        monkeypatch.setattr(oidc_mod, "exchange_code", no_nonce)
+        r = client.get("/admin/oidc/login", follow_redirects=False)
+        from urllib.parse import parse_qs, urlparse
+
+        sent = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
+        r = client.get(f"/admin/oidc/callback?code=abc&state={sent}", follow_redirects=False)
+        assert r.status_code == 303, r.text
+        assert _SESSION_COOKIE in r.cookies
+
+    def test_idp_omitting_the_id_token_entirely_completes(self, oidc_server, monkeypatch):
+        # No id_token at all is likewise not a nonce refusal: the identity comes
+        # from the userinfo claims fetched with the TLS-obtained access token.
         client, st = oidc_server
 
         async def no_id_token(endpoint, cfg, *, code, verifier, **kw):
@@ -352,8 +377,8 @@ class TestNonceBinding:
 
         sent = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
         r = client.get(f"/admin/oidc/callback?code=abc&state={sent}", follow_redirects=False)
-        assert r.status_code == 400
-        assert _SESSION_COOKIE not in r.cookies
+        assert r.status_code == 303, r.text
+        assert _SESSION_COOKIE in r.cookies
 
 
 class TestCookieHardening:
@@ -465,26 +490,38 @@ def _id_token(payload: dict) -> str:
     return f"header.{body}.signature"
 
 
-def test_nonce_matches_when_idp_echoes_it():
-    assert oidc_mod.nonce_matches(_id_token({"nonce": "abc123"}), "abc123")
+def test_nonce_ok_when_idp_echoes_it():
+    assert oidc_mod.nonce_ok(_id_token({"nonce": "abc123"}), "abc123")
 
 
-def test_nonce_mismatch_is_refused():
-    assert not oidc_mod.nonce_matches(_id_token({"nonce": "abc123"}), "different")
+def test_present_but_different_nonce_is_refused():
+    # A nonce the IdP DID carry back must be ours — a mismatch is a mix-up.
+    assert not oidc_mod.nonce_ok(_id_token({"nonce": "abc123"}), "different")
 
 
-def test_missing_nonce_claim_is_refused():
-    """Absence must not be a pass — the IdP is the party this guards against."""
-    assert not oidc_mod.nonce_matches(_id_token({"sub": "joe"}), "abc123")
+def test_missing_nonce_claim_is_allowed():
+    """Enforce-if-present: an IdP that omits the nonce (e.g. tx.wtf's daggerhart
+    OP) is not refused on that basis — state + signed txn + PKCE still bind the
+    attempt."""
+    assert oidc_mod.nonce_ok(_id_token({"sub": "joe"}), "abc123")
 
 
 @pytest.mark.parametrize("token", ["", "not-a-jwt", "a.b", "a.!!!.c"])
-def test_malformed_id_token_is_refused(token):
-    assert not oidc_mod.nonce_matches(token, "abc123")
+def test_id_token_with_no_parseable_nonce_is_allowed(token):
+    # No extractable nonce is the same as a missing one: nothing to enforce.
+    assert oidc_mod.nonce_ok(token, "abc123")
+    assert oidc_mod.id_token_nonce(token) is None
 
 
-def test_empty_expected_nonce_is_refused():
-    assert not oidc_mod.nonce_matches(_id_token({"nonce": ""}), "")
+def test_present_empty_nonce_without_expected_is_refused():
+    # An empty nonce IS present; with no expected to match it, refuse rather
+    # than treat "" as absent.
+    assert not oidc_mod.nonce_ok(_id_token({"nonce": ""}), "")
+
+
+def test_id_token_nonce_extracts_the_claim():
+    assert oidc_mod.id_token_nonce(_id_token({"nonce": "n"})) == "n"
+    assert oidc_mod.id_token_nonce(_id_token({"sub": "joe"})) is None
 
 
 def test_id_token_claims_decodes_payload_without_verifying():

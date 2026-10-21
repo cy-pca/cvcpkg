@@ -15,7 +15,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from cvcpkg import oauth_native
-from cvcpkg.cli import cli
+from cvcpkg.cli import _auth, cli
 
 
 def test_login_without_role_is_accepted(monkeypatch):
@@ -77,3 +77,65 @@ def test_unknown_server_provider_degrades_when_none_listed(monkeypatch):
     # carrying the provider through unchanged.
     assert calls.get("provider") == "whatever"
     assert "stop here" in res.output
+
+
+# ── provider menu: default matches the server's default, selection == display ──
+#
+# Observed against cvcpkg.org: /v1/auth/providers is id-sorted (cvcpkg.com before
+# tx.wtf) and the prompt defaulted to [1] = cvcpkg.com, while the real default is
+# tx.wtf (id "default").  A user who accepted the default was sent to cvcpkg.com,
+# where their tx.wtf identity has no account, so the login never completed.
+
+
+def test_default_index_prefers_the_marker():
+    # Even when the default is not listed first, the marker wins.
+    choices = [
+        {"id": "cvcpkg-com", "display_name": "cvcpkg.com", "default": False},
+        {"id": "default", "display_name": "tx.wtf", "default": True},
+    ]
+    assert _auth._default_provider_index(choices) == 2
+
+
+def test_default_index_falls_back_to_the_default_slug_without_a_marker():
+    # Older server: lists providers but sends no marker; the conventional
+    # "default" slug (the bare CVCPKG_OIDC_* provider) still resolves.
+    assert _auth._default_provider_index([{"id": "cvcpkg-com"}, {"id": "default"}]) == 2
+
+
+def test_default_index_falls_back_to_first_when_nothing_marks_a_default():
+    assert _auth._default_provider_index([{"id": "ringa"}, {"id": "ringb"}]) == 1
+
+
+def test_prompt_default_is_the_marked_provider_not_the_first(monkeypatch):
+    # Regression: id-sorted order (cvcpkg.com first) but tx.wtf is the default.
+    # Pressing Enter must pick tx.wtf, and the [default] marker shows on its row.
+    choices = [
+        {"id": "cvcpkg-com", "display_name": "cvcpkg.com", "default": False},
+        {"id": "default", "display_name": "tx.wtf", "default": True},
+    ]
+    seen = {}
+    lines: list[str] = []
+
+    def fake_prompt(text, **kw):
+        seen["default"] = kw.get("default")
+        return kw.get("default")  # user presses Enter -> take the default
+
+    monkeypatch.setattr(_auth.click, "prompt", fake_prompt)
+    monkeypatch.setattr(_auth.click, "echo", lambda *a, **k: lines.append(a[0] if a else ""))
+
+    assert _auth._prompt_provider(choices) == "default"
+    assert seen["default"] == 2
+    assert any("tx.wtf" in ln and "[default]" in ln for ln in lines)
+
+
+def test_prompt_selection_maps_to_displayed_order(monkeypatch):
+    # The numeric choice indexes the list as displayed; it is never reordered.
+    choices = [
+        {"id": "default", "display_name": "tx.wtf", "default": True},
+        {"id": "cvcpkg-com", "display_name": "cvcpkg.com", "default": False},
+    ]
+    monkeypatch.setattr(_auth.click, "echo", lambda *a, **k: None)
+    monkeypatch.setattr(_auth.click, "prompt", lambda text, **kw: 2)
+    assert _auth._prompt_provider(choices) == "cvcpkg-com"
+    monkeypatch.setattr(_auth.click, "prompt", lambda text, **kw: 1)
+    assert _auth._prompt_provider(choices) == "default"

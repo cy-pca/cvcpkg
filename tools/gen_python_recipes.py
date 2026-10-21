@@ -273,11 +273,13 @@ SCRIPT_PACKAGES = {
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
     "pydle": ["pydle", "pydle-irccat"],
+    "rosbags": ["rosbags-convert"],
     "pygments": ["pygmentize"],
     "pytest": ["pytest", "py.test"],
     "scikit-build-core": ["scikit-build", "scikit-build-core"],
     "sympy": ["isympy"],
     "tqdm": ["tqdm"],
+    "versioneer": ["versioneer"],
     # NEW at 2026.6.1.19: setup.py gained a console_scripts entry point the old
     # 2024.10.16 pin did not have, so moving the pin silently started shipping
     # bin/trove-classifiers in every column.  package.files is declarative only
@@ -861,6 +863,140 @@ SEED_PACKAGES = {
         # Constructing a Box space exercises the numpy path RL spaces
         # exercise, beyond a bare import.
         "check": "import gymnasium; gymnasium.spaces.Box(-1.0, 1.0, (3,))",
+    },
+    # ── LieSPHGP (CVC-Lab/LieSPHGP requirements.txt) ────────────────────────
+    # The port-Hamiltonian GP research code libcvc's navigator work is ported
+    # from.  Its JAX models need jax/jaxlib/optax/equinox; the dataset tools need
+    # pandas and rosbags.  Everything here is the non-JAX part of that closure
+    # plus the pure-Python leaves the JAX packages stand on.  Pins follow the
+    # numpy rule: the newest release that still covers every ABI cvcpkg ships.
+    "absl-py": {
+        # optax's only non-JAX runtime dependency.
+        "version": "2.5.1",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["absl/", "absl_py-*.dist-info/"],
+        "check": "from absl import flags, logging; logging.set_verbosity(logging.INFO)",
+    },
+    "opt-einsum": {
+        # jax's contraction-order planner.  numpy is an optional backend, not a
+        # dependency, so the check plans from shapes alone.
+        "version": "3.4.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["opt_einsum/", "opt_einsum-*.dist-info/"],
+        "check": (
+            "import opt_einsum; "
+            "path, info = opt_einsum.contract_path('ij,jk,kl->il', (2, 3), (3, 4), (4, 5), "
+            "shapes=True); assert len(path) == 2"
+        ),
+    },
+    "wadler-lindig": {
+        # jaxtyping's and equinox's pretty-printer.
+        "version": "0.1.7",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["wadler_lindig/", "wadler_lindig-*.dist-info/"],
+        "check": "import wadler_lindig as wl; assert wl.pformat([1, 2]) == '[1, 2]'",
+    },
+    "jaxtyping": {
+        # Despite the name it does not import jax: the annotations work for
+        # numpy too, which is what lets it build and check before jaxlib exists.
+        "version": "0.3.11",
+        "license": "MIT",
+        "deps": ["wadler-lindig"],
+        "files": ["jaxtyping/", "jaxtyping-*.dist-info/"],
+        "check": "from jaxtyping import Float, Shaped; assert Float and Shaped",
+    },
+    "ruamel-yaml": {
+        # rosbags reads ROS 2 metadata.yaml through it.  0.19 dropped the
+        # ruamel.yaml.clib requirement (the C loader is an extra now), so the
+        # package is pure Python.
+        "version": "0.19.1",
+        "license": "MIT",
+        "deps": [],
+        "files": ["ruamel/", "ruamel_yaml-*.dist-info/"],
+        "check": (
+            "import io; from ruamel.yaml import YAML; y = YAML(); "
+            "d = y.load('a: [1, 2]\\n'); s = io.StringIO(); y.dump(d, s); "
+            "assert s.getvalue() == 'a: [1, 2]\\n', s.getvalue()"
+        ),
+    },
+    "versioneer": {
+        # Build-only: pandas' [build-system] requires names versioneer[toml].
+        # The [toml] extra is tomli on Python < 3.11, i.e. nothing here.
+        "version": "0.29",
+        "license": "Unlicense",
+        "deps": [],
+        "files": ["versioneer.py", "versioneer-*.dist-info/"],
+        "check": "import versioneer; assert versioneer.get_versions",
+    },
+    "ml-dtypes": {
+        # bfloat16 / float8 / int4 numpy dtypes; jax and jaxlib both import
+        # it.  0.5.4, not 0.6.0: 0.6 has no cp313t build.  The sdist vendors the
+        # Eigen headers it compiles against (third_party/eigen), so the build
+        # needs no native cvcpkg library.
+        "version": "0.5.4",
+        "license": "Apache-2.0",
+        "deps": ["numpy"],
+        "files": ["ml_dtypes/", "ml_dtypes-*.dist-info/"],
+        "check": (
+            "import numpy as np, ml_dtypes; "
+            "a = np.array([1.5, -2.0], dtype=ml_dtypes.bfloat16); "
+            "assert (a.astype(np.float32) == np.array([1.5, -2.0], np.float32)).all(); "
+            "assert ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max == 448"
+        ),
+    },
+    "rosbags": {
+        # ROS 1/2 bag reader/writer with no ROS install; LieSPHGP converts the
+        # Marinarium recordings with it.  Its compiled legs are hand-written
+        # columns linking cvcpkg's native libraries (apsw -> sqlite,
+        # backports-zstd -> zstd, lz4 -> lz4; see HANDWRITTEN_DEP_BASES), and
+        # neither apsw nor backports.zstd has a cp313t build, so neither does
+        # this.  typing-extensions is a < 3.12 marker upstream, kept as a plain
+        # edge (seed deps carry no markers).
+        "version": "0.11.9",
+        "license": "Apache-2.0",
+        "deps": ["apsw", "backports-zstd", "lz4", "numpy", "ruamel-yaml", "typing-extensions"],
+        "files": ["rosbags/", "rosbags-*.dist-info/"],
+        # A ROS 2 bag written and read back: the sqlite3 storage plugin is
+        # apsw, and the per-message zstd compression is backports.zstd.
+        "check": (
+            "import pathlib, tempfile; "
+            "from rosbags.rosbag2 import CompressionFormat, CompressionMode, "
+            "StoragePlugin, Writer; "
+            "from rosbags.highlevel import AnyReader; "
+            "from rosbags.typesys import Stores, get_typestore; "
+            "ts = get_typestore(Stores.ROS2_HUMBLE); "
+            "S = ts.types['std_msgs/msg/String']; "
+            "d = pathlib.Path(tempfile.mkdtemp()) / 'bag'; "
+            "w = Writer(d, version=8, storage_plugin=StoragePlugin.SQLITE3); "
+            "w.set_compression(CompressionMode.MESSAGE, CompressionFormat.ZSTD); "
+            "w.open(); "
+            "c = w.add_connection('/chatter', S.__msgtype__, typestore=ts); "
+            "w.write(c, 42, ts.serialize_cdr(S(data='cvcpkg'), S.__msgtype__)); "
+            "w.close(); "
+            "r = AnyReader([d], default_typestore=ts); r.open(); "
+            "got = [r.deserialize(raw, con.msgtype).data for con, t, raw in r.messages()]; "
+            "r.close(); assert got == ['cvcpkg'], got"
+        ),
+    },
+    "pandas": {
+        # 3.0.3, not 3.0.6: 3.0.4 dropped cp313t.  The unconditional
+        # requires-dist is numpy + python-dateutil; tzdata is upstream's
+        # Windows/emscripten fallback and carried as a plain edge, as faker's
+        # is, because columns have no platform markers.
+        "version": "3.0.3",
+        "license": "BSD-3-Clause",
+        "deps": ["numpy", "python-dateutil", "tzdata"],
+        "files": ["pandas/", "pandas-*.dist-info/"],
+        # What LieSPHGP's dataset tools do with it: read a CSV, sort, dedupe.
+        "check": (
+            "import io, pandas as pd; "
+            "df = pd.read_csv(io.StringIO('t,x\\n2,b\\n1,a\\n1,a\\n'))"
+            ".sort_values('t').drop_duplicates(subset='t'); "
+            "assert df['t'].tolist() == [1, 2] and df['x'].tolist() == ['a', 'b']"
+        ),
     },
     # jsonschema and its deps (attrs, pyrsistent) come from poetry.lock, which
     # pins 4.17.3 — the pre-referencing/rpds-py line. The lock shadows any seed
@@ -1469,7 +1605,21 @@ SEED_PACKAGES = {
 # coincurve, pycares, maxminddb and zlib-ng link cvcpkg native libraries
 # (secp256k1, c-ares, libmaxminddb, zlib-ng) with an $ORIGIN rpath pass, so they
 # are hand-written too; ccxt, aiodns, geoip2 and aiohttp-fast-zlib depend on them.
-HANDWRITTEN_DEP_BASES = ("numpy", "coincurve", "pycares", "maxminddb", "zlib-ng")
+#
+# apsw, backports-zstd and lz4 link cvcpkg's sqlite, zstd and lz4 the same way
+# (rosbags depends on them); scipy links OpenBLAS and compiles Fortran with
+# cvcpkg's gfortran (jax depends on it).
+HANDWRITTEN_DEP_BASES = (
+    "numpy",
+    "coincurve",
+    "pycares",
+    "maxminddb",
+    "zlib-ng",
+    "apsw",
+    "backports-zstd",
+    "lz4",
+    "scipy",
+)
 
 
 def handwritten_columns(out: Path, interps: list[str]) -> dict[str, list[str]]:
@@ -2914,6 +3064,9 @@ _TOPPKG = {
     "restrictedpython": "RestrictedPython",
     # PEP-420 namespace like poetry-core: the wheel ships pdm/backend/ only.
     "pdm-backend": "pdm.backend",
+    "absl-py": "absl",
+    # PEP-420 namespace: the wheel ships ruamel/yaml/ with no ruamel/__init__.py.
+    "ruamel-yaml": "ruamel.yaml",
 }
 
 
@@ -3017,8 +3170,12 @@ PY_EXE="$(cvc_python_exe)"
 echo "{name}: building with ${{PY_EXE}}"
 
 # ── 2. Bridge the build-only backend onto that interpreter's path ───────────
-_D="${{CVC_PYTHON_ABI#cp}}"; _D="${{_D%t}}"
-_PYMM="${{_D:0:1}}.${{_D:1}}"                 # cp311 -> 3.11
+# A free-threaded column's packages live under lib/python3.13t, not
+# lib/python3.13: keep the `t`, or the bridge names a directory that does not
+# exist and the backend only imports when the build prefix IS the install prefix.
+_D="${{CVC_PYTHON_ABI#cp}}"; _T=""
+case "${{_D}}" in *t) _T="t"; _D="${{_D%t}}" ;; esac
+_PYMM="${{_D:0:1}}.${{_D:1}}${{_T}}"          # cp311 -> 3.11, cp313t -> 3.13t
 if [ -n "${{CVC_BUILD_PREFIX:-}}" ]; then
     _BP_SITE="${{CVC_BUILD_PREFIX}}/lib/python${{_PYMM}}/site-packages"
     export PYTHONPATH="${{_BP_SITE}}${{PYTHONPATH:+:${{PYTHONPATH}}}}"

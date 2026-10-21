@@ -3,7 +3,11 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\\_common\\env-windows.ps1"
 
-$levmarSrc = Join-Path $scriptDir "..\..\third-party\levmar"
+# The vendored source (recipe.yaml: source.type vendored) is staged at
+# CVC_SOURCE_DIR, as build.sh uses it.  The repo-relative third-party\levmar
+# exists only in a checkout, not in the recipe bundle a builder downloads
+# ("source directory ... third-party/levmar does not exist", populate 2026-10-19).
+$levmarSrc = $env:CVC_SOURCE_DIR
 
 & cmake -G Ninja `
     -S $levmarSrc `

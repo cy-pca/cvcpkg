@@ -19,6 +19,15 @@ fi
 
 cd "${SRC}/jam"
 
+# jam.h includes <malloc.h> except on the systems it lists, and it knows nothing
+# of OpenBSD, which has no <malloc.h> ("'malloc.h' file not found", populate
+# 2026-10-19).  Exclude it there as for FreeBSD.
+if [ "$(uname -s)" = OpenBSD ] && ! grep -q '__OpenBSD__' jam.h; then
+    sed 's/!defined(OS_BSDI) &&/!defined(OS_BSDI) \&\& !defined(__OpenBSD__) \&\&/' jam.h > jam.h.cvc
+    mv jam.h.cvc jam.h
+    grep -q '!defined(__OpenBSD__)' jam.h || { echo "jam.h: malloc.h guard not patched" >&2; exit 1; }
+fi
+
 # Jam bootstraps itself: the Makefile first builds a `jam0` with the host cc,
 # then rebuilds `jam` with jam0.  Some trees ship a make.sh instead.
 if [[ -f Makefile ]]; then

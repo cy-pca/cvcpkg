@@ -1,0 +1,95 @@
+schema_version: 1
+recipe:
+  name: scipy-cp311
+  upstream_version: "1.17.1"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://scipy.org/
+  license: "BSD-3-Clause"
+  tags: [python, source, science]
+  description: >-
+    SciPy 1.17.1 for CPython 3.11, built FROM SOURCE against cvcpkg's OpenBLAS
+    with cvcpkg's gfortran. Hand-written, not generated: the generator reads
+    only [build-system] requires and would miss both the native OpenBLAS edge
+    and the Fortran toolchain, silently producing a recipe that links whatever
+    BLAS the builder happens to have.
+
+    1.17.1, not 1.18: it is the newest SciPy that still covers every ABI cvcpkg
+    ships (1.18 dropped cp311 and cp313t), the same rule that pins numpy.
+
+    Linux only so far. macOS needs a Fortran compiler cvcpkg does not ship
+    there yet; Windows is scipy-cp312's MinGW-w64 build.ps1, not ported to this
+    column.
+
+# From-source sdist (NOT source.type python_wheel): the PyPI wheel bundles its
+# own vendored OpenBLAS and libgfortran, which is exactly the non-hermeticity
+# this recipe exists to avoid — the same reason numpy-cp311 builds from source.
+source:
+  # Built from the source package scipy-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz).
+  type: package
+  package: scipy-src
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: scipy-src
+      version: "==1.17.1"
+    - name: python311
+    - name: numpy-cp311
+    # PEP-517 backend, cythonizer and the two C++ code generators, imported by
+    # the build interpreter under --no-build-isolation (bridged from the build
+    # prefix via PYTHONPATH in build.sh).
+    - name: meson-python-cp311
+    - name: cython-cp311
+    - name: pybind11-cp311
+    - name: pythran-cp311
+    - name: packaging-cp311
+    - name: pyproject-metadata-cp311
+    # Native CLIs meson-python shells out to.
+    - name: meson
+    - name: ninja
+    - name: pkg-config
+    # The Fortran compiler (ARPACK, PROPACK, ...): on the build PATH, never the
+    # builder's own.
+    - name: gfortran
+    - name: openblas
+      version: ">=0.3.28"
+  runtime:
+    - name: python311
+    - name: numpy-cp311
+    - name: openblas
+      version: ">=0.3.28"
+    # libgfortran.so.5 / libquadmath.so.0: the Fortran-compiled extensions
+    # NEED them directly, not just through openblas.
+    - name: gcc-runtime
+  host_tools:
+    - python311
+    - pkg-config
+    - meson
+    - ninja
+    # Stamps the relocatable $ORIGIN RUNPATH into each extension .so.
+    - patchelf
+
+build:
+  # The Python ABI is stable across cvcpkg build types; build once, optimized.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
+  # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
+  # NO scipy.libs/: OpenBLAS and the Fortran runtime are cvcpkg packages.
+  files:
+    - { glob: "lib/python3.11/site-packages/scipy/", platforms: [linux] }
+    - { glob: "lib/python3.11/site-packages/scipy-*.dist-info/", platforms: [linux] }

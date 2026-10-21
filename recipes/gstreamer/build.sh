@@ -31,9 +31,17 @@ else
     _rpath_flags="-Wl,-rpath,\$ORIGIN"
 fi
 
+# OpenBSD ships a V4L2-compatible <sys/videoio.h>, so meson enables
+# gst-plugins-good's v4l2 plugin, but its errno.h has no ENODATA, which
+# gstv4l2object.c uses ("use of undeclared identifier 'ENODATA'", populate
+# 2026-10-19).  FreeBSD and NetBSD define it.
+_extra=()
+if [ "$(uname -s)" = OpenBSD ]; then _extra+=(-Dgst-plugins-good:v4l2=disabled); fi
+
 cd "${CVC_SOURCE_DIR}"
 
 meson setup "${CVC_BUILD_DIR}" \
+    ${_extra[@]+"${_extra[@]}"} \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \

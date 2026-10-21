@@ -1,23 +1,19 @@
 #!/usr/bin/env pwsh
-# recipes/python313t/build.ps1 — build CPython 3.13 free-threaded on Windows.
+# recipes/python313t/build.ps1 — build free-threaded CPython 3.13 on Windows.
 #
-# CPython 3.13 PCbuild\build.bat accepts --disable-gil to produce the
-# free-threaded interpreter: python3.13t.exe / python313t.dll.
-# The resulting files use the "t" ABI suffix throughout.
+# python313's build (_common/build-python.ps1) with -FreeThreaded: PCbuild with
+# DisableGil=true (build.bat's --disable-gil), then PC\layout
+# --include-freethreaded, which stages python3.13t.exe, pythonw3.13t.exe,
+# python313t.dll, python3t.dll and the *.cp313t-win_amd64.pyd modules.  The
+# interpreter has no bare python.exe: consumers find it as python3.13t.exe
+# (_common/python-wheel.ps1).  Like python313 it takes no Python to run
+# PCbuild's code generators with (-NoPythonForBuild).
+#
+# This used to run `python ./PCbuild\build.bat ... --experimental-instdir`,
+# which handed a batch file to python with a flag PCbuild does not have, so
+# Windows python313t never built.
 $ErrorActionPreference = 'Stop'
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $SCRIPT_DIR "../_common/env-windows.ps1")
+. (Join-Path $SCRIPT_DIR "../_common/build-python.ps1")
 
-$env:PYTHON_VERSION = "3.13.3"
-$env:PYTHON_MINOR = "3.13"
-$env:CVC_PLATFORM = "windows"
-
-Set-Location $env:CVC_SOURCE_DIR
-
-python ./PCbuild\build.bat `
-    --no-tkinter `
-    --pgo `
-    --disable-gil `
-    --experimental-instdir=inst
-
-Copy-Item -Recurse -Force (Join-Path (Get-Location) "inst") $env:CVC_INSTALL_DIR
+Invoke-CvcPythonBuild -FreeThreaded -NoPythonForBuild

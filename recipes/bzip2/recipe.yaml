@@ -22,7 +22,16 @@ recipe:
   # scripts that only the Unix `make install` creates; makefile.msc builds
   # just bzip2.exe and bzip2recover.exe) and would fail wasm/wasi/cosmo too,
   # which install the library only.  No file in any bundle changes.
-  cvc_revision: 5
+  # cvc.6: the Windows libbz2.dll exports the API.  It was linked without
+  # upstream's libbz2.def, and bzlib.h marks nothing dllexport, so the DLL had
+  # no export table and libbz2.lib/bz2.lib were empty import libraries: nothing
+  # MSVC could link BZ2_* from it (CPython's _bz2 is the first consumer to try).
+  # Other platforms rebuild unchanged.
+  # cvc.7: Windows installs LICENSE in share/licenses/bzip2/.  CPython's Windows
+  # bundle ships libbz2.dll in DLLs\ and builds its LICENSE.txt from this file,
+  # as python.org's does; without it the bzip2 notice was missing there.  Other
+  # platforms rebuild unchanged.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -107,6 +116,8 @@ package:
     - { glob: "bin/bzdiff*",  platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - { glob: "bin/bzgrep*",  platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - { glob: "bin/bzmore*",  platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
+    # Only build.ps1 installs the license so far (see cvc.7).
+    - { glob: "share/licenses/bzip2/", platforms: [windows] }
   cmake_packages: []
 
 abi:

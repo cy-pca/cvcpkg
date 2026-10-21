@@ -23,17 +23,14 @@ _pc_path="$(IFS=:; echo "${_pc_dirs[*]}")"
 export PKG_CONFIG_PATH="${_pc_path}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
-GTK_VERSION="4.16.7"
-GTK_TARBALL="gtk-${GTK_VERSION}.tar.xz"
-GTK_URL="https://download.gnome.org/sources/gtk/4.16/${GTK_TARBALL}"
-
-# Fetch tarball if a source dir isn't already unpacked.
+# The source comes from the gtk4-src package (recipe.yaml), already unpacked.
+# This script used to download gtk-4.16.7.tar.xz itself, unverified, and untar
+# it with the host tar, which on OpenBSD cannot read xz ("tar: input compressed
+# with xz", populate 2026-10-19).
 SRC="${CVC_SOURCE_DIR}"
 if [[ ! -f "${SRC}/meson.build" ]]; then
-    echo "Downloading ${GTK_URL} ..."
-    curl -fSL -o "${CVC_BUILD_DIR}/${GTK_TARBALL}" "${GTK_URL}"
-    mkdir -p "${SRC}"
-    tar xf "${CVC_BUILD_DIR}/${GTK_TARBALL}" -C "${SRC}" --strip-components=1
+    echo "gtk4: no meson.build in ${SRC}; the gtk4-src package was not staged" >&2
+    exit 1
 fi
 
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then

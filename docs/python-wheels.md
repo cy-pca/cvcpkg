@@ -116,15 +116,22 @@ Two kinds of from-source column exist:
 - **Generated** (the bulk): emitted by `tools/gen_python_recipes.py`, which
   reads each sdist's `[build-system] requires` and wires the backend edges.
 - **Hand-written**: `numpy`, `h5py`, `cffi`, `pyyaml`, `markupsafe`,
-  `greenlet`, `pillow`, `lupa`. These carry native-library edges the generator
+  `greenlet`, `pillow`, `lupa`, `scipy`, `lz4`, `backports-zstd`, `apsw`,
+  `pybullet`. These carry native-library edges the generator
   cannot infer — numpy links cvcpkg's `libopenblas.so.0` by soname, h5py links
-  `libhdf5.so.310`, lupa links `liblua.so.5.4` and `libluajit-5.1.so.2` — plus
-  `$ORIGIN`-relative RUNPATH passes and per-platform gates. No
+  `libhdf5.so.310`, lupa links `liblua.so.5.4` and `libluajit-5.1.so.2`, scipy
+  links OpenBLAS and compiles its Fortran with cvcpkg's `gfortran`, lz4 /
+  backports-zstd / apsw link cvcpkg's `liblz4`, `libzstd` and `libsqlite3`
+  instead of the copies their sdists bundle or download — plus
+  `$ORIGIN`-relative RUNPATH passes and per-platform gates. pybullet has no
+  native edge; it is hand-written because upstream stopped publishing wheels at
+  cp311 and the generator only claims columns upstream builds. No
   auditwheel-vendored `*.libs/` directory ships; the native runtime is the
   corresponding cvcpkg package, resolved out of the same activated prefix. The
-  generator never emits or prunes these families; it declares `numpy` in
-  `HANDWRITTEN_DEP_BASES` so generated packages (matplotlib, gymnasium, …) can
-  depend on its columns, which are read from disk.
+  generator never emits or prunes these families; the ones generated packages
+  depend on (`numpy`, `scipy`, `apsw`, `backports-zstd`, `lz4`, …) are declared
+  in `HANDWRITTEN_DEP_BASES` so matplotlib, gymnasium, rosbags and the rest can
+  depend on their columns, which are read from disk.
 
 For **new** packages, from-source is the generator default — pure `py3-none-any`
 packages included, because even a pure wheel is a third-party binary artifact.

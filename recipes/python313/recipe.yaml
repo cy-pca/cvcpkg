@@ -37,7 +37,23 @@ recipe:
   # NetBSD's ld.elf_so refuses ("math.cpython-313.so: wrong number of segments
   # (3 != 2)").  Rebuilt with 2.5.1 and _common/build-python.sh's NetBSD fixes
   # (no pkgsrc in sysconfig; RPATH room in LDFLAGS_NODIST), as python312 cvc.17.
-  cvc_revision: 8
+  # cvc.9: Windows builds from cvcpkg's libraries and downloads nothing.
+  # PCbuild\build.bat -e ran CPython's get_externals.bat, which fetched bzip2,
+  # sqlite, xz and zlib sources and a PREBUILT libffi and OpenSSL from GitHub
+  # mid-build, while the openssl/zlib/bzip2/xz/sqlite deps declared here went
+  # unused.  _common/build-python.ps1 (shared by python311/312/313/313t) runs
+  # pcbuild.proj directly against the deps, libffi included (its edge now
+  # covers windows), and ships the DLLs the modules import in DLLs\.  No
+  # Python goes into the build: 3.13's tarball ships what PCbuild's code
+  # generators make, and python311/312 run theirs with this python313.  Other
+  # platforms rebuild unchanged.
+  # cvc.10: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts again, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.9 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -70,7 +86,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -90,7 +106,7 @@ depends:
       version: "^1.3"
     - name: libffi
       version: "^3.0"
-      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, cosmo]  # not windows: CPython fetches its own libffi via get_externals
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, cosmo]
     - name: bzip2
       version: "^1.0"
     - name: xz
@@ -179,6 +195,7 @@ package:
     - { glob: "Lib/", platforms: [windows] }
     - { glob: "libs/", platforms: [windows] }
     - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
   cmake_packages:
     - { name: Python3, targets: ["Python3::Python", "Python3::Interpreter"] }
 

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  recipes/_common/python-externals.targets - link CPython's modules against
+  cvcpkg's bzip2, xz, zlib and sqlite instead of the copies PCbuild compiles
+  from externals\ sources (and, in 3.13, build _decimal from the libmpdec in
+  CPython's own tarball).
+
+  _common/build-python.ps1 passes this as /p:ForceImportAfterCppTargets.  The
+  C++ targets import it at the end of every PCbuild project, after the
+  project's own items, so it can take those items out again.  Each block acts
+  on the one project its Condition names.  python-externals.props has already
+  pointed the *Dir properties at the deps prefix's include\.
+
+  The DLLs these now import (libbz2, liblzma, sqlite3) are copied into the
+  build directory by build-python.ps1, which PC\layout then ships in DLLs\.
+  The last block has LICENSE.txt take bzip2's, libffi's and OpenSSL's license
+  texts from the deps prefix too.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!-- python3XX.dll: zlib, linked statically as PCbuild does with its own copy
+       (zlibmodule.c stays; only zlib's own sources go). -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'pythoncore'">
+    <ClCompile Remove="$(zlibDir)*.c" />
+    <ClInclude Remove="$(zlibDir)*.h" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == 'pythoncore'">
+    <Link>
+      <AdditionalDependencies>$(CvcDepsDir)lib\zlibstatic.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- _bz2: libbz2.dll instead of bzip2's sources compiled into the module. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_bz2'">
+    <ClCompile Remove="$(bz2Dir)*.c" />
+    <ClInclude Remove="$(bz2Dir)*.h" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_bz2'">
+    <Link>
+      <AdditionalDependencies>$(CvcDepsDir)lib\libbz2.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- _lzma: liblzma.dll instead of the static liblzma.lib that liblzma.vcxproj
+       builds from xz's sources.  LZMA_API_STATIC would declare the API without
+       dllimport.  (A property function's result comes back escaped, so its
+       semicolons would not separate list entries without the Unescape.) -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_lzma'">
+    <ProjectReference Remove="liblzma.vcxproj" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_lzma'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(CvcDepsDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>$([MSBuild]::Unescape($([System.String]::Copy('%(PreprocessorDefinitions)').Replace('LZMA_API_STATIC;', ''))))</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>$([MSBuild]::Unescape($([System.String]::Copy('%(AdditionalDependencies)').Replace('$(OutDir)liblzma$(PyDebugExt).lib', '$(CvcDepsDir)lib\lzma.lib'))))</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- _sqlite3: cvcpkg's sqlite3.dll instead of the one sqlite3.vcxproj builds
+       from the amalgamation. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_sqlite3'">
+    <ProjectReference Remove="sqlite3.vcxproj" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_sqlite3'">
+    <Link>
+      <AdditionalDependencies>$(CvcDepsDir)lib\sqlite3.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- _ssl (3.11 only): OpenSSL's applink.c, compiled into the module from
+       $(opensslIncludeDir); cvcpkg installs it as include\openssl\applink.c.
+       It never took effect in an extension module (OpenSSL looks for
+       OPENSSL_Applink in the executable), and CPython 3.12 dropped it. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_ssl'">
+    <ClCompile Remove="$(opensslIncludeDir)\applink.c" />
+  </ItemGroup>
+
+  <!-- _decimal (3.13): python-externals.props points mpdecimalDir at the
+       bundled libmpdec 2.5.1, whose mpdecimal.h supports MSVC itself.
+       Modules\_decimal\windows\mpdecimal.h is a shim for mpdecimal 4.0.0's
+       mpdecimal64vc.h, which the bundled copy does not have, so take its
+       directory off the include path (3.11/3.12 have neither). -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_decimal'">
+    <ClInclude Remove="$(mpdecimalDir)libmpdec\*vc.h;$(mpdecimalDir)libmpdec\vccompat.h" />
+  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_decimal'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>$([MSBuild]::Unescape($([System.String]::Copy('%(AdditionalIncludeDirectories)').Replace('..\Modules\_decimal\windows;', ''))))</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <!-- _ctypes: libffi.props copies $(libffiOutDir)libffi-8.dll, but cvcpkg
+       installs DLLs in bin\, not beside the import library. -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == '_ctypes'">
+    <_LIBFFIDLL Remove="@(_LIBFFIDLL)" />
+  </ItemGroup>
+
+  <!-- LICENSE.txt: regen.targets' _RegenLicense (python and pythoncore)
+       concatenates CPython's LICENSE, the CRT's and the license files of the
+       bzip2, libffi and OpenSSL that DLLs\ ships, which it expects in the
+       externals\ layout: $(bz2Dir)LICENSE, $(libffiDir)LICENSE,
+       $(opensslOutDir)LICENSE[.txt].  cvcpkg's builds install theirs in
+       share\licenses\<name>\.  Those items are defined in regen.targets, which
+       these projects import after this file, so they are swapped when the
+       target runs rather than at evaluation.  Same order as upstream's. -->
+  <Target Name="_CvcLicenseSources" BeforeTargets="_RegenLicense">
+    <ItemGroup>
+      <_LicenseSources Remove="$(bz2Dir)LICENSE;$(libffiDir)LICENSE;$(opensslOutDir)LICENSE;$(opensslOutDir)LICENSE.txt" />
+      <_LicenseSources Include="$(CvcDepsDir)share\licenses\bzip2\LICENSE;
+                                $(CvcDepsDir)share\licenses\libffi\LICENSE;
+                                $(CvcDepsDir)share\licenses\openssl\LICENSE.txt" />
+    </ItemGroup>
+  </Target>
+</Project>

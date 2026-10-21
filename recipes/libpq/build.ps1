@@ -84,16 +84,59 @@ Set-Location $env:CVC_SOURCE_DIR
     '-Dzstd=disabled',
     '-Dlz4=disabled',
     '-Dnls=disabled',
-    '-Dgssapi=enabled'
+    # Only libpq builds (below), but meson still configures the server: keep
+    # the PL languages and TAP tests off, or it enables plpython against
+    # whatever Python is on PATH (a hosted runner's own).  build.sh disables
+    # plpython too.
+    '-Dplperl=disabled',
+    '-Dplpython=disabled',
+    '-Dpltcl=disabled',
+    '-Dtap_tests=disabled',
+    # No GSSAPI on Windows: the krb5 recipe has no Windows build (recipe.yaml
+    # declares it for the Unix platforms only), so meson found no gssapi and
+    # stopped (populate job 22351).  Windows libpq authenticates Kerberos and
+    # Negotiate through SSPI (secur32), which meson enables on its own.
+    '-Dgssapi=disabled'
 ))
 if ($LASTEXITCODE -ne 0) { throw "meson setup failed" }
 
 Set-Location $env:CVC_BUILD_DIR
-& ninja -j $env:CVC_JOBS 'src/interfaces/libpq:pq'
-if ($LASTEXITCODE -ne 0) { throw "ninja build failed" }
+# Build libpq alone, then stage the client files the Unix 'ninja install'
+# leaves after package.files filters it.  The whole project does not build
+# here: the backend's postgres.def step needs a native perl (an MSYS perl on
+# PATH turned dumpbin's /nologo into a path), and none of it ships.  The old
+# `ninja 'src/interfaces/libpq:pq'` was meson-compile syntax, which ninja
+# rejects ("unknown target"), and 'ninja install' builds every target.
+& $mesonExe @($mesonArgs + @(
+    'compile', '-C', $env:CVC_BUILD_DIR, '-j', $env:CVC_JOBS,
+    'src/interfaces/libpq/libpq:shared_library',
+    'src/interfaces/libpq/libpq:static_library'
+))
+if ($LASTEXITCODE -ne 0) { throw "meson compile failed" }
 
-& ninja install
-if ($LASTEXITCODE -ne 0) { throw "ninja install failed" }
+# Names under MSVC: default_lib_args sets name_prefix '', so the DLL is
+# libpq.dll with import library libpq.lib; meson names static libraries
+# lib*.a, here libpq.a.
+$src = $env:CVC_SOURCE_DIR
+$bld = $env:CVC_BUILD_DIR
+$dst = $env:CVC_INSTALL_DIR
+foreach ($d in 'bin', 'lib\pkgconfig', 'include\libpq') {
+    New-Item -ItemType Directory -Force -Path (Join-Path $dst $d) | Out-Null
+}
+$pqBuild = Join-Path $bld 'src\interfaces\libpq'
+Copy-Item (Join-Path $pqBuild 'libpq.dll') (Join-Path $dst 'bin')
+Copy-Item (Join-Path $pqBuild 'libpq.lib') (Join-Path $dst 'lib')
+Copy-Item (Join-Path $pqBuild 'libpq.a')   (Join-Path $dst 'lib')
+Copy-Item (Join-Path $bld 'meson-private\libpq.pc') (Join-Path $dst 'lib\pkgconfig')
+# The headers src/include/meson.build and src/interfaces/libpq/meson.build
+# install into includedir (not the internal/server ones).
+Copy-Item (Join-Path $src 'src\interfaces\libpq\libpq-fe.h'),
+          (Join-Path $src 'src\interfaces\libpq\libpq-events.h'),
+          (Join-Path $src 'src\include\postgres_ext.h'),
+          (Join-Path $src 'src\include\pg_config_manual.h'),
+          (Join-Path $bld 'src\include\pg_config.h'),
+          (Join-Path $bld 'src\include\pg_config_os.h') (Join-Path $dst 'include')
+Copy-Item (Join-Path $src 'src\include\libpq\libpq-fs.h') (Join-Path $dst 'include\libpq')
 
 # Generate CMake config.
 $cmakeDir = "$env:CVC_INSTALL_DIR\lib\cmake\PostgreSQL"
@@ -113,3 +156,7 @@ set(PostgreSQL_LIBRARIES "`${_PG_LIB}")
 unset(_PG_PREFIX)
 unset(_PG_LIB)
 "@ | Set-Content "$cmakeDir\PostgreSQLConfig.cmake"
+
+# libpq.pc carries the temporary install dir as prefix=; make it relocatable,
+# as build.sh does with cvc_rewrite_install_paths.
+Invoke-CvcRewriteInstallPaths

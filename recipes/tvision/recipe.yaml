@@ -6,7 +6,9 @@ recipe:
   upstream_version: "0.0.0-git.b4831e2"
   # cvc.2: build against the cvcpkg ncurses in the deps prefix (Linux used the build
   # host's ncursesw headers; macOS could not find ncursesw/ncurses_dll.h).
-  cvc_revision: 2
+  # cvc.3: adds Windows (MSVC, Win32 console, no ncurses; build.ps1), so libcvc can
+  # ship its tvision terminal backend there. The Unix build is unchanged.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -35,17 +37,20 @@ depends:
   build:
     - cmake
     - ninja
-    - ncurses
+    # Not Windows: tvision draws through the Win32 console API there, and the
+    # catalog has no Windows ncurses (install-deps is all-or-nothing).
+    - name: ncurses
+      platforms: [linux, macos, freebsd, netbsd]
   runtime:
     # tvision links libncursesw + libtinfo at build; the static lib needs them at
     # the consumer's final link too, so ncurses must be in the flat prefix.
-    - ncurses
+    - name: ncurses
+      platforms: [linux, macos, freebsd, netbsd]
   host_tools: []
 
 build:
-  # Unix only for this first cut: tvision uses ncursesw here. The Windows build
-  # (Win32 console, no ncurses) can be added later — same "add a platform in a
-  # revision bump" pattern the yaml-cpp recipe used.
+  # Unix builds use ncursesw (build.sh); Windows uses the Win32 console and MSVC
+  # (build.ps1), with no ncurses.
   matrix:
     - platform: linux
       script: build.sh
@@ -61,14 +66,21 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
 
 package:
-  # Upstream has no install target and ships no CMake config: build.sh stages the
-  # static lib + headers by hand and generates a pkg-config file. Consumers link
+  # Unix: upstream's install target exports a CMake config whose link interface
+  # names the build host's absolute ncurses paths, so build.sh stages the static
+  # lib + headers by hand and generates a pkg-config file instead. Consumers link
   # -ltvision plus ncursesw/tinfo (pulled in via the pkg-config Requires).
+  # Windows: build.ps1 uses upstream's install, which yields tvision.lib (MSVC
+  # spelling, no "lib" prefix) and a relocatable CMake config (tvision::tvision).
   files:
-    - lib/libtvision.*
-    - lib/pkgconfig/tvision.pc
+    - { glob: "lib/libtvision.*", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/pkgconfig/tvision.pc", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/tvision.lib", platforms: [windows] }
+    - { glob: "lib/cmake/tvision/", platforms: [windows] }
     - include/tvision/
   cmake_packages: []
 

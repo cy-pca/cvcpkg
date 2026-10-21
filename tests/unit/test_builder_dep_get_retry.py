@@ -1,4 +1,4 @@
-"""The builder's dependency downloads retry transport errors, not HTTP statuses."""
+"""The builder's dependency downloads retry transport errors and transient statuses."""
 
 from __future__ import annotations
 
@@ -44,11 +44,31 @@ def test_gives_up_after_the_last_attempt():
     assert len(client.calls) == _DEP_GET_ATTEMPTS
 
 
-def test_an_http_error_status_is_not_retried():
-    err = httpx.Response(503)
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 410])
+def test_a_definite_http_error_status_is_not_retried(status):
+    err = httpx.Response(status)
     client = _Client([err])
     assert _get_retrying(client, "https://s/a.tar.zst", sleep=lambda _s: None) is err
     assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_a_transient_http_error_status_is_retried(status):
+    # pango on Windows (2026-10-20) lost fribidi to one of these: the lookup's
+    # error status was taken for "not on the server".
+    ok = httpx.Response(200, json={"packages": []})
+    client = _Client([httpx.Response(status), ok])
+    slept = []
+    assert _get_retrying(client, "https://s/v1/packages/x", sleep=slept.append) is ok
+    assert len(client.calls) == 2
+    assert len(slept) == 1
+
+
+def test_a_transient_status_on_the_last_attempt_is_returned():
+    last = httpx.Response(502)
+    client = _Client([httpx.Response(503)] * (_DEP_GET_ATTEMPTS - 1) + [last])
+    assert _get_retrying(client, "https://s/a", sleep=lambda _s: None) is last
+    assert len(client.calls) == _DEP_GET_ATTEMPTS
 
 
 def test_timeouts_are_retried():

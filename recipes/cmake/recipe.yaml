@@ -95,8 +95,11 @@ depends:
     - name: curl
       version: ">=8.0"
       # haiku bootstraps with cmake's BUNDLED curl (no cvcpkg haiku curl yet),
-      # so it has no external libcurl runtime dependency.
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      # so it has no external libcurl runtime dependency. Windows repackages
+      # Kitware's cmake.exe, which imports only system DLLs (see openssl
+      # below), and curl's Windows build needs cmake, so a curl dependency
+      # there would be a cycle.
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: openssl
       version: "^3.0"
       # Linked directly (libcrypto/libssl via cmlibarchive and curl). Windows

@@ -1,121 +1,12 @@
 #!/usr/bin/env pwsh
-# recipes/python311/build.ps1 — build CPython 3.11 on Windows from source.
+# recipes/python311/build.ps1 — build CPython 3.11 on Windows (MSVC).
 #
-# CPython's Windows build is self-contained: PCbuild\build.bat -e runs
-# get_externals.bat, which fetches CPython's OWN bundled externals (openssl,
-# libffi, bzip2, xz, sqlite, zlib, ...). So the windows build needs NONE of the
-# cvcpkg deps (they are scoped off windows in recipe.yaml). PC\layout then
-# produces a complete python.org-style tree (python.exe + python3XX.dll + Lib/ +
-# DLLs/ + include/ + libs/python3XX.lib) that find_package(Python3
-# Development.Embed) expects.
+# The whole build is _common/build-python.ps1: PCbuild against the cvcpkg
+# openssl/zlib/bzip2/xz/sqlite/libffi deps, nothing downloaded, then PC\layout
+# into a python.org-style tree at the prefix root (python.exe, python311.dll,
+# Lib\, DLLs\, include\, libs\python311.lib for embedding).
 $ErrorActionPreference = 'Stop'
 $SCRIPT_DIR = Split-Path -Parent $MyInvocation.MyCommand.Path
-. (Join-Path $SCRIPT_DIR "../_common/env-windows.ps1")
+. (Join-Path $SCRIPT_DIR "../_common/build-python.ps1")
 
-Set-Location $env:CVC_SOURCE_DIR
-
-# ── Trim PATH to essentials before building ─────────────────────────────────
-# The workflow's "Install system build tools" step dumps the ENTIRE machine PATH
-# into GITHUB_PATH, bloating PATH to ~7.5 KB. cmd.exe has an ~8 KB command-line
-# limit, so when vcvars64 — or MSBuild's _decimal `ml64` custom-build — extends
-# PATH via `set PATH=...;%PATH%` it overflows ("The input line is too long"),
-# the extension silently fails, and the MASM assembler dir never lands on the
-# PATH cmd sees. THAT is why ml64 was "not recognized" for _decimal's vcdiv64.asm
-# despite being resolvable in pwsh (pwsh has no such command-line limit).
-#
-# Rebuild a lean PATH from only the tools the CPython build needs; vcvars then
-# adds the MSVC toolset with plenty of headroom. Capture the tool dirs from the
-# full PATH *before* trimming it.
-$keep = @()
-foreach ($tool in 'git.exe', 'python.exe', 'py.exe', 'cmake.exe', 'nuget.exe') {
-    $c = Get-Command $tool -ErrorAction SilentlyContinue
-    if ($c) { $keep += (Split-Path $c.Source) }
-}
-$env:PATH = (@(
-        "$env:SystemRoot\System32",
-        "$env:SystemRoot",
-        "$env:SystemRoot\System32\Wbem",
-        "$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-    ) + $keep | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique) -join ';'
-Write-Host "DIAG lean PATH length: $($env:PATH.Length)"
-
-# ── Source the MSVC x64 developer environment (vcvars64) into THIS process ──
-# Provides cl/link and the MASM assembler (ml64.exe). env-windows.ps1's
-# Import-CvcMsvcEnv early-returns when cl is already present (true on CI via
-# msvc-dev-cmd), so it would not have sourced vcvars — do it here. Uses the
-# robust temp-.cmd technique (avoids the fragile inline `cmd /c "..."` quoting).
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (-not (Test-Path $vswhere)) { $vswhere = Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe' }
-$vsRoot = & $vswhere -latest -products '*' `
-    -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' `
-    -property installationPath 2>$null | Select-Object -First 1
-if (-not $vsRoot) { throw 'vswhere found no VS install with the x64 VC tools' }
-$vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
-if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found under $vsRoot" }
-$helper = Join-Path ([System.IO.Path]::GetTempPath()) ("cvc-vcvars-{0}.cmd" -f ([guid]::NewGuid().ToString('N')))
-Set-Content -LiteralPath $helper -Value ("@echo off`r`ncall `"$vcvars`" >nul 2>&1`r`nset") -Encoding Ascii
-try { $dump = & cmd.exe /c $helper } finally { Remove-Item -LiteralPath $helper -ErrorAction SilentlyContinue }
-foreach ($line in $dump) {
-    if ($line -match '^([^=]+)=(.*)$') {
-        $n = $matches[1]; $v = $matches[2]
-        if ($n -in @('_', 'PROMPT')) { continue }
-        [Environment]::SetEnvironmentVariable($n, $v, 'Process')
-    }
-}
-Write-Host "DIAG post-vcvars PATH length: $($env:PATH.Length)"
-Write-Host "DIAG ml64: $((Get-Command ml64.exe -ErrorAction SilentlyContinue).Source)"
-if (-not (Get-Command ml64.exe -ErrorAction SilentlyContinue)) {
-    throw 'ml64.exe not resolvable after sourcing vcvars64 — _decimal would fail'
-}
-
-# Release x64. -e fetches externals; --no-tkinter (no tcl/tk here). No --pgo: the
-# profile-guided build reruns the test suite and is slow + flaky in CI.
-# CPython's PCbuild\python.props maps only VisualStudioVersion 15.0-17.0 to a
-# platform toolset and otherwise falls back to v140, so under Visual Studio 2026
-# (18.0, GitHub's windows-latest image) MSBuild asked for the VS 2015 tools and
-# failed with MSB8020.  MSBuild reads environment variables as properties and
-# python.props only fills PlatformToolset when it is empty, so name VS 2026's
-# toolset here.  Visual Studio 2022 (the fleet, windows-2022) is unaffected.
-if ($env:VisualStudioVersion -eq '18.0' -and -not $env:PlatformToolset) {
-    $env:PlatformToolset = 'v145'
-    Write-Host "Visual Studio 18: PlatformToolset=v145"
-}
-
-& .\PCbuild\build.bat -e -c Release -p x64 --no-tkinter
-if ($LASTEXITCODE -ne 0) { throw "PCbuild\build.bat failed (exit $LASTEXITCODE)" }
-
-# Lay out a full install directly into the install dir. --include-dev carries the
-# headers + libs/python311.lib needed to EMBED (volrover3), --include-pip carries
-# pip, --precompile bytes-compiles the stdlib.
-& .\PCbuild\amd64\python.exe PC\layout `
-    --copy $env:CVC_INSTALL_DIR `
-    --preset-default `
-    --include-dev `
-    --include-pip `
-    --precompile
-if ($LASTEXITCODE -ne 0) { throw "PC\layout failed (exit $LASTEXITCODE)" }
-
-# Windows $ORIGIN analog for C-extension DLL resolution. Since Python 3.8 the
-# loader IGNORES PATH for a .pyd's dependent DLLs — only the module's own dir,
-# system dirs, and dirs registered via os.add_dll_directory() are searched. So a
-# downstream `import numpy` / `import pycvc` cannot find the cvcpkg DLLs
-# (openblas.dll, libcvc.dll, ...) in <prefix>\bin without help. Ship a .pth that
-# registers <prefix>\bin at every interpreter startup (derived from sys.prefix,
-# so the tree stays relocatable). Matches recipes/python312/build.ps1.
-$siteDir = Join-Path $env:CVC_INSTALL_DIR "Lib\site-packages"
-New-Item -ItemType Directory -Force -Path $siteDir | Out-Null
-$pth = @'
-import os, sys; _b = os.path.join(sys.prefix, 'bin'); os.path.isdir(_b) and hasattr(os, 'add_dll_directory') and os.add_dll_directory(_b)
-'@
-Set-Content -Path (Join-Path $siteDir "cvcpkg-dll-directories.pth") -Value $pth -Encoding ASCII
-
-# pip only.  3.11's ensurepip (PC\layout --include-pip) also lays down
-# setuptools 65.5.0; next to the setuptools-cp311 package that left two
-# setuptools dist-infos in Lib\site-packages, and the old one's
-# check_test_suite entry point broke every setup.py using test_suite=.  Same
-# removal as _common/build-python.sh on the POSIX platforms.
-foreach ($name in @('setuptools', 'pkg_resources', '_distutils_hack', 'distutils-precedence.pth')) {
-    $path = Join-Path $siteDir $name
-    if (Test-Path $path) { Remove-Item -Recurse -Force $path }
-}
-Get-ChildItem -Path $siteDir -Directory -Filter 'setuptools-*.dist-info' | Remove-Item -Recurse -Force
+Invoke-CvcPythonBuild

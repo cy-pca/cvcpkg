@@ -43,7 +43,23 @@ recipe:
   # _common/build-python.sh stopped baking pkgsrc's -I/usr/pkg/include -L/usr/pkg/lib
   # into sysconfig, which made every C extension built against it prefer pkgsrc's
   # libraries (python312 cvc.16/cvc.17).
-  cvc_revision: 10
+  # cvc.11: a Windows build that works (none was ever published).  build.ps1 ran
+  # `python ./PCbuild\build.bat ... --experimental-instdir=inst`: a batch file
+  # handed to python, with a flag PCbuild does not have.  It is now python313's
+  # build, _common/build-python.ps1, with -FreeThreaded (DisableGil, then
+  # PC\layout --include-freethreaded), against the cvcpkg
+  # openssl/zlib/bzip2/xz/sqlite/libffi deps with nothing downloaded, and no
+  # Python to run PCbuild's code generators with (3.13 needs none).
+  # package.files declares the Windows tree, and the Unix entries are scoped
+  # off windows (the strict pack check would have failed on every one).  Other
+  # platforms rebuild unchanged.
+  # cvc.12: Windows LICENSE.txt carries the bzip2, libffi and OpenSSL license
+  # texts, as python.org's does: DLLs\ ships those libraries, and PCbuild
+  # reads the texts from its externals\ tree, so cvc.11 warned "License file
+  # ... is missing" and left them out.  _common/python-externals.targets takes
+  # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
+  # cvc.10).  Other platforms rebuild unchanged.
+  cvc_revision: 12
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -154,16 +170,28 @@ build:
 
 package:
   files:
-    - bin/python3.13t*
-    - bin/pip3.13t*
-    - bin/python3t
-    - lib/libpython3.13t*
-    - lib/python3.13t/
-    - lib/pkgconfig/python-3.13t*.pc
-    - include/python3.13t/
-    # Windows PCbuild --experimental-instdir layout
-    - python313t.dll
-    - python3.13t.exe
+    # POSIX layout (autotools `make install`).
+    - { glob: "bin/python3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/python3t", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/libpython3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/python3.13t/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "lib/pkgconfig/python-3.13t*.pc", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "include/python3.13t/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    # Windows layout (PC\layout --include-freethreaded at the prefix root): the
+    # t-suffixed interpreters and DLLs, the stable-ABI forwarder python3t.dll,
+    # the stdlib (Lib/), the *.cp313t-win_amd64.pyd modules (DLLs/), and the
+    # headers + libs/python313t.lib for embedding.
+    - { glob: "python3.13t.exe", platforms: [windows] }
+    - { glob: "pythonw3.13t.exe", platforms: [windows] }
+    - { glob: "python313t.dll", platforms: [windows] }
+    - { glob: "python3t.dll", platforms: [windows] }
+    - { glob: "vcruntime140*.dll", platforms: [windows] }
+    - { glob: "DLLs/", platforms: [windows] }
+    - { glob: "Lib/", platforms: [windows] }
+    - { glob: "libs/", platforms: [windows] }
+    - { glob: "include/", platforms: [windows] }
+    - { glob: "LICENSE.txt", platforms: [windows] }
   cmake_packages:
     - { name: Python3t, targets: ["Python3t::Python", "Python3t::Interpreter"] }
 
@@ -178,7 +206,7 @@ notes:
       (python3.13t.exe on Windows) and the shared library is
       libpython3.13t.so (python313t.dll on Windows).  A python3t
       convenience symlink is also created on Unix.  PGO is enabled on
-      Linux, macOS, and Windows.
+      Linux and macOS.
   - title: "Separate stdlib from python313"
     platforms: [linux, macos, freebsd, openbsd, netbsd]
     description: >-
@@ -191,10 +219,12 @@ notes:
   - title: "Windows (PCbuild) build"
     platforms: [windows]
     description: >-
-      Built via PCbuild\build.bat --disable-gil using MSVC.  The free-threaded
-      interpreter is python3.13t.exe and the DLL is python313t.dll.  PGO is
-      enabled.  The Windows build uses the same CPython source tarball as the
-      Unix build; --experimental-instdir produces a relocatable install tree.
+      Built with MSVC through PCbuild with DisableGil (build.bat's
+      --disable-gil) against the cvcpkg openssl, zlib, bzip2, xz, sqlite and
+      libffi, then staged by PC\layout --include-freethreaded.  The
+      interpreter is python3.13t.exe (there is no bare python.exe) and the
+      DLL is python313t.dll; extension modules carry the cp313t tag.  No PGO,
+      as for python313.
   - title: "WASM (Emscripten) — experimental"
     platforms: [wasm]
     description: >-

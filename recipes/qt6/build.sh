@@ -15,6 +15,19 @@ if [[ "${CVC_PLATFORM}" == "linux" ]]; then
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     CMAKE_EXTRA+=(-DINPUT_xcb=yes)
 fi
+# OpenBSD: no backtrace feature.  Qt 6.8.2's qlogging.cpp passes a const frame
+# pointer to a lambda taking `void *&` in its execinfo backtrace path, which
+# clang rejects there ("1st argument ('void *const') would lose const
+# qualifier", populate 2026-10-19).  It only drops stack traces from fatal
+# messages.
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    CMAKE_EXTRA+=(-DFEATURE_backtrace=OFF)
+    # qelfparser_p.cpp names ELFOSABI_AIX, which OpenBSD's <elf.h> spells
+    # ELFOSABI_MONTEREY (AIX's old name, value 7): "use of undeclared
+    # identifier 'ELFOSABI_AIX'" (job 22627).  It has every other ELFOSABI_*
+    # the parser uses.
+    export CXXFLAGS="${CXXFLAGS:-} -DELFOSABI_AIX=7"
+fi
 
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \

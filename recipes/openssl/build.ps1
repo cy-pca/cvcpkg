@@ -94,12 +94,20 @@ $target = 'VC-WIN64A'
 # Static vs shared: OpenSSL uses 'no-shared' for static libs.
 $sharedFlag = if ($env:CVC_LINK -eq 'static') { 'no-shared' } else { 'shared' }
 
+# no-uplink: libcrypto uses the FILE* it is handed directly.  With uplink (the
+# VC-WIN64A default) every FILE*-based call goes through OPENSSL_Applink, which
+# the calling EXECUTABLE must export, and the process exits with
+# "OPENSSL_Uplink(...): no OPENSSL_Applink" when it does not -- CPython's
+# _ssl.load_dh_params did exactly that.  Uplink only matters when OpenSSL and
+# its caller use different C runtimes; everything here links the UCRT (/MD).
+# CPython builds the OpenSSL it ships the same way (PCbuild\openssl.vcxproj).
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & perl Configure $target `
         --prefix="$env:CVC_INSTALL_DIR" `
         --openssldir="$env:CVC_INSTALL_DIR\ssl" `
         $sharedFlag `
+        no-uplink `
         no-tests
     if ($LASTEXITCODE -ne 0) { throw "OpenSSL Configure failed" }
 
@@ -112,6 +120,13 @@ try {
 finally {
     Pop-Location
 }
+
+# The license travels with the DLLs, as Apache-2.0 asks.  CPython's Windows
+# bundle ships libcrypto/libssl in DLLs\ and appends this text to its
+# LICENSE.txt (_common/python-externals.targets), as python.org's does.
+$lic = Join-Path $env:CVC_INSTALL_DIR 'share\licenses\openssl'
+New-Item -ItemType Directory -Force -Path $lic | Out-Null
+Copy-Item (Join-Path $env:CVC_SOURCE_DIR 'LICENSE.txt') $lic
 
 # Ensure installed .pc/.cmake files are relocatable.
 Invoke-CvcRewriteInstallPaths

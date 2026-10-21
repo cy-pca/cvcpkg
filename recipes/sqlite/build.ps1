@@ -23,9 +23,22 @@ try {
     New-Item -ItemType Directory -Force -Path $libDir, $incDir, $binDir | Out-Null
 
     # Compile the amalgamation with NMAKE using the provided Makefile.msc.
+    #
+    # The CORE_* macros make the DLL export the API.  Makefile.msc marks
+    # SQLITE_API dllexport only for DYNAMIC_SHELL/FOR_WIN10 builds; otherwise
+    # it links with a sqlite3.def it greps out of the object's /EXPORT
+    # directives, of which there are none, so cvc.5 and earlier shipped a
+    # sqlite3.dll with an empty export table and an import library nothing
+    # could link (CPython's _sqlite3 is the first consumer to try).
+    # USE_CRT_DLL=1 builds against the DLL C runtime (/MD), as every other
+    # shared Windows library here is, instead of Makefile.msc's default /MT.
     & nmake /f Makefile.msc `
         "PREFIX=$prefix" `
         "USE_NATIVE_LIBPATHS=1" `
+        "USE_CRT_DLL=1" `
+        "CORE_COMPILE_OPTS=-DSQLITE_API=__declspec(dllexport)" `
+        "CORE_LINK_DEP=" `
+        "CORE_LINK_OPTS=" `
         sqlite3.dll sqlite3.lib
     if ($LASTEXITCODE -ne 0) { throw "nmake (sqlite3.dll/sqlite3.lib) failed" }
 
