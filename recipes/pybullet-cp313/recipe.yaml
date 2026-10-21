@@ -1,0 +1,74 @@
+schema_version: 1
+recipe:
+  name: pybullet-cp313
+  upstream_version: "3.2.7"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pybullet.org/
+  license: "Zlib"
+  tags: [python, source, physics, robotics]
+  description: >-
+    pybullet 3.2.7 (Bullet Physics' Python module) for CPython 3.13 — the cp313
+    column of cvcpkg's per-interpreter matrix, BUILT FROM SOURCE from the PyPI
+    sdist, with numpy support. Ships pybullet_data (URDF/meshes) and the
+    pybullet_envs / pybullet_utils / pybullet_robots helpers alongside the
+    extension. Hand-written, not generated: upstream publishes wheels only up to
+    cp311, and the generator only claims interpreter columns upstream builds,
+    so it would emit cp311 alone. No cp313t column: the extension is not
+    free-threading safe.
+
+# From-source sdist: the whole Bullet3 tree. setup.py compiles it into one
+# extension module with no native dependencies beyond libc/libdl/libpthread.
+source:
+  # Built from the source package pybullet-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/de/95/b9a98cd4ed948d4f25a7d0b13cb0c1f87e58dc6d113be9e18940641eb25f/pybullet-3.2.7.tar.gz).
+  type: package
+  package: pybullet-src
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: pybullet-src
+      version: "==3.2.7"
+    - name: python313
+    # No pyproject.toml: the legacy setuptools backend.
+    - name: setuptools-cp313
+    - name: wheel-cp313
+    # setup.py enables -DPYBULLET_USE_NUMPY only when numpy imports at build
+    # time; declaring it makes that deterministic.
+    - name: numpy-cp313
+  runtime:
+    - name: python313
+    - name: numpy-cp313
+  host_tools:
+    - python313
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.13/site-packages/pybullet.cpython-*.so", platforms: [linux] }
+    - { glob: "lib/python3.13/site-packages/pybullet_*/", platforms: [linux] }
+    - { glob: "lib/python3.13/site-packages/pybullet-*.dist-info/", platforms: [linux] }
+
+notes:
+  - title: "Linux only so far"
+    platforms: [linux]
+    description: >-
+      setup.py also builds on macOS and Windows, but no column has been built
+      and verified there yet, so neither is claimed.

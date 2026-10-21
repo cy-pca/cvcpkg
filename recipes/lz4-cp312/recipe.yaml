@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: lz4-cp312
+  upstream_version: "4.4.5"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/lz4/
+  license: "BSD-3-Clause"
+  tags: [python, source, compression]
+  description: >-
+    python-lz4 4.4.5 for CPython 3.12 — the cp312 column of cvcpkg's
+    per-interpreter matrix, BUILT FROM SOURCE against cvcpkg's own LZ4 C library
+    (recipes/lz4, liblz4.so.1) instead of the copy the PyPI sdist bundles
+    (lz4libs/). The extensions resolve the library by soname out of the merged
+    prefix through an $ORIGIN-relative RUNPATH. Installed as a real wheel
+    (dist-info/RECORD/METADATA) via pip. Hand-written, not generated: the
+    generator cannot express the native lz4 edge, and setup.py links whatever
+    liblz4 pkg-config happens to find on the builder.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  # Built from the source package lz4-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/57/51/f1b86d93029f418033dddf9b9f79c8d2641e7454080478ee2aab5123173e/lz4-4.4.5.tar.gz).
+  type: package
+  package: lz4-src
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: lz4-src
+      version: "==4.4.5"
+    - name: python312
+    # PEP-517 backend and the build requirements its setup.py imports.
+    - name: setuptools-cp312
+    - name: setuptools-scm-cp312
+    - name: packaging-cp312
+    - name: wheel-cp312
+    # setup.py asks pkg-config (through the python `pkgconfig` module) whether a
+    # liblz4 >= 1.7.5 exists; that answer decides bundled vs shared.
+    - name: pkgconfig-cp312
+    - name: lz4
+  runtime:
+    - name: python312
+    - name: lz4
+  host_tools:
+    - python312
+    - pkg-config
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.12/site-packages/lz4/", platforms: [linux] }
+    - { glob: "lib/python3.12/site-packages/lz4-*.dist-info/", platforms: [linux] }
+
+notes:
+  - title: "Linux only so far"
+    platforms: [linux]
+    description: >-
+      The build script also handles macOS (install_name_tool), but no macOS or
+      Windows column has been built and verified yet, so neither is claimed.

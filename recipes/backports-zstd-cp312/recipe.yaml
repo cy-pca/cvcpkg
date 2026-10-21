@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: backports-zstd-cp312
+  upstream_version: "1.8.0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/backports.zstd/
+  license: "PSF-2.0"
+  tags: [python, source, compression]
+  description: >-
+    backports.zstd 1.8.0 for CPython 3.12 — the cp312 column of cvcpkg's
+    per-interpreter matrix: Python 3.14's compression.zstd module (PEP 784) for
+    3.10-3.13, BUILT FROM SOURCE against cvcpkg's own Zstandard C library
+    (recipes/zstd, libzstd.so.1) instead of the copy the PyPI sdist bundles
+    (src/c/zstd). The extension resolves the library by soname out of the merged
+    prefix through an $ORIGIN-relative RUNPATH. Installed as a real wheel via
+    pip. Hand-written, not generated: the generator cannot express the native
+    zstd edge or pass setup.py's --system-zstd switch. rosbags needs it on
+    Python < 3.14. No cp313t column: upstream does not support the free-threaded
+    build.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  # Built from the source package backports-zstd-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/ff/9c/13569626440e88f09d16f43ec1c2aa0d10a523be2811414580d1cfb7c9f3/backports_zstd-1.8.0.tar.gz).
+  type: package
+  package: backports-zstd-src
+
+python:
+  interpreter: python312
+  abi: cp312
+
+patches: []
+
+depends:
+  build:
+    - name: backports-zstd-src
+      version: "==1.8.0"
+    - name: python312
+    # PEP-517 backend and the build requirements its setup.py imports.
+    - name: setuptools-cp312
+    - name: wheel-cp312
+    - name: zstd
+  runtime:
+    - name: python312
+    - name: zstd
+  host_tools:
+    - python312
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.12/site-packages/backports/zstd/", platforms: [linux] }
+    - { glob: "lib/python3.12/site-packages/backports_zstd-*.dist-info/", platforms: [linux] }
+
+notes:
+  - title: "Linux only so far"
+    platforms: [linux]
+    description: >-
+      The build script also handles macOS (install_name_tool), but no macOS or
+      Windows column has been built and verified yet, so neither is claimed.
