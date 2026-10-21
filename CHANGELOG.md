@@ -30,6 +30,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.3
+
+**A release so builders pick up the fixes that took sandipaws-dev offline.**
+On Windows, staged `perl-src` trees leave ReadOnly files that 2.5.2 cannot
+delete: job roots leak, and the work-dir sweeps spin on them, the hourly one
+on the thread that sends heartbeats, so the server marks the builder offline
+and fails its running job (2026-10-19 and again 2026-10-21, 67 leaked roots).
+
+- **Fix: a slow disk sweep took a builder offline.** `builder run`'s hourly
+  work-dir sweep ran on the same thread that sends heartbeats and reads the
+  WebSocket, so while it ran the builder sent no heartbeats and took no work.
+  On 2026-10-19 sandipaws-dev's sweep spent 20+ minutes on leaked ReadOnly
+  job roots. Its socket stayed connected the whole time, because the
+  websockets library answers the server's pings on a thread of its own. The
+  server marked the builder offline and failed its running job, and since
+  nothing had dropped, nothing reconnected. The sweep now runs on its own
+  thread, one at a time.
 - **Fix: Windows builders leaked every job root holding a read-only file.**
   Job cleanup used `rmtree(ignore_errors=True)`, and Windows refuses to unlink
   a file with the ReadOnly attribute. Every file a staged `perl-src` ships has
@@ -134,15 +153,6 @@ fleet stayed on v2.5.1 code through them; the 2026-10-19 populate hit several.
   `cvcpkg gc` leaves that directory alone. `--recipes-dir` and `./recipes`
   still override the defaults by name. Builders never read the bundled
   recipes, so a builder start no longer writes any recipe files.
-- **Fix: a slow disk sweep took a builder offline.** `builder run`'s hourly
-  work-dir sweep ran on the same thread that sends heartbeats and reads the
-  WebSocket, so while it ran the builder sent no heartbeats and took no work.
-  On 2026-10-19 sandipaws-dev's sweep spent 20+ minutes on leaked ReadOnly
-  job roots. Its socket stayed connected the whole time, because the
-  websockets library answers the server's pings on a thread of its own. The
-  server marked the builder offline and failed its running job, and since
-  nothing had dropped, nothing reconnected. The sweep now runs on its own
-  thread, one at a time.
 
 ---
 
