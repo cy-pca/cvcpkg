@@ -1,7 +1,7 @@
 schema_version: 1
 recipe:
   name: scipy-cp312
-  upstream_version: "1.18.0"
+  upstream_version: "1.17.1"
   cvc_revision: 1
 
   maintainer: "cvcpkg group"
@@ -11,25 +11,29 @@ recipe:
   license: "BSD-3-Clause"
   tags: [python, source, science]
   description: >-
-    SciPy 1.18.0 for CPython 3.12, built FROM SOURCE against cvcpkg's OpenBLAS.
-    Hand-written, not generated: the generator reads only
-    [build-system] requires and would miss both the native OpenBLAS edge and
-    the Fortran toolchain, silently producing a recipe that links whatever BLAS
-    the builder happens to have.
+    SciPy 1.17.1 for CPython 3.12, built FROM SOURCE against cvcpkg's OpenBLAS
+    with cvcpkg's gfortran. Hand-written, not generated: the generator reads
+    only [build-system] requires and would miss both the native OpenBLAS edge
+    and the Fortran toolchain, silently producing a recipe that links whatever
+    BLAS the builder happens to have.
 
-    Windows only, deliberately. SciPy needs a Fortran compiler — MSVC has none
-    and LLVM flang is unsupported — so this builds with mingw-w64-gcc
-    (gcc/g++/gfortran), the way SciPy's own CI does rather than mixing MSVC for
-    C/C++ with gfortran for Fortran. linux/macos are not claimed here because
-    they have not been built and verified; an unverified platform column is the
-    phantom-platform claim the coverage audit exists to prevent, not a freebie.
+    1.17.1, not 1.18: it is the newest SciPy that still covers every ABI cvcpkg
+    ships (1.18 dropped cp311 and cp313t), the same rule that pins numpy.
+
+    Linux builds with cvcpkg's gfortran (build.sh). Windows needs a Fortran
+    compiler too — MSVC has none and LLVM flang is unsupported — so build.ps1
+    builds with mingw-w64-gcc (gcc/g++/gfortran), the way SciPy's own CI does
+    rather than mixing MSVC for C/C++ with gfortran for Fortran. That Windows
+    lane predates the Linux one (it was written for 1.18.0) and has not been
+    built since the move to 1.17.1. macOS is not claimed: cvcpkg ships no
+    Fortran compiler there yet.
 
 # From-source sdist (NOT source.type python_wheel): the PyPI wheel bundles its
-# own vendored OpenBLAS, which is exactly the non-hermeticity this recipe
-# exists to avoid — the same reason numpy-cp312 builds from source.
+# own vendored OpenBLAS and libgfortran, which is exactly the non-hermeticity
+# this recipe exists to avoid — the same reason numpy-cp312 builds from source.
 source:
   # Built from the source package scipy-src, which pins the upstream tarball
-  # (https://files.pythonhosted.org/packages/a7/25/c2700dfaf6442b4effaa91af24ebce5dc9d31bb4a69706313aae70d72cd0/scipy-1.18.0.tar.gz).
+  # (https://files.pythonhosted.org/packages/7a/97/5a3609c4f8d58b039179648e62dd220f89864f56f7357f5d4f45c29eb2cc/scipy-1.17.1.tar.gz).
   type: package
   package: scipy-src
 
@@ -42,36 +46,63 @@ patches: []
 depends:
   build:
     - name: scipy-src
-      version: "==1.18.0"
+      version: "==1.17.1"
     - name: python312
     - name: numpy-cp312
-    - name: cython-cp312
+    # PEP-517 backend, cythonizer and the two C++ code generators, imported by
+    # the build interpreter under --no-build-isolation (bridged from the build
+    # prefix via PYTHONPATH in build.sh).
     - name: meson-python-cp312
+    - name: cython-cp312
     - name: pybind11-cp312
     - name: pythran-cp312
     - name: packaging-cp312
     - name: pyproject-metadata-cp312
+    # Native CLIs meson-python shells out to.
+    - name: meson
+    - name: ninja
+    - name: pkg-config
+    # The Fortran compiler (ARPACK, PROPACK, ...): on the build PATH, never the
+    # builder's own.
+    - name: gfortran
+      platforms: [linux]
     - name: openblas
+      version: ">=0.3.28"
   runtime:
     - name: python312
     - name: numpy-cp312
     - name: openblas
+      version: ">=0.3.28"
+    # libgfortran.so.5 / libquadmath.so.0: the Fortran-compiled extensions
+    # NEED them directly, not just through openblas.
+    - name: gcc-runtime
+      platforms: [linux]
   host_tools:
     - python312
-    # The reason this recipe can exist at all: cvcpkg's only Fortran compiler.
+    # Windows: cvcpkg's only Fortran compiler there (build.ps1).
     - mingw-w64-gcc
-    - meson
-    # meson resolves BLAS through pkgconfig only — never cmake — so without a
-    # pkg-config inside the prefix the build dies "No BLAS library detected!".
     - pkg-config
+    - meson
+    - ninja
+    # Stamps the relocatable $ORIGIN RUNPATH into each extension .so (Linux).
+    - patchelf
 
 build:
+  # The Python ABI is stable across cvcpkg build types; build once, optimized.
+  build_type_independent: true
   matrix:
+    - platform: linux
+      script: build.sh
     - platform: windows
       script: build.ps1
 
 package:
+  # DOCUMENTATION ONLY — stage_bundle ships the whole CVC_INSTALL_DIR tree;
+  # build.sh keeps it pure by pip-installing --prefix into an empty dir. There is
+  # NO scipy.libs/: OpenBLAS and the Fortran runtime are cvcpkg packages.
   files:
-    - Lib/site-packages/scipy/
-    - Lib/site-packages/scipy-*.dist-info/
+    - { glob: "lib/python3.12/site-packages/scipy/", platforms: [linux] }
+    - { glob: "lib/python3.12/site-packages/scipy-*.dist-info/", platforms: [linux] }
+    - { glob: "Lib/site-packages/scipy/", platforms: [windows] }
+    - { glob: "Lib/site-packages/scipy-*.dist-info/", platforms: [windows] }
   cmake_packages: []

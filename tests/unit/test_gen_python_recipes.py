@@ -1251,6 +1251,40 @@ class TestEmitSdistColumn:
         _, sh, _ = self._emit(tmp_path)
         assert "CVC_BUILD_PREFIX" in sh and "PYTHONPATH" in sh
 
+    # POSIX only: build.sh runs on POSIX builders, and the `bash` a Windows runner
+    # finds (WSL's or Git's) fails under this minimal environment.
+    @pytest.mark.skipif(
+        sys.platform == "win32" or shutil.which("bash") is None, reason="needs a POSIX bash"
+    )
+    @pytest.mark.parametrize(
+        ("interp", "site"), [("311", "python3.11"), ("313", "python3.13"), ("313t", "python3.13t")]
+    )
+    def test_build_sh_bridges_the_columns_own_site_packages(self, tmp_path, interp, site):
+        # A free-threaded column's packages live under lib/python3.13t. The
+        # bridge used to strip the `t` and name lib/python3.13, which does not
+        # exist in a cp313t prefix: the column's own interpreter still found its
+        # backend (build prefix == install prefix), but anything else on PATH did
+        # not -- pandas-cp313t's meson runs generate_version.py, which imports
+        # versioneer, under a different python3, and died.
+        import subprocess
+
+        m = _meta_sdist()
+        gen._emit_column(tmp_path, "widget", m, interp, {"widget": m}, {"widget": [interp]})
+        sh = (tmp_path / f"widget-cp{interp}" / "build.sh").read_text(encoding="utf-8")
+        bridge = sh[sh.index("# ── 2.") : sh.index("# ── 3.")]
+        out = subprocess.run(
+            ["bash", "-c", bridge + '\nprintf %s "${PYTHONPATH}"'],
+            env={
+                "CVC_PYTHON_ABI": f"cp{interp}",
+                "CVC_BUILD_PREFIX": "/bp",
+                "PATH": "/usr/bin:/bin",
+            },
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert out == f"/bp/lib/{site}/site-packages"
+
     def test_build_sh_resolves_the_prefix_interpreter(self, tmp_path):
         _, sh, _ = self._emit(tmp_path)
         assert "_common/python-wheel.sh" in sh

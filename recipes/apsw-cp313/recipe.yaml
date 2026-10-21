@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: apsw-cp313
+  upstream_version: "3.49.1-0"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://rogerbinns.github.io/apsw/
+  license: "Zlib"
+  tags: [python, source, database]
+  description: >-
+    APSW 3.49.1.0 (Another Python SQLite Wrapper) for CPython 3.13 — the cp313
+    column of cvcpkg's per-interpreter matrix, BUILT FROM SOURCE against
+    cvcpkg's own SQLite (recipes/sqlite 3.49.1, libsqlite3.so.0). The pin is
+    chosen to match that library: APSW versions track SQLite releases. PyPI's
+    sdist is configured to DOWNLOAD the SQLite amalgamation at build time
+    (setup.apsw: fetch = True), which an offline builder cannot do and which
+    would compile a second, unpinned SQLite into the extension; build.sh
+    replaces that config so the extension links the prefix's library by soname
+    through an $ORIGIN-relative RUNPATH. rosbags reads ROS 2 .db3 bags through
+    it. No cp313t column: upstream does not support the free-threaded build.
+
+# From-source sdist (NOT source.type python_wheel): cvcpkg fetches and
+# sha256-verifies the PyPI sdist (digest as published in the PyPI JSON API) and
+# extracts it to CVC_SOURCE_DIR.
+source:
+  # Built from the source package apsw-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/93/44/df6b76e11ff1bc412d09bbd433a14203395e05ea5d28a01a0a321d6c4da5/apsw-3.49.1.0.tar.gz).
+  type: package
+  package: apsw-src
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: apsw-src
+      version: "==3.49.1-0"
+    - name: python313
+    # PEP-517 backend and the build requirements its setup.py imports.
+    - name: setuptools-cp313
+    - name: wheel-cp313
+    - name: sqlite
+  runtime:
+    - name: python313
+    - name: sqlite
+  host_tools:
+    - python313
+    - patchelf
+
+# bin/apsw (the SQLite shell entry point) collides across columns.
+provides:
+  - apsw
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty dir).
+  files:
+    - { glob: "lib/python3.13/site-packages/apsw/", platforms: [linux] }
+    - { glob: "lib/python3.13/site-packages/apsw-*.dist-info/", platforms: [linux] }
+    - { glob: "bin/apsw", platforms: [linux] }
+
+notes:
+  - title: "Linux only so far"
+    platforms: [linux]
+    description: >-
+      The build script also handles macOS (install_name_tool), but no macOS or
+      Windows column has been built and verified yet, so neither is claimed.
