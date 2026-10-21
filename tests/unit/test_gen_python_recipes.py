@@ -1251,7 +1251,11 @@ class TestEmitSdistColumn:
         _, sh, _ = self._emit(tmp_path)
         assert "CVC_BUILD_PREFIX" in sh and "PYTHONPATH" in sh
 
-    @pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+    # POSIX only: build.sh runs on POSIX builders, and the `bash` a Windows runner
+    # finds (WSL's or Git's) fails under this minimal environment.
+    @pytest.mark.skipif(
+        sys.platform == "win32" or shutil.which("bash") is None, reason="needs a POSIX bash"
+    )
     @pytest.mark.parametrize(
         ("interp", "site"), [("311", "python3.11"), ("313", "python3.13"), ("313t", "python3.13t")]
     )
