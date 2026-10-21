@@ -124,6 +124,15 @@ fleet stayed on v2.5.1 code through them; the 2026-10-19 populate hit several.
   `cvcpkg gc` leaves that directory alone. `--recipes-dir` and `./recipes`
   still override the defaults by name. Builders never read the bundled
   recipes, so a builder start no longer writes any recipe files.
+- **Fix: a slow disk sweep took a builder offline.** `builder run`'s hourly
+  work-dir sweep ran on the same thread that sends heartbeats and reads the
+  WebSocket, so while it ran the builder sent no heartbeats and took no work.
+  On 2026-10-19 sandipaws-dev's sweep spent 20+ minutes on leaked ReadOnly
+  job roots. Its socket stayed connected the whole time, because the
+  websockets library answers the server's pings on a thread of its own. The
+  server marked the builder offline and failed its running job, and since
+  nothing had dropped, nothing reconnected. The sweep now runs on its own
+  thread, one at a time.
 
 ---
 
