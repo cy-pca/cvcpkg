@@ -78,6 +78,19 @@ PYBIND_SHARE="$("${PY}" -c 'import os, pybind11; print(os.path.join(os.path.dirn
 export PKG_CONFIG_PATH="${DEPS}/lib/pkgconfig:${BLD}/lib/pkgconfig:${PYBIND_SHARE}/pkgconfig"
 export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
 export CMAKE_PREFIX_PATH="${PYBIND_SHARE}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
+# The header dir goes on CXXFLAGS too, unconditionally (as matplotlib and
+# contourpy do).  The fleet builder rewrites every .pc file's prefix= to the
+# deps prefix root (builder._rewrite_pc_prefixes), which turns pybind11.pc's
+# relocatable prefix=${pcfiledir}/../../ into <prefix>: meson still finds
+# pybind11 2.13.6, but its include dir is <prefix>/include and pypocketfft fails
+# "pybind11/pybind11.h: No such file or directory" (all four scipy columns on
+# 2026-10-22, jobs 22720-22723; a local build never runs that rewrite).
+PYBIND_INC="$("${PY}" -c 'import pybind11; print(pybind11.get_include())')"
+[ -f "${PYBIND_INC}/pybind11/pybind11.h" ] || {
+    echo "scipy-cp311: no pybind11/pybind11.h under ${PYBIND_INC}" >&2
+    exit 1
+}
+export CXXFLAGS="-I${PYBIND_INC} ${CXXFLAGS:-}"
 "${PKG_CONFIG}" --exists openblas || {
     echo "scipy-cp311: openblas.pc not found by ${PKG_CONFIG} (PKG_CONFIG_LIBDIR=${PKG_CONFIG_LIBDIR})" >&2
     exit 1
