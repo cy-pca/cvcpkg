@@ -44,6 +44,17 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     each pin and the recipe that set it, instead of falling back.
   - Every pin in the tree (410) is met by the current cvcpkg.org catalog, so
     nothing that builds today stops building.
+- **Fix: the builder broke `${pcfiledir}`-relative .pc files.** After it
+  unpacks a job's deps, and after each merge in `cvcpkg build`, the builder
+  repoints every .pc file's `prefix=` at the prefix root. A prefix written as
+  `${pcfiledir}/<../ count>` is relative to the file's own directory, so for a
+  .pc that a Python package ships inside site-packages the root is the wrong
+  answer: pybind11's includedir became `<prefix>/include`, and all four
+  scipy-cp3XX columns failed on the fleet on 2026-10-22 with
+  `pybind11/pybind11.h: No such file or directory`. numpy's `numpy.pc` broke
+  the same way. The rewrite now leaves a `${pcfiledir}` prefix alone; it
+  already resolves wherever the file lands. Absolute prefixes baked at a
+  build's temp install dir are repointed as before.
 
 ---
 
