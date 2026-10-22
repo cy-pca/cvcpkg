@@ -171,3 +171,34 @@ class TestPcRehoming:
         _rewrite_pc_prefixes(p)
         for rel in ("lib64/pkgconfig/foo.pc", "share/pkgconfig/bar.pc"):
             assert (p / rel).read_text().startswith(f"prefix={p}\n")
+
+    def test_pcfiledir_relative_pc_in_site_packages_is_kept(self, tmp_path):
+        # pybind11's own .pc at the depth pip installs it.  Its "../../" climbs
+        # to the package dir, not the prefix root: rewriting it to the root sent
+        # includedir to <prefix>/include, and every scipy column failed on the
+        # fleet with "pybind11/pybind11.h: No such file or directory".
+        p = _prefix(tmp_path)
+        pkg = p / "lib" / "python3.12" / "site-packages" / "pybind11"
+        (pkg / "include" / "pybind11").mkdir(parents=True)
+        (pkg / "include" / "pybind11" / "pybind11.h").write_text("")
+        pc = pkg / "share" / "pkgconfig" / "pybind11.pc"
+        pc.parent.mkdir(parents=True)
+        shipped = "prefix=${pcfiledir}/../../\nincludedir=${prefix}/include\nName: pybind11\n"
+        pc.write_text(shipped)
+        _rewrite_pc_prefixes(p)
+        assert pc.read_text() == shipped
+        # pkg-config expands ${pcfiledir} to the .pc's own directory
+        assert (pc.parent / "../../include/pybind11/pybind11.h").is_file()
+
+    def test_relocated_bundle_pc_is_kept_and_a_baked_one_rehomed(self, tmp_path):
+        # cvc_rewrite_install_paths anchors published .pc files at ${pcfiledir};
+        # a temp-dir prefix in the same pass is still repointed.
+        p = _prefix(tmp_path)
+        (p / "lib" / "pkgconfig").mkdir(parents=True)
+        relocated = p / "lib" / "pkgconfig" / "zlib.pc"
+        baked = p / "lib" / "pkgconfig" / "readline.pc"
+        relocated.write_text("prefix=${pcfiledir}/../..\nlibdir=${prefix}/lib\n")
+        baked.write_text(f"prefix={_BAKED}\nlibdir=${{prefix}}/lib\n")
+        _rewrite_pc_prefixes(p)
+        assert relocated.read_text() == "prefix=${pcfiledir}/../..\nlibdir=${prefix}/lib\n"
+        assert baked.read_text() == f"prefix={p}\nlibdir=${{prefix}}/lib\n"

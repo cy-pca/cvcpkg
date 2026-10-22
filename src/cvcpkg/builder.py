@@ -3539,6 +3539,17 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
     ``prefix=`` path pointing at the (now deleted) temp directory.
     This helper rewrites the ``prefix=`` line to point at *target_dir*
     so that subsequent recipes find valid paths via ``pkg-config``.
+
+    A ``${pcfiledir}``-relative prefix is left alone: it already resolves
+    wherever the file lands, and its ``../`` count is relative to the file's
+    own directory, not to *target_dir*.  Published bundles carry that form
+    (recipes/_common/rewrite-install-paths.sh), and so do .pc files that
+    Python packages ship inside site-packages.  Pointing pybind11's
+    ``.../site-packages/pybind11/share/pkgconfig/pybind11.pc`` at the prefix
+    root sent its includedir to ``<prefix>/include``, so every scipy column
+    failed on the fleet with ``pybind11/pybind11.h: No such file or
+    directory`` (2026-10-22) while ``cvcpkg install`` prefixes built fine.
+    numpy's ``numpy/_core/lib/pkgconfig/numpy.pc`` broke the same way.
     """
     target_str = str(target_dir)
     for pc_file in (f for f in _prefix_files(target_dir) if f.suffix == ".pc"):
@@ -3551,7 +3562,7 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
         for i, line in enumerate(lines):
             if line.startswith("prefix="):
                 old_val = line[len("prefix=") :].strip()
-                if old_val != target_str:
+                if old_val != target_str and not old_val.startswith("${pcfiledir}"):
                     lines[i] = f"prefix={target_str}\n"
                     rewritten = True
                 break  # only the first prefix= line matters
