@@ -157,6 +157,70 @@ def _pick_dep_variant(
     return None
 
 
+def _dep_version_specs(depends: dict | None, platform: str) -> dict[str, list[str]]:
+    """The version constraints a recipe's ``depends`` block puts on its deps.
+
+    Maps dep name to its constraint strings (``"==1.17.1"``, ``">=0.3.28"``).
+    Only dict entries can carry one; entries scoped to other platforms are
+    skipped, as ``_extract_dep_names`` skips them.
+    """
+    specs: dict[str, list[str]] = {}
+    for key in ("runtime", "build", "host_tools"):
+        for dep in (depends or {}).get(key, []) or []:
+            if not isinstance(dep, dict) or not dep.get("name"):
+                continue
+            plats = dep.get("platforms")
+            if plats and platform not in plats:
+                continue
+            spec = str(dep.get("version") or "").strip()
+            if spec:
+                specs.setdefault(dep["name"], []).append(spec)
+    return specs
+
+
+def _rows_satisfying(pkgs: list[dict], specs: list[str]) -> list[dict]:
+    """The catalog rows (order kept) whose version meets every constraint in *specs*.
+
+    Same rules as the resolver (``semver.satisfies``): an exact ``==`` pin that
+    names a ``+cvc.N`` holds the revision too, ranges ignore it, and a version
+    or constraint that does not parse matches nothing.
+    """
+    from cvcpkg.semver import satisfies
+
+    def ok(version: str) -> bool:
+        try:
+            return all(satisfies(version, s) for s in specs)
+        except ValueError:
+            return False
+
+    return [p for p in pkgs if ok(p.get("version", ""))]
+
+
+def _apply_dep_pins(dep_name: str, pkgs: list[dict], pins: list[tuple[str, str]]) -> list[dict]:
+    """*pkgs* narrowed to the versions that meet every pin on *dep_name*.
+
+    *pins* is ``[(constraint, recipe that set it)]`` from the job's dependency
+    closure.  The builder used to install the newest row whatever the recipe
+    said: scipy-cp3XX, pinned to ``scipy-src ==1.17.1``, built from an orphan
+    scipy-src 1.18.0 on the fleet (2026-10-22, jobs 22674-22677) -- cp311
+    failed, and cp312/313 would have published 1.18 code labelled 1.17.1.
+
+    No pins, or no rows at all (an unknown name, left to the caller), returns
+    *pkgs* unchanged.  Rows that exist but none of which satisfies the pins is
+    an error, never a fallback to another version.
+    """
+    if not pins or not pkgs:
+        return pkgs
+    allowed = _rows_satisfying(pkgs, [spec for spec, _ in pins])
+    if not allowed:
+        wanted = ", ".join(f"{spec} (from {owner})" for spec, owner in pins)
+        have = ", ".join(sorted({p.get("version", "?") for p in pkgs}))
+        raise RuntimeError(
+            f"dep {dep_name}: no published version satisfies {wanted}; the catalog has {have}"
+        )
+    return allowed
+
+
 def _settle_dep_prefix(prefix: Path, platform: str) -> None:
     """Finish a job's dep prefix after its archives are unpacked, as
     ``cvcpkg install`` would have left it.
@@ -3009,18 +3073,22 @@ def builder_run(
             except Exception:
                 pass  # best-effort log streaming
 
+    def _recipe_depends(recipe_dir: Path) -> dict:
+        """The ``depends`` block of the recipe in *recipe_dir* ({} if none)."""
+        import yaml as _yaml
+
+        recipe_yaml = recipe_dir / "recipe.yaml"
+        if not recipe_yaml.is_file():
+            return {}
+        data = _yaml.safe_load(recipe_yaml.read_text()) or {}
+        return data.get("depends") or {}
+
     def _extract_dep_names(
         recipe_dir: Path,
         job_platform: str,
     ) -> list[str]:
         """Return direct dependency names from a recipe directory."""
-        import yaml as _yaml
-
-        recipe_yaml = recipe_dir / "recipe.yaml"
-        if not recipe_yaml.is_file():
-            return []
-        data = _yaml.safe_load(recipe_yaml.read_text())
-        deps_block = data.get("depends", {})
+        deps_block = _recipe_depends(recipe_dir)
 
         names: list[str] = []
         for key in ("runtime", "build", "host_tools"):
@@ -3038,13 +3106,26 @@ def builder_run(
         recipe_dir: Path,
         job_platform: str,
         log_cb: Callable[[str], None],
+        pins: dict[str, list[tuple[str, str]]] | None = None,
     ) -> list[str]:
         """Compute the full transitive closure of dependencies.
 
         Returns dep names in topological order (deepest deps first)
         so that when packages are extracted into the prefix, transitive
         libraries are available before the packages that need them.
+
+        When *pins* is given, it is filled with every version constraint the
+        recipes in the closure put on a dep: name -> [(constraint, recipe that
+        set it)].  _install_deps installs only versions that meet all of them.
         """
+
+        def add_pins(rdir: Path, owner: str) -> None:
+            if pins is None:
+                return
+            for dep, specs in _dep_version_specs(_recipe_depends(rdir), job_platform).items():
+                pins.setdefault(dep, []).extend((spec, owner) for spec in specs)
+
+        add_pins(recipe_dir, recipe_dir.name)
         direct = _extract_dep_names(recipe_dir, job_platform)
         if not direct:
             return []
@@ -3061,6 +3142,7 @@ def builder_run(
             # Fetch this dep's recipe to find *its* deps
             try:
                 dep_recipe_dir = _fetch_recipe(name)
+                add_pins(dep_recipe_dir, name)
                 sub_deps = _extract_dep_names(dep_recipe_dir, job_platform)
                 for sd in sub_deps:
                     if sd not in visited:
@@ -3131,7 +3213,8 @@ def builder_run(
         unlike a missing catalog dep, it is not something the build can
         plausibly do without.
         """
-        dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb)
+        pins: dict[str, list[tuple[str, str]]] = {}
+        dep_names = _resolve_transitive_deps(recipe_dir, job_platform, log_cb, pins)
         dep_names = [n for n in implicit if n not in dep_names] + dep_names
         if not dep_names:
             return
@@ -3168,6 +3251,9 @@ def builder_run(
                 # of a dep rather than whichever the server happened to list
                 # first (see _newest_first).
                 pkgs = sorted(resp.json().get("packages", []), key=_newest_first, reverse=True)
+                # A recipe's version constraint on a dep is honored, not just
+                # its name (see _apply_dep_pins).
+                pkgs = _apply_dep_pins(dep_name, pkgs, pins.get(dep_name, []))
                 # Best match for platform/arch/config/link, relaxing to any
                 # build_type on this platform, then to a platform-independent
                 # (noarch) variant -- a pure-Python wheel is valid on every

@@ -30,6 +30,21 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: the fleet builder ignored version pins on dependencies.** A job's
+  dependency install looked deps up by name and took the newest published row,
+  whatever the recipes said. scipy-cp3XX pin `scipy-src ==1.17.1`; with an
+  orphan scipy-src 1.18.0 also published, every scipy job on 2026-10-22 built
+  from 1.18.0 (cp311 failed, as 1.18 needs Python 3.12, and cp312/313 would
+  have published 1.18 code labelled 1.17.1).
+  - The builder now collects every version constraint the recipes in the
+    job's dependency closure put on a dep, and installs only a version that
+    meets all of them (the resolver's rules: an exact pin naming `+cvc.N`
+    holds the revision, ranges ignore it).
+  - A dep whose published versions all fail its pins fails the job, naming
+    each pin and the recipe that set it, instead of falling back.
+  - Every pin in the tree (410) is met by the current cvcpkg.org catalog, so
+    nothing that builds today stops building.
+
 ---
 
 ## v2.5.3
