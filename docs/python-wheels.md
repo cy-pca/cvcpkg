@@ -125,7 +125,10 @@ Two kinds of from-source column exist:
   instead of the copies their sdists bundle or download — plus
   `$ORIGIN`-relative RUNPATH passes and per-platform gates. pybullet has no
   native edge; it is hand-written because upstream stopped publishing wheels at
-  cp311 and the generator only claims columns upstream builds. No
+  cp311 and the generator only claims columns upstream builds. `jaxlib` is
+  hand-written too but, like `torch`, installs the pinned prebuilt PyPI wheel:
+  PyPI ships no sdist, and the source build is XLA plus most of LLVM under
+  Bazel. jax, optax and equinox are generated from-source columns on top of it. No
   auditwheel-vendored `*.libs/` directory ships; the native runtime is the
   corresponding cvcpkg package, resolved out of the same activated prefix. The
   generator never emits or prunes these families; the ones generated packages

@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: jaxlib-cp311
+  upstream_version: "0.8.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/jax-ml/jax
+  license: Apache-2.0
+  tags: [python, wheel, ml, scientific]
+  description: >-
+    jaxlib 0.8.2 (CPU) for CPython 3.11 (cp311): the pinned prebuilt
+    manylinux_2_27 wheel from PyPI, installed into the python311 interpreter's
+    site-packages. jaxlib is NOT built from source, the way torch is not: PyPI
+    publishes no sdist, and the source build is XLA plus most of LLVM under
+    Bazel, which downloads its own clang and sysroot. Its runtime deps (numpy,
+    scipy, ml-dtypes) are cvcpkg's own from-source columns; jax, optax and
+    equinox build from source on top of it. 0.8.2 is the version LieSPHGP's
+    Phase A ran, and its x86 build needs AVX (not AVX2): it imports on every
+    fleet machine except lat. linux-x86_64 only: the platform verified, and the
+    only one with a cvcpkg scipy column.
+
+source:
+  type: python_wheel
+  artifacts:
+    linux-x86_64:
+      url: https://files.pythonhosted.org/packages/65/7d/9bb1cd620d8093098203b17d227a902939afec00da1c63cb719a9fe89525/jaxlib-0.8.2-cp311-cp311-manylinux_2_27_x86_64.whl
+      sha256: "ccf77da917a20935247c990691decfcbdd06c25ef0ac94d914a04aadb22f714c"
+
+python:
+  interpreter: python311
+  abi: cp311
+
+patches: []
+
+depends:
+  build:
+    - name: python311
+  runtime:
+    - name: python311
+    - name: numpy-cp311
+    - name: scipy-cp311
+    - name: ml-dtypes-cp311
+  host_tools:
+    - python311
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/python3.11/site-packages/jaxlib/
+    - lib/python3.11/site-packages/jaxlib-0.8.2.dist-info/

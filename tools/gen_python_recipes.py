@@ -318,6 +318,17 @@ _RESURRECTED_FLOOR = {
 # files/check override the generated defaults where the wheel's layout is not
 # just <module>/ + dist-info. Versions are pinned like poetry.lock pins:
 # bumping one is a deliberate edit here.
+# Prefix for the import checks of packages that load jaxlib (jax, optax,
+# equinox).  jaxlib 0.8.2's x86 build needs AVX and refuses to import without
+# it (lat has none), so `avx` gates every step that imports jax; elsewhere the
+# check imports and computes.  _NO_AVX is what the check prints when it skips.
+_AVX_GUARD = (
+    "import os, importlib.metadata as md; "
+    "_NO_AVX = 'not imported: no AVX on this CPU'; "
+    "avx = 'avx' in (open('/proc/cpuinfo').read().split() "
+    "if os.path.exists('/proc/cpuinfo') else ['avx']); "
+)
+
 SEED_PACKAGES = {
     "altgraph": {
         "version": "0.17.5",
@@ -930,6 +941,62 @@ SEED_PACKAGES = {
         "deps": [],
         "files": ["versioneer.py", "versioneer-*.dist-info/"],
         "check": "import versioneer; assert versioneer.get_versions",
+    },
+    # jax, optax, equinox: pure Python on top of the PREBUILT jaxlib columns
+    # (hand-written, see HANDWRITTEN_DEP_BASES: PyPI ships no jaxlib sdist).
+    # 0.8.2 is what LieSPHGP's Phase A ran.  jaxlib 0.8.2 refuses to import on a
+    # CPU without AVX (lat), so each check verifies the installed version there
+    # and imports only where it can; `avx` gates every step that imports jax.
+    "jax": {
+        "version": "0.8.2",
+        "license": "Apache-2.0",
+        "deps": ["jaxlib", "ml-dtypes", "numpy", "opt-einsum", "scipy"],
+        "files": ["jax/", "jax-*.dist-info/"],
+        # A dense solve: jaxlib's CPU LAPACK kernels come from scipy's
+        # cython_lapack, so this exercises cvcpkg's scipy column too.
+        "check": (
+            _AVX_GUARD + "assert md.version('jax') == '0.8.2', md.version('jax'); "
+            "jnp = __import__('jax.numpy', fromlist=['numpy']) if avx else None; "
+            "a = jnp.array([[3.0, 1.0], [1.0, 2.0]]) if avx else None; "
+            "b = jnp.array([9.0, 8.0]) if avx else None; "
+            "assert (not avx) or bool(jnp.allclose(a @ jnp.linalg.solve(a, b), b)); "
+            "print('jax', md.version('jax'), 'solve OK' if avx else _NO_AVX)"
+        ),
+    },
+    "optax": {
+        # optax.contrib.prodigy is what LieSPHGP trains with.  0.2.8 dropped
+        # the chex dependency.
+        "version": "0.2.8",
+        "license": "Apache-2.0",
+        "deps": ["absl-py", "jax", "jaxlib", "numpy"],
+        "files": ["optax/", "optax-*.dist-info/"],
+        "check": (
+            _AVX_GUARD + "assert md.version('optax') == '0.2.8', md.version('optax'); "
+            "contrib = __import__('optax.contrib', fromlist=['prodigy']) if avx else None; "
+            "assert (not avx) or callable(contrib.prodigy); "
+            "optax = __import__('optax') if avx else None; "
+            "jnp = __import__('jax.numpy', fromlist=['numpy']) if avx else None; "
+            "tx = optax.adam(0.1) if avx else None; "
+            "u = tx.update(jnp.ones(3), tx.init(jnp.zeros(3)))[0] if avx else None; "
+            "assert (not avx) or float(jnp.sum(u)) < 0; "
+            "print('optax', md.version('optax'), 'adam + prodigy OK' if avx else _NO_AVX)"
+        ),
+    },
+    "equinox": {
+        # Used by LieSPHGP's NeuralSDE baseline only.
+        "version": "0.13.8",
+        "license": "Apache-2.0",
+        "deps": ["jax", "jaxtyping", "typing-extensions", "wadler-lindig"],
+        "files": ["equinox/", "equinox-*.dist-info/"],
+        "check": (
+            _AVX_GUARD + "assert md.version('equinox') == '0.13.8', md.version('equinox'); "
+            "eqx = __import__('equinox') if avx else None; "
+            "jax = __import__('jax') if avx else None; "
+            "jnp = __import__('jax.numpy', fromlist=['numpy']) if avx else None; "
+            "m = eqx.nn.Linear(2, 3, key=jax.random.PRNGKey(0)) if avx else None; "
+            "assert (not avx) or m(jnp.ones(2)).shape == (3,); "
+            "print('equinox', md.version('equinox'), 'Linear OK' if avx else _NO_AVX)"
+        ),
     },
     "ml-dtypes": {
         # bfloat16 / float8 / int4 numpy dtypes; jax and jaxlib both import
@@ -1608,7 +1675,9 @@ SEED_PACKAGES = {
 #
 # apsw, backports-zstd and lz4 link cvcpkg's sqlite, zstd and lz4 the same way
 # (rosbags depends on them); scipy links OpenBLAS and compiles Fortran with
-# cvcpkg's gfortran (jax depends on it).
+# cvcpkg's gfortran (jax depends on it); jaxlib installs Google's prebuilt
+# wheels (PyPI ships no sdist), hand-written like torch, and jax, optax and
+# equinox build on top of it.
 HANDWRITTEN_DEP_BASES = (
     "numpy",
     "coincurve",
@@ -1619,6 +1688,7 @@ HANDWRITTEN_DEP_BASES = (
     "backports-zstd",
     "lz4",
     "scipy",
+    "jaxlib",
 )
 
 
