@@ -450,3 +450,18 @@ if [ "${PYTHON_LDVERSION}" != "${PYTHON_MINOR}" ]; then
           "${CVC_INSTALL_DIR}/lib/libpython${MAJOR}.so" \
           "${CVC_INSTALL_DIR}/lib/libpython${MAJOR}.dylib"
 fi
+
+# --- Relocatable pkg-config files ---
+# CPython's .pc files (python-3.X.pc, python-3.X-embed.pc; python3.pc and
+# python3-embed.pc link to them) bake prefix=${CVC_INSTALL_DIR}, the builder's
+# temp install dir, which is deleted after packing.  The fleet builder repoints
+# a dependency's .pc at its own prefix, but `cvcpkg install` copies it as is,
+# so in an installed prefix `pkg-config --cflags python-3.X` handed out a dead
+# -I and meson builds (scipy) could not find Python.h without a CPATH
+# workaround.  Anchor them at ${pcfiledir}/../.., as every other recipe's are.
+# The helper also relocates bin/python3.X-config where it is a shell script
+# (Linux, the BSDs); that script already derives its prefix from $0, so its
+# output does not change.  On macOS it is a Python script and is left alone.
+# _sysconfigdata is not touched: its config vars (INCLUDEPY, LIBDIR, LIBPC)
+# keep the build-time paths, while sysconfig.get_paths() follows sys.prefix.
+cvc_rewrite_install_paths

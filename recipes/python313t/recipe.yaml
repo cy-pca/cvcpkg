@@ -59,7 +59,13 @@ recipe:
   # ... is missing" and left them out.  _common/python-externals.targets takes
   # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
   # cvc.10).  Other platforms rebuild unchanged.
-  cvc_revision: 12
+  # cvc.13: relocatable pkg-config files.  python-3.13t.pc and
+  # python-3.13t-embed.pc carried prefix= the builder's deleted temp install
+  # dir, so in a `cvcpkg install` prefix `pkg-config --cflags python-3.13t`
+  # gave a dead -I.  _common/build-python.sh now runs
+  # cvc_rewrite_install_paths, which sets prefix=${pcfiledir}/../.. as in
+  # every other recipe's .pc.  Windows ships no .pc and rebuilds unchanged.
+  cvc_revision: 13
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
