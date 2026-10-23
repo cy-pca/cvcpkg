@@ -8,7 +8,10 @@ recipe:
   # host's ncursesw headers; macOS could not find ncursesw/ncurses_dll.h).
   # cvc.3: adds Windows (MSVC, Win32 console, no ncurses; build.ps1), so libcvc can
   # ship its tvision terminal backend there. The Unix build is unchanged.
-  cvc_revision: 3
+  # cvc.4: adds wasm and wasm-mt (build-wasm.sh) with emscripten-browser-console.patch, a
+  # console for a page's JS terminal, so libcvc's ari runs the tvision desktop in the browser.
+  # The patch compiles only under __EMSCRIPTEN__: the other builds are unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -31,7 +34,13 @@ source:
   sha256: "64de100a7d750ccdad9218fbb43dc711fe2928ca690e7ef8c532778868e14962"
   strip_components: 1
 
-patches: []
+patches:
+  # A browser console for Emscripten builds (internal/browsercon.h, platform/browsercon.cpp):
+  # ANSI output on stdout, non-blocking stdin decoded by TermIO, the page's size through the
+  # exported tvision_set_screen_size(), an event wait that yields with emscripten_sleep, and
+  # CMake that skips ncurses there. Emscripten's libc also has strupr, so tvision's own is left
+  # out there. Everything is behind __EMSCRIPTEN__ / EMSCRIPTEN; other platforms build as before.
+  - emscripten-browser-console.patch
 
 depends:
   build:
@@ -68,6 +77,17 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    # The browser: cross-compiled with em++ against the patch's browser console (build-wasm.sh).
+    # Static only. Single-threaded is what a static page (the gh-pages gallery) links.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # Threaded wasm: same script; env-wasm.sh injects -pthread via the CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   # Unix: upstream's install target exports a CMake config whose link interface
@@ -76,11 +96,13 @@ package:
   # -ltvision plus ncursesw/tinfo (pulled in via the pkg-config Requires).
   # Windows: build.ps1 uses upstream's install, which yields tvision.lib (MSVC
   # spelling, no "lib" prefix) and a relocatable CMake config (tvision::tvision).
+  # wasm / wasm-mt: build-wasm.sh uses upstream's install too: libtvision.a and the
+  # same relocatable config, with nothing else to link.
   files:
-    - { glob: "lib/libtvision.*", platforms: [linux, macos, freebsd, netbsd] }
+    - { glob: "lib/libtvision.*", platforms: [linux, macos, freebsd, netbsd, wasm, wasm-mt] }
     - { glob: "lib/pkgconfig/tvision.pc", platforms: [linux, macos, freebsd, netbsd] }
     - { glob: "lib/tvision.lib", platforms: [windows] }
-    - { glob: "lib/cmake/tvision/", platforms: [windows] }
+    - { glob: "lib/cmake/tvision/", platforms: [windows, wasm, wasm-mt] }
     - include/tvision/
   cmake_packages: []
 

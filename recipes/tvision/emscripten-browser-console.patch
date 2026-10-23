@@ -1,0 +1,645 @@
+diff --git a/include/tvision/internal/browsercon.h b/include/tvision/internal/browsercon.h
+new file mode 100644
+index 0000000..6666d03
+--- /dev/null
++++ b/include/tvision/internal/browsercon.h
+@@ -0,0 +1,104 @@
++#ifndef TVISION_BROWSERCON_H
++#define TVISION_BROWSERCON_H
++
++// The console of a WebAssembly build that runs in a browser page (Emscripten). The page is a
++// terminal emulator (e.g. xterm.js) wired to the module's stdin and stdout: every byte it produces
++// (keys, mouse reports) arrives on stdin, and everything written to stdout is drawn. There is no
++// ncurses and no select(): output is plain ANSI through AnsiScreenWriter, input is decoded by
++// TermIO plus a table for the control characters, and the page reports its size through
++// tvision_set_screen_size(cols, rows).
++
++#ifdef __EMSCRIPTEN__
++
++#include <internal/platform.h>
++#include <internal/termio.h>
++#include <internal/ansiwrit.h>
++
++namespace tvision
++{
++
++class ConsoleCtl;
++
++// Reads stdin without blocking: a byte, or -1 when the page has none queued.
++struct BrowserInputGetter final : public InputGetter
++{
++    enum { maxPending = 64 };
++    int pending[maxPending];
++    int pendingCount {0};
++
++    int get() noexcept override;
++    void unget(int k) noexcept override;
++    bool peek() noexcept;
++};
++
++class BrowserInput final : public InputAdapter
++{
++    ConsoleCtl &con;
++    InputState &state;
++    BrowserInputGetter in;
++
++public:
++
++    // Lifetimes of 'con' and 'state' must exceed that of 'this'.
++    BrowserInput(ConsoleCtl &con, InputState &state) noexcept;
++    ~BrowserInput();
++
++    bool getEvent(TEvent &ev) noexcept override;
++    bool hasPendingEvents() noexcept override;
++};
++
++class BrowserDisplay final : public DisplayAdapter
++{
++    ConsoleCtl &con;
++    AnsiScreenWriter ansiScreenWriter;
++
++public:
++
++    BrowserDisplay(ConsoleCtl &con) noexcept;
++    ~BrowserDisplay();
++
++    TPoint reloadScreenInfo() noexcept override;
++    int getColorCount() noexcept override;
++    TPoint getFontSize() noexcept override;
++    void writeCell(TPoint, TStringView, TColorAttr, bool) noexcept override;
++    void setCaretPosition(TPoint) noexcept override;
++    void setCaretSize(int) noexcept override;
++    void clearScreen() noexcept override;
++    void flush() noexcept override;
++};
++
++// cmScreenChanged when the page reports a new size.
++class BrowserResizeSource final : public EventSource
++{
++public:
++
++    BrowserResizeSource() noexcept : EventSource(-1) {}
++
++    bool hasPendingEvents() noexcept override;
++    bool getEvent(TEvent &ev) noexcept override;
++};
++
++class BrowserConsoleAdapter final : public ConsoleAdapter
++{
++    InputAdapter &input;
++    BrowserResizeSource &resize;
++    InputState &inputState;
++
++    BrowserConsoleAdapter( DisplayAdapter &, InputAdapter &, BrowserResizeSource &,
++                           InputState & ) noexcept;
++
++public:
++
++    // The lifetime of 'con' must exceed that of the returned object.
++    static BrowserConsoleAdapter &create(ConsoleCtl &con) noexcept;
++    ~BrowserConsoleAdapter();
++};
++
++// The size the page last reported (80x24 until it does).
++TPoint browserScreenSize() noexcept;
++
++} // namespace tvision
++
++#endif // __EMSCRIPTEN__
++
++#endif // TVISION_BROWSERCON_H
+diff --git a/include/tvision/internal/events.h b/include/tvision/internal/events.h
+index a6f2c3f..f999e23 100644
+--- a/include/tvision/internal/events.h
++++ b/include/tvision/internal/events.h
+@@ -94,6 +94,10 @@ public:
+ 
+     void signal() noexcept; // Multiple producers.
+     bool getEvent(TEvent &event) noexcept override; // Single consumer.
++#ifdef __EMSCRIPTEN__
++    // No select() in a browser: the waiter asks every source directly.
++    bool hasPendingEvents() noexcept override { return signaled; }
++#endif
+ };
+ 
+ inline WakeUpEventSource::WakeUpEventSource( SysManualEvent::Handle aHandle,
+diff --git a/include/tvision/util.h b/include/tvision/util.h
+index 61551f4..4334486 100644
+--- a/include/tvision/util.h
++++ b/include/tvision/util.h
+@@ -111,7 +111,9 @@ int vsnprintf( char _FAR *buffer, size_t size, const char _FAR *format,
+ 
+ int stricmp( const char *s1, const char *s2 ) noexcept;
+ int strnicmp( const char *s1, const char *s2, size_t maxlen ) noexcept;
++#if !defined( __EMSCRIPTEN__ ) // Emscripten's libc declares strupr (compat/string.h).
+ char *strupr(char *s) noexcept;
++#endif
+ char *itoa( int value, char *buffer, int radix ) noexcept;
+ char *ltoa( long value, char *buffer, int radix ) noexcept;
+ char *ultoa( ulong value, char *buffer, int radix ) noexcept;
+diff --git a/source/CMakeLists.txt b/source/CMakeLists.txt
+index 1b54b7f..5c34e51 100644
+--- a/source/CMakeLists.txt
++++ b/source/CMakeLists.txt
+@@ -88,7 +88,8 @@ endif()
+ 
+ # Dependencies
+ 
+-if (NOT WIN32)
++# A browser build (Emscripten) has its own console (platform/browsercon.cpp): no ncurses.
++if (NOT WIN32 AND NOT EMSCRIPTEN)
+     # ncursesw
+     find_library(NCURSESW ncursesw)
+     if (NOT NCURSESW AND APPLE)
+diff --git a/source/platform/browsercon.cpp b/source/platform/browsercon.cpp
+new file mode 100644
+index 0000000..2f74f36
+--- /dev/null
++++ b/source/platform/browsercon.cpp
+@@ -0,0 +1,331 @@
++#ifdef __EMSCRIPTEN__
++
++#define Uses_TKeys
++#define Uses_TEvent
++#define Uses_TPoint
++#define Uses_TScreen
++#include <tvision/tv.h>
++
++#include <internal/browsercon.h>
++#include <internal/conctl.h>
++#include <internal/codepage.h>
++#include <internal/utf8.h>
++
++#include <emscripten/emscripten.h>
++#include <unistd.h>
++
++namespace tvision
++{
++
++/////////////////////////////////////////////////////////////////////////
++// The page's size
++
++static TPoint screenSize {80, 24};
++static bool screenResized {false};
++
++TPoint browserScreenSize() noexcept
++{
++    return screenSize;
++}
++
++} // namespace tvision
++
++// The page calls this with the terminal's size: once before the program starts, and on every
++// resize. Exported so the page can reach it as Module._tvision_set_screen_size.
++extern "C" EMSCRIPTEN_KEEPALIVE void tvision_set_screen_size(int cols, int rows)
++{
++    using namespace tvision;
++    if (cols > 0 && rows > 0 && (cols != screenSize.x || rows != screenSize.y))
++    {
++        screenSize = {cols, rows};
++        screenResized = true;
++    }
++}
++
++namespace tvision
++{
++
++/////////////////////////////////////////////////////////////////////////
++// Input
++
++int BrowserInputGetter::get() noexcept
++{
++    if (pendingCount > 0)
++        return pending[--pendingCount];
++    unsigned char c;
++    // The page's stdin hands out one queued byte per call and reports none (EOF) when it has
++    // nothing, so this never blocks.
++    if (::read(STDIN_FILENO, &c, 1) == 1)
++        return c;
++    return -1;
++}
++
++void BrowserInputGetter::unget(int k) noexcept
++{
++    if (pendingCount < maxPending)
++        pending[pendingCount++] = k;
++}
++
++bool BrowserInputGetter::peek() noexcept
++{
++    if (pendingCount > 0)
++        return true;
++    int k = get();
++    if (k == -1)
++        return false;
++    unget(k);
++    return true;
++}
++
++static constexpr KeyDownEvent fromNonPrintableAscii[32] =
++{
++    {{'@'},         kbLeftCtrl, {'@'}, 1}, // ^@, Null
++    {{kbCtrlA},     kbLeftCtrl},
++    {{kbCtrlB},     kbLeftCtrl},
++    {{kbCtrlC},     kbLeftCtrl},
++    {{kbCtrlD},     kbLeftCtrl},
++    {{kbCtrlE},     kbLeftCtrl},
++    {{kbCtrlF},     kbLeftCtrl},
++    {{kbCtrlG},     kbLeftCtrl},
++    {{kbBack},      0}, // ^H, Backspace
++    {{kbTab},       0}, // ^I, Tab
++    {{kbEnter},     0}, // ^J, Line Feed
++    {{kbCtrlK},     kbLeftCtrl},
++    {{kbCtrlL},     kbLeftCtrl},
++    {{kbEnter},     0}, // ^M, Carriage Return
++    {{kbCtrlN},     kbLeftCtrl},
++    {{kbCtrlO},     kbLeftCtrl},
++    {{kbCtrlP},     kbLeftCtrl},
++    {{kbCtrlQ},     kbLeftCtrl},
++    {{kbCtrlR},     kbLeftCtrl},
++    {{kbCtrlS},     kbLeftCtrl},
++    {{kbCtrlT},     kbLeftCtrl},
++    {{kbCtrlU},     kbLeftCtrl},
++    {{kbCtrlV},     kbLeftCtrl},
++    {{kbCtrlW},     kbLeftCtrl},
++    {{kbCtrlX},     kbLeftCtrl},
++    {{kbCtrlY},     kbLeftCtrl},
++    {{kbCtrlZ},     kbLeftCtrl},
++    {{kbEsc},       0}, // ^[, Escape
++    {{'\\'},        kbLeftCtrl, {'\\'}, 1}, // ^\, File Separator
++    {{']'},         kbLeftCtrl, {']'}, 1}, // ^], Group Separator
++    {{'^'},         kbLeftCtrl, {'^'}, 1}, // ^^, Record Separator
++    {{'_'},         kbLeftCtrl, {'_'}, 1}, // ^_, Unit Separator
++};
++
++BrowserInput::BrowserInput(ConsoleCtl &aCon, InputState &aState) noexcept :
++    InputAdapter(-1),
++    con(aCon),
++    state(aState)
++{
++    TStringView seq = "\x1B[?1000h" // Enable mouse reporting.
++                      "\x1B[?1002h" // Enable mouse drag reporting.
++                      "\x1B[?1006h" // Enable SGR extended mouse reporting.
++                      "\x1B[?2004h" // Enable bracketed paste.
++                    ;
++    con.write(seq.data(), seq.size());
++}
++
++BrowserInput::~BrowserInput()
++{
++    TStringView seq = "\x1B[?2004l"
++                      "\x1B[?1006l"
++                      "\x1B[?1002l"
++                      "\x1B[?1000l"
++                    ;
++    con.write(seq.data(), seq.size());
++}
++
++bool BrowserInput::hasPendingEvents() noexcept
++{
++    return in.peek();
++}
++
++bool BrowserInput::getEvent(TEvent &ev) noexcept
++{
++    // Escape sequences (cursor and function keys, SGR mouse, bracketed paste) first.
++    GetChBuf buf(in);
++    switch (TermIO::parseEvent(buf, ev, state))
++    {
++        case Rejected: buf.reject(); break;
++        case Accepted: return true;
++        case Ignored: return false;
++    }
++
++    int k = in.get();
++    if (k == -1)
++        return false;
++
++    ev.what = evKeyDown;
++    ev.keyDown = {};
++    bool alt = false;
++    // ESC followed by another byte is Alt+that key; a lone ESC is Escape. The page delivers a key's
++    // bytes together, so there is no need to wait for more.
++    if (k == '\x1B')
++    {
++        int next = in.get();
++        if (next != -1)
++        {
++            k = next;
++            alt = true;
++        }
++    }
++
++    if (k < 32)
++        ev.keyDown = fromNonPrintableAscii[k];
++    else if (k == 127)
++        ev.keyDown = {{kbBack}, 0}; // ^?, Delete
++    else
++    {
++        // A Unicode character: its UTF-8 bytes arrive one after another.
++        char text[4] = {(char) k};
++        int n = 1 + (int) Utf8BytesLeft((char) k);
++        for (int i = 1; i < n && i < 4; ++i)
++        {
++            int b = in.get();
++            if (b == -1)
++            {
++                n = i;
++                break;
++            }
++            text[i] = (char) b;
++        }
++        if (n > 4)
++            n = 4;
++        for (int i = 0; i < n; ++i)
++            ev.keyDown.text[i] = text[i];
++        ev.keyDown.textLength = (uchar) n;
++        ev.keyDown.charScan.charCode = CpTranslator::fromUtf8({ev.keyDown.text, size_t(n)});
++        // Prevent text from triggering Ctrl+Key shortcuts.
++        if (ev.keyDown.keyCode <= kbCtrlZ)
++            ev.keyDown.keyCode = kbNoKey;
++    }
++
++    if (alt)
++    {
++        ev.keyDown.controlKeyState |= kbLeftAlt;
++        TermIO::normalizeKey(ev.keyDown);
++    }
++    if (state.bracketedPaste)
++        ev.keyDown.controlKeyState |= kbPaste;
++
++    return ev.keyDown.keyCode != kbNoKey || ev.keyDown.textLength;
++}
++
++/////////////////////////////////////////////////////////////////////////
++// Display
++
++BrowserDisplay::BrowserDisplay(ConsoleCtl &aCon) noexcept :
++    con(aCon),
++    ansiScreenWriter(aCon, TermCap {Direct, 0})
++{
++    TStringView seq = "\x1B[?1049h" // Alternate screen.
++                      "\x1B[H\x1B[2J";
++    con.write(seq.data(), seq.size());
++}
++
++BrowserDisplay::~BrowserDisplay()
++{
++    ansiScreenWriter.flush();
++    TStringView seq = "\x1B[0m\x1B[?25h\x1B[?1049l";
++    con.write(seq.data(), seq.size());
++}
++
++TPoint BrowserDisplay::reloadScreenInfo() noexcept
++{
++    ansiScreenWriter.reset();
++    return browserScreenSize();
++}
++
++int BrowserDisplay::getColorCount() noexcept
++{
++    return 256*256*256;
++}
++
++TPoint BrowserDisplay::getFontSize() noexcept
++{
++    return {0, 0};
++}
++
++void BrowserDisplay::writeCell(TPoint pos, TStringView text, TColorAttr attr, bool doubleWidth) noexcept
++{
++    ansiScreenWriter.writeCell(pos, text, attr, doubleWidth);
++}
++
++void BrowserDisplay::setCaretPosition(TPoint pos) noexcept
++{
++    ansiScreenWriter.setCaretPosition(pos);
++}
++
++void BrowserDisplay::setCaretSize(int size) noexcept
++{
++    ansiScreenWriter.flush();
++    TStringView seq = size > 0 ? "\x1B[?25h" : "\x1B[?25l";
++    con.write(seq.data(), seq.size());
++}
++
++void BrowserDisplay::clearScreen() noexcept
++{
++    ansiScreenWriter.clearScreen();
++}
++
++void BrowserDisplay::flush() noexcept
++{
++    ansiScreenWriter.flush();
++    // The page writes to its terminal once per frame, at a NUL: the same convention as FTXUI's
++    // Emscripten screen, since Emscripten has no flush hook. Terminals ignore NUL.
++    con.write("", 1);
++}
++
++/////////////////////////////////////////////////////////////////////////
++// Resize
++
++bool BrowserResizeSource::hasPendingEvents() noexcept
++{
++    return screenResized;
++}
++
++bool BrowserResizeSource::getEvent(TEvent &ev) noexcept
++{
++    if (!screenResized)
++        return false;
++    screenResized = false;
++    ev.what = evCommand;
++    ev.message.command = cmScreenChanged;
++    return true;
++}
++
++/////////////////////////////////////////////////////////////////////////
++// Console
++
++inline BrowserConsoleAdapter::BrowserConsoleAdapter( DisplayAdapter &aDisplay,
++                                                     InputAdapter &aInput,
++                                                     BrowserResizeSource &aResize,
++                                                     InputState &aInputState ) noexcept :
++    ConsoleAdapter(aDisplay, {&aInput, &aResize}),
++    input(aInput),
++    resize(aResize),
++    inputState(aInputState)
++{
++}
++
++BrowserConsoleAdapter &BrowserConsoleAdapter::create(ConsoleCtl &con) noexcept
++{
++    auto &inputState = *new InputState;
++    auto &display = *new BrowserDisplay(con);
++    auto &input = *new BrowserInput(con, inputState);
++    auto &resize = *new BrowserResizeSource;
++    return *new BrowserConsoleAdapter(display, input, resize, inputState);
++}
++
++BrowserConsoleAdapter::~BrowserConsoleAdapter()
++{
++    delete &resize;
++    delete &input;
++    delete &display;
++    delete &inputState;
++}
++
++} // namespace tvision
++
++#endif // __EMSCRIPTEN__
+diff --git a/source/platform/conctl.cpp b/source/platform/conctl.cpp
+index 2303e2e..15ec7f2 100644
+--- a/source/platform/conctl.cpp
++++ b/source/platform/conctl.cpp
+@@ -29,6 +29,7 @@ void ConsoleCtl::destroyInstance() noexcept
+ #include <unistd.h>
+ #include <fcntl.h>
+ #include <sys/ioctl.h>
++#include <internal/browsercon.h>
+ #if __has_include(<linux/kd.h>)
+ #   include <linux/kd.h>
+ #endif
+@@ -38,9 +39,14 @@ namespace tvision
+ 
+ ConsoleCtl::ConsoleCtl() noexcept
+ {
++#ifdef __EMSCRIPTEN__
++    // The page's terminal is the module's stdin and stdout; /dev/tty would be the browser console.
++    if (false)
++#else
+     if ( getEnv<TStringView>("TVISION_USE_STDIO").empty()
+          && (files[0] = fopen("/dev/tty", "r")) != nullptr
+          && (files[1] = fopen("/dev/tty", "w")) != nullptr )
++#endif
+     {
+         ownsFiles = true;
+         fds[0] = fileno(files[0]);
+@@ -80,6 +86,9 @@ void ConsoleCtl::write(const char *data, size_t bytes) const noexcept
+ 
+ TPoint ConsoleCtl::getSize() const noexcept
+ {
++#ifdef __EMSCRIPTEN__
++    return browserScreenSize();
++#endif
+     struct winsize w;
+     for (int fd : fds)
+     {
+diff --git a/source/platform/events.cpp b/source/platform/events.cpp
+index 77b09ac..211ea87 100644
+--- a/source/platform/events.cpp
++++ b/source/platform/events.cpp
+@@ -12,6 +12,9 @@ using std::chrono::steady_clock;
+ #include <sys/ioctl.h>
+ #include <sys/select.h>
+ #endif
++#ifdef __EMSCRIPTEN__
++#include <emscripten/emscripten.h>
++#endif
+ 
+ namespace tvision
+ {
+@@ -124,7 +127,11 @@ bool WakeUpEventSource::getEvent(TEvent &ev) noexcept
+ /////////////////////////////////////////////////////////////////////////
+ // EventWaiter
+ 
+-#ifdef _TV_UNIX
++#if defined(__EMSCRIPTEN__)
++
++// pollSources does the waiting itself (below).
++
++#elif defined(_TV_UNIX)
+ 
+ static bool fdEmpty(int fd) noexcept
+ {
+@@ -228,6 +235,40 @@ inline void EventWaiter::removeSource(size_t i) noexcept
+     pd.erase(i);
+ }
+ 
++#ifdef __EMSCRIPTEN__
++
++void EventWaiter::pollSources(int timeoutMs) noexcept
++// In a browser there is nothing to select() on, and blocking would freeze the page. Ask each
++// source whether it has an event, and between asks give the page the thread (emscripten_sleep,
++// which needs the module linked with -sASYNCIFY) so it can deliver input, until one has an event
++// or the time is up.
++{
++    const auto end = timeoutMs < 0 ? time_point::max()
++                                   : steady_clock::now() + milliseconds(timeoutMs);
++    for (;;)
++    {
++        bool hasEvents = false;
++        for (size_t i = 0; i < pd.size(); ++i)
++            if ((pd.states[i] = sources[i]->hasPendingEvents() ? psReady : psNothing))
++                hasEvents = true;
++        if (hasEvents || timeoutMs == 0)
++            return;
++        auto now = steady_clock::now();
++        if (now >= end)
++            return;
++        long long sliceMs = 8;
++        if (end != time_point::max())
++        {
++            long long left = duration_cast<milliseconds>(end - now).count() + 1;
++            if (left < sliceMs)
++                sliceMs = left;
++        }
++        emscripten_sleep((unsigned) sliceMs);
++    }
++}
++
++#else
++
+ void EventWaiter::pollSources(int timeoutMs) noexcept
+ {
+     bool hasEvents = false;
+@@ -243,6 +284,8 @@ void EventWaiter::pollSources(int timeoutMs) noexcept
+     }
+ }
+ 
++#endif // __EMSCRIPTEN__
++
+ bool EventWaiter::hasReadyEvent() noexcept
+ {
+     if (!readyEventPresent)
+diff --git a/source/platform/platform.cpp b/source/platform/platform.cpp
+index e68196b..5572e44 100644
+--- a/source/platform/platform.cpp
++++ b/source/platform/platform.cpp
+@@ -5,6 +5,7 @@
+ #include <internal/unixcon.h>
+ #include <internal/linuxcon.h>
+ #include <internal/win32con.h>
++#include <internal/browsercon.h>
+ #include <internal/ncurdisp.h>
+ #include <internal/ncursinp.h>
+ #include <internal/sighandl.h>
+@@ -39,6 +40,8 @@ ConsoleAdapter &Platform::createConsole() noexcept
+ {
+ #ifdef _WIN32
+     return Win32ConsoleAdapter::create();
++#elif defined(__EMSCRIPTEN__)
++    return BrowserConsoleAdapter::create(ConsoleCtl::getInstance());
+ #else
+     auto &con = ConsoleCtl::getInstance();
+     InputState &inputState = *new InputState;
+diff --git a/source/platform/strings.cpp b/source/platform/strings.cpp
+index 630c8d2..c7abfb8 100644
+--- a/source/platform/strings.cpp
++++ b/source/platform/strings.cpp
+@@ -74,6 +74,7 @@ int strnicmp( const char *s1, const char *s2, size_t maxlen ) noexcept
+ 
+ #include <cctype>
+ 
++#if !defined( __EMSCRIPTEN__ ) // Emscripten's libc has strupr.
+ char *strupr(char *s) noexcept
+ {
+     char* p = s;
+@@ -81,6 +82,7 @@ char *strupr(char *s) noexcept
+         p++;
+     return s;
+ }
++#endif
+ 
+ // Quick and dirty implementation of itoa, ltoa, ultoa based on sprintf.
+ // It won't provide the expected results in some cases, but at least will not
