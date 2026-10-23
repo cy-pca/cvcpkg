@@ -39,7 +39,10 @@ cmake -G Ninja \
     -DENABLE_TESTS=OFF \
     ${_extra[@]+"${_extra[@]}"}
 
-cmake --build "${CVC_BUILD_DIR}" --target x265 -j "${CVC_JOBS}"
+# x265's CLI target is 'cli' (OUTPUT_NAME x265).  '--target x265' only
+# worked where ninja took it as the output file's path; on Windows that
+# file is x265.exe, so ninja said "unknown target 'x265'" (job 22616).
+cmake --build "${CVC_BUILD_DIR}" --target cli -j "${CVC_JOBS}"
 
 mkdir -p "${CVC_INSTALL_DIR}/bin"
 # The x265 binary links against libx265 dynamically when ENABLE_SHARED=OFF
