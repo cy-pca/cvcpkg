@@ -1,8 +1,11 @@
-Use __attribute__((flatten)) only with GCC and clang.
+Build the C extension with MSVC: no GCC/C23-only constructs.
 
-python/message.c marks PyUpb_Message_GetAttr __attribute__((flatten)), a GCC/clang
-extension that MSVC rejects ("syntax error: missing ')' before '('", windows
-populate 2026-10-19).  It is only an inlining hint.
+- python/message.c marks PyUpb_Message_GetAttr __attribute__((flatten)), a GCC/clang
+  extension ("syntax error: missing ')' before '('", windows populate 2026-10-19).
+  Keep it for those compilers; it is only an inlining hint.
+- python/protobuf.c's FreeThreadingMutex is empty without the free-threading mutex,
+  and is initialized with {}: C has no empty structs (MSVC: C2016) and {} is C23.
+  Give it a placeholder member there and initialize it with {0}.
 
 --- a/python/message.c
 +++ b/python/message.c
@@ -18,3 +21,22 @@ populate 2026-10-19).  It is only an inlining hint.
      PyObject* _self, PyObject* attr) {
    PyUpb_Message* self = (void*)_self;
  
+--- a/python/protobuf.c
++++ b/python/protobuf.c
+@@ -31,13 +31,15 @@
+ typedef struct {
+ #ifdef ENABLE_MUTEX
+   pthread_mutex_t mutex;
++#else
++  char unused;  // C has no empty structs (MSVC: C2016)
+ #endif
+ } FreeThreadingMutex;
+ 
+ #ifdef ENABLE_MUTEX
+ static FreeThreadingMutex obj_cache_mutex = {PTHREAD_MUTEX_INITIALIZER};
+ #else
+-static FreeThreadingMutex obj_cache_mutex = {};
++static FreeThreadingMutex obj_cache_mutex = {0};
+ #endif
+ 
+ static upb_Arena* PyUpb_NewArena(void);
