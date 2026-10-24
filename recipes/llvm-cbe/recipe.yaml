@@ -29,7 +29,10 @@ source:
   sha256: "20e6aad8159e1e8bf0bd6e282f90eaf5fb2738aefa0202e01083be6f14119fc0"
   strip_components: 1
 
-patches: []
+patches:
+  # Link the component libraries where LLVM has no shared library (MSVC):
+  # "LNK1181: cannot open input file 'LLVM.lib'" on Windows.  No-op elsewhere.
+  - link-components-without-dylib.patch
 
 depends:
   runtime:

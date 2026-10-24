@@ -1,0 +1,30 @@
+Link LLVM's component libraries where there is no LLVM shared library.
+
+tools/llvm-cbe links the LLVM dylib target unconditionally under USE_SYSTEM_LLVM.
+An MSVC LLVM build has no LLVM_BUILD_LLVM_DYLIB, so the Windows build failed
+with LNK1181: cannot open input file 'LLVM.lib' (windows catch-up populate
+2026-10-20).  Where the target exists (the Unix builds) nothing changes.
+
+--- a/tools/llvm-cbe/CMakeLists.txt	2026-10-24 17:07:43.581392300 -0500
++++ b/tools/llvm-cbe/CMakeLists.txt	2026-10-24 17:08:22.056455900 -0500
+@@ -35,7 +35,17 @@
+     CBackendCodeGen
+     CBackendInfo
+     )
+-  target_link_libraries(llvm-cbe
+-    LLVM
+-    ${llvm_libs})
++  # The LLVM shared library exists only where LLVM was built with
++  # LLVM_BUILD_LLVM_DYLIB; an MSVC build has none (LNK1181: cannot open input
++  # file 'LLVM.lib'), so link the component libraries there instead.
++  if(TARGET LLVM)
++    target_link_libraries(llvm-cbe
++      LLVM
++      ${llvm_libs})
++  else()
++    llvm_map_components_to_libnames(llvm_all_libs all)
++    target_link_libraries(llvm-cbe
++      ${llvm_libs}
++      ${llvm_all_libs})
++  endif()
+ endif()
