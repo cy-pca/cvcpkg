@@ -70,6 +70,9 @@ $sharedFlags = if ($env:CVC_LINK -eq 'static') {
 }
 
 # Build in a separate directory (FFmpeg's configure supports out-of-tree).
+# cvcpkg's Windows libvpx is a static MinGW libvpx.a whose thread code calls
+# pthreads, so configure's libvpx check failed with undefined pthread_* symbols.
+# Link winpthreads statically: cvcpkg ships no MinGW runtime DLLs.
 $configureCmd = @"
 $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
   '$msysSource/configure' \
@@ -100,6 +103,7 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-bzlib \
     --enable-lzma \
     --enable-w32threads \
+    --extra-libs=-l:libpthread.a \
     --enable-dxva2 \
     --enable-d3d11va \
   && make -j $jobs \
