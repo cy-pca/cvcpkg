@@ -24,16 +24,44 @@ if ($jobs -le 0) { $jobs = 4 }
 New-Item -ItemType Directory -Force -Path $env:CVC_BUILD_DIR | Out-Null
 
 $env:MSYSTEM          = 'MINGW64'
-$env:MSYS_NO_PATHCONV = '1'
+# No MSYS_NO_PATHCONV: configure and make (an MSYS binary) work in /c/... paths,
+# and the MSYS runtime converts /c/... and /tmp/... arguments when it starts a
+# native program.  With conversion off, cvcpkg's native MinGW gcc got them
+# literally: "cc1.exe: fatal error: /tmp/ffconf.XXXXXXXX/test.c: No such file
+# or directory".  (Drive-letter paths instead would put C:/ into make rules.)
+Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
 $env:CHERE_INVOKING   = '1'
 
 # Clear MSVC env so MinGW-w64 gcc is selected by FFmpeg's configure.
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
-$depsFlag = if ($msysDeps) {
-    "PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig' PATH='$msysDeps/bin:'`$PATH "
-} else { '' }
+# cvcpkg's mingw-w64-gcc is staged into CVC_BUILD_PREFIX, the codec libraries
+# into CVC_DEPS_PREFIX; search both, build prefix first.  Only the deps prefix
+# was on PATH, and as a prefix to `mkdir -p` the assignments reached only mkdir,
+# so configure found no compiler ("x86_64-w64-mingw32-gcc: command not found",
+# populate job 22643).  Export them, as recipes/x264/build.ps1 does.
+$toolRoots = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysRoots = $toolRoots | ForEach-Object { ConvertTo-CvcMsysPath $_ }
+$depsFlag = ''
+if ($msysRoots) {
+    $binPath = ($msysRoots | ForEach-Object { "$_/bin" }) -join ':'
+    # cvcpkg's pkg-config is a native Windows program, and MSYS converts no
+    # environment variable but PATH: give it C:/... entries, ';'-separated.
+    $pcPath  = ($toolRoots | ForEach-Object { ($_ -replace '\\', '/') + '/lib/pkgconfig' }) -join ';'
+    $depsFlag = "export PATH='${binPath}:'`$PATH PKG_CONFIG_PATH='$pcPath'; "
+}
+
+# --cross-prefix only when the cross-named binutils exist: cvcpkg's
+# mingw-w64-gcc ships x86_64-w64-mingw32-gcc but plain-named binutils.  Name
+# pkg-config outright, or configure looks for x86_64-w64-mingw32-pkg-config.
+$crossFlag = ''
+foreach ($r in $toolRoots) {
+    if (Test-Path (Join-Path $r 'bin\x86_64-w64-mingw32-strings.exe')) {
+        $crossFlag = '--cross-prefix=x86_64-w64-mingw32-'
+        break
+    }
+}
 
 $sharedFlags = if ($env:CVC_LINK -eq 'static') {
     '--enable-static --disable-shared'
@@ -42,13 +70,20 @@ $sharedFlags = if ($env:CVC_LINK -eq 'static') {
 }
 
 # Build in a separate directory (FFmpeg's configure supports out-of-tree).
+# TLS from SChannel, the OS-native Windows TLS, as ffmpeg-lgpl does: cvcpkg's
+# Windows OpenSSL ships no openssl.pc, and configure needs pkg-config to accept
+# OpenSSL 3 under the GPL ("ERROR: OpenSSL <3.0.0 is incompatible with the gpl").
+# cvcpkg's Windows libvpx is a static MinGW libvpx.a whose thread code calls
+# pthreads, so configure's libvpx check failed with undefined pthread_* symbols.
+# Link winpthreads statically: cvcpkg ships no MinGW runtime DLLs.
 $configureCmd = @"
 $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
   '$msysSource/configure' \
     --prefix='$msysPrefix' \
     --target-os=mingw32 \
     --arch=x86_64 \
-    --cross-prefix=x86_64-w64-mingw32- \
+    $crossFlag \
+    --pkg-config=pkg-config \
     --enable-gpl \
     --enable-pic \
     --enable-version3 \
@@ -66,11 +101,11 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-libwebp \
     --enable-libfreetype \
     --enable-libfribidi \
-    --enable-openssl \
     --enable-zlib \
     --enable-bzlib \
     --enable-lzma \
     --enable-w32threads \
+    --extra-libs=-l:libpthread.a \
     --enable-dxva2 \
     --enable-d3d11va \
   && make -j $jobs \
@@ -87,5 +122,10 @@ if ($LASTEXITCODE -ne 0) {
     }
     throw 'FFmpeg build failed'
 }
+
+# FFmpeg's MinGW install puts the MSVC import libraries (avcodec.lib, ...) in
+# bin\ beside the DLLs; MSVC consumers, and package.files, look in lib\.
+Get-ChildItem -Path (Join-Path $env:CVC_INSTALL_DIR 'bin') -Filter '*.lib' -File |
+    Move-Item -Destination (Join-Path $env:CVC_INSTALL_DIR 'lib') -Force
 
 Invoke-CvcRewriteInstallPaths
