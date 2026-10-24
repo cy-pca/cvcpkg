@@ -1,0 +1,20 @@
+Use __attribute__((flatten)) only with GCC and clang.
+
+python/message.c marks PyUpb_Message_GetAttr __attribute__((flatten)), a GCC/clang
+extension that MSVC rejects ("syntax error: missing ')' before '('", windows
+populate 2026-10-19).  It is only an inlining hint.
+
+--- a/python/message.c
++++ b/python/message.c
+@@ -1036,7 +1036,10 @@
+  * Attribute lookup must find both message fields and base class methods like
+  * msg.SerializeToString().
+  */
+-__attribute__((flatten)) static PyObject* PyUpb_Message_GetAttr(
++#if defined(__GNUC__) || defined(__clang__)
++__attribute__((flatten))
++#endif
++static PyObject* PyUpb_Message_GetAttr(
+     PyObject* _self, PyObject* attr) {
+   PyUpb_Message* self = (void*)_self;
+ 
