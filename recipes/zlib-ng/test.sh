@@ -7,7 +7,9 @@ set -euo pipefail
 echo "-- zlib-ng smoke test (${CVC_PLATFORM:-native}) --"
 test -f "${CVC_INSTALL_DIR}/include/zlib-ng.h" || { echo "FAIL: include/zlib-ng.h missing"; exit 1; }
 
-if ! command -v cc >/dev/null 2>&1; then
+# cc, or gcc where only that exists (cvcpkg's mingw-w64-gcc has no cc.exe).
+CC_BIN="$(command -v cc || command -v gcc || true)"
+if [[ -z "${CC_BIN}" ]]; then
     echo "  WARN: no C compiler on PATH, skipping compile test"
     exit 0
 fi
@@ -29,7 +31,15 @@ int main(void) {
     return 0;
 }
 EOF
-cc -o "${T}/t" "${T}/t.c" -I"${CVC_INSTALL_DIR}/include" -L"${CVC_INSTALL_DIR}/lib" -lz-ng
+zlib_ng_lib=(-lz-ng)
+if [[ "${CVC_PLATFORM:-}" == "windows" ]]; then
+    # The MSVC build names its import library lib/zlib-ng.lib (the DLL is
+    # bin/zlib-ng2.dll), which -lz-ng never matches: "ld.exe: cannot find
+    # -lz-ng" (job 22623).  Link it by file name; the DLL loads from bin/.
+    zlib_ng_lib=(-l:zlib-ng.lib)
+    export PATH="${CVC_INSTALL_DIR}/bin:${PATH}"
+fi
+"${CC_BIN}" -o "${T}/t" "${T}/t.c" -I"${CVC_INSTALL_DIR}/include" -L"${CVC_INSTALL_DIR}/lib" "${zlib_ng_lib[@]}"
 LD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
 DYLD_LIBRARY_PATH="${CVC_INSTALL_DIR}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}" \
     "${T}/t"
