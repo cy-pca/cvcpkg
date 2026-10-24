@@ -76,8 +76,9 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: fribidi
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # Not windows: TLS there is SChannel (build.ps1).
     - name: openssl
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: bzip2
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: xz
@@ -116,8 +117,9 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: fribidi
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # Not windows: TLS there is SChannel (build.ps1).
     - name: openssl
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: bzip2
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: xz

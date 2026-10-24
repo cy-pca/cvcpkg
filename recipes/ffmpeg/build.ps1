@@ -70,6 +70,9 @@ $sharedFlags = if ($env:CVC_LINK -eq 'static') {
 }
 
 # Build in a separate directory (FFmpeg's configure supports out-of-tree).
+# TLS from SChannel, the OS-native Windows TLS, as ffmpeg-lgpl does: cvcpkg's
+# Windows OpenSSL ships no openssl.pc, and configure needs pkg-config to accept
+# OpenSSL 3 under the GPL ("ERROR: OpenSSL <3.0.0 is incompatible with the gpl").
 # cvcpkg's Windows libvpx is a static MinGW libvpx.a whose thread code calls
 # pthreads, so configure's libvpx check failed with undefined pthread_* symbols.
 # Link winpthreads statically: cvcpkg ships no MinGW runtime DLLs.
@@ -98,7 +101,6 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-libwebp \
     --enable-libfreetype \
     --enable-libfribidi \
-    --enable-openssl \
     --enable-zlib \
     --enable-bzlib \
     --enable-lzma \
