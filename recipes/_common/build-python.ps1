@@ -182,6 +182,27 @@ function Invoke-CvcPythonBuild {
         $f
     }
 
+    # The external libraries' headers, alone.  PCbuild puts each library's
+    # header directory ahead of CPython's own Include\ (pythoncore lists
+    # $(zlibDir), _bz2 $(bz2Dir), _sqlite3 $(sqlite3Dir)), which is harmless
+    # with externals\ but not with the deps prefix's include\: on the builder
+    # it also holds the headers of the python313 that 3.11 and 3.12 build with,
+    # so "Python.h" resolved to 3.13's, and python311 and python312 failed
+    # ("_PyLong_AsByteArray: too few arguments", "_Py_atomic_address", populate
+    # 2026-10-19).  python-externals.props points the directories here.
+    $depsInclude = Join-Path $env:CVC_DEPS_PREFIX 'include'
+    $extRoot = if ($env:CVC_BUILD_DIR) { $env:CVC_BUILD_DIR } else { $env:CVC_SOURCE_DIR }
+    $extInclude = Join-Path $extRoot 'cvc-ext-include'
+    if (Test-Path -LiteralPath $extInclude) { Remove-Item -Recurse -Force -LiteralPath $extInclude }
+    New-Item -ItemType Directory -Force -Path $extInclude | Out-Null
+    foreach ($h in @('zlib.h', 'zconf.h', 'bzlib.h', 'lzma.h', 'lzma', 'sqlite3.h', 'ffi.h', 'ffitarget.h', 'openssl')) {
+        $src = Join-Path $depsInclude $h
+        if (-not (Test-Path -LiteralPath $src)) { throw "deps: no include\$h" }
+        Copy-Item -Recurse -LiteralPath $src -Destination $extInclude
+    }
+    $sqliteExt = Join-Path $depsInclude 'sqlite3ext.h'
+    if (Test-Path -LiteralPath $sqliteExt) { Copy-Item -LiteralPath $sqliteExt -Destination $extInclude }
+
     # ── 1. Release x64 through pcbuild.proj ─────────────────────────────────
     # The properties build.bat passes, minus the externals download.  No
     # tkinter (no tcl/tk here); no PGO (it reruns the test suite: slow, and
@@ -196,6 +217,7 @@ function Invoke-CvcPythonBuild {
         '/p:IncludeSSL=true', '/p:IncludeTkinter=false',
         "/p:DisableGil=$(if ($FreeThreaded) { 'true' } else { 'false' })",
         "/p:CvcDepsPrefix=$env:CVC_DEPS_PREFIX",
+        "/p:CvcExtInclude=$extInclude",
         "/p:ExternalProps=$(Join-Path $commonDir 'python-externals.props')",
         "/p:ForceImportAfterCppTargets=$(Join-Path $commonDir 'python-externals.targets')"
     )

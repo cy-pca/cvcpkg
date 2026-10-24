@@ -4,7 +4,11 @@
   external libraries on Windows: the cvcpkg deps prefix, not externals\.
 
   _common/build-python.ps1 passes this as /p:ExternalProps, with
-  /p:CvcDepsPrefix=<the deps prefix>.  PCbuild\python.props imports it just
+  /p:CvcDepsPrefix=<the deps prefix> and /p:CvcExtInclude=<a directory
+  holding only these libraries' headers, which build-python.ps1 stages from
+  the deps prefix's include\: PCbuild puts them ahead of CPython's own
+  Include\, and on the builder the deps prefix also holds python313's
+  headers>.  PCbuild\python.props imports it just
   before it fills in its own defaults, each of which applies only while the
   property is still empty, so the externals\ copies that get_externals.bat
   would have downloaded are never looked for.
@@ -17,23 +21,24 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <CvcDepsDir>$([MSBuild]::EnsureTrailingSlash('$(CvcDepsPrefix)'))</CvcDepsDir>
+    <CvcExtDir>$([MSBuild]::EnsureTrailingSlash('$(CvcExtInclude)'))</CvcExtDir>
 
     <!-- _ssl, _hashlib: libssl.lib and libcrypto.lib (import libraries). -->
     <opensslOutDir>$(CvcDepsDir)lib\</opensslOutDir>
-    <opensslIncludeDir>$(CvcDepsDir)include</opensslIncludeDir>
+    <opensslIncludeDir>$(CvcExtInclude)</opensslIncludeDir>
     <!-- _ctypes: libffi-8.lib, the import library of the MSVC libffi build. -->
     <libffiDir>$(CvcDepsDir)</libffiDir>
     <libffiOutDir>$(CvcDepsDir)lib\</libffiOutDir>
-    <libffiIncludeDir>$(CvcDepsDir)include</libffiIncludeDir>
+    <libffiIncludeDir>$(CvcExtInclude)</libffiIncludeDir>
     <!-- openssl.props copies libcrypto-3.dll/libssl-3.dll (CPython's own names)
          from opensslOutDir; cvcpkg's are libcrypto-3-x64.dll/libssl-3-x64.dll
          in bin\.  build-python.ps1 copies the DLLs the modules import. -->
     <SkipCopySSLDLL>true</SkipCopySSLDLL>
 
-    <sqlite3Dir>$(CvcDepsDir)include\</sqlite3Dir>
-    <bz2Dir>$(CvcDepsDir)include\</bz2Dir>
-    <lzmaDir>$(CvcDepsDir)include\</lzmaDir>
-    <zlibDir>$(CvcDepsDir)include\</zlibDir>
+    <sqlite3Dir>$(CvcExtDir)</sqlite3Dir>
+    <bz2Dir>$(CvcExtDir)</bz2Dir>
+    <lzmaDir>$(CvcExtDir)</lzmaDir>
+    <zlibDir>$(CvcExtDir)</zlibDir>
 
     <!-- _decimal (3.13): PCbuild compiles mpdecimal 4.0.0 from externals\;
          use the libmpdec CPython bundles in its own tarball instead, as 3.11

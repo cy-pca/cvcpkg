@@ -9,7 +9,7 @@
   C++ targets import it at the end of every PCbuild project, after the
   project's own items, so it can take those items out again.  Each block acts
   on the one project its Condition names.  python-externals.props has already
-  pointed the *Dir properties at the deps prefix's include\.
+  pointed the *Dir properties at the staged headers ($(CvcExtInclude)).
 
   The DLLs these now import (libbz2, liblzma, sqlite3) are copied into the
   build directory by build-python.ps1, which PC\layout then ships in DLLs\.
@@ -50,7 +50,7 @@
   </ItemGroup>
   <ItemDefinitionGroup Condition="'$(MSBuildProjectName)' == '_lzma'">
     <ClCompile>
-      <AdditionalIncludeDirectories>$(CvcDepsDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(CvcExtInclude);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>$([MSBuild]::Unescape($([System.String]::Copy('%(PreprocessorDefinitions)').Replace('LZMA_API_STATIC;', ''))))</PreprocessorDefinitions>
     </ClCompile>
     <Link>
