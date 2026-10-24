@@ -30,6 +30,16 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.4
+
+**A release so builders pick up two dependency-install fixes.** Builders
+self-update only to a server version newer than their own, so the fleet ran
+2.5.3's resolver through the 2026-10-19 populate. On Windows, its build-closure
+installs put a second CPython into wheel prefixes and failed cp313 wheels with
+"interpreter not found".
+
 - **Fix: the fleet builder installed every dependency's build closure.** A
   job's dependency install walked the build deps of its deps, and of theirs,
   so it installed their source packages, compilers and build tools too. That is
