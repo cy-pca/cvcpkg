@@ -32,6 +32,11 @@ source:
 patches: []
 
 depends:
+  build:
+    # cmake and ninja: declared now that the builder installs only the runtime
+    # deps beneath a recipe's own; they used to arrive through zstd's build edge.
+    - cmake
+    - ninja
   runtime:
     # llvm-cbe links LLVM's libraries, so LLVM must ship with it: the shipped
     # binary/plugin resolves LLVM symbols at runtime.  Under edge-based

@@ -25,6 +25,14 @@ patches: []
 
 depends:
   build:
+    # Windows builds with MinGW-w64 under MSYS2 (Invoke-CvcMsysAutotoolsBuild).
+    # Declared, as aspell does, now that a dep's build edge no longer brings it.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
     - name: idn2-src
       version: "==2.3.7"
   runtime:

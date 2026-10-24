@@ -57,6 +57,10 @@ patches: []
 
 depends:
   build:
+    # cmake and ninja: declared now that the builder installs only the runtime
+    # deps beneath a recipe's own; they used to arrive through zstd's build edge.
+    - cmake
+    - ninja
     - name: zlib
       version: "^1.3"
     - name: zstd

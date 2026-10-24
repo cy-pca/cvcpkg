@@ -3086,12 +3086,13 @@ def builder_run(
     def _extract_dep_names(
         recipe_dir: Path,
         job_platform: str,
+        roles: tuple[str, ...] = ("runtime", "build", "host_tools"),
     ) -> list[str]:
-        """Return direct dependency names from a recipe directory."""
+        """Return direct dependency names from a recipe directory, in *roles*."""
         deps_block = _recipe_depends(recipe_dir)
 
         names: list[str] = []
-        for key in ("runtime", "build", "host_tools"):
+        for key in roles:
             for dep in deps_block.get(key, []) or []:
                 if isinstance(dep, str):
                     names.append(dep)
@@ -3108,29 +3109,42 @@ def builder_run(
         log_cb: Callable[[str], None],
         pins: dict[str, list[tuple[str, str]]] | None = None,
     ) -> list[str]:
-        """Compute the full transitive closure of dependencies.
+        """The dependencies to install for building the recipe in *recipe_dir*.
 
-        Returns dep names in topological order (deepest deps first)
-        so that when packages are extracted into the prefix, transitive
-        libraries are available before the packages that need them.
+        The recipe's own runtime, build and host_tools deps, then only the
+        runtime deps beneath them: what it takes to *use* each package, the
+        closure ``cvcpkg install`` resolves from the catalog's required_deps.
+        A dep's build deps (its source package, its compilers, the python313
+        python312's PCbuild runs) were for building that dep, which already
+        happened.  Walking them too installed whole build closures into every
+        job, and on Windows that put a second CPython into a wheel's prefix:
+        every Windows CPython lays out python.exe, Lib\\ and DLLs\\ at the
+        prefix root, so the last one extracted won, and cp313 wheels failed
+        "interpreter not found" against python312's python.exe (populate
+        2026-10-19).  A ``redistributable: false`` dep is the exception: it is
+        built in this job, so its build deps come too.
+
+        Returns dep names breadth-first (the recipe's own deps first).
 
         When *pins* is given, it is filled with every version constraint the
-        recipes in the closure put on a dep: name -> [(constraint, recipe that
+        recipes put on the deps followed: name -> [(constraint, recipe that
         set it)].  _install_deps installs only versions that meet all of them.
         """
+        all_roles = ("runtime", "build", "host_tools")
 
-        def add_pins(rdir: Path, owner: str) -> None:
+        def add_pins(rdir: Path, owner: str, roles: tuple[str, ...]) -> None:
             if pins is None:
                 return
-            for dep, specs in _dep_version_specs(_recipe_depends(rdir), job_platform).items():
+            depends = {k: v for k, v in _recipe_depends(rdir).items() if k in roles}
+            for dep, specs in _dep_version_specs(depends, job_platform).items():
                 pins.setdefault(dep, []).extend((spec, owner) for spec in specs)
 
-        add_pins(recipe_dir, recipe_dir.name)
+        add_pins(recipe_dir, recipe_dir.name, all_roles)
         direct = _extract_dep_names(recipe_dir, job_platform)
         if not direct:
             return []
 
-        # BFS to collect all transitive deps
+        # BFS over the closure
         visited: set[str] = set()
         order: list[str] = []
         queue = list(direct)
@@ -3139,11 +3153,16 @@ def builder_run(
             if name in visited:
                 continue
             visited.add(name)
-            # Fetch this dep's recipe to find *its* deps
+            # Fetch this dep's recipe to find the deps it brings along
             try:
                 dep_recipe_dir = _fetch_recipe(name)
-                add_pins(dep_recipe_dir, name)
-                sub_deps = _extract_dep_names(dep_recipe_dir, job_platform)
+                try:
+                    built_here = not Recipe.load(dep_recipe_dir).redistributable
+                except Exception:
+                    built_here = False
+                roles = all_roles if built_here else ("runtime",)
+                add_pins(dep_recipe_dir, name, roles)
+                sub_deps = _extract_dep_names(dep_recipe_dir, job_platform, roles)
                 for sd in sub_deps:
                     if sd not in visited:
                         queue.append(sd)

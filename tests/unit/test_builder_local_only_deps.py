@@ -76,7 +76,7 @@ class _Resp:
         return self._data
 
 
-def _fake_server(job, recipes, packages, posted):
+def _fake_server(job, recipes, packages, posted, lookups=None):
     """*recipes*: name -> recipe bundle; *packages*: name -> (status, rows)."""
     handed_out = {"done": False}
     interp_archive = _tar({"bin/interp": b"#!/bin/sh\n"})
@@ -112,6 +112,8 @@ def _fake_server(job, recipes, packages, posted):
                 name = url.rsplit("/", 1)[-1]
                 return _Resp(200, content=recipes[name]) if name in recipes else _Resp(404)
             if "/v1/packages/" in url:
+                if lookups is not None:
+                    lookups.append(url.rsplit("/", 1)[-1])
                 status, rows = packages.get(url.rsplit("/", 1)[-1], (404, []))
                 return _Resp(status, {"packages": rows})
             if url.endswith("/v1/download/interp.tar.gz"):
@@ -145,13 +147,21 @@ _INTERP_ROW = {
 
 
 def _run(
-    monkeypatch, tmp_path, recipes, packages, *, build_fails=False, job_extra=None, at_pack=None
+    monkeypatch,
+    tmp_path,
+    recipes,
+    packages,
+    *,
+    build_fails=False,
+    job_extra=None,
+    at_pack=None,
+    lookups=None,
 ):
     job = {"id": 42, "recipe_name": "app", "platform": "linux", "arch": "x86_64"}
     job.update(job_extra or {})
     posted: dict[str, list[dict]] = {}
     events: list[str] = []
-    monkeypatch.setattr(httpx, "Client", _fake_server(job, recipes, packages, posted))
+    monkeypatch.setattr(httpx, "Client", _fake_server(job, recipes, packages, posted, lookups))
 
     def fake_build_recipe(recipe_dir, *, prefix, **k):
         name = Path(recipe_dir).name.split("-")[0]
@@ -317,3 +327,68 @@ def test_a_static_job_does_not_fetch_patchelf(monkeypatch, tmp_path):
         at_pack=at_pack,
     )
     assert at_pack == {"patchelf": False}
+
+
+def _recipe_roles(name: str, *, build=(), runtime=(), redistributable=True) -> bytes:
+    """A recipe with deps in both the build and runtime roles."""
+    flag = "" if redistributable else "redistributable: false\n"
+
+    def block(role, deps):
+        if not deps:
+            return f"  {role}: []\n"
+        return f"  {role}:\n" + "".join(f"    - name: {d}\n" for d in deps)
+
+    text = textwrap.dedent(
+        f"""\
+        recipe:
+          name: {name}
+          upstream_version: "1.0.0"
+          cvc_revision: 1
+        source:
+          type: none
+        """
+    )
+    text += f"{flag}depends:\n" + block("build", build) + block("runtime", runtime)
+    return _tar({"recipe.yaml": text.encode()})
+
+
+def test_a_deps_own_build_deps_are_not_installed(monkeypatch, tmp_path):
+    """Only the runtime deps beneath the job's own deps come along, as
+    ``cvcpkg install`` resolves them.  A dep's build deps were for building it;
+    on Windows they put a second CPython into wheel prefixes (python312 via
+    pkg-config's build edge), and its python.exe replaced the wheel's own."""
+    recipes = {
+        "app": _recipe_roles("app", build=["tool"], runtime=["lib"]),
+        "tool": _recipe_roles("tool", build=["tool-src", "otherpython"], runtime=["toollib"]),
+        "lib": _recipe_roles("lib", build=["lib-src"], runtime=["zlib"]),
+        "toollib": _recipe_roles("toollib"),
+        "zlib": _recipe_roles("zlib", build=["zlib-src"]),
+    }
+    lookups: list[str] = []
+    posted, events, output = _run(monkeypatch, tmp_path, recipes, {}, lookups=lookups)
+    looked = set(lookups) - {"patchelf"}
+    assert looked == {"tool", "lib", "toollib", "zlib"}, (lookups, output)
+    assert posted.get("complete"), output
+
+
+def test_a_local_only_deps_build_deps_still_come_along(monkeypatch, tmp_path):
+    """A ``redistributable: false`` dep is built in the job, so its build deps
+    are installed for it."""
+    recipes = {
+        "app": _recipe_roles("app", runtime=["vendorlib"]),
+        "vendorlib": _recipe_roles(
+            "vendorlib", build=["vendortool"], runtime=["interp"], redistributable=False
+        ),
+        "vendortool": _recipe_roles("vendortool", build=["vendortool-src"]),
+        "interp": _recipe_roles("interp"),
+    }
+    lookups: list[str] = []
+    posted, events, output = _run(
+        monkeypatch, tmp_path, recipes, {"interp": (200, [_INTERP_ROW])}, lookups=lookups
+    )
+    looked = set(lookups) - {"patchelf"}
+    assert looked == {"vendorlib", "vendortool", "interp"}, (lookups, output)
+    assert events == [
+        "build vendorlib (interp in prefix: True)",
+        "pack with vendorlib.built",
+    ], output

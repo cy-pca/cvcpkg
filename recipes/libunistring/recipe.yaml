@@ -22,6 +22,14 @@ patches: []
 
 depends:
   build:
+    # Windows builds with MinGW-w64 under MSYS2 (Invoke-CvcMsysAutotoolsBuild).
+    # Declared, as aspell does, now that a dep's build edge no longer brings it.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
     - name: libunistring-src
       version: "==1.3"
   runtime:
