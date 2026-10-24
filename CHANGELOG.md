@@ -30,6 +30,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: the fleet builder installed every dependency's build closure.** A
+  job's dependency install walked the build deps of its deps, and of theirs,
+  so it installed their source packages, compilers and build tools too. That is
+  more than `cvcpkg install` installs, and on Windows it was wrong, not just
+  slow. Every Windows CPython lays out python.exe, Lib\ and DLLs\ at the prefix
+  root. A cp313 wheel's prefix also got python312 (pkg-config's build edge),
+  whose python.exe replaced the wheel's own, and the wheel failed "interpreter
+  not found". A cp312 wheel got python313 (python312's PCbuild build edge).
+  - The builder now installs the recipe's own runtime, build and host_tools
+    deps, then only the runtime deps beneath them, as `cvcpkg install` does
+    with the catalog's `required_deps`. Version pins come from the same edges.
+  - A `redistributable: false` dep is built in the job, so its build deps
+    still come along.
+  - Recipes that relied on a dep's build deps now declare what they use. The
+    Windows meson users cairo, dav1d, dav1d-tools, fribidi, graphene, gtk4,
+    harfbuzz, libepoxy, libpq, pango, pixman and proxy-libintl gain a Windows
+    `python312` build dep for meson.cmd, as pkg-config and glib already had.
+
 - **Fix: the fleet builder ignored version pins on dependencies.** A job's
   dependency install looked deps up by name and took the newest published row,
   whatever the recipes said. scipy-cp3XX pin `scipy-src ==1.17.1`; with an

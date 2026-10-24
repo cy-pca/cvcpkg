@@ -24,6 +24,11 @@ patches: []
 
 depends:
   build:
+    # meson.cmd runs the prefix's python.exe.  Declared, as pkg-config and glib
+    # do: the builder installs only the runtime deps beneath a recipe's own, so
+    # one no longer arrives through another dep's build edge.
+    - name: python312
+      platforms: [windows]
     - name: dav1d
     - ninja
     - meson
