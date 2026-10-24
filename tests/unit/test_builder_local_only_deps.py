@@ -388,6 +388,7 @@ def test_a_local_only_deps_build_deps_still_come_along(monkeypatch, tmp_path):
     )
     looked = set(lookups) - {"patchelf"}
     assert looked == {"vendorlib", "vendortool", "interp"}, (lookups, output)
-    assert events == ["build vendorlib (interp in prefix: True)", "pack with vendorlib.built"], (
-        output
-    )
+    assert events == [
+        "build vendorlib (interp in prefix: True)",
+        "pack with vendorlib.built",
+    ], output
