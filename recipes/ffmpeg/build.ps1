@@ -31,9 +31,30 @@ $env:CHERE_INVOKING   = '1'
 'CC','CXX','LD','AR','NM','RANLIB','CFLAGS','CXXFLAGS','LDFLAGS' |
     ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
 
-$depsFlag = if ($msysDeps) {
-    "PKG_CONFIG_PATH='$msysDeps/lib/pkgconfig' PATH='$msysDeps/bin:'`$PATH "
-} else { '' }
+# cvcpkg's mingw-w64-gcc is staged into CVC_BUILD_PREFIX, the codec libraries
+# into CVC_DEPS_PREFIX; search both, build prefix first.  Only the deps prefix
+# was on PATH, and as a prefix to `mkdir -p` the assignments reached only mkdir,
+# so configure found no compiler ("x86_64-w64-mingw32-gcc: command not found",
+# populate job 22643).  Export them, as recipes/x264/build.ps1 does.
+$toolRoots = @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ }
+$msysRoots = $toolRoots | ForEach-Object { ConvertTo-CvcMsysPath $_ }
+$depsFlag = ''
+if ($msysRoots) {
+    $binPath = ($msysRoots | ForEach-Object { "$_/bin" }) -join ':'
+    $pcPath  = ($msysRoots | ForEach-Object { "$_/lib/pkgconfig" }) -join ':'
+    $depsFlag = "export PATH='${binPath}:'`$PATH PKG_CONFIG_PATH='$pcPath'; "
+}
+
+# --cross-prefix only when the cross-named binutils exist: cvcpkg's
+# mingw-w64-gcc ships x86_64-w64-mingw32-gcc but plain-named binutils.  Name
+# pkg-config outright, or configure looks for x86_64-w64-mingw32-pkg-config.
+$crossFlag = ''
+foreach ($r in $toolRoots) {
+    if (Test-Path (Join-Path $r 'bin\x86_64-w64-mingw32-strings.exe')) {
+        $crossFlag = '--cross-prefix=x86_64-w64-mingw32-'
+        break
+    }
+}
 
 $sharedFlags = if ($env:CVC_LINK -eq 'static') {
     '--enable-static --disable-shared'
@@ -48,7 +69,8 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --prefix='$msysPrefix' \
     --target-os=mingw32 \
     --arch=x86_64 \
-    --cross-prefix=x86_64-w64-mingw32- \
+    $crossFlag \
+    --pkg-config=pkg-config \
     --enable-gpl \
     --enable-pic \
     --enable-version3 \

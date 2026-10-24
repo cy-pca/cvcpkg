@@ -58,6 +58,14 @@ patches: []
 
 depends:
   build:
+    # Windows builds with MinGW-w64 under MSYS2 (build.ps1). Declared, as
+    # aspell and x264-cli do, rather than reached through x264's host_tools.
+    - name: msys2
+      platforms: [windows]
+    - name: make
+      platforms: [windows]
+    - name: mingw-w64-gcc
+      platforms: [windows]
     - name: ffmpeg-src
       version: "==7.1.2"
     - name: patchelf
