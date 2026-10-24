@@ -27,7 +27,12 @@ if ($jobs -le 0) { $jobs = 4 }
 New-Item -ItemType Directory -Force -Path $env:CVC_BUILD_DIR | Out-Null
 
 $env:MSYSTEM          = 'MINGW64'
-$env:MSYS_NO_PATHCONV = '1'
+# No MSYS_NO_PATHCONV: configure and make (an MSYS binary) work in /c/... paths,
+# and the MSYS runtime converts /c/... and /tmp/... arguments when it starts a
+# native program.  With conversion off, cvcpkg's native MinGW gcc got them
+# literally: "cc1.exe: fatal error: /tmp/ffconf.XXXXXXXX/test.c: No such file
+# or directory".  (Drive-letter paths instead would put C:/ into make rules.)
+Remove-Item Env:MSYS_NO_PATHCONV -ErrorAction SilentlyContinue
 $env:CHERE_INVOKING   = '1'
 
 # Clear MSVC env so MinGW-w64 gcc is selected by FFmpeg's configure.
@@ -44,7 +49,9 @@ $msysRoots = $toolRoots | ForEach-Object { ConvertTo-CvcMsysPath $_ }
 $depsFlag = ''
 if ($msysRoots) {
     $binPath = ($msysRoots | ForEach-Object { "$_/bin" }) -join ':'
-    $pcPath  = ($msysRoots | ForEach-Object { "$_/lib/pkgconfig" }) -join ':'
+    # cvcpkg's pkg-config is a native Windows program, and MSYS converts no
+    # environment variable but PATH: give it C:/... entries, ';'-separated.
+    $pcPath  = ($toolRoots | ForEach-Object { ($_ -replace '\\', '/') + '/lib/pkgconfig' }) -join ';'
     $depsFlag = "export PATH='${binPath}:'`$PATH PKG_CONFIG_PATH='$pcPath'; "
 }
 
