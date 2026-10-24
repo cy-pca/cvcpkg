@@ -78,6 +78,10 @@ depends:
   host_tools:
     - cmake
     - ninja
+    # configure finds the codec libraries through pkg-config.  Declared now that
+    # the builder installs only the runtime deps beneath a recipe's own.
+    - name: pkg-config
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
   build:
     # Full delegate set — a hermetic ImageMagick built entirely against cvcpkg
     # codecs (no fall-through to the build host's system libraries). build.sh
