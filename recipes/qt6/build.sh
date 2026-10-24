@@ -27,6 +27,12 @@ if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     # identifier 'ELFOSABI_AIX'" (job 22627).  It has every other ELFOSABI_*
     # the parser uses.
     export CXXFLAGS="${CXXFLAGS:-} -DELFOSABI_AIX=7"
+    # No -Wl,--no-undefined: OpenBSD's compiler driver links libc into executables,
+    # not shared libraries, so every libc symbol was undefined when libQt6Core.so
+    # linked ("ld: error: undefined symbol: strlen", job 22745).  Qt adds the flag
+    # when these cached probes pass; preset them off, as OpenBSD's own Qt port
+    # drops the flag.
+    CMAKE_EXTRA+=(-DHAVE_DASH_UNDEFINED_SYMBOLS=OFF -DHAVE_DASH_DASH_NO_UNDEFINED=OFF)
 fi
 
 cmake -G Ninja \
