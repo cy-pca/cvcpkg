@@ -124,4 +124,9 @@ if ($LASTEXITCODE -ne 0) {
     throw 'FFmpeg (LGPL) build failed'
 }
 
+# FFmpeg's MinGW install puts the MSVC import libraries (avcodec.lib, ...) in
+# bin\ beside the DLLs; MSVC consumers, and package.files, look in lib\.
+Get-ChildItem -Path (Join-Path $env:CVC_INSTALL_DIR 'bin') -Filter '*.lib' -File |
+    Move-Item -Destination (Join-Path $env:CVC_INSTALL_DIR 'lib') -Force
+
 Invoke-CvcRewriteInstallPaths
