@@ -57,3 +57,19 @@ Write-Host "cvcpkg: bash -lc `"$cmd`""
 if ($LASTEXITCODE -ne 0) { throw 'libopus build failed' }
 
 Invoke-CvcRewriteInstallPaths
+
+# opus.lib, so MSVC consumers (libcvc) can link: a copy of the DLL's import
+# library, as Invoke-CvcMsysAutotoolsBuild makes for every other MinGW recipe.
+# This script runs its own configure line (path conversion, above), so it never
+# got that step, and the bundle shipped only libopus.dll.a, which MSVC's
+# find_library does not look for.  The import library is safe to alias:
+# libopus-0.dll imports only KERNEL32 and the UCRT.  The static libopus.a is
+# NOT aliased: it is MinGW-compiled, and Opus's stack arrays make gcc emit
+# ___chkstk_ms calls that an MSVC link cannot resolve.
+if ($env:CVC_LINK -ne 'static') {
+    $installLib = Join-Path $env:CVC_INSTALL_DIR 'lib'
+    $implib     = Join-Path $installLib 'libopus.dll.a'
+    if (-not (Test-Path -LiteralPath $implib)) { throw "libopus: $implib was not installed" }
+    Copy-Item -Force $implib (Join-Path $installLib 'opus.lib')
+    Write-Host 'libopus: copied lib\libopus.dll.a -> lib\opus.lib for MSVC consumers'
+}

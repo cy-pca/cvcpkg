@@ -20,7 +20,10 @@ recipe:
   # strict packing refused the old bin/opus-*.dll glob on the prod builder.
   # cvc.7: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
   # instead of using the builder's; see depends.build.
-  cvc_revision: 7
+  # cvc.8: wasm also builds on a Windows host (build-wasm.ps1, upstream's CMake with the same
+  # configuration as build-wasm.sh), for the libcvc browser client's Opus audio.  Windows ships
+  # lib/opus.lib, a copy of the DLL's import library, so MSVC consumers can link (build.ps1).
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -89,6 +92,9 @@ build:
     - platform: wasm
       host_platform: linux
       script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
@@ -102,5 +108,6 @@ package:
     - lib/pkgconfig/opus.pc
     - include/opus/
     - bin/libopus-*.dll    # upstream's MinGW DLL is libopus-0.dll
+    - { glob: "lib/opus.lib", platforms: [windows] }   # the import library, MSVC's name
   pkg_config:
     - opus
