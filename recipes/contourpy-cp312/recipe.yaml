@@ -42,6 +42,8 @@ depends:
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: meson
     - name: meson-python-cp312
+    # meson-python runs meson and ninja; 2.5.4 stages only its runtime deps (job 23056).
+    - name: ninja
     - name: pybind11-cp312
   runtime:
     - name: python312

@@ -49,11 +49,6 @@ depends:
     - name: python312
     - name: packaging-cp312
     - name: pyproject-metadata-cp312
-    # meson-python runs meson and ninja whenever it builds a package, so a
-    # recipe using it as its backend needs both; 2.5.4 stages a dependency's
-    # runtime deps only (pandas-cp313, job 23056: "Could not find ninja").
-    - name: meson
-    - name: ninja
   host_tools:
     - python312
 
