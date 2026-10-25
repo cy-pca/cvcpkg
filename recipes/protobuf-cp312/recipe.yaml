@@ -29,7 +29,9 @@ python:
   interpreter: python312
   abi: cp312
 
-patches: []
+patches:
+  # MSVC: python/message.c uses __attribute__((flatten)), a GCC/clang extension.
+  - msvc-no-gcc-attribute.patch
 
 depends:
   build:
