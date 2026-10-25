@@ -76,13 +76,17 @@ $env:PYMUPDF_SETUP_SWIG = $swig
 if (-not $env:SWIG_LIB) {
     foreach ($root in @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX)) {
         if (-not $root) { continue }
-        $cand = Get-ChildItem -Path (Join-Path $root 'share\swig') -Directory -ErrorAction SilentlyContinue |
-            Where-Object { Test-Path (Join-Path $_.FullName 'swig.swg') } | Select-Object -First 1
-        if ($cand) { $env:SWIG_LIB = $cand.FullName; break }
+        # The Windows swig package keeps its library next to the exe, as
+        # bin\Lib (job 23104); the Unix layout is share\swig\<version>.
+        $dirs = @(Join-Path $root 'bin\Lib') +
+            @(Get-ChildItem -Path (Join-Path $root 'share\swig') -Directory -ErrorAction SilentlyContinue |
+              ForEach-Object { $_.FullName })
+        $cand = $dirs | Where-Object { Test-Path (Join-Path $_ 'swig.swg') } | Select-Object -First 1
+        if ($cand) { $env:SWIG_LIB = $cand; break }
     }
 }
 if (-not ($env:SWIG_LIB -and (Test-Path (Join-Path $env:SWIG_LIB 'swig.swg')))) {
-    throw "pymupdf-cp312: could not locate swig.swg under share\swig (SWIG_LIB=$($env:SWIG_LIB)); swig would fail with 'Unknown directive'."
+    throw "pymupdf-cp312: could not locate swig.swg under bin\Lib or share\swig (SWIG_LIB=$($env:SWIG_LIB)); swig would fail with 'Unknown directive'."
 }
 Write-Output "pymupdf-cp312: swig [$swig], SWIG_LIB=$env:SWIG_LIB"
 
