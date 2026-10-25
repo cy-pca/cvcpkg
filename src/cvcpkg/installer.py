@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cvcpkg import cache as cache_mod
-from cvcpkg._archive import archive_format, open_tar
+from cvcpkg._archive import archive_format, materialize_symlinks, open_tar
 from cvcpkg.errors import DownloadIntegrityError, InstallError, IntegrityError
 from cvcpkg.manifest import CatalogEntry
 from cvcpkg.retry import backoff_delay, with_retry
@@ -342,6 +342,7 @@ def _extract_tar(archive: Path, prefix: Path) -> list[str]:
             if member.name.startswith("/") or ".." in member.name.split("/"):
                 raise InstallError(f"unsafe path in archive: {member.name}")
         _safe_extractall(tf, prefix)
+        materialize_symlinks(tf, prefix)
         return [m.name for m in members]
 
 

@@ -31,6 +31,7 @@ from typing import Any
 import yaml
 
 from cvcpkg import linkage as _linkage
+from cvcpkg._archive import materialize_symlinks
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
 from cvcpkg.platform import (
@@ -541,6 +542,7 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
                 tf.extractall(source_dir, filter="data")
             else:
                 tf.extractall(source_dir)
+            materialize_symlinks(tf, source_dir)
 
     # If strip_components>0, move the inner directory up
     if source.strip_components > 0:

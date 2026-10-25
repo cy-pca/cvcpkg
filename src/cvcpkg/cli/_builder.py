@@ -18,7 +18,7 @@ from pathlib import Path
 
 import click
 
-from cvcpkg._archive import safe_tar_extractall
+from cvcpkg._archive import materialize_symlinks, members_to_extract, safe_tar_extractall
 from cvcpkg.cli import cli
 from cvcpkg.cli._publish import _publish_to_server
 from cvcpkg.cli._server import _api_request
@@ -3331,6 +3331,7 @@ def builder_run(
                     elif kind == "gz":
                         with tarfile.open(tmp_archive, "r:gz") as tf:
                             tf.extractall(path=prefix)  # noqa: S202
+                            materialize_symlinks(tf, prefix)
                     elif kind == "zst":
                         import zstandard  # type: ignore[import-untyped]
 
@@ -3338,7 +3339,9 @@ def builder_run(
                             dctx = zstandard.ZstdDecompressor()
                             with dctx.stream_reader(f_in) as reader:
                                 with tarfile.open(fileobj=reader, mode="r|") as tf:
-                                    tf.extractall(path=prefix)  # noqa: S202
+                                    members = members_to_extract(tf)
+                                    tf.extractall(path=prefix, members=members)  # noqa: S202
+                                    materialize_symlinks(tf, prefix)
                     else:
                         raise ValueError(f"unknown archive format (magic={head!r})")
                 except Exception as exc:

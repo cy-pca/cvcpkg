@@ -32,6 +32,31 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.5.5
+
+**A release so Windows builders extract archive symlinks as files.**
+
+- **Fix: tar symlinks came out unreadable on elevated Windows builders.** A
+  source package can ship symlinks: wcwidth-src's `README.rst` points to
+  `docs/intro.rst`. tarfile creates each link with `os.symlink` using the
+  archive's target verbatim. An elevated process, which every Windows fleet
+  builder is, gets a real link, and on Windows that link does not resolve: its
+  relative target keeps the forward slash, and a link made before its target
+  exists is a file link even for a directory. So hatchling failed "Readme file
+  does not exist: README.rst" on builder #28 (wcwidth-cp311/313/313t), while
+  the same build passed unelevated on the same machine, where tarfile copies
+  the target instead. That fallback has gaps of its own: a directory link
+  becomes an empty directory, and in a streamed extraction (the builder's
+  `.tar.zst` dependency path) it raises `StreamError`.
+  `cvcpkg._archive.materialize_symlinks` now replaces, on Windows, every
+  symlink an extraction made with a copy of its target (settling links to
+  links; leaving targets outside the destination alone), and
+  `members_to_extract` skips symlink members in streamed extractions. Every
+  tar extraction calls them: the builder's dependency installs, the
+  installer, tarball sources and `safe_tar_extractall` (#470).
+
+---
+
 ## v2.5.4
 
 **A release so builders pick up two dependency-install fixes.** Builders
