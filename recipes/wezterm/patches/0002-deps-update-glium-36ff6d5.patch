@@ -1,0 +1,94 @@
+From 36ff6d5f44211e8839bdf729b93a0990db851732 Mon Sep 17 00:00:00 2001
+From: Wez Furlong <wez@wezfurlong.org>
+Date: Tue, 6 Feb 2024 16:52:02 -0700
+Subject: [PATCH] deps: update glium
+
+---
+ Cargo.lock                    | 6 +++---
+ window/Cargo.toml             | 2 +-
+ window/src/egl.rs             | 4 ++++
+ window/src/os/macos/window.rs | 4 ++++
+ window/src/os/windows/wgl.rs  | 4 ++++
+ 5 files changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 3f8ed7d1940..bb6709c815c 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2156,15 +2156,15 @@ dependencies = [
+ 
+ [[package]]
+ name = "glium"
+-version = "0.31.0"
++version = "0.34.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "0ab4f09b43d8ee427a700cb9ed3b20e0e858d62a509edded1a98ca5707d68e19"
++checksum = "94d5813c960a54b76e20fe4ef7e54fbeb12545776a11ecf14f42a946a1c65964"
+ dependencies = [
+  "backtrace",
+  "fnv",
+  "gl_generator",
+  "lazy_static",
+- "memoffset 0.6.5",
++ "memoffset 0.9.0",
+  "smallvec",
+  "takeable-option",
+ ]
+diff --git a/window/Cargo.toml b/window/Cargo.toml
+index f084869bbd7..b4598297b90 100644
+--- a/window/Cargo.toml
++++ b/window/Cargo.toml
+@@ -40,7 +40,7 @@ raw-window-handle = "0.5"
+ resize = "0.5"
+ serde = {version="1.0", features = ["rc", "derive"]}
+ tiny-skia = "0.11"
+-glium = { version = "0.31", default-features = false }
++glium = { version = "0.34", default-features = false }
+ url = "2"
+ wezterm-bidi = { path = "../bidi" }
+ wezterm-color-types = { path = "../color-types" }
+diff --git a/window/src/egl.rs b/window/src/egl.rs
+index 9c50c46cb0a..6986a0ca054 100644
+--- a/window/src/egl.rs
++++ b/window/src/egl.rs
+@@ -658,6 +658,10 @@ impl GlState {
+ }
+ 
+ unsafe impl glium::backend::Backend for GlState {
++    fn resize(&self, _: (u32, u32)) {
++        todo!()
++    }
++
+     fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
+         let res = unsafe {
+             self.connection
+diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
+index 8c257299b14..dac38998bfb 100644
+--- a/window/src/os/macos/window.rs
++++ b/window/src/os/macos/window.rs
+@@ -313,6 +313,10 @@ mod cglbits {
+     }
+ 
+     unsafe impl glium::backend::Backend for GlState {
++        fn resize(&self, _: (u32, u32)) {
++            todo!()
++        }
++
+         fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
+             unsafe {
+                 let pool = NSAutoreleasePool::new(nil);
+diff --git a/window/src/os/windows/wgl.rs b/window/src/os/windows/wgl.rs
+index 6865ebc219b..25fc6e59148 100644
+--- a/window/src/os/windows/wgl.rs
++++ b/window/src/os/windows/wgl.rs
+@@ -402,6 +402,10 @@ impl Drop for GlState {
+ }
+ 
+ unsafe impl glium::backend::Backend for GlState {
++    fn resize(&self, _: (u32, u32)) {
++        todo!()
++    }
++
+     fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
+         unsafe {
+             SwapBuffers(self.hdc);

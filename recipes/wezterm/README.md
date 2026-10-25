@@ -1,9 +1,11 @@
 # wezterm
 
-WezTerm 20240203-110809-5046fc22 (the last stable release), repackaged from
-upstream's release binaries. `recipe.yaml` records what is pinned and why;
-this file records what was found about images in the terminal while making
-it, for libcvc's `arigl --terminal` (`src/cvc/ariadne/term_graphics.cpp`).
+WezTerm 20240203-110809-5046fc22 (the last stable release), built from its
+release source tarball (`wezterm-src`) with the cvcpkg Rust toolchain on linux
+and Windows; on macOS, upstream's signed app. `recipe.yaml` records what is
+pinned and why; this file records what was found about images in the
+terminal while making it, for libcvc's `arigl --terminal`
+(`src/cvc/ariadne/term_graphics.cpp`).
 
 ```sh
 cvcpkg install wezterm --prefix P
@@ -37,12 +39,18 @@ python3 kitty-placeholder-probe.py --hold 30  # or holds for 30 s
 | B | arigl's `a=T,U=1,…,q=2,C=1`, sent with the cursor to the right of a 4×16 placeholder grid | picture **on** the grid | picture **beside** the grid; grid cells are boxes |
 | C | a DEC Sixel picture | — (kitty has no Sixel) | picture |
 
-Checked on 2026-10-25 with this package:
+Checked on 2026-10-25, with upstream's release binaries (cvc.1) and with this
+recipe's from-source builds (cvc.2), the same way each time:
 
 - linux-x86_64, the Linux binaries under cvcpkg's `xvfb` (WezTerm's own pty, so
   no ConPTY in the way): A and C draw, B lands beside the grid.
 - windows-x86_64, native Windows program (`python.exe`) in the pane: same
   result, **once the ConPTY is replaced** (below).
+
+The from-source builds first showed no images at all, and glyphs as solid
+blocks, with the OpenGL and Software front ends: glium 0.31 under Rust 1.90.
+`patches/0002` (upstream's glium 0.34 commit) fixes that, and `test.sh` now
+checks the pixels of its window on Windows so it cannot come back unnoticed.
 
 So on WezTerm, arigl's kitty mode would show each frame at wherever the
 cursor happens to be when the transmission is written, and leave placeholder
@@ -58,12 +66,13 @@ the replacement ConPTY below).
 
 WezTerm hosts Windows programs through ConPTY (`conpty.dll` + `OpenConsole.exe`
 beside `wezterm-gui.exe`), which parses the program's output and re-emits it.
-The ConPTY in the 20240203 zip (from February 2024) drops APC and DCS
-sequences. In that configuration **no** image reached WezTerm from a native
-Windows program: probe panels A, B and C were all empty, and a window title set
-with OSC 2 was lost as well. A kitty query from the pane got no reply.
+The ConPTY WezTerm 20240203 bundles (`assets/windows/conhost` in its source,
+and in its release zip; from February 2024) drops APC and DCS sequences. With
+it **no** image reached WezTerm from a native Windows program: probe panels A,
+B and C were all empty, and a window title set with OSC 2 was lost as well. A
+kitty query from the pane got no reply.
 
-`build.ps1` therefore overlays Microsoft's ConPTY 1.25.260930003
+`build.ps1` therefore installs Microsoft's ConPTY 1.25.260930003
 (`Microsoft.Windows.Console.ConPTY` on nuget.org). With it the same probe
 shows A and C drawn and B beside the grid, exactly as on Linux. `test.sh`
 checks it on every Windows build that has a desktop: the program in the pane
