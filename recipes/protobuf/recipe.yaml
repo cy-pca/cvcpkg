@@ -59,6 +59,13 @@ build:
     - platform: windows
       script: build.ps1
       vcpkg_features: ["libprotoc"]
+    # libprotobuf only (no protoc): a consumer generates with a native protoc 28.3.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
 
 package:
   files:
@@ -70,6 +77,11 @@ package:
     - lib/pkgconfig/protobuf*
     - include/google/protobuf/
     - bin/protoc*
+    # utf8_range, which protobuf's CMake config requires (find_dependency).
+    - { glob: "lib/libutf8_*", platforms: [wasm] }
+    - { glob: "lib/cmake/utf8_range/", platforms: [wasm] }
+    - { glob: "include/utf8_range.h", platforms: [wasm] }
+    - { glob: "include/utf8_validity.h", platforms: [wasm] }
   cmake_packages:
     - { name: Protobuf, targets: ["protobuf::libprotobuf", "protobuf::libprotoc"] }
 
