@@ -509,6 +509,12 @@ SEED_PACKAGES = {
         "version": "0.18.0",
         "license": "MIT",
         "deps": ["packaging", "pyproject-metadata"],
+        # Not in [build-system] requires (upstream expects ninja on PATH or the
+        # PyPI ninja wheel): meson-python builds itself with meson, which runs
+        # ninja.  cvcpkg 2.5.4 stopped staging meson's own build deps, so the
+        # Windows column failed "Could not find ninja version 1.8.2 or newer"
+        # (job 23029).
+        "build_deps": ["ninja"],
         "files": ["mesonpy/", "meson_python-*.dist-info/"],
         "check": "import mesonpy",
     },
@@ -2824,10 +2830,15 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     # Seed-declared build-only edges the sdist's [build-system] requires does
     # not name (a backend that consults a package only if it is importable).
     if mode == "sdist":
+        # A native tool (ninja, meson, ...) stays a bare recipe name, as in
+        # backend_edges.
         backends += [
-            f"{b}-cp{interp}"
-            for b in m.get("build_deps") or []
-            if f"{b}-cp{interp}" not in backends
+            e
+            for e in (
+                b if b in _NATIVE_BUILD_REQ else f"{b}-cp{interp}"
+                for b in m.get("build_deps") or []
+            )
+            if e not in backends
         ]
     # Stage the transitive runtime closure of the backends in
     # _BACKEND_RUNTIME_CLOSURE (see its definition): --no-build-isolation needs

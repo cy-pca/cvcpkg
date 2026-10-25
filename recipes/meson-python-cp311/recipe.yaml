@@ -42,6 +42,9 @@ depends:
     # --no-build-isolation means pip will NOT fetch it, so it has to be
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: meson
+    # meson runs ninja to build meson-python itself; 2.5.4 no longer
+    # stages meson's own build deps (job 23029: "Could not find ninja").
+    - name: ninja
   runtime:
     - name: python311
     - name: packaging-cp311
