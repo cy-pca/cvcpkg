@@ -91,4 +91,4 @@ meson install -C "${CVC_BUILD_DIR}/meson"
 
 cvc_rewrite_install_paths
 
-echo "gtk4 ${GTK_VERSION} installed to ${CVC_INSTALL_DIR}"
+echo "gtk4 installed to ${CVC_INSTALL_DIR}"
