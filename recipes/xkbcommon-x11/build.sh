@@ -45,9 +45,12 @@ ninja -C "${CVC_BUILD_DIR}" install
 # paths would point into this job directory), so it must not ship.
 # libxkbcommon-x11 never reads those paths, and its use of struct xkb_context
 # is unchanged by the base's patch, which only appends members.
+# On FreeBSD meson puts the .pc in libdata/pkgconfig; the builder moves it to
+# lib/pkgconfig only after this script exits, so keep both locations.
 find "${CVC_INSTALL_DIR}" -mindepth 1 \( -type f -o -type l \) \
     ! -path "${CVC_INSTALL_DIR}/lib/libxkbcommon-x11*" \
     ! -path "${CVC_INSTALL_DIR}/lib/pkgconfig/xkbcommon-x11.pc" \
+    ! -path "${CVC_INSTALL_DIR}/libdata/pkgconfig/xkbcommon-x11.pc" \
     ! -path "${CVC_INSTALL_DIR}/include/xkbcommon/xkbcommon-x11.h" \
     -delete
 find "${CVC_INSTALL_DIR}" -mindepth 1 -type d -empty -delete
