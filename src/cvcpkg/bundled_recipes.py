@@ -26,10 +26,10 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import secrets
 import shutil
 import stat
 import sys
-import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -108,22 +108,28 @@ def embedded_recipes_dir(cache_root: Path | None = None) -> Path | None:
 
     Unpacks them on first use into ``<cache_root>/<digest>/recipes`` (default
     cache root: ``<cvcpkg cache>/bundled-recipes``).  When the cache cannot be
-    written, unpacks into ``sys._MEIPASS`` instead, which the bootloader
-    removes at exit: correct, just not reused by the next start.
+    written, or holds a tree this process cannot read, unpacks into
+    ``sys._MEIPASS`` instead, with a warning.  The bootloader removes that dir
+    at exit: correct, just not reused by the next start.
     """
     mod = _embedded()
     if mod is None:
         return None
     root = cache_root if cache_root is not None else _cache_root()
     target = root / mod.DIGEST[:16]
-    if (target / _COMPLETE).is_file():
-        return target / "recipes"
     try:
+        if _usable(target):
+            return target / "recipes"
         tree = _unpack_into_cache(mod.DATA, root, target)
-    except OSError:
+    except OSError as exc:
         meipass = getattr(sys, "_MEIPASS", None)
         if not meipass:
             raise
+        print(
+            f"cvcpkg: warning: cannot use the recipe cache at {exc.filename or root} "
+            f"({exc.strerror or exc}); unpacking the recipes for this run only",
+            file=sys.stderr,
+        )
         tree = Path(meipass) / "cvcpkg-embedded-recipes"
         if not (tree / _COMPLETE).is_file():
             _unpack(mod.DATA, tree)
@@ -143,37 +149,64 @@ def _unpack(data: bytes, dest: Path) -> None:
     (dest / _COMPLETE).write_text("")
 
 
+def _usable(tree: Path) -> bool:
+    """Whether *tree* is a complete unpacked tree; raises if it cannot be read.
+
+    Another account sharing the cache (an elevated builder on Windows, root on
+    POSIX) can leave a complete tree that this process may not list.  Its
+    marker still stats as a file, so checking the marker alone hands back a
+    tree that ``load_all_recipes`` then fails to read.  Listing the tree here
+    raises PermissionError instead, which the caller turns into the fallback.
+    """
+    try:
+        with os.scandir(tree) as it:
+            if not any(entry.name == _COMPLETE for entry in it):
+                return False
+        with os.scandir(tree / "recipes"):
+            return True
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+
+
 def _unpack_into_cache(data: bytes, root: Path, target: Path) -> Path:
-    """Unpack into a private temp dir under *root* and rename it to *target*.
+    """Unpack into a temp dir of its own under *root*, then rename it to *target*.
 
     The rename is the commit point, so concurrent starts (a fleet launching
     its workers) never see a half-written tree: each unpacks its own copy and
     the first rename wins.  Returns the directory to use, which is the temp
     dir itself when Windows keeps refusing the rename (an antivirus scanner
     holding a just-written file open); that copy is complete, and a later
-    start retries the rename.
+    start retries the rename.  Raises PermissionError if the race is won by a
+    tree this process cannot read (see :func:`_usable`).
     """
     root.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix=f".tmp-{target.name}-", dir=root))
+    # Not tempfile.mkdtemp: its dir is private to the account that made it
+    # (mode 0700; on Windows, Python 3.12.4+ gives it a protected ACL for
+    # SYSTEM, Administrators and the owner only), and the rename below makes
+    # it the shared tree.  A tree the elevated builder unpacked was then
+    # unreadable to the same user unelevated.  A plain mkdir inherits the
+    # cache's permissions.
+    tmp = root / f".tmp-{target.name}-{os.getpid()}-{secrets.token_hex(4)}"
+    tmp.mkdir()
     try:
         _unpack(data, tmp)
+        for attempt in range(5):
+            if _usable(target):  # another process won the race
+                shutil.rmtree(tmp, ignore_errors=True)
+                return target
+            if target.exists():  # left incomplete by something other than us
+                shutil.rmtree(target, ignore_errors=True)
+            try:
+                tmp.rename(target)
+                return target
+            except OSError:
+                time.sleep(0.2 * (attempt + 1))
+        if _usable(target):
+            shutil.rmtree(tmp, ignore_errors=True)
+            return target
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
         raise
-    for attempt in range(5):
-        if (target / _COMPLETE).is_file():  # another process won the race
-            shutil.rmtree(tmp, ignore_errors=True)
-            return target
-        if target.exists():  # left incomplete by something other than us
-            shutil.rmtree(target, ignore_errors=True)
-        try:
-            tmp.rename(target)
-            return target
-        except OSError:
-            time.sleep(0.2 * (attempt + 1))
-    if (target / _COMPLETE).is_file():
-        shutil.rmtree(tmp, ignore_errors=True)
-        return target
     return tmp
 
 

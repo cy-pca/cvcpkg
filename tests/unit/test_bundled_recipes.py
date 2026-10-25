@@ -12,9 +12,12 @@ import hashlib
 import importlib
 import io
 import os
+import stat
+import subprocess
 import sys
 import types
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -49,6 +52,33 @@ def embedded(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, br.MODULE, mod)
     monkeypatch.setenv("CVCPKG_CACHE", str(tmp_path / "cache"))
     return mod
+
+
+@pytest.fixture
+def meipass(tmp_path, monkeypatch):
+    """Run as the frozen binary, whose bootloader unpack dir is the result."""
+    path = tmp_path / "meipass"
+    path.mkdir()
+    monkeypatch.setattr(sys, "_MEIPASS", str(path), raising=False)
+    return path
+
+
+def _deny(monkeypatch, tree):
+    """Make listing *tree* fail, as for a tree another account unpacked.
+
+    Only listing is denied: the real tree's ``.complete`` still stats as a
+    file, which is what let the old marker check hand it back.
+    """
+    real = os.scandir
+
+    def scandir(path="."):
+        if isinstance(path, (str, os.PathLike)):
+            p = Path(path)
+            if p == tree or tree in p.parents:
+                raise PermissionError(13, "Access is denied", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", scandir)
 
 
 def test_archive_is_reproducible_and_keeps_layout(tmp_path):
@@ -138,6 +168,62 @@ def test_unwritable_cache_falls_back_to_meipass(tmp_path, embedded, monkeypatch)
     got = br.embedded_recipes_dir(tmp_path / "cache")
     assert got.is_relative_to(meipass)
     assert (got / "zlib" / "recipe.yaml").is_file()
+
+
+def test_unreadable_tree_falls_back_to_meipass(tmp_path, embedded, meipass, monkeypatch, capsys):
+    # A complete tree that the elevated builder sharing the cache unpacked:
+    # handing it back made load_all_recipes die with WinError 5.
+    root = tmp_path / "cache" / "bundled-recipes"
+    target = root / embedded.DIGEST[:16]
+    br.embedded_recipes_dir(root)
+    _deny(monkeypatch, target)
+    got = br.embedded_recipes_dir(root)
+    assert got.is_relative_to(meipass)
+    assert (got / "zlib" / "recipe.yaml").is_file()
+    assert str(target) in capsys.readouterr().err
+    monkeypatch.undo()
+    # The unreadable tree is left alone, and no copy is left in the cache.
+    assert [p.name for p in root.iterdir()] == [target.name]
+
+
+def test_unreadable_race_winner_leaves_no_temp_copy(tmp_path, embedded, meipass, monkeypatch):
+    # Another account finishes the same tree while this process is unpacking.
+    root = tmp_path / "cache" / "bundled-recipes"
+    target = root / embedded.DIGEST[:16]
+    real_unpack = br._unpack
+
+    def racing(data, dest):
+        real_unpack(data, dest)
+        if not target.exists():
+            real_unpack(data, target)
+            _deny(monkeypatch, target)
+
+    monkeypatch.setattr(br, "_unpack", racing)
+    got = br.embedded_recipes_dir(root)
+    assert got.is_relative_to(meipass)
+    monkeypatch.undo()
+    assert [p.name for p in root.iterdir()] == [target.name]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
+def test_tree_inherits_the_cache_acl(embedded):
+    # The tree used to be a renamed tempfile.mkdtemp dir, whose protected ACL
+    # (SYSTEM, Administrators, owner) shut out the same user unelevated when
+    # the elevated builder unpacked it.  icacls marks inherited entries (I).
+    tree = find_recipes_dir().parent
+    out = subprocess.run(["icacls", str(tree)], capture_output=True, text=True, check=True)
+    assert "(I)" in out.stdout
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+def test_tree_is_not_private_to_its_owner(embedded):
+    # A mkdtemp dir is 0700, so a tree root unpacked was unreadable to users.
+    old = os.umask(0o022)
+    try:
+        tree = find_recipes_dir().parent
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(tree.stat().st_mode) == 0o755
 
 
 def test_prune_keeps_the_newest_trees(tmp_path, embedded):
