@@ -1,0 +1,30 @@
+QtNetwork's BSD interface code on OpenBSD.
+
+qnetworkinterface_unix.cpp's BSD branch reads IPv6 address flags and lifetimes
+with in6_ifreq, SIOCGIFAFLAG_IN6, SIOCGIFALIFETIME_IN6 and IN6_IFF_*, which
+OpenBSD declares in <netinet6/in6_var.h>; and OpenBSD has no IFT_STF.  Both
+failed the OpenBSD build (populate 2026-10-25, job 22761).  OpenBSD's own Qt
+port patches the same two places.
+
+--- a/src/network/kernel/qnetworkinterface_unix.cpp
++++ b/src/network/kernel/qnetworkinterface_unix.cpp
+@@ -392,6 +392,9 @@
+ #  include <net/if_media.h>
+ #  include <net/if_types.h>
+ #  include <netinet/in_var.h>
++#  ifdef Q_OS_OPENBSD
++#    include <netinet6/in6_var.h>
++#  endif
+ #endif // QT_PLATFORM_UIKIT
+ QT_END_INCLUDE_NAMESPACE
+ 
+@@ -419,7 +422,9 @@
+         return QNetworkInterface::Ieee1394;
+ 
+     case IFT_GIF:
++#ifdef IFT_STF
+     case IFT_STF:
++#endif
+         return QNetworkInterface::Virtual;
+     }
+ 
