@@ -27,6 +27,36 @@ fi
 
 _rpath_flags="-Wl,-rpath,\$ORIGIN"
 
+# Configure-time XKB config root, XKB extra path and X locale dir.  The
+# patched libxkbcommon (relocatable-default-paths.patch) first tries
+# <libdir>/../share/X11/xkb, ../etc/xkb and ../share/X11/locale, so these are
+# only the fallback for a prefix without xkeyboard-config / libx11 data.  Left
+# unset, meson bakes in ${CVC_INSTALL_DIR}/share/X11/..., the builder's job
+# directory, which exists on no machine the bundle is installed on; point them
+# at where each OS keeps its own X data instead, as its own libxkbcommon does.
+case "${CVC_PLATFORM}" in
+    freebsd)
+        _xkb_root=/usr/local/share/X11/xkb
+        _xkb_extra=/usr/local/etc/xkb
+        _xlocale=/usr/local/lib/X11/locale
+        ;;
+    openbsd)
+        _xkb_root=/usr/X11R6/share/X11/xkb
+        _xkb_extra=/etc/xkb
+        _xlocale=/usr/X11R6/share/X11/locale
+        ;;
+    netbsd)
+        _xkb_root=/usr/X11R7/lib/X11/xkb
+        _xkb_extra=/etc/xkb
+        _xlocale=/usr/X11R7/lib/X11/locale
+        ;;
+    *)
+        _xkb_root=/usr/share/X11/xkb
+        _xkb_extra=/etc/xkb
+        _xlocale=/usr/share/X11/locale
+        ;;
+esac
+
 cd "${CVC_SOURCE_DIR}"
 
 # enable-xkbregistry defaults to true and makes meson.build:360 require
@@ -44,6 +74,9 @@ meson setup "${CVC_BUILD_DIR}" \
     --default-library="${_default_lib}" \
     --pkg-config-path="$(IFS=,; echo "${_pc_dirs[*]}")" \
     -Dc_link_args="${_rpath_flags}" \
+    -Dxkb-config-root="${_xkb_root}" \
+    -Dxkb-config-extra-path="${_xkb_extra}" \
+    -Dx-locale-root="${_xlocale}" \
     -Denable-wayland=true \
     -Denable-x11=false \
     -Denable-docs=false \

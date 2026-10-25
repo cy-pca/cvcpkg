@@ -2,7 +2,14 @@ schema_version: 1
 recipe:
   name: xkbcommon-x11
   upstream_version: "1.7.0"
-  cvc_revision: 1
+  # Bumped 1 -> 2: build.sh now prunes the install dir to the x11 delta.
+  # package.files does not filter the bundle, so cvc.1 also shipped the whole
+  # core libxkbcommon (lib/libxkbcommon.so.0.0.0, its headers and .pc) that
+  # the base `xkbcommon` package owns, and whichever of the two installed last
+  # won -- reverting the base's relocatable-default-paths fix whenever this one
+  # landed second.  It also declares the xkbcommon-x11 pkg-config module now,
+  # which the base recipe used to claim without shipping it.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -48,6 +55,8 @@ package:
     - lib/libxkbcommon-x11*
     - lib/pkgconfig/xkbcommon-x11.pc
     - include/xkbcommon/xkbcommon-x11.h
+  pkg_config:
+    - xkbcommon-x11
 
 build:
   matrix:

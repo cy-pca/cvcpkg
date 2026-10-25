@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # recipes/xkbcommon-x11/build.sh — build libxkbcommon with X11 (xcb) support and
-# ship only the libxkbcommon-x11 delta (package.files filters); the core
-# libxkbcommon comes from the base `xkbcommon` recipe.
+# ship only the libxkbcommon-x11 delta (pruned below; package.files does not
+# filter); the core libxkbcommon comes from the base `xkbcommon` recipe.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,5 +36,20 @@ meson setup "${CVC_BUILD_DIR}" \
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
+
+# meson installs the core libxkbcommon (lib/libxkbcommon.so*, its headers and
+# xkbcommon.pc) beside the x11 delta, and package.files does not filter the
+# bundle, so prune it here: the base `xkbcommon` package owns those files, and
+# shipping them too meant whichever package installed last won.  This build's
+# copy of the core library is not patched like the base's (its default XKB
+# paths would point into this job directory), so it must not ship.
+# libxkbcommon-x11 never reads those paths, and its use of struct xkb_context
+# is unchanged by the base's patch, which only appends members.
+find "${CVC_INSTALL_DIR}" -mindepth 1 \( -type f -o -type l \) \
+    ! -path "${CVC_INSTALL_DIR}/lib/libxkbcommon-x11*" \
+    ! -path "${CVC_INSTALL_DIR}/lib/pkgconfig/xkbcommon-x11.pc" \
+    ! -path "${CVC_INSTALL_DIR}/include/xkbcommon/xkbcommon-x11.h" \
+    -delete
+find "${CVC_INSTALL_DIR}" -mindepth 1 -type d -empty -delete
 
 cvc_rewrite_install_paths
