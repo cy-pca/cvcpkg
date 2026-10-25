@@ -8,7 +8,8 @@ recipe:
   # the base `xkbcommon` package owns, and whichever of the two installed last
   # won -- reverting the base's relocatable-default-paths fix whenever this one
   # landed second.  It also declares the xkbcommon-x11 pkg-config module now,
-  # which the base recipe used to claim without shipping it.
+  # which the base recipe used to claim without shipping it, and build-depends
+  # on xorgproto, without which the BSD builders could not resolve xcb.
   cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -44,6 +45,12 @@ depends:
     - bison
     - name: xkbcommon
     - name: libxcb
+    # meson resolves xcb/xcb-xkb through pkg-config, and xcb.pc's xau and xdmcp
+    # both say "Requires: xproto", while libxau/libxdmcp list xorgproto only as
+    # a build dep.  cvcpkg 2.5.4's builder no longer stages a dep's build deps,
+    # so on the BSD builders xproto.pc was missing and meson reported "xcb-xkb
+    # >= 1.10 not found"; Linux passed only on the builder's own xproto.pc.
+    - name: xorgproto
   runtime:
     # libxkbcommon-x11 links the core libxkbcommon (base recipe) + libxcb/xcb-xkb.
     - name: xkbcommon
