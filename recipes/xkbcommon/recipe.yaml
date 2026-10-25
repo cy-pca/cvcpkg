@@ -6,7 +6,24 @@ recipe:
   # ports/pkgsrc, and their absence left xkbcommon-x11 advertising those two
   # platforms while depending on a package that had no build for them, so the
   # claim could never resolve.
-  cvc_revision: 2
+  # Bumped 2 -> 3: relocatable-default-paths.patch.  The XKB config root, the
+  # XKB extra path and the X locale dir were absolute paths into the builder's
+  # job directory (/tmp/cvcpkg-builder/.../install/share/X11/xkb, ...), so in an
+  # installed prefix xkb_keymap_new_from_names() and
+  # xkb_compose_table_new_from_locale() failed unless XKB_CONFIG_ROOT and
+  # XLOCALEDIR were set (WezTerm: "no keymap" on Wayland, "Failed to acquire
+  # compose table" on X11).  libxkbcommon now resolves them against its own
+  # directory via dladdr() -- <libdir>/../share/X11/xkb, ../etc/xkb and
+  # ../share/X11/locale -- as libglvnd does for its EGL vendor dir, and only
+  # falls back to the OS's own X data paths (build.sh) when those are absent.
+  # Baking the paths of the data packages instead (xkeyboard-config ships
+  # share/X11/xkb, libx11 ships share/X11/locale) cannot work: an absolute path
+  # compiled in on the builder names the builder's prefix, never the
+  # consumer's, and cvcpkg does not rewrite paths inside binaries at install.
+  # Resolving relative to the library finds those same packages wherever the
+  # prefix is, and needs no hard dependency on them (xkeyboard-config is
+  # linux-only, and libx11 would pull X11 into Wayland-only consumers).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -24,7 +41,8 @@ source:
   type: package
   package: xkbcommon-src
 
-patches: []
+patches:
+  - relocatable-default-paths.patch
 
 depends:
   build:
@@ -77,9 +95,9 @@ package:
     - include/xkbcommon/
     # No libexec/xkbcommon/: build.sh passes -Denable-tools=false, so the xkbcli
     # helpers that live there are never built (strict package.files refused it).
+  # xkbcommon-x11.pc ships in the xkbcommon-x11 package (-Denable-x11=false here).
   pkg_config:
     - xkbcommon
-    - xkbcommon-x11
 
 abi:
   cxx_std: 17

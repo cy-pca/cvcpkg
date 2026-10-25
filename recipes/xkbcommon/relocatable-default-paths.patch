@@ -1,0 +1,156 @@
+--- a/meson.build
++++ b/meson.build
+@@ -246,6 +246,8 @@
+     libxkbcommon_link_deps += libxkbcommon_def
+     libxkbcommon_link_args += '/DEF:' + libxkbcommon_def.full_path()
+ endif
++# cvcpkg: src/context.c calls dladdr(), which glibc < 2.34 keeps in libdl.
++dl_dep = cc.find_library('dl', required: false)
+ libxkbcommon = library(
+     'xkbcommon',
+     'include/xkbcommon/xkbcommon.h',
+@@ -256,6 +258,7 @@
+     version: '0.0.0',
+     install: true,
+     include_directories: include_directories('src', 'include'),
++    dependencies: dl_dep,
+ )
+ install_headers(
+     'include/xkbcommon/xkbcommon.h',
+@@ -627,6 +630,7 @@
+     libxkbcommon_sources,
+     include_directories: include_directories('src', 'include'),
+     c_args: ['-DENABLE_PRIVATE_APIS'],
++    dependencies: dl_dep,
+ )
+ test_dep = declare_dependency(
+     include_directories: include_directories('src', 'include'),
+--- a/src/compose/paths.c
++++ b/src/compose/paths.c
+@@ -38,7 +38,7 @@
+ {
+     const char *dir = xkb_context_getenv(ctx, "XLOCALEDIR");
+     if (!dir)
+-        dir = XLOCALEDIR;
++        dir = ctx->reloc_xlocaledir ? ctx->reloc_xlocaledir : XLOCALEDIR;
+     return dir;
+ }
+ 
+--- a/src/context.c
++++ b/src/context.c
+@@ -28,6 +28,7 @@
+ 
+ #include <sys/types.h>
+ #include <sys/stat.h>
++#include <dlfcn.h>
+ #include <errno.h>
+ 
+ #include "xkbcommon/xkbcommon.h"
+@@ -76,18 +77,57 @@
+     return 0;
+ }
+ 
++/*
++ * cvcpkg: relocatable default paths.
++ *
++ * DFLT_XKB_CONFIG_ROOT, DFLT_XKB_CONFIG_EXTRA_PATH and XLOCALEDIR are absolute
++ * paths fixed at configure time, and the prefix they name does not exist once
++ * a cvcpkg bundle is installed somewhere else.  Resolve each one against the
++ * directory this library was loaded from instead, found with dladdr():
++ * <libdir>/../share/X11/xkb, <libdir>/../etc/xkb and
++ * <libdir>/../share/X11/locale.  A path is used only if it is a directory;
++ * otherwise the configure-time default applies.  XKB_CONFIG_ROOT,
++ * XKB_CONFIG_EXTRA_PATH and XLOCALEDIR still override both.
++ */
++static char *
++relocated_dir(const char *rel)
++{
++    Dl_info info;
++    const char *slash;
++    struct stat stat_buf;
++    char *path;
++
++    if (dladdr((void *) &relocated_dir, &info) == 0 || !info.dli_fname)
++        return NULL;
++    slash = strrchr(info.dli_fname, '/');
++    if (!slash)
++        return NULL;
++    path = asprintf_safe("%.*s/../%s", (int) (slash - info.dli_fname),
++                         info.dli_fname, rel);
++    if (path && (stat(path, &stat_buf) != 0 || !S_ISDIR(stat_buf.st_mode))) {
++        free(path);
++        path = NULL;
++    }
++    return path;
++}
++
+ const char *
+ xkb_context_include_path_get_extra_path(struct xkb_context *ctx)
+ {
+     const char *extra = xkb_context_getenv(ctx, "XKB_CONFIG_EXTRA_PATH");
+-    return extra ? extra : DFLT_XKB_CONFIG_EXTRA_PATH;
++    if (extra)
++        return extra;
++    return ctx->reloc_xkb_extra_path ? ctx->reloc_xkb_extra_path
++                                     : DFLT_XKB_CONFIG_EXTRA_PATH;
+ }
+ 
+ const char *
+ xkb_context_include_path_get_system_path(struct xkb_context *ctx)
+ {
+     const char *root = xkb_context_getenv(ctx, "XKB_CONFIG_ROOT");
+-    return root ? root : DFLT_XKB_CONFIG_ROOT;
++    if (root)
++        return root;
++    return ctx->reloc_xkb_root ? ctx->reloc_xkb_root : DFLT_XKB_CONFIG_ROOT;
+ }
+ 
+ /**
+@@ -204,6 +244,9 @@
+         return;
+ 
+     free(ctx->x11_atom_cache);
++    free(ctx->reloc_xkb_root);
++    free(ctx->reloc_xkb_extra_path);
++    free(ctx->reloc_xlocaledir);
+     xkb_context_include_path_clear(ctx);
+     atom_table_free(ctx->atom_table);
+     free(ctx);
+@@ -293,6 +336,9 @@
+     ctx->log_verbosity = 0;
+     ctx->use_environment_names = !(flags & XKB_CONTEXT_NO_ENVIRONMENT_NAMES);
+     ctx->use_secure_getenv = !(flags & XKB_CONTEXT_NO_SECURE_GETENV);
++    ctx->reloc_xkb_root = relocated_dir("share/X11/xkb");
++    ctx->reloc_xkb_extra_path = relocated_dir("etc/xkb");
++    ctx->reloc_xlocaledir = relocated_dir("share/X11/locale");
+ 
+     /* Environment overwrites defaults. */
+     env = xkb_context_getenv(ctx, "XKB_LOG_LEVEL");
+@@ -307,7 +353,7 @@
+         !xkb_context_include_path_append_default(ctx)) {
+         log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                 "failed to add default include path %s\n",
+-                DFLT_XKB_CONFIG_ROOT);
++                xkb_context_include_path_get_system_path(ctx));
+         xkb_context_unref(ctx);
+         return NULL;
+     }
+--- a/src/context.h
++++ b/src/context.h
+@@ -55,6 +55,16 @@
+ 
+     unsigned int use_environment_names : 1;
+     unsigned int use_secure_getenv : 1;
++
++    /*
++     * cvcpkg: the default paths resolved relative to this library (see
++     * relocated_dir() in context.c), or NULL to use the configure-time
++     * defaults.  Appended last so the offsets of the members above, which
++     * libxkbcommon-x11 also reads, stay as upstream has them.
++     */
++    char *reloc_xkb_root;
++    char *reloc_xkb_extra_path;
++    char *reloc_xlocaledir;
+ };
+ 
+ char *
