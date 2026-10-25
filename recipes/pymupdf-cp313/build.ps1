@@ -43,8 +43,17 @@ if ($actual -ne $mupdfSha256.ToUpper()) {
     throw "pymupdf-cp313: MuPDF source sha256 mismatch`n  expected $mupdfSha256`n  actual   $actual"
 }
 if (Test-Path $mupdfSrc) { Remove-Item -Recurse -Force $mupdfSrc }
-# tar (bsdtar) ships with Windows 10+; extracts into CVC_BUILD_DIR.
-& tar -xzf $mupdfTgz -C $env:CVC_BUILD_DIR
+# tar (bsdtar) ships with Windows 10+; extracts into CVC_BUILD_DIR.  The
+# tarball's only four symlinks (zxing-cpp's python/rust wrappers, a freeglut
+# test program) are unused by the build, and creating them needs the symlink
+# privilege an unelevated build lacks ("Can't create ..."), so leave them out.
+$links = @(
+    'thirdparty/freeglut/progs/test-shapes-gles1/android_toolchain.cmake',
+    'thirdparty/zxing-cpp/wrappers/python/core',
+    'thirdparty/zxing-cpp/wrappers/python/zxing.cmake',
+    'thirdparty/zxing-cpp/wrappers/rust/core'
+) | ForEach-Object { '--exclude'; "mupdf-$mupdfVer-source/$_" }
+& tar -xzf $mupdfTgz -C $env:CVC_BUILD_DIR @links
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path $mupdfSrc)) { throw "pymupdf-cp313: MuPDF extract failed" }
 
 # ── 2. Py2 -> Py3 fix in MuPDF's SWIG template (see build.sh) ───────────────
