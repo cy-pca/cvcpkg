@@ -97,8 +97,10 @@ package:
     - { glob: "lib/pkgconfig/Qt6Multimedia*", platforms: [linux, freebsd, openbsd, netbsd] }
     - { glob: "include/QtMultimedia/", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
     - { glob: "include/QtMultimediaWidgets/", platforms: [linux, windows, freebsd, openbsd, netbsd, wasm] }
-    # Qt 6's media backends (Qt 5's mediaservice/ and audio/ are gone).
-    - plugins/multimedia/
+    # Qt 6's media backends (Qt 5's mediaservice/ and audio/ are gone).  The BSD
+    # builds find no backend (no FFmpeg dep there, no GStreamer), so they build
+    # the library without one: OpenBSD packed no plugins/multimedia/ (job 22801).
+    - { glob: "plugins/multimedia/", platforms: [linux, macos, windows, wasm] }
   cmake_packages:
     - {
         name: Qt6Multimedia,
