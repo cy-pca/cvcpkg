@@ -38,6 +38,9 @@ depends:
     - flex
     # bison runs m4 at build time (as mariadb-server and mesa declare).
     - m4
+    # Windows: meson.build needs a native perl at configure (build.ps1).
+    - name: perl
+      platforms: [windows]
     # No readline: it is psql's line editor, libpq never links it, and this
     # recipe ships just lib/libpq* + headers, not bin/psql.  build.sh passes
     # -Dreadline=disabled (as build.ps1 already does).

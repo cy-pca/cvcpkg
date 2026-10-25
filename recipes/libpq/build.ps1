@@ -70,14 +70,48 @@ if ($mesonCmd) {
     $mesonArgs = @($py.Args + @('-m', 'mesonbuild.mesonmain'))
 }
 
+# meson.build requires perl at configure (job 23012: "Program 'perl' not found";
+# 2.5.3 builders staged it only as openssl's build dep).  Use cvcpkg's
+# Strawberry perl, a native perl (an MSYS one breaks the postgres.def step,
+# below), staged at <prefix>\lib\strawberry\perl\bin.
+$perlBin = @(
+    @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ } |
+        ForEach-Object { Join-Path $_ 'lib\strawberry\perl\bin' } |
+        Where-Object { Test-Path (Join-Path $_ 'perl.exe') }
+)
+if (-not $perlBin) { throw "libpq: no cvcpkg perl (lib\strawberry\perl\bin\perl.exe) in the prefix" }
+$env:PATH = "$($perlBin[0]);$env:PATH"
+Write-Host "libpq: perl from $($perlBin[0])"
+# Strawberry's perl\bin also holds its own pkg-config.bat; meson finds that one
+# first, rejects it ("Strawberry Perl and thus broken") and stops looking, so
+# name cvcpkg's pkg-config explicitly.
+$pkgConfigExe = @(
+    @($env:CVC_BUILD_PREFIX, $env:CVC_DEPS_PREFIX) | Where-Object { $_ } |
+        ForEach-Object { Join-Path $_ 'bin\pkg-config.exe' } |
+        Where-Object { Test-Path $_ }
+)
+if (-not $pkgConfigExe) { throw "libpq: no cvcpkg pkg-config (bin\pkg-config.exe) in the prefix" }
+$env:PKG_CONFIG = $pkgConfigExe[0]
+
 Set-Location $env:CVC_SOURCE_DIR
+
+# Point meson at the dependency prefixes.  cvcpkg's Windows OpenSSL ships no
+# openssl.pc, so PostgreSQL falls back to a plain header/library search, which
+# needs extra_include_dirs/extra_lib_dirs ("C header 'openssl/ssl.h' not found");
+# zlib is found through its .pc.
+$depRoots = @($env:CVC_DEPS_PREFIX, $env:CVC_BUILD_PREFIX) | Where-Object { $_ } | Select-Object -Unique
+$prefixArgs = @(
+    "-Dextra_include_dirs=$(($depRoots | ForEach-Object { Join-Path $_ 'include' }) -join ',')",
+    "-Dextra_lib_dirs=$(($depRoots | ForEach-Object { Join-Path $_ 'lib' }) -join ',')",
+    "--pkg-config-path=$(($depRoots | ForEach-Object { Join-Path $_ 'lib\pkgconfig' }) -join ',')"
+)
 
 # Meson-based build for libpq only.
 & $mesonExe @($mesonArgs + @(
     'setup', $env:CVC_BUILD_DIR,
     "--prefix=$env:CVC_INSTALL_DIR",
     '--buildtype=release',
-    '--wrap-mode=nofallback',
+    '--wrap-mode=nofallback') + $prefixArgs + @(
     '-Dssl=openssl',
     '-Dzlib=enabled',
     '-Dreadline=disabled',
