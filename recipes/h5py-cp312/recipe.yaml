@@ -88,11 +88,11 @@ build:
   # build_type_independent — the extensions are compiled per platform/toolchain.
   #
   # linux + macos + the three BSDs all build from this one build.sh (each sources
-  # its _common/env-<platform>.sh). Windows is a deliberate delta: MSVC + the
-  # vcpkg HDF5 layout differ enough that it needs its own build.ps1 (currently a
-  # stub — until it lands, Windows consumers fall back to the prebuilt wheel
-  # column). wasi/wasm are out of scope: no HDF5 filter pipeline / no runnable
-  # extension host yet.
+  # its _common/env-<platform>.sh). Windows is a deliberate delta: MSVC, the
+  # hdf5.dll import libraries and no rpath (the prefix's bin\ reaches the DLL
+  # search path through the interpreter's cvcpkg-dll-directories.pth), so it has
+  # its own build.ps1. wasi/wasm are out of scope: no HDF5 filter pipeline / no
+  # runnable extension host yet.
   matrix:
     - platform: linux
       script: build.sh
@@ -115,7 +115,7 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
-    # Windows delta — build.ps1 is a stub pending the MSVC/HDF5_DIR port.
+    # Windows delta — build.ps1 (MSVC, HDF5_DIR=<prefix>, hdf5.dll by name).
     - platform: windows
       script: build.ps1
 
@@ -129,7 +129,7 @@ package:
   files:
     - { glob: "lib/python3.12/site-packages/h5py/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
     - { glob: "lib/python3.12/site-packages/h5py-3.16.0.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd] }
-    # Windows (build.ps1) site-packages scheme, for when that port lands.
+    # Windows (build.ps1) site-packages scheme.
     - { glob: "Lib/site-packages/h5py/", platforms: [windows] }
     - { glob: "Lib/site-packages/h5py-3.16.0.dist-info/", platforms: [windows] }
 
