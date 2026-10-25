@@ -8,10 +8,20 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
 Invoke-CvcMesonBuild @(
+    # The monorepo defaults build-tools-source to 'subproject', which on Windows
+    # pulls win-flex-bison-binaries, win-nasm and win-pkgconfig through wraps;
+    # --wrap-mode=nofallback refuses them (job 22968).  Use the cvcpkg flex,
+    # bison and pkg-config the recipe declares, found on PATH.
+    '-Dbuild-tools-source=system',
     '-Dbase=enabled',
     '-Dgood=enabled',
     '-Dugly=disabled',
     '-Dbad=enabled',
+    # nvcodec's Windows path needs gst-plugins-bad's d3d11 library types
+    # (GstD3D11Device, GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY), which come out
+    # undeclared under MSVC 19.44 although d3d11 configures; the NVIDIA
+    # hardware codecs are optional here, so leave the plugin out.
+    '-Dgst-plugins-bad:nvcodec=disabled',
     '-Dlibav=disabled',
     '-Ddevtools=disabled',
     '-Dges=disabled',

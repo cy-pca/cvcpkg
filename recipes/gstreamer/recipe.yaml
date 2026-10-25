@@ -96,7 +96,10 @@ build:
 
 package:
   files:
-    - lib/libgst*
+    # MSVC names the import libraries gstreamer-1.0.lib, gstbase-1.0.lib, ...,
+    # so lib/libgst* is the Unix spelling only.
+    - { glob: "lib/libgst*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - lib/gst*.lib
     - lib/gstreamer-1.0/
     - lib/pkgconfig/gstreamer*
     - include/gstreamer-1.0/
