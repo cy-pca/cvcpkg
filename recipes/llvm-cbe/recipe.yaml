@@ -71,7 +71,9 @@ build:
 
 package:
   files:
-    - bin/llvm-cbe
+    # A bare bin/llvm-cbe applies to every platform and never matches the
+    # Windows .exe, so scope it; bin/llvm-cbe.exe is Windows-only by suffix.
+    - { glob: bin/llvm-cbe, platforms: [linux, macos, freebsd] }
     - bin/llvm-cbe.exe
   cmake_packages: []
 
