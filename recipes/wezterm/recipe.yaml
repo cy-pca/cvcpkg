@@ -1,0 +1,252 @@
+schema_version: 1
+recipe:
+  name: wezterm
+  # The last stable release. WezTerm has shipped only nightlies since
+  # (February 2024), and a nightly cannot be pinned as a binary: every night
+  # upstream overwrites the assets of its single `nightly` release in place
+  # (WezTerm-windows-nightly.zip, ...), so a sha256 taken today fails
+  # tomorrow. Pinning a nightly means pinning a commit and building it from
+  # source -- the follow-up in the notes. The stable tag is immutable, and it
+  # has what cvcpkg wants WezTerm for: the kitty graphics protocol (on by
+  # default, enable_kitty_graphics = true) and DEC Sixel. The one thing the
+  # nightlies fixed that matters here -- on Windows, a ConPTY that lets
+  # those escapes through -- is a separate component, so this recipe swaps
+  # it in instead (see the notes).
+  upstream_version: "20240203-110809-5046fc22"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://wezterm.org/
+  # WezTerm is MIT. The Windows build bundles ANGLE (BSD-3-Clause), Mesa's
+  # llvmpipe opengl32.dll (MIT) and Microsoft's ConPTY (MIT); every build
+  # embeds fonts under the SIL OFL 1.1. share/doc/wezterm/ carries the
+  # licence texts (recipes/wezterm/licenses/, copied from the upstream
+  # repositories at the pinned tags).
+  license: MIT
+  tags: [tools, terminal]
+  description: >-
+    WezTerm -- a GPU-accelerated terminal emulator and multiplexer that speaks
+    the kitty graphics protocol, DEC Sixel and iTerm2 inline images.
+    Repackaged from the official release binaries of the 20240203 stable tag:
+    wezterm, wezterm-gui and wezterm-mux-server in bin/. A terminal for
+    testing programs that draw images into the terminal (libcvc's
+    `arigl --terminal`), without a system install.
+
+# The payload is upstream's prebuilt release (linux: built on Ubuntu 22.04,
+# glibc 2.35); nothing is compiled here. Building it from source with the
+# cvcpkg `rust` recipe is the follow-up in the notes.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build scripts, not by cvcpkg core, so
+# this map DOCUMENTS what build.sh / build.ps1 download. The enforced sha256
+# values are in build.sh's EXPECTED and build.ps1's $expected -- keep the
+# three in sync when bumping.
+#
+# Each WezTerm value is the one upstream publishes beside the asset
+# (<asset>.sha256 in the same GitHub release) and was re-hashed after
+# download. WezTerm does not sign its releases, so that is the whole chain of
+# custody: the pin protects against the asset changing after it was taken,
+# not against the release itself. macOS has one universal (x86_64 + arm64)
+# app for both arches.
+#
+# windows-x86_64-conpty is Microsoft's ConPTY from nuget.org (signed by
+# Microsoft and by nuget.org); the downloaded .nupkg's SHA-512 matched the
+# packageHash of its nuget.org catalog entry before its sha256 was taken.
+source:
+  type: prebuilt
+  base_url: https://github.com/wez/wezterm/releases/download/20240203-110809-5046fc22
+  artifacts:
+    windows-x86_64:
+      file: WezTerm-windows-20240203-110809-5046fc22.zip
+      sha256: "57e5d03b585303d81e8b8e96d1230362852eb39aca92b3b29c7a42cfb82f9ac4"
+    windows-x86_64-conpty:
+      url: https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg
+      sha256: "02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee"
+    linux-x86_64:
+      file: wezterm-20240203-110809-5046fc22.Ubuntu22.04.tar.xz
+      sha256: "142cb46de648200b852cc4b1d932e6b8f2a9d3c55f6dc5af44b6d4eeb9385f5c"
+    macos-x86_64:
+      file: WezTerm-macos-20240203-110809-5046fc22.zip
+      sha256: "e77388cad55f2e9da95a220a89206a6c58f865874a629b7c3ea3c162f5692224"
+    macos-arm64:
+      file: WezTerm-macos-20240203-110809-5046fc22.zip
+      sha256: "e77388cad55f2e9da95a220a89206a6c58f865874a629b7c3ea3c162f5692224"
+
+patches: []
+
+depends:
+  build:
+    # The relocation pass gives bin/* an $ORIGIN/../lib RUNPATH with it.
+    - name: patchelf
+      platforms: [linux]
+  # The DT_NEEDED set of upstream's linux binaries, minus glibc and libgcc_s:
+  # wezterm and wezterm-mux-server need zlib and OpenSSL 3; wezterm-gui adds
+  # X11 (xcb, xcb-util, xcb-image, X11-xcb, xkbcommon-x11), Wayland (client,
+  # egl) and fontconfig. Plus data: xkeyboard-config's share/X11/xkb, which
+  # with libx11's share/X11/locale is what bin/* point xkbcommon at (see the
+  # notes). EGL / OpenGL / Vulkan are dlopened from the host's graphics driver.
+  # Windows and macOS need nothing outside the OS.
+  runtime:
+    - name: zlib
+      platforms: [linux]
+    - name: openssl
+      platforms: [linux]
+    - name: libxcb
+      platforms: [linux]
+    - name: xcb-util
+      platforms: [linux]
+    - name: xcb-util-image
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: xkbcommon
+      platforms: [linux]
+    - name: xkbcommon-x11
+      platforms: [linux]
+    - name: wayland
+      platforms: [linux]
+    - name: fontconfig
+      platforms: [linux]
+    - name: xkeyboard-config
+      platforms: [linux]
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: windows
+      script: build.ps1
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+
+package:
+  files:
+    # Windows: upstream's portable zip, flat, in bin\ (see the notes).
+    - { glob: "bin/wezterm.exe", platforms: [windows] }
+    - { glob: "bin/wezterm-gui.exe", platforms: [windows] }
+    - { glob: "bin/wezterm-mux-server.exe", platforms: [windows] }
+    - { glob: "bin/strip-ansi-escapes.exe", platforms: [windows] }
+    - { glob: "bin/conpty.dll", platforms: [windows] }
+    - { glob: "bin/OpenConsole.exe", platforms: [windows] }
+    - { glob: "bin/libEGL.dll", platforms: [windows] }
+    - { glob: "bin/libGLESv2.dll", platforms: [windows] }
+    - { glob: "bin/mesa/", platforms: [windows] }
+    # Linux and macOS: the binaries in lib/wezterm/ (macOS: the signed
+    # WezTerm.app), launchers for them in bin/.
+    - { glob: "bin/wezterm", platforms: [linux, macos] }
+    - { glob: "bin/wezterm-gui", platforms: [linux, macos] }
+    - { glob: "bin/wezterm-mux-server", platforms: [linux, macos] }
+    - { glob: "bin/strip-ansi-escapes", platforms: [linux, macos] }
+    - { glob: "lib/wezterm/", platforms: [linux, macos] }
+    - { glob: "share/applications/", platforms: [linux] }
+    - { glob: "share/icons/", platforms: [linux] }
+    - { glob: "share/metainfo/", platforms: [linux] }
+    - { glob: "share/bash-completion/", platforms: [linux, macos] }
+    - { glob: "share/zsh/", platforms: [linux, macos] }
+    - { glob: "share/fish/", platforms: [macos] }
+    - share/doc/wezterm/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. build.ps1 / build.sh
+    verify the pinned sha256 values and stage upstream's executables: flat
+    in bin\ on Windows (with Microsoft's ConPTY in place of the bundled one),
+    in lib/wezterm/ with bin/ launchers on linux and macOS (macOS: the
+    signed WezTerm.app).
+
+notes:
+  - title: "Windows: Microsoft's ConPTY 1.25 instead of the bundled 2024 one"
+    platforms: [windows]
+    description: >-
+      WezTerm runs Windows programs through ConPTY (conpty.dll +
+      OpenConsole.exe beside wezterm-gui.exe), which parses what the program
+      writes and re-emits it. The ConPTY in the 20240203 zip (February 2024)
+      drops APC and DCS sequences, so kitty graphics and Sixel from a native
+      Windows program -- arigl --terminal, say -- never reach WezTerm: the
+      pictures, and window titles set with OSC 2, are simply missing.
+      build.ps1 overlays conpty.dll and OpenConsole.exe from
+      Microsoft.Windows.Console.ConPTY 1.25.260930003 (nuget.org), which
+      passes them through. Checked on Windows 11: with the bundled ConPTY a
+      kitty query (a=q) from the pane times out; with 1.25 it is answered,
+      and kitty pictures and Sixel draw (recipes/wezterm/README.md). WezTerm's
+      own nightlies bundle ConPTY 1.22.250204002 for the same reason; that
+      build is not on nuget.org, and both behave the same here. Programs on
+      the other side of `wezterm ssh` or a mux connection never touch ConPTY.
+  - title: "Windows layout: upstream's portable zip, flat in bin\\"
+    platforms: [windows]
+    description: >-
+      wezterm.exe starts wezterm-gui.exe from its own directory, and
+      wezterm-gui.exe loads conpty.dll + OpenConsole.exe, ANGLE's
+      libEGL.dll / libGLESv2.dll and the software renderer mesa\opengl32.dll
+      from there as well, so the zip's directory becomes bin\ (minus
+      wezterm.pdb). Everything links the CRT statically; nothing outside
+      Windows is needed, and the prefix can be moved. Mind the DLL names: an
+      executable in the same bin\ that imports libEGL.dll or libGLESv2.dll
+      gets WezTerm's ANGLE build. No cvcpkg package ships either today.
+  - title: "Isolate a test run from a running WezTerm"
+    description: >-
+      `wezterm start` hands the new window to a wezterm-gui that is already
+      running (for the same --class) instead of starting one, so on a desktop
+      where WezTerm is open a test silently runs in THAT process -- possibly
+      another version. Use `wezterm start --always-new-process` (and
+      `wezterm -n` / `--config-file` to keep ~/.wezterm.lua out of it).
+  - title: "kitty Unicode placeholders are not supported"
+    description: >-
+      WezTerm draws kitty images placed directly (a=T / a=p) but ignores
+      U=1: an a=T,U=1 transmission is shown as an ordinary placement at the
+      cursor, and the U+10EEEE placeholder cells print as missing-glyph
+      boxes. Neither this release nor WezTerm's main branch parses the U key.
+      A program that places kitty images through placeholders (arigl) should
+      use Sixel or direct kitty placement on WezTerm. Details and a probe
+      script: recipes/wezterm/README.md.
+  - title: "wezterm-gui --version"
+    description: >-
+      Prints "wezterm-gui someone forgot to call assign_version_info" in this
+      release (an upstream bug, fixed after it); `wezterm --version` and
+      `wezterm-mux-server --version` print the version, and so does
+      `wezterm.version` in the GUI's Lua.
+  - title: "Linux: X11/Wayland libraries from cvcpkg, GPU driver from the host"
+    platforms: [linux]
+    description: >-
+      The binaries are upstream's Ubuntu 22.04 build (glibc 2.35, the fleet
+      floor), staged in lib/wezterm/. Their X11, Wayland, xkbcommon,
+      fontconfig, OpenSSL 3 and zlib libraries are this package's runtime
+      dependencies and resolve from the prefix through an $ORIGIN-relative
+      RUNPATH. libEGL.so.1 / libGL.so.1 / libvulkan.so.1 are dlopened at run
+      time and come from the host's graphics driver. With no GPU, use
+      `--config 'front_end="Software"'` (CPU rasterisation); a --config value
+      is a Lua expression, so the quotes are part of it.
+  - title: "Linux: bin/* set XKB_CONFIG_ROOT and XLOCALEDIR"
+    platforms: [linux]
+    description: >-
+      wezterm-gui builds keymaps and a Compose table with libxkbcommon, which
+      looks for keymap data and Compose files at directories fixed when it
+      was compiled. In cvcpkg's xkbcommon those are paths on the machine that
+      built it, so without help wezterm-gui dies at start ("no keymap" or a
+      segfault on Wayland, "Failed to acquire compose table" on X11). The bin/
+      launchers therefore export XKB_CONFIG_ROOT=<prefix>/share/X11/xkb (from
+      xkeyboard-config) and XLOCALEDIR=<prefix>/share/X11/locale (from
+      libx11) unless they are already set, then exec lib/wezterm/<name>.
+      Programs started inside the terminal inherit both variables. Run
+      lib/wezterm/* directly only with both set.
+  - title: "Not covered yet: linux-arm64, and building from source"
+    description: >-
+      The stable release has no arm64 tarball or AppImage, only .debs whose
+      payload is zstd-compressed and which carry no published checksum;
+      cvcpkg's zstd recipe ships no zstd CLI to unpack them with. Building
+      from source covers linux-arm64 and lets a nightly commit be pinned:
+      WezTerm's minimum Rust is 1.71 (ci/check-rust-version.sh at the tag),
+      below the cvcpkg `rust` recipe's 1.90. That build is the follow-up, as
+      cy-pca/cvcpkg#236 is for texlive.
+  - title: "Built and tested"
+    description: >-
+      windows-x86_64 (Windows 11) and linux-x86_64 (Ubuntu 22.04 under WSL,
+      WSLg) are built, packed and tested by this recipe, each including the
+      window test. macOS goes through the same build.sh on upstream's
+      universal app but has not been built yet.
