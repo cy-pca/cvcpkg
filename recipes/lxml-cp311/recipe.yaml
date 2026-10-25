@@ -64,6 +64,12 @@ depends:
     # recipe declares what the libraries' NEEDED entries resolve against.
     - name: zlib
       version: "^1.3"
+    # lxml's setupinfo hard-codes iconv among its Windows link libraries
+    # (libxslt, libexslt, libxml2, iconv, zlib, WS2_32; job 23018: LNK1181
+    # 'iconv.lib').  lxml calls no iconv function itself, so this only
+    # satisfies the link: the extensions import nothing from the iconv DLL.
+    - name: iconv
+      platforms: [windows]
   runtime:
     - name: python311
     # The compiled extensions link these by soname and resolve them from the
