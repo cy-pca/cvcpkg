@@ -513,7 +513,7 @@ SEED_PACKAGES = {
         # PyPI ninja wheel): meson-python builds itself with meson, which runs
         # ninja.  cvcpkg 2.5.4 stopped staging meson's own build deps, so the
         # Windows column failed "Could not find ninja version 1.8.2 or newer"
-        # (job 23029).
+        # (job 23029).  Its consumers get both from the rule in column_edges.
         "build_deps": ["ninja"],
         "files": ["mesonpy/", "meson_python-*.dist-info/"],
         "check": "import mesonpy",
@@ -2840,6 +2840,15 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             )
             if e not in backends
         ]
+        # meson-python runs meson and ninja to build every package that uses
+        # it as its backend.  Upstream gets them from meson-python's own
+        # [project] deps and get_requires_for_build_wheel, which
+        # --no-build-isolation never sees, and they are host tools, so they
+        # cannot ride along as meson-python runtime deps
+        # (test_required_deps_no_host_tools).  The consumer declares them
+        # (pandas-cp313, job 23056: "Could not find ninja").
+        if f"meson-python-cp{interp}" in backends:
+            backends += [t for t in ("meson", "ninja") if t not in backends]
     # Stage the transitive runtime closure of the backends in
     # _BACKEND_RUNTIME_CLOSURE (see its definition): --no-build-isolation needs
     # each such backend importable, and importing it imports its own runtime deps,
