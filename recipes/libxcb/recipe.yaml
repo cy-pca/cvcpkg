@@ -4,7 +4,13 @@ recipe:
   upstream_version: "1.17.0"
   # Bumped 2 -> 3: depend on the new pthread-stubs recipe (configure requires
   # pthread-stubs.pc) — hermetic + unblocks the OpenBSD chain.
-  cvc_revision: 3
+  # Bumped 3 -> 4: pthread-stubs is a runtime dep, so consumers get it too.
+  # xcb.pc lists it in Requires.private, and pkg-config cannot resolve xcb (or
+  # x11, or cairo) without pthread-stubs.pc. cvcpkg 2.5.4's builder installs
+  # only runtime deps beneath a recipe's own, and gtk4 on OpenBSD then failed
+  # "Dependency 'cairo' is required but not found" (job 22760). The bump also
+  # republishes libxcb with pthread-stubs in its catalog required_deps.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -30,13 +36,14 @@ depends:
     - name: xcb-proto
     - name: python311
     - name: xorgproto
-    # pthread-stubs.pc: libxcb's configure requires (xau … pthread-stubs). It's
-    # system-provided on Linux/FreeBSD/NetBSD but absent on OpenBSD, so depend on
-    # the cvcpkg recipe to build hermetically + unblock the openbsd chain.
-    - name: pthread-stubs
   runtime:
     - name: libxau
     - name: libxdmcp
+    # pthread-stubs.pc: libxcb's configure requires it (xau … pthread-stubs), and
+    # the installed xcb.pc lists it in Requires.private, so every consumer's
+    # pkg-config needs it too.  System-provided on Linux/FreeBSD/NetBSD but absent
+    # on OpenBSD, so depend on the cvcpkg recipe.
+    - name: pthread-stubs
   host_tools: []
 
 package:
