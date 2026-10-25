@@ -72,7 +72,12 @@ build:
 
 package:
   files:
-    - lib/libgraphene-1.0*
+    # meson with MSVC names the import library graphene-1.0.lib and the DLL
+    # bin/graphene-1.0-0.dll, so lib/libgraphene-1.0* is the Unix spelling only
+    # (job 22965).
+    - { glob: "lib/libgraphene-1.0*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - lib/graphene-1.0.lib
+    - bin/graphene-1.0-0.dll
     - lib/graphene-1.0/
     - lib/pkgconfig/graphene-1.0.pc
     - lib/pkgconfig/graphene-gobject-1.0.pc
