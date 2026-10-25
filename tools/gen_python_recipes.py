@@ -509,12 +509,14 @@ SEED_PACKAGES = {
         "version": "0.18.0",
         "license": "MIT",
         "deps": ["packaging", "pyproject-metadata"],
-        # Not in [build-system] requires (upstream expects ninja on PATH or the
-        # PyPI ninja wheel): meson-python builds itself with meson, which runs
-        # ninja.  cvcpkg 2.5.4 stopped staging meson's own build deps, so the
-        # Windows column failed "Could not find ninja version 1.8.2 or newer"
-        # (job 23029).
-        "build_deps": ["ninja"],
+        # meson-python runs meson and ninja whenever it builds anything: itself
+        # (job 23029) and every sdist that uses it as its backend (pandas-cp313,
+        # job 23056: "Could not find ninja version 1.8.2 or newer").  Upstream gets
+        # meson from its own [project] dependencies and ninja from
+        # get_requires_for_build_wheel, neither of which --no-build-isolation
+        # sees, and cvcpkg 2.5.4 stages a dependency's RUNTIME deps only.  So
+        # both are runtime (and build) edges of every meson-python column.
+        "native_deps": ["meson", "ninja"],
         "files": ["mesonpy/", "meson_python-*.dist-info/"],
         "check": "import mesonpy",
     },
