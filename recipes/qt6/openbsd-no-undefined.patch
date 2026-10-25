@@ -1,0 +1,24 @@
+No -Wl,--no-undefined / -Wl,-undefined,error on OpenBSD.
+
+OpenBSD's clang links libc into executables, not shared libraries, so every libc
+symbol is undefined in a shared library: libQt6Core.so failed to link with
+"ld: error: undefined symbol: strlen" (openbsd populate 2026-10-24).  Presetting
+the probes off only trades that for Qt's FATAL_ERROR ("Platform linker doesn't
+support erroring upon encountering undefined symbols"), so skip the helper there,
+as OpenBSD's own Qt port does.  The helper is installed with Qt, so the add-on
+modules (qtmultimedia, qtshadertools) get the same behaviour.
+
+--- a/cmake/QtFlagHandlingHelpers.cmake
++++ b/cmake/QtFlagHandlingHelpers.cmake
+@@ -159,6 +159,11 @@
+         # passing this option is deprecated, causing a warning.
+         return()
+     endif()
++    if(CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
++        # OpenBSD links libc into executables, not shared libraries, so every
++        # libc symbol is undefined in a shared library and --no-undefined fails.
++        return()
++    endif()
+     if ((GCC OR CLANG) AND NOT MSVC)
+         if(CLANG AND QT_FEATURE_sanitizer)
+             return()
