@@ -26,7 +26,11 @@ source:
   type: package
   package: gdk-pixbuf-src
 
-patches: []
+patches:
+  # MSVC: gdk-pixbuf asks pkg-config for 'tiff' (vcpkg's name); cvcpkg's libtiff
+  # ships libtiff-4.pc there too, so look that up first (job 22946: Dependency
+  # "tiff" not found).  Off MSVC it was already the name used.
+  - msvc-libtiff-4.patch
 
 depends:
   build:

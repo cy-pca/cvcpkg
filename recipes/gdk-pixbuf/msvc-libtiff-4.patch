@@ -1,0 +1,13 @@
+--- a/meson.build
++++ b/meson.build
+@@ -348,7 +348,9 @@
+ if not tiff_opt.disabled() and not native_windows_loaders
+   # We currently don't have a fallback subproject, but this handles error
+   # reporting if tiff_opt is enabled.
+-  tiff_dep = dependency(is_msvc_like ? 'tiff' : 'libtiff-4', required: tiff_opt)
++  # cvcpkg: libtiff ships libtiff-4.pc on MSVC too ('tiff' is vcpkg's name),
++  # so try it first everywhere.
++  tiff_dep = dependency('libtiff-4', is_msvc_like ? 'tiff' : 'libtiff-4', required: tiff_opt)
+ 
+   if tiff_dep.found()
+     enabled_loaders += 'tiff'
