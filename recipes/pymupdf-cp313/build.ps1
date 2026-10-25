@@ -107,6 +107,11 @@ $env:PYMUPDF_SETUP_MUPDF_BUILD       = $mupdfSrc
 $env:PYMUPDF_SETUP_MUPDF_BUILD_TYPE  = 'release'
 $env:PYMUPDF_SETUP_PY_LIMITED_API    = '0'
 $env:PYMUPDF_SETUP_MUPDF_VS_UPGRADE  = '1'
+# env-windows.ps1 sets CC=cl / CXX=cl.  pipcl then writes the literal '$CXX'
+# (and '$LD') into the commands it hands to cmd.exe, which cannot expand them:
+# "'$CXX' is not recognized" compiling extra.i.cpp.  Without them pipcl runs
+# its own `vcvars && cl`.
+Remove-Item Env:CC, Env:CXX, Env:LD -ErrorAction SilentlyContinue
 
 $wheelhouse = Join-Path $env:CVC_BUILD_DIR 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
