@@ -23,6 +23,8 @@ extraction through :func:`safe_tar_extractall`.
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 import tarfile
 from collections.abc import Iterator
@@ -151,6 +153,85 @@ def safe_tar_extractall(tar: tarfile.TarFile, dest) -> None:
         tar.extractall(dest, filter="data")
     else:  # pragma: no cover - version-dependent
         tar.extractall(dest)
+    materialize_symlinks(tar, dest)
+
+
+def materialize_symlinks(tar: tarfile.TarFile, dest, *, windows: bool | None = None) -> int:
+    """On Windows, replace each symbolic link *tar* extracted under *dest* with a copy.
+
+    tarfile creates a member symlink with ``os.symlink(linkname, path)``, verbatim.
+    Without the symlink privilege that fails and tarfile copies the target
+    instead, but an elevated process (every Windows fleet builder) gets a real
+    link, and on Windows that link can be broken: a relative target keeps the
+    archive's forward slashes, and a link made before its target exists is a
+    file link even when the target is a directory.  wcwidth-src's README.rst ->
+    docs/intro.rst came out unreadable on builder #28, so hatchling failed
+    "Readme file does not exist: README.rst" (jobs 23219/23221/23222) while an
+    unelevated build on the same machine passed.  Copying gives every Windows
+    extraction the unelevated result.  Links to links are settled over repeated
+    passes; a target outside *dest*, or one that never appears, is left alone.
+    Run after the extraction, with the archive still open (a stream-mode
+    TarFile keeps the members it has read).  Returns how many were replaced.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    if not windows:
+        return 0
+    root = Path(dest).resolve()  # _escapes resolves its candidate; compare like with like
+    pending = [m for m in tar.getmembers() if m.issym()]
+    replaced = 0
+    while pending:
+        left = []
+        for m in pending:
+            link = root / m.name
+            target = Path(os.path.normpath(link.parent / m.linkname.replace("/", os.sep)))
+            present = os.path.lexists(link)
+            if present and not link.is_symlink():
+                # tarfile already fell back to a copy; for a directory link that
+                # fallback is only an empty directory, which still needs filling.
+                if not (link.is_dir() and not any(link.iterdir())):
+                    continue
+            if _escapes(root, target):
+                continue
+            if target.is_symlink() or not target.exists():
+                left.append(m)  # a link not settled yet, or not extracted (yet)
+                continue
+            if present:
+                try:
+                    link.unlink()
+                except OSError:
+                    os.rmdir(link)  # a directory, or a Windows directory link (not its target)
+            else:
+                # Skipped at extraction (a stream cannot seek back for tarfile's
+                # copy fallback, see members_to_extract).
+                link.parent.mkdir(parents=True, exist_ok=True)
+            if target.is_dir():
+                shutil.copytree(target, link, symlinks=False)
+            else:
+                shutil.copy2(target, link)
+            replaced += 1
+        if len(left) == len(pending):
+            break
+        pending = left
+    return replaced
+
+
+def members_to_extract(
+    tar: tarfile.TarFile, *, windows: bool | None = None
+) -> Iterator[tarfile.TarInfo]:
+    """*tar*'s members for ``extractall(members=...)``, without symlinks on Windows.
+
+    For a stream-mode TarFile (``mode="r|"``): when tarfile cannot create a
+    link it copies the target instead, which means seeking back to the
+    target's data, and a stream raises StreamError ("seeking backwards is not
+    allowed").  Skip the links and let materialize_symlinks create the copies
+    after the stream is read.  Iterating also works for a seekable archive.
+    """
+    if windows is None:
+        windows = sys.platform == "win32"
+    for member in tar:
+        if not (windows and member.issym()):
+            yield member
 
 
 def tar_has_unsafe_member(tar: tarfile.TarFile) -> str | None:
