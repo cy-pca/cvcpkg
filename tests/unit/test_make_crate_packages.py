@@ -74,7 +74,8 @@ def _setup(tmp_path: Path, with_git_recipe: bool = True) -> tuple[Path, Path, Pa
         (sources / d).mkdir(parents=True)
         (sources / d / "Cargo.toml").write_text(
             f'[package]\nname = "x"\nversion = "1.0.0"\nlicense = "{lic}"\n'
-            'description = """A\n  description."""\n'
+            'description = """A “quoted”\n  description."""\n',
+            encoding="utf-8",
         )
     return lock, recipes, sources
 
@@ -125,6 +126,10 @@ class TestGenerate:
         doc = yaml.safe_load((zstd / "recipe.yaml").read_text(encoding="utf-8"))
         assert doc["recipe"]["upstream_version"] == "0.11.2"
         assert doc["recipe"]["license"] == "MIT"
+        # Escaped to ASCII: a Windows builder's cvcpkg may read the file in its
+        # code page, where a curly quote fails to decode.
+        assert "(A “quoted” description)" in doc["recipe"]["description"]
+        assert (zstd / "recipe.yaml").read_bytes().isascii()
         assert doc["source"] == {
             "type": "tarball",
             "url": "https://static.crates.io/crates/zstd/zstd-0.11.2+zstd.1.5.2.crate",
@@ -198,8 +203,8 @@ class TestGenerate:
 
 def test_the_shipped_wezterm_set_matches_its_crate_recipes(tool):
     """Every member of recipes/wezterm-crates exists, each crate recipe's sha256
-    is the checksum its Cargo.lock records, and its build.sh is what the
-    generator writes now."""
+    is the checksum its Cargo.lock records, its recipe.yaml is ASCII, and its
+    build.sh is what the generator writes now."""
     sset = ROOT / "recipes" / "wezterm-crates"
     lock = tomllib.loads((sset / "Cargo.lock").read_text(encoding="utf-8"))
     checksums = {
@@ -213,5 +218,6 @@ def test_the_shipped_wezterm_set_matches_its_crate_recipes(tool):
         assert rd.name in members, rd.name
         doc = yaml.safe_load((rd / "recipe.yaml").read_text(encoding="utf-8"))
         assert doc["source"]["sha256"] == checksum, rd.name
+        assert (rd / "recipe.yaml").read_bytes().isascii(), rd.name
         build = (rd / "build.sh").read_bytes().decode("utf-8")
         assert build == tool.crate_build_sh(tool.Crate(name, version, checksum)), rd.name

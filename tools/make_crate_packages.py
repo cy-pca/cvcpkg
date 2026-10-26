@@ -168,8 +168,10 @@ def _one_line(text: str) -> str:
 
 
 def _q(text: str) -> str:
-    """A YAML double-quoted scalar (JSON's escaping is valid YAML)."""
-    return json.dumps(text, ensure_ascii=False)
+    """A YAML double-quoted scalar (JSON's escaping is valid YAML), ASCII only:
+    cvcpkg on a Windows builder has read recipe.yaml in the locale's code page,
+    where a crate description's curly quote fails to decode."""
+    return json.dumps(text, ensure_ascii=True)
 
 
 def crate_recipe_yaml(crate: Crate, license: str, description: str, consumer: str) -> str:
