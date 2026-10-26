@@ -16,8 +16,11 @@ import json as _json
 import logging
 import os
 import re
+from dataclasses import dataclass
 
 from cvcpkg import __version__
+from cvcpkg.server.quickstart import QuickStartProfile
+from cvcpkg.server.quickstart import profile as quickstart_profile
 
 _log = logging.getLogger(__name__)
 
@@ -675,6 +678,17 @@ function fmtSizeLarge(bytes) {
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
   return (bytes / 1073741824).toFixed(2) + ' GB';
 }
+// Best-effort guess of the visitor's OS, to steer the copy-paste download
+// command toward an archive they can actually use.  Returns a cvcpkg platform
+// string ('linux'/'macos'/'windows') or '' when undetectable.  Shared: the
+// package page's manual-install script needs it as much as the landing page.
+function detectVisitorPlatform() {
+  const s = ((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
+  if (/Win/i.test(s)) return 'windows';
+  if (/Mac/i.test(s)) return 'macos';
+  if (/Linux|X11|Android/i.test(s)) return 'linux';
+  return '';
+}
 function fmtDate(iso) {
   if (!iso) return '&mdash;';
   const d = new Date(iso);
@@ -839,17 +853,6 @@ function updateFilterOptions(facets) {
   _syncSelect('arch-filter', facets.archs || [], state.arch);
   _syncSelect('release-filter', facets.releases || [], state.release);
   _syncSelect('tag-filter', facets.tags || [], state.tag);
-}
-
-// Best-effort guess of the visitor's OS, to steer the copy-paste download
-// command toward an archive they can actually use.  Returns a cvcpkg platform
-// string ('linux'/'macos'/'windows') or '' when undetectable.
-function detectVisitorPlatform() {
-  const s = ((navigator.platform || '') + ' ' + (navigator.userAgent || ''));
-  if (/Win/i.test(s)) return 'windows';
-  if (/Mac/i.test(s)) return 'macos';
-  if (/Linux|X11|Android/i.test(s)) return 'linux';
-  return '';
 }
 
 function groupBundlesByName(pkgs) {
@@ -1488,6 +1491,24 @@ function renderDeps(forward, reverse, meta, recipeNames) {
       }
     }
   }
+  // A Python column's Quick Start links the same package's other
+  // interpreter columns that exist: attrs-cp311, attrs-cp313t, ... for
+  // attrs-cp313, and only other -cuda columns for torch-cp311-cuda.
+  const colEl = document.getElementById('qs-columns');
+  if (colEl && colEl.dataset.base) {
+    const base = colEl.dataset.base;
+    const variant = colEl.dataset.variant || '';
+    const others = recipeNames.filter(n =>
+      n !== pkgName && n.startsWith(base) && n.endsWith(variant) &&
+      /^-cp3\d+t?$/.test(n.slice(base.length, n.length - variant.length))
+    ).sort();
+    if (others.length > 0) {
+      colEl.innerHTML = ' Other interpreters: ' + others.map(n =>
+        '<a class="has-text-link" href="/package/' + encodeURIComponent(n) + '">' + esc(n) + '</a>'
+      ).join(', ') + '.';
+    }
+  }
+
   const deps = forward[pkgName] || [];
   const depEl = document.getElementById('pkg-deps');
   if (deps.length > 0) {
@@ -1550,9 +1571,14 @@ function renderDeps(forward, reverse, meta, recipeNames) {
     const fname = firstBuild.archive_url.split('/').pop();
     lines.push('curl -LO ' + url);
     lines.push('tar --zstd -xf ' + fname + ' -C /opt/cvcpkg');
-    lines.push('');
-    lines.push('# Point CMake at the prefix:');
-    lines.push('cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..');
+    // What to do with the extracted prefix depends on the kind of package
+    // (CMake for a library, the interpreter for a Python package, PATH for
+    // a tool); the server renders it into data-tail.
+    const tail = scriptEl.dataset.tail || '';
+    if (tail) {
+      lines.push('');
+      tail.split('\n').forEach(l => lines.push(l));
+    }
 
     scriptEl.textContent = lines.join('\n');
     manualEl.style.display = '';
@@ -2095,12 +2121,261 @@ def _js_string_literal(s: str) -> str:
     return _json.dumps(s).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
 
-def package_detail_html(name: str, *, org: str = "") -> str:
-    """Return the HTML for a package detail page."""
+@dataclass(frozen=True)
+class _QsStep:
+    """One Quick Start step: an intro (HTML), a copy-paste block (plain text,
+    escaped on output) and small notes under it (HTML)."""
+
+    intro: str
+    code: str = ""
+    notes: tuple[str, ...] = ()
+
+
+def _qs_steps(steps: list[_QsStep]) -> str:
+    out: list[str] = []
+    for i, step in enumerate(steps):
+        spacing = "" if i == 0 else " mt-4"
+        out.append(f'<p class="has-text-grey-lighter{spacing}">{step.intro}</p>')
+        if step.code:
+            out.append(
+                '<pre class="has-background-dark has-text-success p-3" '
+                f'style="border-radius:6px;">{_html.escape(step.code, quote=False)}</pre>'
+            )
+        out.extend(f'<p class="has-text-grey is-size-7 mt-2">{n}</p>' for n in step.notes)
+    return "\n        ".join(out)
+
+
+_QS_VENV_INTRO = (
+    "Work in a virtualenv on top of it. Whatever you <code>pip install</code> goes into "
+    "<code>.venv</code>, and the prefix's packages stay importable:"
+)
+
+
+def _qs_windows_note(exe: str, *invocations: str) -> str:
+    """Where the interpreter is on Windows, with *invocations* spelled out.
+
+    A Windows CPython keeps ``python.exe`` at the prefix root, and the
+    activation scripts put only ``bin/`` and ``Scripts/`` on PATH.
+    """
+    runs = " or ".join(
+        f"<code>.\\deps\\{_html.escape(exe)} {_html.escape(i)}</code>" for i in invocations
+    )
+    return (
+        "On Windows the interpreter sits at the prefix root, which activation does not put "
+        f"on PATH, so call it directly: {runs}."
+    )
+
+
+def _qs_codes(items: tuple[str, ...], limit: int = 8) -> str:
+    """``<code>a</code>, <code>b</code> and 3 more``."""
+    shown = ", ".join(f"<code>{_html.escape(c)}</code>" for c in items[:limit])
+    more = len(items) - limit
+    return shown + (f" and {more} more" if more > 0 else "")
+
+
+def _quickstart(qs: QuickStartProfile, *, name: str, org: str = "") -> tuple[str, str, str]:
+    """``(quick_start_html, manual_tail_intro, manual_tail_cmd)`` for one package.
+
+    *name* and *org* arrive unescaped; commands install ``[org/]name``.  The
+    manual-install tail (what to do after extracting the archives by hand) is
+    as kind-specific as the Quick Start; its intro is HTML, its command plain
+    text.
+    """
+    e = _html.escape
+    title = f"{org}/{name}" if org else name
+    install = f"cvcpkg install {title} --prefix ./deps"
+    build = _QsStep(
+        "Or build it from source using the recipe:", f"cvcpkg build {title} --prefix ./deps"
+    )
+    activate = "source ./deps/bin/activate"
+
+    if qs.kind == "python":
+        cmd, exe, abi = qs.python_cmd, qs.windows_exe, qs.abi
+        venv = "-m venv --system-site-packages .venv"
+        # Without the recipe the import name is unknown, and a pip-metadata
+        # check would fail for columns that ship no dist-info (vtk-python).
+        check = f'-c "import {qs.module}"' if qs.module else ""
+        use_notes = [_qs_windows_note(exe, *(i for i in (check, venv) if i))]
+        if qs.commands:
+            use_notes.append(
+                f"It also installs {_qs_codes(qs.commands)}, on PATH once the prefix is activated."
+            )
+        # Sibling columns are linked from the page's recipe list, which knows
+        # no org, so an org page would link packages that org may not have.
+        columns = (
+            ""
+            if org
+            else f'<span id="qs-columns" data-base="{e(qs.base)}" '
+            f'data-variant="{e(qs.variant)}"></span>'
+        )
+        steps = [
+            _QsStep(
+                f"<strong>{e(qs.base)}</strong> for CPython {e(cmd[len('python'):])} ({e(abi)}). "
+                f"It installs into the prefix's own <code>{e(cmd)}</code>; it does not import "
+                f"into a system Python.{columns}"
+            ),
+            _QsStep(
+                f"Install it. This also pulls in <code>{e(qs.interpreter)}</code> and the "
+                f"{e(abi)} build of every dependency:",
+                install,
+            ),
+            _QsStep(
+                "Use it from the prefix's interpreter:",
+                f"{activate}\n{cmd} {check}".rstrip(),
+                tuple(use_notes),
+            ),
+            _QsStep(_QS_VENV_INTRO, f"{cmd} {venv}"),
+            _QsStep(
+                "Pin it in your project: list it in a requirements file, then run "
+                "<code>cvcpkg install --from cvc-requirements.yaml --prefix ./deps</code>:",
+                f"# cvc-requirements.yaml\ncomponents:\n  - {title}",
+            ),
+            build,
+        ]
+        return (
+            _qs_steps(steps),
+            "Then run the prefix's interpreter:",
+            f"/opt/cvcpkg/bin/{cmd} {check or '--version'}",
+        )
+
+    if qs.kind == "interpreter":
+        cmd, exe, abi = qs.python_cmd, qs.windows_exe, qs.abi
+        steps = [
+            _QsStep(
+                f"CPython {e(cmd[len('python'):])}. Python packages for it are separate recipes, "
+                f"one per interpreter, named <code>&lt;package&gt;-{e(abi)}</code>."
+            ),
+            _QsStep("Install it:", install),
+            _QsStep(
+                "Run it:",
+                f"{activate}\n{cmd} --version",
+                (_qs_windows_note(exe, "--version"),),
+            ),
+            _QsStep("Add packages for it:", f"cvcpkg install <package>-{abi} --prefix ./deps"),
+            _QsStep(_QS_VENV_INTRO, f"{cmd} -m venv --system-site-packages .venv"),
+        ]
+        if not abi.endswith("t"):
+            # CMake's FindPython3 module, not a shipped config package.  Its
+            # Python3_ROOT_DIR hint is searched before the Windows registry and
+            # macOS frameworks, which CMAKE_PREFIX_PATH is not.  (FindPython3
+            # selects a free-threaded ABI only on request, so 3.13t gets no
+            # line here.)
+            steps.append(
+                _QsStep(
+                    "Embed it in a C/C++ build: CMake's FindPython3 module "
+                    "(<code>find_package(Python3 COMPONENTS Development)</code>) finds it when "
+                    "pointed at the prefix:",
+                    'cmake -S . -B build -DPython3_ROOT_DIR="$PWD/deps"',
+                )
+            )
+        steps.append(build)
+        return _qs_steps(steps), "Then run the interpreter:", f"/opt/cvcpkg/bin/{cmd} --version"
+
+    if qs.kind == "tool":
+        notes = (f"Commands: {_qs_codes(qs.commands)}.",) if qs.commands else ()
+        steps = [
+            _QsStep("Install it:", install),
+            _QsStep(
+                "Put its commands on PATH by activating the prefix:",
+                f"{activate}            # bash / zsh\n. .\\deps\\Scripts\\Activate.ps1   # PowerShell",
+                notes,
+            ),
+            build,
+        ]
+        return (
+            _qs_steps(steps),
+            "Then put the prefix's commands on PATH:",
+            "export PATH=/opt/cvcpkg/bin:$PATH",
+        )
+
+    if qs.kind == "source":
+        upstream = name[: -len("-src")] if name.endswith("-src") else name
+        pin = f'\n      version: "=={qs.upstream_version}"' if qs.upstream_version else ""
+        steps = [
+            _QsStep(
+                f"A source package: the unmodified upstream source of <strong>{e(upstream)}</strong>, "
+                f"staged at <code>src/{e(name)}/</code>. Nothing is compiled. Recipes build from "
+                "it, so the upstream host is contacted once and every other build installs this "
+                "package from the catalog."
+            ),
+        ]
+        # source.package must name a depends.build entry exactly, and the
+        # recipe schema allows no org/ there, so an org's source package has
+        # no snippet that builds.
+        if not org:
+            steps.append(
+                _QsStep(
+                    "Build a recipe from it (in that recipe's <code>recipe.yaml</code>):",
+                    f"source:\n  type: package\n  package: {name}\n"
+                    f"depends:\n  build:\n    - name: {name}{pin}",
+                )
+            )
+        steps.append(
+            _QsStep(
+                "Or install the source tree itself:" if not org else "Install the source tree:",
+                f"{install}    # -> ./deps/src/{name}/",
+            )
+        )
+        return _qs_steps(steps), "The source tree is then at:", f"ls /opt/cvcpkg/src/{name}/"
+
+    if qs.kind == "files":
+        notes = (f"It installs {_qs_codes(qs.paths)} under the prefix.",) if qs.paths else ()
+        return _qs_steps([_QsStep("Install it:", install, notes), build]), "", ""
+
+    # library: the C/C++ flow.
+    steps = [
+        _QsStep(
+            "Install the pre-built binary:", f"cvcpkg install {title} --prefix /path/to/prefix"
+        ),
+        _QsStep(
+            "Or build from source using the recipe:",
+            f"cvcpkg build {title} --prefix /path/to/prefix",
+        ),
+        _QsStep(
+            "Use in a downstream CMake project:", "cmake -DCMAKE_PREFIX_PATH=/path/to/prefix .."
+        ),
+    ]
+    return (
+        _qs_steps(steps),
+        "Then point CMake at the prefix:",
+        "cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..",
+    )
+
+
+def package_detail_html(name: str, *, org: str = "", recipe: dict | None = None) -> str:
+    """Return the HTML for a package detail page.
+
+    *recipe* is the package's parsed recipe.yaml, when the caller may show what
+    it says; it decides the Quick Start (a Python column, a tool, a source
+    package, ...).  Without it the name alone does.
+    """
     safe_name = _html.escape(name, quote=True)
     safe_org = _html.escape(org, quote=True) if org else ""
     display_title = f"{safe_org}/{safe_name}" if safe_org else safe_name
-    canonical_path = f"/package/{org}/{name}" if org else f"/package/{name}"
+    # Escaped: _head_html writes it into href/content attributes as is.
+    canonical_path = f"/package/{safe_org}/{safe_name}" if org else f"/package/{safe_name}"
+    try:
+        qs = quickstart_profile(name, recipe)
+    except Exception:
+        # profile() reads untrusted pushed recipes defensively; if one still
+        # trips it, the page renders from the name rather than failing.
+        _log.warning("quick start: could not read the recipe of %s", name, exc_info=True)
+        qs = quickstart_profile(name)
+    qs_html, tail_intro, tail_cmd = _quickstart(qs, name=name, org=org)
+    manual_tail_html = (
+        f"""{tail_intro}
+        </p>
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">{_html.escape(tail_cmd, quote=False)}</pre>"""
+        if tail_cmd
+        else "</p>"
+    )
+    # The JS-built manual script ends with the same step as a comment and the
+    # command ("Then point CMake at the prefix:" -> "# Point CMake at the
+    # prefix:").  Carried in a data- attribute, escaped for it.
+    comment = tail_intro.removeprefix("Then ")
+    manual_tail_attr = _html.escape(
+        f"# {comment[:1].upper()}{comment[1:]}\n{tail_cmd}" if tail_cmd else "", quote=True
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en" data-theme="dark" class="has-background-black-bis">
@@ -2295,15 +2570,8 @@ cvcpkg pack {safe_name} --recipes-dir recipes --prefix ./prefix --output-dir ./d
       <h3 class="title is-5 has-text-white">
         <span class="icon mr-1"><i class="fas fa-terminal"></i></span> Quick Start
       </h3>
-      <div class="content">
-        <p class="has-text-grey-lighter">Install the pre-built binary:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg install {display_title} --prefix /path/to/prefix</pre>
-
-        <p class="has-text-grey-lighter mt-4">Or build from source using the recipe:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cvcpkg build {display_title} --prefix /path/to/prefix</pre>
-
-        <p class="has-text-grey-lighter mt-4">Use in a downstream CMake project:</p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/path/to/prefix ..</pre>
+      <div class="content" id="quick-start">
+        {qs_html}
       </div>
     </div>
 
@@ -2318,14 +2586,12 @@ cvcpkg pack {safe_name} --recipes-dir recipes --prefix ./prefix --output-dir ./d
           CLI. Download <strong>{safe_name}</strong> and all its dependencies for your
           platform, then extract them into a single prefix directory:
         </p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;" id="manual-script">mkdir -p /opt/cvcpkg
+        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;" id="manual-script" data-tail="{manual_tail_attr}">mkdir -p /opt/cvcpkg
 # Download {safe_name} and its dependencies, then:
 tar --zstd -xf &lt;package&gt;.tar.zst -C /opt/cvcpkg</pre>
         <p class="has-text-grey-lighter mt-3">
           Each package extracts into the same prefix layout (<code>lib/</code>, <code>include/</code>, etc.)
-          so they compose correctly. Then point CMake at the prefix:
-        </p>
-        <pre class="has-background-dark has-text-success p-3" style="border-radius:6px;">cmake -DCMAKE_PREFIX_PATH=/opt/cvcpkg ..</pre>
+          so they compose correctly. {manual_tail_html}
       </div>
     </div>
   </div>

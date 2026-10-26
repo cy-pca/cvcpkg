@@ -2804,13 +2804,34 @@ def create_app(
             headers={"Cache-Control": "public, max-age=300"},
         )
 
+    async def _page_recipe_doc(name: str, org: str) -> dict | None:
+        """The recipe.yaml a package page's Quick Start is derived from, or None.
+
+        The page HTML is served without auth, so only a recipe an anonymous
+        visitor could read through ``/v1/recipe`` anyway may shape it: not a
+        private org's, and none on a server that requires auth for reads.
+        The page then falls back to what the name alone says.
+        """
+        if not _RECIPE_NAME_RE.match(name) or (org and not _RECIPE_NAME_RE.match(org)):
+            return None
+        if _get_state().require_auth_for_reads or not await _recipe_org_visible(org, None):
+            return None
+        bundle_path = None
+        if _use_db and _db_recipes is not None:
+            try:
+                bundle_path = await _db_recipes.get_bundle_path(name, org_slug=org)
+            except Exception:  # pragma: no cover - store/back-end hiccup
+                bundle_path = None
+        return await asyncio.to_thread(_recipe_doc_sync, name, org, bundle_path)
+
     @app.get("/package/{org}/{name}", response_class=HTMLResponse, include_in_schema=False)
     async def package_detail_page_scoped(org: str, name: str):
         from cvcpkg.server.landing import package_detail_html
 
         if not _RECIPE_NAME_RE.match(org) or not _RECIPE_NAME_RE.match(name):
             return HTMLResponse(status_code=404, content="not found")
-        return HTMLResponse(package_detail_html(name, org=org))
+        recipe = await _page_recipe_doc(name, org)
+        return HTMLResponse(package_detail_html(name, org=org, recipe=recipe))
 
     @app.get("/package/{name}", response_class=HTMLResponse, include_in_schema=False)
     async def package_detail_page(
@@ -2821,7 +2842,10 @@ def create_app(
 
         if org:
             return RedirectResponse(url=f"/package/{org}/{name}", status_code=301)
-        return HTMLResponse(package_detail_html(name, org=org))
+        if not _RECIPE_NAME_RE.match(name):
+            return HTMLResponse(status_code=404, content="not found")
+        recipe = await _page_recipe_doc(name, "")
+        return HTMLResponse(package_detail_html(name, recipe=recipe))
 
     @app.get("/guide", response_class=HTMLResponse, include_in_schema=False)
     async def guide_page():
@@ -3568,7 +3592,9 @@ def create_app(
             return None
         try:
             doc = yaml.safe_load(body)
-        except yaml.YAMLError:
+        except (yaml.YAMLError, RecursionError):
+            # PyYAML's composer recurses, so deeply nested input (a pushed
+            # recipe is anyone's YAML) raises RecursionError, not YAMLError.
             return None
         return doc if isinstance(doc, dict) else None
 
