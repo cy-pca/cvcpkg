@@ -7,7 +7,7 @@
 #     everything below runs from the COPY. On linux the copy also gets the
 #     runtime dependencies' libraries and X11 data, and LD_LIBRARY_PATH is
 #     dropped, so the RUNPATH and the bin/ launchers are what is tested; on
-#     Windows it gets OpenSSL's DLLs beside the executables.
+#     Windows it gets OpenSSL's and ConPTY's DLLs beside the executables.
 #  3. strip-ansi-escapes filters a coloured string; `wezterm ls-fonts` loads
 #     wezterm-gui (on linux: every X11/Wayland/fontconfig library, from the
 #     prefix) and resolves the built-in font.
@@ -68,9 +68,12 @@ if [ "$(uname -s)" = "Linux" ] && [ -n "${CVC_DEPS_PREFIX:-}" ]; then
     cp -pRL "${CVC_DEPS_PREFIX}/share/X11" "${MOVED}/share/"
     unset LD_LIBRARY_PATH XKB_CONFIG_ROOT XLOCALEDIR
 elif [ -n "${EXE}" ] && [ -n "${CVC_DEPS_PREFIX:-}" ]; then
-    # Windows: OpenSSL's DLLs, which an installed prefix has in the same bin\
-    # (Windows looks in the executable's directory first).
-    cp -p "${CVC_DEPS_PREFIX}"/bin/libssl-3*.dll "${CVC_DEPS_PREFIX}"/bin/libcrypto-3*.dll "${MOVED}/bin/"
+    # Windows: OpenSSL's DLLs and ConPTY (the openssl and conpty packages),
+    # which an installed prefix has in the same bin\ -- wezterm-gui loads
+    # conpty.dll from its own directory, and the kitty check below fails with
+    # any other ConPTY.
+    cp -p "${CVC_DEPS_PREFIX}"/bin/libssl-3*.dll "${CVC_DEPS_PREFIX}"/bin/libcrypto-3*.dll \
+          "${CVC_DEPS_PREFIX}/bin/conpty.dll" "${CVC_DEPS_PREFIX}/bin/OpenConsole.exe" "${MOVED}/bin/"
 fi
 
 export HOME="${T}/home"

@@ -1,11 +1,12 @@
 # wezterm
 
-WezTerm 20240203-110809-5046fc22 (the last stable release), built from its
-release source tarball (`wezterm-src`) with the cvcpkg Rust toolchain on linux
-and Windows; on macOS, upstream's signed app. `recipe.yaml` records what is
-pinned and why; this file records what was found about images in the
-terminal while making it, for libcvc's `arigl --terminal`
-(`src/cvc/ariadne/term_graphics.cpp`).
+WezTerm 20240203-110809-5046fc22 (the last stable release), built from source
+with the cvcpkg Rust toolchain. Every input is a cvcpkg package: the source
+tree and all of its crates from `wezterm-src`, the libraries from the runtime
+dependencies, and on Windows Microsoft's ConPTY from `conpty`; the build itself
+downloads nothing. `recipe.yaml` records what is pinned and why; this file
+records what was found about images in the terminal while making it, for
+libcvc's `arigl --terminal` (`src/cvc/ariadne/term_graphics.cpp`).
 
 ```sh
 cvcpkg install wezterm --prefix P
@@ -49,7 +50,7 @@ recipe's from-source builds (cvc.2), the same way each time:
 
 The from-source builds first showed no images at all, and glyphs as solid
 blocks, with the OpenGL and Software front ends: glium 0.31 under Rust 1.90.
-`patches/0002` (upstream's glium 0.34 commit) fixes that, and `test.sh` now
+`wezterm-src`'s `patches/0002` (upstream's glium 0.34 commit) fixes that, and `test.sh` now
 checks the pixels of its window on Windows so it cannot come back unnoticed.
 
 So on WezTerm, arigl's kitty mode would show each frame at wherever the
@@ -72,8 +73,10 @@ it **no** image reached WezTerm from a native Windows program: probe panels A,
 B and C were all empty, and a window title set with OSC 2 was lost as well. A
 kitty query from the pane got no reply.
 
-`build.ps1` therefore installs Microsoft's ConPTY 1.25.260930003
-(`Microsoft.Windows.Console.ConPTY` on nuget.org). With it the same probe
+This package therefore does not ship that ConPTY: its `conpty` dependency
+installs Microsoft's ConPTY 1.25.260930003 (`Microsoft.Windows.Console.ConPTY`,
+from the Windows Terminal 1.25.2733.0 release) into the same `bin\`. With it
+the same probe
 shows A and C drawn and B beside the grid, exactly as on Linux. `test.sh`
 checks it on every Windows build that has a desktop: the program in the pane
 sends a kitty query and must get `ESC _Gi=31;OK ESC \` back through ConPTY.
