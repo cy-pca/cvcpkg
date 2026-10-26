@@ -42,11 +42,12 @@ import json
 import re
 import sys
 import time
-import tomllib
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+import tomllib
 
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 USER_AGENT = "cvcpkg tools/make_crate_packages.py (https://github.com/cy-pca/cvcpkg)"
@@ -124,7 +125,7 @@ def read_lockfile(path: Path) -> tuple[list[Crate], list[GitDep]]:
             crates.append(Crate(pkg["name"], pkg["version"], pkg["checksum"]))
         elif source.startswith("git+"):
             key, _, commit = source.partition("#")
-            parts = urllib.parse.urlsplit(key[len("git+"):])
+            parts = urllib.parse.urlsplit(key[len("git+") :])
             url = urllib.parse.urlunsplit(parts._replace(query=""))
             query = dict(urllib.parse.parse_qsl(parts.query))
             gits.append(GitDep(pkg["name"], pkg["version"], key, url, query, commit))
@@ -150,9 +151,7 @@ def crate_metadata(crate: Crate, sources: Path | None) -> tuple[str, str]:
         data = json.load(resp)
     time.sleep(1.0)
     version = data.get("version", {})
-    return _license_text(version.get("license"), None), _one_line(
-        version.get("description") or ""
-    )
+    return _license_text(version.get("license"), None), _one_line(version.get("description") or "")
 
 
 def _license_text(license: str | None, license_file: str | None) -> str:
@@ -232,10 +231,11 @@ def crate_build_sh(crate: Crate) -> str:
         f'dest="${{CVC_INSTALL_DIR}}/share/cargo/crates/{crate.dirname}"\n'
         'mkdir -p "${dest}"\n'
         'cp -R "${CVC_SOURCE_DIR}/." "${dest}/"\n'
-        "# cargo reads a directory-source entry's checksums from here. \"package\" is the\n"
+        '# cargo reads a directory-source entry\'s checksums from here. "package" is the\n'
         "# Cargo.lock checksum, which cargo compares; no per-file hashes (the bundle's\n"
         "# own sha256 covers the files).\n"
-        f"printf '{{\"files\":{{}},\"package\":\"{crate.checksum}\"}}\\n' > \"${{dest}}/.cargo-checksum.json\"\n"
+        f'printf \'{{"files":{{}},"package":"{crate.checksum}"}}\\n\''
+        ' > "${dest}/.cargo-checksum.json"\n'
     )
 
 
@@ -359,7 +359,8 @@ def main(argv: list[str] | None = None) -> int:
             have = existing_checksum(cdir)
             if have != crate.checksum:
                 raise SystemExit(
-                    f"recipes/{crate.recipe}: sha256 {have} but {args.lockfile} says {crate.checksum}"
+                    f"recipes/{crate.recipe}: sha256 {have}"
+                    f" but {args.lockfile} says {crate.checksum}"
                 )
             reused += 1
             continue

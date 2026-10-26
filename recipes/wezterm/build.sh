@@ -4,7 +4,7 @@
 #
 # cargo builds wezterm, wezterm-gui, wezterm-mux-server and strip-ansi-escapes
 # from the wezterm-src source package (CVC_SOURCE_DIR: the release's -src tree,
-# patched, with every crate vendored) with the cvcpkg rust toolchain,
+# with patches/ applied) with the cvcpkg rust toolchain and crates,
 # offline. freetype, harfbuzz, cairo, libssh, libssh2 and Lua are compiled in
 # from WezTerm's bundled sources; OpenSSL comes from the prefix, and on linux
 # so do X11/xcb/xkbcommon/wayland/fontconfig/zlib (runtime dependencies). The
@@ -12,8 +12,8 @@
 # finds wezterm-gui next to its own executable, and on linux the launchers
 # point xkbcommon at the prefix's XKB and Compose data first (see the notes).
 #
-# Nothing is downloaded: crates come from wezterm-src's vendor/, every library
-# from the prefix.
+# Nothing is downloaded: every crate is a cvcpkg package (the wezterm-crates
+# set), every library comes from the prefix.
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
@@ -90,15 +90,30 @@ export CARGO RUSTC
 "${RUSTC}" --version
 
 # cargo's state stays in the build tree; a $HOME/.cargo on the builder would be
-# both an input and an output otherwise. wezterm-src's .cargo/config replaces
-# crates.io and the one git dependency with its vendor/; offline makes a crate
-# missing from it an error rather than a download.
+# both an input and an output otherwise.
 export CARGO_HOME="${CVC_BUILD_DIR}/cargo-home"
 export RUSTUP_HOME="${CVC_BUILD_DIR}/rustup-home"
 unset RUSTUP_TOOLCHAIN
 export CARGO_TARGET_DIR="${CVC_BUILD_DIR}/cargo-target"
 export CARGO_NET_OFFLINE=true
 mkdir -p "${CARGO_HOME}" "${RUSTUP_HOME}"
+
+# Crates: each is a cvcpkg package staged at share/cargo/crates/ beside the
+# wezterm-crates set, whose cargo-config.toml.in replaces crates.io and the
+# one git dependency with that directory (docs/rust-crates.md). Offline makes
+# a crate missing from it an error rather than a download.
+crates_set=""
+for root in "${bld}" "${deps}"; do
+    if [ -f "${root}/share/cargo/sets/wezterm-crates/cargo-config.toml.in" ]; then
+        crates_set="${root}/share/cargo/sets/wezterm-crates"
+        crates_dir="${root}/share/cargo/crates"
+        break
+    fi
+done
+[ -n "${crates_set}" ] \
+    || { echo "wezterm: no wezterm-crates set in ${bld} or ${deps} -- is it in the closure?" >&2; exit 1; }
+sed "s|@CRATES_DIR@|${crates_dir}|" "${crates_set}/cargo-config.toml.in" > "${CARGO_HOME}/config.toml"
+echo "wezterm: crates from ${crates_dir} ($(ls "${crates_dir}" | wc -l | tr -d ' ') packages)"
 
 # Every library comes from the prefix. openssl-sys is pointed at its OpenSSL;
 # WezTerm turns on openssl's `vendored` feature on macOS (and Windows), and

@@ -1,8 +1,8 @@
 # recipes/wezterm/build.ps1 — build WezTerm from source on Windows (MSVC).
 #
 # cargo builds wezterm, wezterm-gui, wezterm-mux-server and strip-ansi-escapes
-# from the wezterm-src source package (CVC_SOURCE_DIR: the patched tree with
-# every crate vendored) with the cvcpkg rust toolchain, offline. WezTerm's
+# from the wezterm-src source package (CVC_SOURCE_DIR, with patches\ applied)
+# with the cvcpkg rust toolchain and crates, offline. WezTerm's
 # .cargo\config links the MSVC CRT statically (+crt-static), and freetype,
 # harfbuzz, cairo, libssh, libssh2,
 # zlib and Lua are compiled in from bundled sources. OpenSSL is the one shared
@@ -17,8 +17,8 @@
 # not WezTerm's: they come from the `conpty` runtime dependency, which installs
 # a newer ConPTY into the same bin\ (see recipe.yaml).
 #
-# Nothing is downloaded: crates come from wezterm-src's vendor\, every library
-# from the prefix.
+# Nothing is downloaded: every crate is a cvcpkg package (the wezterm-crates
+# set), every library comes from the prefix.
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\_common\env-windows.ps1"    # cl.exe/link.exe/rc.exe on PATH, CVC_JOBS
 
@@ -51,10 +51,26 @@ New-Item -ItemType Directory -Force -Path $env:CARGO_HOME, $env:RUSTUP_HOME | Ou
 # assets\windows\{conhost,angle,mesa} into <source>\target\<profile> without
 # looking at CARGO_TARGET_DIR. (CVC_SOURCE_DIR is this build's own copy.)
 $env:CARGO_TARGET_DIR = Join-Path $src 'target'
-# wezterm-src's .cargo\config replaces crates.io and the one git dependency
-# with its vendor\; --offline makes any crate missing from it an error rather
-# than a download.
 $env:CARGO_NET_OFFLINE = 'true'
+
+# Crates: each is a cvcpkg package staged at share\cargo\crates\ beside the
+# wezterm-crates set, whose cargo-config.toml.in replaces crates.io and the one
+# git dependency with that directory (docs/rust-crates.md). --offline makes a
+# crate missing from it an error rather than a download.
+$cratesSet = $null
+foreach ($root in @($bld, $deps)) {
+    $candidate = Join-Path $root 'share\cargo\sets\wezterm-crates'
+    if (Test-Path -LiteralPath (Join-Path $candidate 'cargo-config.toml.in')) {
+        $cratesSet = $candidate
+        $cratesDir = Join-Path $root 'share\cargo\crates'
+        break
+    }
+}
+if (-not $cratesSet) { throw "wezterm: no wezterm-crates set in $bld or $deps -- is it in the closure?" }
+# TOML string: forward slashes, which cargo accepts on Windows, need no escaping.
+$cfg = (Get-Content -Raw (Join-Path $cratesSet 'cargo-config.toml.in')).Replace('@CRATES_DIR@', ($cratesDir -replace '\\', '/'))
+Set-Content -LiteralPath (Join-Path $env:CARGO_HOME 'config.toml') -Value $cfg -Encoding utf8NoBOM
+Write-Output "wezterm: crates from $cratesDir ($((Get-ChildItem -Directory $cratesDir).Count) packages)"
 
 # OpenSSL from the prefix. WezTerm's async_ossl turns on openssl's `vendored`
 # feature on Windows; OPENSSL_NO_VENDOR overrides it, so openssl-sys links the

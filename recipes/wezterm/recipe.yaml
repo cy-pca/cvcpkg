@@ -11,8 +11,8 @@ recipe:
   # fixed that matters here -- on Windows, a ConPTY that lets those escapes
   # through -- is a separate component, the `conpty` package (see the notes).
   upstream_version: "20240203-110809-5046fc22"
-  # 1 -> 2: built from source, with every crate from wezterm-src (cvc.1
-  # repackaged upstream's release binaries); the linux build also covers arm64.
+  # 1 -> 2: built from source, every crate a cvcpkg package (cvc.1 repackaged
+  # upstream's release binaries); the linux build also covers arm64.
   cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -29,26 +29,47 @@ recipe:
     WezTerm -- a GPU-accelerated terminal emulator and multiplexer that speaks
     the kitty graphics protocol, DEC Sixel and iTerm2 inline images. The
     20240203 stable release, built from its source with the cvcpkg Rust
-    toolchain, every crate from the wezterm-src package: wezterm, wezterm-gui
+    toolchain, every crate a cvcpkg package (wezterm-crates): wezterm, wezterm-gui
     and wezterm-mux-server in bin/. A terminal for testing programs that draw
     images into the terminal (libcvc's `arigl --terminal`), without a system
     install.
 
-# Everything comes from cvcpkg: the source tree and all of its crates from
-# wezterm-src (the release's -src tarball, patched, crates vendored), the
-# toolchain from rust, libraries from the runtime dependencies, Microsoft's
-# ConPTY from conpty. The build itself downloads nothing (cargo --offline).
+# Everything comes from cvcpkg: the source tree from wezterm-src (the
+# release's -src tarball), every crate from its own crate-<name>--<version>
+# package (the wezterm-crates set), the toolchain from rust, libraries from
+# the runtime dependencies, Microsoft's ConPTY from conpty. The build itself
+# downloads nothing (cargo --offline).
 source:
   type: package
   package: wezterm-src
 
-# None here: wezterm-src applies them before it vendors the crates, because
-# they change Cargo.lock (time 0.3.36, glium 0.34; see its recipe.yaml).
-patches: []
+# Two changes a February 2024 tree needs to build and work with Rust 1.90.
+# Both change Cargo.lock; wezterm-crates was generated from the patched one.
+#
+#  0001  Cargo.lock pins time 0.3.31, which no longer compiles on Rust >= 1.80
+#        (type inference, E0282). This moves time to 0.3.36 and time-macros to
+#        0.2.18 (adding their num-conv dependency), as
+#        `cargo update -p time --precise 0.3.36` does, with crates.io
+#        checksums. Nothing else in the lockfile changes.
+#  0002  Upstream commit 36ff6d5 ("deps: update glium", 2024-02-06, three days
+#        after the tag), verbatim: glium 0.31 -> 0.34. Built with Rust 1.90
+#        against glium 0.31, the OpenGL and Software front ends draw every
+#        glyph as a solid block (Windows) or nothing at all (linux, under
+#        Xvfb), and no image appears -- wezterm/wezterm#5990 and #6005,
+#        the same breakage nixpkgs hit after its own Rust 1.80 lockfile fix.
+#        The WebGpu front end does not use glium and was unaffected.
+patches:
+  - patches/0001-cargo-lock-time-0.3.36.patch
+  - patches/0002-deps-update-glium-36ff6d5.patch
 
 depends:
   build:
     - name: wezterm-src
+      version: "==20240203-110809-5046fc22"
+    # The 645 crates of the patched Cargo.lock (644 from crates.io, one git
+    # dependency), each its own package, and the cargo source replacement
+    # that points cargo at them (share/cargo/sets/wezterm-crates/).
+    - name: wezterm-crates
       version: "==20240203-110809-5046fc22"
     # cargo and rustc; the build scripts refuse any outside the cvcpkg prefixes.
     - name: rust
@@ -134,23 +155,26 @@ toolchain:
     cargo + rustc 1.90.0 from the cvcpkg `rust` recipe (the build scripts
     refuse any other), `cargo build --release --locked --offline` of the
     wezterm, wezterm-gui, wezterm-mux-server and strip-ansi-escapes packages
-    with wezterm-gui's distro-defaults feature, crates from wezterm-src's
-    vendor/. The bundled C (freetype, harfbuzz, cairo, libssh, libssh2, Lua)
+    with wezterm-gui's distro-defaults feature, crates from the build
+    prefix's share/cargo/crates/ (the wezterm-crates set). The bundled C (freetype, harfbuzz, cairo, libssh, libssh2, Lua)
     is compiled by the cc crate with gcc (linux), clang (macOS) or MSVC
     (Windows, CRT linked statically). WezTerm's minimum Rust is 1.71
     (ci/check-rust-version.sh).
 
 notes:
-  - title: "Hermetic: crates come from wezterm-src"
+  - title: "Hermetic: every crate is a cvcpkg package"
     description: >-
-      The release tarball carries Cargo.lock but no crate sources. The
-      wezterm-src package vendors them once -- 645 crates from crates.io,
-      checked against Cargo.lock's checksums, and xcb-imdkit-rs from
-      github.com at the commit Cargo.lock names -- and points the tree's
-      .cargo/config at vendor/. This build runs cargo with --offline and a
-      cargo home of its own in the build directory, so it never reaches
-      crates.io or github.com, and a crate missing from vendor/ is an error.
-      Every input of this build is a cvcpkg package.
+      The release tarball carries Cargo.lock but no crate sources. Each crate
+      it pins is a package of its own, crate-<name>--<version> (generated by
+      tools/make_crate_packages.py, docs/rust-crates.md): the .crate file
+      from static.crates.io checked against the Cargo.lock checksum, staged
+      at share/cargo/crates/<name>-<version>/. The one git dependency,
+      xcb-imdkit-rs, is crate-git-xcb-imdkit--215ce4b0. The wezterm-crates set
+      depends on all 645, so they land in the build prefix, and ships the
+      cargo source replacement; the build scripts write it into a cargo home
+      of their own and run cargo with --offline, so the build never reaches
+      crates.io or github.com, and a missing crate is an error. Another Rust
+      recipe that pins the same crate version reuses the same package.
   - title: "A February 2024 tree on Rust 1.90: three fixes"
     description: >-
       WezTerm's own CI built this release with the Rust of its day, and three
@@ -164,8 +188,8 @@ notes:
       (behind git2 0.16, used by wezterm-version's build script) never asks
       for advapi32.lib and relied on std to link it, which Rust 1.90's std
       does not; build.ps1 adds it to every link through RUSTFLAGS (see
-      there). The two patches live in wezterm-src, which applies them before
-      vendoring the crates they change. The rendering defect showed in the
+      there). Both patches change Cargo.lock, and wezterm-crates was generated
+      from the patched one. The rendering defect showed in the
       probe screenshots (README.md); test.sh now checks pixels on Windows so
       that a build like it fails.
   - title: "Windows: Microsoft's ConPTY 1.25 instead of the bundled 2024 one"
