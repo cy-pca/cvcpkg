@@ -4,12 +4,11 @@ recipe:
   # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
-  upstream_version: "2.5.4"
-  # 2.5.4: the release that carries #438 (the builder honors version pins on
-  # dependencies) and #441 (it installs the runtime deps beneath a recipe's own,
-  # not every dependency's build closure, which put a second CPython into
-  # Windows wheel prefixes) to the fleet; the single-file Windows builders
-  # (sandipaws, sandipaws-dev) self-update from this package.
+  upstream_version: "2.5.5"
+  # 2.5.5: the release that carries #470 (Windows extracts archive symlinks
+  # as copies of their targets: builder #28's elevated extraction left
+  # wcwidth-src's README.rst an unreadable link) to the fleet; the single-file
+  # builders self-update from this package.
   cvc_revision: 1
 
   maintainer: "cvcpkg group"
@@ -31,8 +30,8 @@ recipe:
 # GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
 source:
   type: tarball
-  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.4.tar.gz
-  sha256: "7d6e50d700c8f666040c2ad6ce482602dd2d5daa7122e9b211136eabac0fa178"
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.5.tar.gz
+  sha256: "6fa146cb9a0bf98949b22c84528ad01054459cfa210a1184a8a25d79595e78af"
   strip_components: 1
 
 # Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and
