@@ -382,6 +382,19 @@ jobs:
           export BUILDX_BUILDER=cvcpkg-deploy
 
           $COMPOSE build --build-arg "CVCPKG_RELEASE=${RELEASE_TAG}" backend
+
+          # Bound the builder's cache.  Nothing pruned it, and each deploy adds
+          # its layers: on 2026-10-25 it held 10.84 GB of catx-03's 96 GB
+          # /mnt/ramdisk tmpfs, which the CI runners' Docker builds share, and a
+          # cvcpkg integration job died with ENOSPC while a deploy built here.
+          # A size cap, not the primary's until=24h filter, which keeps every
+          # layer of a busy day (that day had ten deploys).  Safe right after
+          # the build: the deploy-prod concurrency group serialises deploys, so
+          # no other build is using this builder, and the cap evicts oldest
+          # first, keeping the newest layers (base image, apt) for the next
+          # deploy.
+          docker buildx prune --builder cvcpkg-deploy -f --max-used-space 2gb 2>&1 | tail -1 || true
+
           echo "Ensuring postgres is up..."
           $COMPOSE up -d postgres
           for i in $(seq 1 30); do
