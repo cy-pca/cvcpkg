@@ -7,72 +7,36 @@ recipe:
   maintainer_email: info@cvcpkg.org
   maintainer_url: https://cvcpkg.org
   homepage: https://wezterm.org/
-  # WezTerm is MIT; the vendored crates carry their own licences (mostly MIT
-  # and/or Apache-2.0), each in its directory under vendor/.
   license: MIT
   tags: [source]
   description: >-
-    Everything the wezterm recipe builds from, fetched once: the source of
-    WezTerm 20240203-110809-5046fc22 (the release's wezterm-<tag>-src.tar.gz,
-    verified against the sha256 below) with the two patches below applied,
-    and every crate its Cargo.lock names, vendored under vendor/ with a
-    .cargo/config that points cargo at them. Staged at src/wezterm-src/. The
-    wezterm recipe builds from it (source.type package) with cargo --offline,
-    so no build of wezterm reaches crates.io or github.com: on every platform
-    and arch the crates come from this package.
+    The unmodified upstream source of WezTerm 20240203-110809-5046fc22: the
+    release's wezterm-<tag>-src.tar.gz, verified against the sha256 below and
+    staged at src/wezterm-src/. It is the tarball WezTerm asks distributions to
+    build from: it carries the C submodules (freetype, harfbuzz, cairo,
+    fontconfig) and a .tag file with the version, which the GitHub archive of
+    the tag lacks. The wezterm recipe builds from it (source.type package), so
+    the tarball is fetched once, from github.com, and every other build of
+    wezterm installs this package from the catalog instead. Crates are not in
+    it: each crate Cargo.lock names is a cvcpkg package of its own
+    (crate-<name>--<version>, gathered by the wezterm-crates set), shared with
+    every other Rust recipe that pins the same version.
 source:
   type: tarball
   # sha256 as published beside it, wezterm-20240203-110809-5046fc22-src.tar.gz.sha256.
   url: https://github.com/wez/wezterm/releases/download/20240203-110809-5046fc22/wezterm-20240203-110809-5046fc22-src.tar.gz
   sha256: "df60b1081d402b5a9239cc4cef16fc699eab68bbbeac9c669cb5d991a6010b2c"
   strip_components: 1
-
-# Two changes a February 2024 tree needs to build and work with Rust 1.90.
-# They are applied here, before the crates are vendored, because they change
-# which crates Cargo.lock names.
-#
-#  0001  Cargo.lock pins time 0.3.31, which no longer compiles on Rust >= 1.80
-#        (type inference, E0282). This moves time to 0.3.36 and time-macros to
-#        0.2.18 (adding their num-conv dependency), as
-#        `cargo update -p time --precise 0.3.36` does, with crates.io
-#        checksums. Nothing else in the lockfile changes.
-#  0002  Upstream commit 36ff6d5 ("deps: update glium", 2024-02-06, three days
-#        after the tag), verbatim: glium 0.31 -> 0.34. Built with Rust 1.90
-#        against glium 0.31, the OpenGL and Software front ends draw every
-#        glyph as a solid block (Windows) or nothing at all (linux, under
-#        Xvfb), and no image appears -- wezterm/wezterm#5990 and #6005,
-#        the same breakage nixpkgs hit after its own Rust 1.80 lockfile fix.
-#        The WebGpu front end does not use glium and was unaffected.
-patches:
-  - patches/0001-cargo-lock-time-0.3.36.patch
-  - patches/0002-deps-update-glium-36ff6d5.patch
-
+patches: []
 depends:
-  # cargo, for `cargo vendor` (build.sh refuses any outside the cvcpkg prefixes).
-  build:
-    - name: rust
+  build: []
   runtime: []
   host_tools: []
-
 build:
   build_type_independent: true
   matrix:
     - platform: any
       script: build.sh
-
 package:
   files:
     - src/wezterm-src/
-
-notes:
-  - title: "The one place WezTerm's crates are downloaded"
-    description: >-
-      build.sh runs `cargo vendor --locked --versioned-dirs` on the patched
-      tree: 645 crates from crates.io, each checked against the checksum
-      Cargo.lock records, and xcb-imdkit-rs from github.com at the commit
-      Cargo.lock names. It appends the source replacement cargo vendor prints
-      to the tree's .cargo/config (the file WezTerm already has; cargo would
-      ignore a .cargo/config.toml beside it). Every crate for every target
-      is vendored, Windows- and macOS-only ones included, so one noarch
-      package serves every build. It is large: about 1.2 GB unpacked, most of
-      it the windows / windows-sys / winapi crates' import libraries.
