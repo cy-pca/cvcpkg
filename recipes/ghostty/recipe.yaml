@@ -219,8 +219,19 @@ notes:
       completions and the terminfo are copied out beside it. The app's
       built-in Sparkle updater stays as upstream ships it; set
       `auto-update = off` in the Ghostty config to keep a pinned version.
-  - title: "Not covered: linux-arm64 (not built yet), Windows, the BSDs"
+  - title: "linux-arm64: works, blocked by the published gettext bundle"
+    platforms: [linux]
     description: >-
-      Ghostty has no Windows port. linux-arm64 goes through the same build.sh
-      (Zig and every dependency exist for it) but has not been built yet.
-      FreeBSD is supported upstream and not attempted here.
+      On ubuntu-22.04-arm the whole chain (sassc, libadwaita and zig from
+      source, then ghostty) builds and test.sh passes, pixel check included,
+      with the same numbers as x86_64 -- but only with cvcpkg's iconv
+      installed beside it. The published gettext 1.0+cvc.5 for linux-arm64
+      ships a msgfmt that needs libiconv.so.2 without declaring iconv
+      (gettext's build.sh links cvcpkg's libiconv whenever the deps prefix
+      happens to hold iconv.h, which is meant for OpenBSD and macOS only), so
+      the libadwaita and ghostty translations fail to build there until that
+      bundle is fixed and republished.
+  - title: "Not covered: Windows, the BSDs"
+    description: >-
+      Ghostty has no Windows port. FreeBSD is supported upstream and not
+      attempted here.

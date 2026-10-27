@@ -17,6 +17,7 @@ P/bin/ghostty -e <cmd>                   # new window running <cmd>
 |---|---|
 | macOS (x86_64, arm64) | the official `Ghostty.dmg`: one signed, notarised universal app, staged whole in `lib/ghostty/Ghostty.app` |
 | linux-x86_64 | built here from `ghostty-1.3.1.tar.gz` with cvcpkg `zig` 0.15.2, GTK 4.16 and `libadwaita` 1.6 |
+| linux-arm64 | the same build; it works, but needs a fixed `gettext` bundle first (recipe notes) |
 | Windows | none: Ghostty has no Windows port |
 
 ## Linux: a source build that never touches the network
