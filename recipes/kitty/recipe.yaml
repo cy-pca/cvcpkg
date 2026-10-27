@@ -157,7 +157,8 @@ notes:
     description: >-
       kitty draws a kitty-graphics image transmitted with a=T,U=1 onto the
       U+10EEEE placeholder cells, the way libcvc's `arigl --terminal` places
-      its frames. test.sh checks it on every linux build: it runs
+      its frames. test.sh checks it on linux wherever cvcpkg's software GL
+      loads (see "Built and tested"): it runs
       recipes/kitty/kitty-placeholder-probe.py in a kitty window under Xvfb
       and measures, in the screenshot, that panel B's picture covers its
       placeholder grid (and not the cells beside it, where a terminal that
@@ -236,7 +237,10 @@ notes:
       a running instance unless asked to (--single-instance).
   - title: "Built and tested"
     description: >-
-      linux-x86_64 (Ubuntu 22.04 under WSL, Xvfb + Mesa llvmpipe) is built,
-      packed and tested by this recipe, including the placeholder pixel
-      check. linux-arm64 and macOS (x86_64, arm64) go through the same
-      build.sh; see recipes/kitty/README.md for what has been run where.
+      All four platforms are built, tested and packed by this recipe:
+      linux-x86_64 under WSL Ubuntu 22.04, linux-arm64 and macOS (arm64,
+      x86_64) on the cvcpkg CI recipe checks. The placeholder pixel check
+      ran on linux-x86_64. On linux-arm64 test.sh skips the window test
+      because cvcpkg's mesa 25.3.6+cvc.1 for arm64 links libLLVM.so.18.1
+      while it depends on llvm20; it runs once mesa is rebuilt. macOS has no
+      window test. Details: recipes/kitty/README.md.

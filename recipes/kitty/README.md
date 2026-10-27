@@ -160,12 +160,14 @@ versions, the relocated copy and the font listing (Core Text).
 
 ## What was run where
 
-| Platform | Where | build | test.sh | pack |
+Checked on 2026-10-26:
+
+| Platform | Where | build | test.sh | pack (gates) |
 |---|---|---|---|---|
-| linux-x86_64 | WSL Ubuntu 22.04 on Windows 11 | ✓ | ✓ including the window test | VERIFY |
-| linux-arm64 | `linux-arm-recipe-check` (GitHub ubuntu-22.04-arm) | VERIFY | VERIFY | VERIFY |
-| macos-arm64 | `macos-recipe-check` (macos-latest) | VERIFY | VERIFY (no window test) | VERIFY |
-| macos-x86_64 | `macos-recipe-check` (macos-15-intel) | VERIFY | VERIFY (no window test) | VERIFY |
+| linux-x86_64 | WSL Ubuntu 22.04 on Windows 11: `cvcpkg install --fallback-to-source`, then `cvcpkg pack` | ✓ | ✓ including the window test and its negative control | ✓ glibc ≤ 2.35, relocatable (113 objects), 63 MB |
+| linux-arm64 | `linux-arm-recipe-check` (GitHub ubuntu-22.04-arm, catalog deps) | ✓ | ✓; X11 back end resolves; window test **skipped**: cvcpkg's arm64 mesa needs `libLLVM.so.18.1` (above) | ✓ glibc ≤ 2.35, relocatable (113 objects), 62 MB |
+| macos-arm64 | `macos-recipe-check` (macos-latest) | ✓ | ✓ (no window test on macOS) | ✓ relocatable (94 objects), 93 MB |
+| macos-x86_64 | `macos-recipe-check` (macos-15-intel) | ✓ | ✓ (no window test on macOS) | ✓ relocatable (94 objects), 93 MB |
 
 None of these runs publish anything. Publishing to cvcpkg.org is a separate,
 production step.
