@@ -1,0 +1,221 @@
+schema_version: 1
+recipe:
+  name: ghostty
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ghostty.org/
+  # Ghostty is MIT. It embeds JetBrains Mono and the Nerd Fonts symbols (SIL
+  # OFL 1.1), and links in statically, on linux, the C/C++ libraries its
+  # build.zig.zon pins (oniguruma, glslang, SPIRV-Cross, simdutf, highway,
+  # utfcpp, wuffs, Dear ImGui, ...) and gtk4-layer-shell as a shared library.
+  # share/doc/ghostty/ carries Ghostty's licence and, on linux, every fetched
+  # package's licence files (third-party/<name>/).
+  license: MIT
+  tags: [tools, terminal]
+  description: >-
+    Ghostty -- a fast, native, GPU-rendered terminal emulator that speaks the
+    kitty graphics protocol including Unicode placeholders (U=1), which is
+    what libcvc's `arigl --terminal` draws with. macOS: the official signed,
+    notarised universal Ghostty.app. Linux: built from the release source
+    tarball with the cvcpkg zig toolchain against cvcpkg's GTK 4 and
+    libadwaita. There is no Windows Ghostty.
+
+# Both payloads are fetched by the build scripts, not by cvcpkg core, so this
+# map DOCUMENTS what build.sh / build-macos.sh download; the enforced sha256
+# values are in build.sh's SRC_SHA256 and build-macos.sh's EXPECTED -- keep
+# the three in sync when bumping. Why not `type: tarball`: release.files.
+# ghostty.org answers 403 to the default Python-urllib User-Agent that cvcpkg
+# core downloads sources with (curl, and zig's own fetcher, are served).
+#
+# linux builds from the release source tarball, which Ghostty asks
+# distributions to build from: unlike a git checkout it carries the
+# pre-generated GTK resources, so the build needs no blueprint-compiler. Its
+# minisign signature (ghostty-1.3.1.tar.gz.minisig) was verified against
+# Ghostty's release key RWQlAjJC23149WL2sEpT/l0QKy7hMIFhYdQOFy0Z7z7PbneUgvlsnYcV
+# (PACKAGING.md) before the sha256 was taken -> "Signature and comment
+# signature verified". macOS repackages the signed, notarised universal app.
+source:
+  type: prebuilt
+  base_url: https://release.files.ghostty.org/1.3.1
+  artifacts:
+    linux-x86_64:
+      file: ghostty-1.3.1.tar.gz
+      sha256: "3349d25600ffbda281197a18314f7d18791969cffe9474f0ff16a45a9ebfccdb"
+    linux-arm64:
+      file: ghostty-1.3.1.tar.gz
+      sha256: "3349d25600ffbda281197a18314f7d18791969cffe9474f0ff16a45a9ebfccdb"
+    macos-x86_64:
+      file: Ghostty.dmg
+      sha256: "18cff2b0a6cee90eead9c7d3064e808a252a40baf214aa752c1ecb793b8f5f69"
+    macos-arm64:
+      file: Ghostty.dmg
+      sha256: "18cff2b0a6cee90eead9c7d3064e808a252a40baf214aa752c1ecb793b8f5f69"
+
+patches: []
+
+depends:
+  build:
+    # build.zig.zon: minimum_zig_version 0.15.2, and Ghostty builds with
+    # exactly one Zig release.
+    - name: zig
+      version: "==0.15.2"
+      platforms: [linux]
+    - name: pkg-config
+      platforms: [linux]
+    # tic compiles the xterm-ghostty terminfo (which is also how Ghostty finds
+    # its share/ghostty at run time); msgfmt the translations.
+    - name: ncurses
+      platforms: [linux]
+    - name: gettext
+      platforms: [linux]
+    - name: patchelf
+      platforms: [linux]
+    # test.sh: a headless X server with software OpenGL to draw into, and a
+    # python3 for the kitty probe and the screenshot check.
+    - name: xvfb
+      platforms: [linux]
+    - name: mesa
+      platforms: [linux]
+    - name: python3
+      platforms: [linux]
+  # What bin/ghostty links (DT_NEEDED) besides glibc, plus fontconfig's data.
+  # gtk4 brings the rest of the GTK stack (pango, cairo, glib, graphene, ...).
+  # OpenGL comes from the host's driver through libepoxy, or from cvcpkg mesa.
+  # macOS needs nothing outside the app.
+  runtime:
+    - name: gtk4
+      version: "^4.16"
+      platforms: [linux]
+    - name: libadwaita
+      version: "^1.6"
+      platforms: [linux]
+    - name: glib
+      platforms: [linux]
+    - name: freetype
+      platforms: [linux]
+    - name: harfbuzz
+      platforms: [linux]
+    - name: fontconfig
+      platforms: [linux]
+    - name: libpng
+      platforms: [linux]
+    - name: zlib
+      platforms: [linux]
+    - name: bzip2
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: wayland
+      platforms: [linux]
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build-macos.sh
+
+package:
+  files:
+    - bin/ghostty
+    # Linux: the zig build install tree.
+    - { glob: "lib/libgtk4-layer-shell*", platforms: [linux] }
+    - { glob: "share/ghostty/", platforms: [linux] }
+    - { glob: "share/terminfo/", platforms: [linux, macos] }
+    - { glob: "share/applications/", platforms: [linux] }
+    - { glob: "share/icons/", platforms: [linux] }
+    - { glob: "share/metainfo/", platforms: [linux] }
+    - { glob: "share/locale/", platforms: [linux] }
+    - { glob: "share/kio/", platforms: [linux] }
+    - { glob: "share/nautilus-python/", platforms: [linux] }
+    - { glob: "share/nvim/", platforms: [linux] }
+    - { glob: "share/vim/", platforms: [linux] }
+    - { glob: "share/bat/", platforms: [linux] }
+    # macOS: the signed Ghostty.app, untouched.
+    - { glob: "lib/ghostty/", platforms: [macos] }
+    - share/man/
+    - share/bash-completion/
+    - share/zsh/
+    - share/fish/
+    - share/doc/ghostty/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    linux: `zig build -Doptimize=ReleaseFast -Dcpu=baseline` with the cvcpkg
+    zig 0.15.2, offline (`--system`) from a package cache that build.sh
+    fills with `zig fetch` and checks against the content hashes pinned in
+    the tarball's build.zig.zon.json; GTK 4, libadwaita, freetype, harfbuzz,
+    fontconfig, libpng and zlib from the cvcpkg prefix. macOS: prebuilt.
+
+notes:
+  - title: "kitty graphics with Unicode placeholders"
+    description: >-
+      This is the cvcpkg terminal for libcvc's `arigl --terminal` in kitty
+      mode, which places images through Unicode placeholders
+      (`a=T,U=1,...`). WezTerm ignores U=1 (recipes/wezterm/README.md);
+      Ghostty draws the picture on the placeholder cells. test.sh proves it
+      on linux with recipes/ghostty/kitty-placeholder-probe.py under Xvfb
+      by counting the picture's pixels in a screenshot
+      (recipes/ghostty/README.md). Ghostty has no Sixel.
+  - title: "Linux: built from source, offline, with pinned Zig packages"
+    platforms: [linux]
+    description: >-
+      Ghostty publishes no Linux binaries, so build.sh compiles the release
+      tarball. Its build.zig.zon.json lists the 36 Zig packages the build
+      can use (Zig libraries, the C libraries Ghostty compiles in, fonts,
+      themes), each with its Zig content hash. build.sh `zig fetch`es each
+      into a cache in the build dir and fails unless zig reports exactly the
+      pinned hash, then runs `zig build --system <cache>/p`, which cannot
+      reach the network. GTK 4, libadwaita, freetype, harfbuzz, fontconfig,
+      libpng, zlib and bzip2 link from the cvcpkg prefix (-fsys); oniguruma,
+      glslang, SPIRV-Cross, simdutf, highway and gtk4-layer-shell, which
+      cvcpkg does not package, are compiled from the pinned packages
+      (-fno-sys). gtk4-layer-shell must be a shared library and lands in
+      lib/.
+  - title: "Linux: OpenGL 4.3 needed at run time"
+    platforms: [linux]
+    description: >-
+      Ghostty renders with OpenGL 4.3 core through GTK, which loads
+      libEGL / libGL through libepoxy from the host's graphics driver. On a
+      machine without one, cvcpkg's mesa (llvmpipe) is enough: install it
+      into the prefix and run with LD_LIBRARY_PATH=<prefix>/lib, as test.sh
+      does under Xvfb.
+  - title: "Linux: desktop files point at `ghostty` on PATH"
+    platforms: [linux]
+    description: >-
+      Ghostty's install writes its own absolute path into the .desktop file
+      and the AppStream metainfo, and installs a D-Bus activation file and a
+      systemd user unit that need one. In a package built in a builder's
+      temporary prefix those paths are wrong, so build.sh rewrites Exec= /
+      TryExec= and the metainfo to plain `ghostty` and leaves the D-Bus
+      service and the systemd unit out (session glue for a system install;
+      without them --gtk-single-instance=true still works, it just cannot be
+      D-Bus-activated). Nothing else records the install location: Ghostty
+      finds share/ghostty and its terminfo from its own executable, so the
+      prefix can be moved.
+  - title: "macOS: the official signed app"
+    platforms: [macos]
+    description: >-
+      Ghostty.dmg from release.files.ghostty.org is a universal (x86_64 +
+      arm64) Ghostty.app for macOS 13+, signed with "Developer ID
+      Application: Mitchell Hashimoto (24VZTF6M5V)" and notarised.
+      build-macos.sh checks the pinned sha256, copies the app whole to
+      lib/ghostty/Ghostty.app with ditto, and refuses it unless `codesign
+      --verify --deep --strict` passes and the team identifier is
+      24VZTF6M5V. bin/ghostty execs the app's binary; man pages, shell
+      completions and the terminfo are copied out beside it. The app's
+      built-in Sparkle updater stays as upstream ships it; set
+      `auto-update = off` in the Ghostty config to keep a pinned version.
+  - title: "Not covered: linux-arm64 (not built yet), Windows, the BSDs"
+    description: >-
+      Ghostty has no Windows port. linux-arm64 goes through the same build.sh
+      (Zig and every dependency exist for it) but has not been built yet.
+      FreeBSD is supported upstream and not attempted here.
