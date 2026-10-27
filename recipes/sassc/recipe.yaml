@@ -59,6 +59,7 @@ notes:
   - title: "Linux only"
     platforms: [linux]
     description: >-
-      Built and tested on linux-x86_64 (Ubuntu 22.04) because that is where
-      the one consumer, libadwaita, is built. sassc's Makefile also supports
-      macOS and the BSDs; add them to the matrix when a recipe there needs it.
+      Built and tested on linux-x86_64 (Ubuntu 22.04) and linux-arm64
+      (ubuntu-22.04-arm), because linux is where the one consumer,
+      libadwaita, is built. sassc's Makefile also supports macOS and the
+      BSDs; add them to the matrix when a recipe there needs it.
