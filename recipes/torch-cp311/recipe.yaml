@@ -82,10 +82,16 @@ package:
   files:
     # torch bundles its own libs under torch/lib/ (auditwheel-vendored); the whole
     # package tree ships. The dist-info dir is "torch-2.8.0+cpu.dist-info".
-    - lib/python3.11*/site-packages/torch/
-    - lib/python3.11*/site-packages/torchgen/
-    - lib/python3.11*/site-packages/functorch/
-    - lib/python3.11*/site-packages/torch-2.8.0*.dist-info/
+    - { glob: "lib/python3.11*/site-packages/torch/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/torchgen/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/functorch/", platforms: [linux] }
+    - { glob: "lib/python3.11*/site-packages/torch-2.8.0*.dist-info/", platforms: [linux] }
+    # Windows install scheme (the windows-x86_64 wheel; job 23182 found only the
+    # Linux layout declared), as torch-cp311-cuda declares it.
+    - { glob: "Lib/site-packages/torch/", platforms: [windows] }
+    - { glob: "Lib/site-packages/torchgen/", platforms: [windows] }
+    - { glob: "Lib/site-packages/functorch/", platforms: [windows] }
+    - { glob: "Lib/site-packages/torch-2.8.0*.dist-info/", platforms: [windows] }
 
 abi:
   cxx_std: 17
