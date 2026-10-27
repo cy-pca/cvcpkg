@@ -30,6 +30,13 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.6
+
+**A release so builders stop the jobs the server gave up on, and so the
+single-file exe can read recipes that another account unpacked.**
+
 - **Fix: a builder kept building jobs the server had already given up on.**
   The offline reaper fails every job of a builder whose heartbeats lapse for
   180 s and told the builder nothing. A builder only logged `job.timeout`, and
@@ -62,7 +69,26 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     signal sent to the builder no longer reaches them. The builder still
     drains in-flight jobs for up to 5 minutes. Then it kills the builds still
     running and lets them report the failure, so none outlives it.
-    `CVCPKG_BUILDER_HEARTBEAT_INTERVAL` (default 60 s) sets the beat.
+    `CVCPKG_BUILDER_HEARTBEAT_INTERVAL` (default 60 s) sets the beat (#479).
+- **Fix: the single-file exe died on recipes that another account had
+  unpacked.** The frozen binary unpacks its embedded recipes once per digest
+  into `<cache>/bundled-recipes/<digest>/`. It did that through a
+  `tempfile.mkdtemp` directory, which it renamed into place. On Windows,
+  Python 3.12.4+ gives a mkdtemp directory a protected ACL that admits only
+  SYSTEM, Administrators and the directory's owner, and the rename keeps that
+  ACL. If an elevated process unpacked a digest first, BUILTIN\Administrators
+  owned the tree, and the same user could not list it unelevated. Every command
+  that reads the recipe set (`cvcpkg build --local`, `cvcpkg recipes --list`)
+  then died with `PermissionError: [WinError 5]`. The tree's `.complete` marker
+  still stat'ed as a file, so the fallback never ran. Now:
+  - The temp directory is created with a plain `mkdir`, so the tree inherits
+    the cache's permissions. On POSIX its mode comes from the umask instead of
+    0700.
+  - A cached tree that cannot be listed is skipped with a warning that names
+    it, and the recipes unpack into the bootloader's temp directory for that
+    run.
+  - A tree that an older release left unreadable stays where it is until it
+    is removed from an elevated shell (#458).
 
 ---
 
