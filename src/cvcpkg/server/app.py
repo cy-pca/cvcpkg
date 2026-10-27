@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
     Form,
@@ -134,6 +135,7 @@ from cvcpkg.server.models import (
     TokenRole,
     TokenRotateRequest,
     TokenRotateResponse,
+    UploadInitMetadata,
     UserListResponse,
     UserProfileResponse,
     WebhookInfo,
@@ -308,6 +310,36 @@ def _reject_overlong_package_fields(**fields: str) -> None:
                 422,
                 f"{column} is {len(value)} characters; the catalog stores at most {limit}",
             )
+
+
+# Advertised in /healthz: publish metadata whose size grows with the bundle
+# (required_deps, provides) may travel in the request body.  A bundle with
+# hundreds of runtime deps (wezterm-crates declares 645) encodes them as a
+# ~50 KB query string, and cvcpkg.org's front end refuses any request line over
+# ~8 KB with 414 before the app sees it.  Clients check for this feature rather
+# than send the lists in a body an older server would ignore, recording [].
+PUBLISH_METADATA_BODY_FEATURE = "publish-metadata-body"
+
+
+def _json_list_param(field: str, query_value: str, body_value: object) -> str:
+    """The JSON-encoded list for *field*: the body's value when given, else the query's.
+
+    422 unless it is a JSON list: the DB path stores the string verbatim, and
+    every catalog read parses it back as one.
+    """
+    if body_value is None:
+        raw = query_value
+    elif isinstance(body_value, str):
+        raw = body_value
+    else:
+        raw = json.dumps(body_value)
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = None
+    if not isinstance(parsed, list):
+        raise HTTPException(422, f"{field} must be a JSON-encoded list")
+    return raw
 
 
 def _edge_public_publish_warning(org: str) -> str:
@@ -2942,6 +2974,7 @@ def create_app(
             mirror_mode=MIRROR_MODE,
             populate_upstream=POPULATE_UPSTREAM,
             populate_stats=dict(_populate_stats) if POPULATE_UPSTREAM else {},
+            features=[PUBLISH_METADATA_BODY_FEATURE],
         )
 
     # ── Admin shutdown ──────────────────────────────────────
@@ -4832,6 +4865,16 @@ def create_app(
             "[]",
             description="JSON-encoded list of virtual slot names this package fills",
         ),
+        required_deps_form: str | None = Form(
+            None,
+            alias="required_deps",
+            description="required_deps as a multipart field; wins over the query parameter",
+        ),
+        provides_form: str | None = Form(
+            None,
+            alias="provides",
+            description="provides as a multipart field; wins over the query parameter",
+        ),
         actor: TokenRecord = Depends(
             require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
         ),
@@ -4841,6 +4884,8 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        required_deps = _json_list_param("required_deps", required_deps, required_deps_form)
+        provides = _json_list_param("provides", provides, provides_form)
         edge_warning = _edge_public_publish_warning(org)
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
@@ -5117,6 +5162,7 @@ def create_app(
             "",
             description="Organization slug. Empty for official/public packages.",
         ),
+        metadata: UploadInitMetadata | None = Body(None),
         actor: TokenRecord = Depends(
             require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
         ),
@@ -5132,6 +5178,10 @@ def create_app(
                 403,
                 "this server is running in mirror mode and does not accept publishes",
             )
+        required_deps = _json_list_param(
+            "required_deps", required_deps, metadata.required_deps if metadata else None
+        )
+        provides = _json_list_param("provides", provides, metadata.provides if metadata else None)
         # Strict-mode edges reject here (fail before the upload); non-strict
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)

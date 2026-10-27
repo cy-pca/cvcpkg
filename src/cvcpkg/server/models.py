@@ -518,6 +518,29 @@ class HealthResponse(BaseModel):
         default_factory=dict,
         description="Rolling stats of the populate loop (last_sync, counts, last_error).",
     )
+    features: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional API behaviours this server supports, for clients that must not "
+            "assume them (e.g. 'publish-metadata-body')."
+        ),
+    )
+
+
+class UploadInitMetadata(BaseModel):
+    """Optional JSON body of ``POST /v1/upload/init``.
+
+    Carries the publish metadata that grows with the bundle, which can make the
+    query string too long for a front-end proxy.  A field given here wins over
+    the query parameter of the same name.
+    """
+
+    required_deps: list | None = Field(
+        default=None, description="Runtime dependency dicts [{name, version}, ...]"
+    )
+    provides: list[str] | None = Field(
+        default=None, description="Virtual slot names this package fills"
+    )
 
 
 # ── Organizations ───────────────────────────────────────────────
