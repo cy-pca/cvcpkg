@@ -42,6 +42,11 @@ depends:
     # one no longer arrives through another dep's build edge.
     - name: python312
       platforms: [windows]
+    # GTK's meson build imports `packaging` on the interpreter meson runs on, as
+    # GLib's does; on Windows that is python312.  From its cvcpkg recipe, never
+    # pip-installed from PyPI at build time (build.ps1 used to).
+    - name: packaging-cp312
+      platforms: [windows]
     - name: gtk4-src
       version: "==4.16.7"
     - ninja
@@ -143,9 +148,14 @@ package:
   files:
     # GTK 4 has no separate libgdk-4 or gdk-4.pc (GDK is part of libgtk-4), and
     # build.sh disables introspection, so there are no .typelib or .gir files.
-    - lib/libgtk-4*
+    # meson with MSVC names the import library lib/gtk-4.lib and the DLL
+    # bin/gtk-4-1.dll, so lib/libgtk-4* is the Unix spelling only.  Windows has
+    # no unix-print backend (gtk4-win32.pc instead, matched by gtk4*.pc).
+    - { glob: "lib/libgtk-4*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/gtk-4.lib", platforms: [windows] }
+    - { glob: "bin/gtk-4-1.dll", platforms: [windows] }
     - lib/pkgconfig/gtk4*.pc
-    - lib/pkgconfig/gtk4-unix-print*.pc
+    - { glob: "lib/pkgconfig/gtk4-unix-print*.pc", platforms: [linux, macos, freebsd, openbsd, netbsd] }
     - include/gtk-4.0/
     - share/gtk-4.0/
     - share/glib-2.0/schemas/org.gtk.*.xml
