@@ -148,9 +148,11 @@ done
 
 # The install templates its own absolute path (the builder's install dir)
 # into these; on PATH is the only location that stays true once installed.
-sed -i "s|${CVC_INSTALL_DIR}/bin/ghostty|ghostty|g" \
-    "${CVC_INSTALL_DIR}/share/applications/com.mitchellh.ghostty.desktop" \
-    "${CVC_INSTALL_DIR}/share/metainfo/com.mitchellh.ghostty.metainfo.xml"
+# Portable in-place sed (BSD/macOS sed needs the suffix argument).
+for f in "${CVC_INSTALL_DIR}/share/applications/com.mitchellh.ghostty.desktop" \
+         "${CVC_INSTALL_DIR}/share/metainfo/com.mitchellh.ghostty.metainfo.xml"; do
+    sed -i.orig "s|${CVC_INSTALL_DIR}/bin/ghostty|ghostty|g" "${f}" && rm -f "${f}.orig"
+done
 # D-Bus activation and the systemd user unit need an absolute path; they are
 # session glue for a system install (see the recipe notes).
 rm -rf "${CVC_INSTALL_DIR}/share/dbus-1" "${CVC_INSTALL_DIR}/share/systemd" \
