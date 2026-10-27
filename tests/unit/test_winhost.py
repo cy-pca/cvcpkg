@@ -448,7 +448,7 @@ class TestRunBuildHook:
         monkeypatch.setattr(
             builder_mod,
             "_find_pwsh",
-            lambda prefix=None: (_ for _ in ()).throw(builder_mod.BuildError("pwsh probe")),
+            lambda *a, **kw: (_ for _ in ()).throw(builder_mod.BuildError("pwsh probe")),
         )
         with pytest.raises(builder_mod.BuildError, match="pwsh probe"):
             builder_mod.run_build(ctx)

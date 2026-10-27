@@ -2339,8 +2339,7 @@ def run_build(
         interpreter = _find_bash()
         cmd = [interpreter, str(script)]
     elif script.suffix == ".ps1":
-        interpreter = _find_pwsh(ctx.prefix)
-        cmd = [interpreter, "-NoProfile", "-NonInteractive", "-File", str(script)]
+        cmd = _pwsh_command(script, ctx.prefix, ctx.build_prefix)
     else:
         raise BuildError(f"Unknown script type: {script.suffix}")
 
@@ -2459,36 +2458,108 @@ def _find_bash() -> str:
     )
 
 
-def _find_pwsh(prefix: Path | None = None) -> str:
-    """Find pwsh 7, preferring a cvcpkg-provided build under *prefix*.
+def _find_pwsh(
+    prefix: Path | None = None,
+    build_prefix: Path | None = None,
+    *,
+    script: Path | None = None,
+) -> str:
+    """Find pwsh 7, preferring a cvcpkg-provided build under the prefixes.
 
     Windows recipe build scripts are ``#!/usr/bin/env pwsh`` and use
     pwsh-7-only syntax; the Windows Store alias ``pwsh.exe`` is not usable
     non-interactively.  Prefer the pwsh installed by the ``powershell`` cvcpkg
-    recipe into the deps prefix (declare it as a ``host_tool``), so a bare
-    build host needs no system pwsh.  Fall back to PATH otherwise -- e.g. when
-    bootstrapping the ``powershell`` recipe itself, whose own build.ps1 must
-    run under a pre-existing pwsh.
+    recipe (declare it as a ``host_tool``): ``--with-deps`` builds host tools
+    into *build_prefix*, an install puts it in *prefix*.  So a bare build host
+    needs no system pwsh.  Fall back to PATH otherwise.
+
+    Last, on Windows, a *script* that declares ``#Requires -Version 5.1`` runs
+    under Windows PowerShell 5.1, which every Windows 10/11 has.  That is how the
+    ``powershell`` recipe bootstraps itself on a host with no pwsh 7 at all.
     """
     candidates: list[Path] = []
-    if prefix is not None:
+    for p in dict.fromkeys(x for x in (build_prefix, prefix) if x is not None):
         if sys.platform == "win32":
             candidates += [
-                prefix / "lib" / "powershell" / "pwsh.exe",
-                prefix / "bin" / "pwsh.exe",
+                p / "lib" / "powershell" / "pwsh.exe",
+                p / "bin" / "pwsh.exe",
             ]
         else:
-            candidates.append(prefix / "bin" / "pwsh")
+            candidates.append(p / "bin" / "pwsh")
     for c in candidates:
         if c.is_file():
             return str(c)
     found = shutil.which("pwsh")
     if found:
         return found
+    if sys.platform == "win32" and script is not None and _runs_on_windows_powershell(script):
+        winps = _windows_powershell()
+        if winps:
+            print(
+                f"cvcpkg: pwsh 7 not found; running {script.name} under Windows "
+                "PowerShell 5.1 (it declares #Requires -Version 5.1)"
+            )
+            return winps
     raise BuildError(
         "pwsh 7 not found -- add the 'powershell' recipe as a host_tool, "
         "or install pwsh 7 on PATH"
+        + (
+            " (a script that runs under Windows PowerShell 5.1 can say so with "
+            "'#Requires -Version 5.1')"
+            if sys.platform == "win32"
+            else ""
+        )
     )
+
+
+# PowerShell's own statements of what a script needs.  ``#Requires -Version``
+# is the oldest version it runs on; ``-PSEdition Core`` rules out Windows
+# PowerShell whatever the version.
+_PS_REQUIRES_VERSION = re.compile(r"^\s*#requires\s+-version\s+(\d+)(?:\.(\d+))?", re.I | re.M)
+_PS_REQUIRES_CORE = re.compile(r"^\s*#requires\b.*-psedition\s+core\b", re.I | re.M)
+
+
+def _runs_on_windows_powershell(script: Path) -> bool:
+    """Whether *script* declares that Windows PowerShell 5.1 runs it.
+
+    It does with ``#Requires -Version 5.1`` (or any lower minimum) and no
+    ``#Requires -PSEdition Core``.  A script that declares no version is taken
+    to need pwsh 7, as cvcpkg's own recipe scripts do.
+    """
+    try:
+        text = script.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    if _PS_REQUIRES_CORE.search(text):
+        return False
+    versions = [
+        (int(m.group(1)), int(m.group(2) or 0)) for m in _PS_REQUIRES_VERSION.finditer(text)
+    ]
+    return bool(versions) and max(versions) <= (5, 1)
+
+
+def _windows_powershell() -> str | None:
+    """Path of Windows PowerShell 5.1's ``powershell.exe``, or None off Windows."""
+    if sys.platform != "win32":
+        return None
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    exe = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    if exe.is_file():
+        return str(exe)
+    return shutil.which("powershell")
+
+
+def _pwsh_command(
+    script: Path, prefix: Path | None = None, build_prefix: Path | None = None
+) -> list[str]:
+    """The command line that runs the PowerShell *script* (see ``_find_pwsh``)."""
+    interpreter = _find_pwsh(prefix, build_prefix, script=script)
+    cmd = [interpreter, "-NoProfile", "-NonInteractive"]
+    if interpreter == _windows_powershell():
+        # Windows PowerShell's default execution policy on client Windows is
+        # Restricted, which refuses every -File script.
+        cmd += ["-ExecutionPolicy", "Bypass"]
+    return [*cmd, "-File", str(script)]
 
 
 def run_test(
