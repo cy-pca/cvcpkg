@@ -60,6 +60,7 @@ if [ "$(uname -s)" = "Linux" ] && [ -n "${CVC_DEPS_PREFIX:-}" ]; then
     # Without those rules "monospace" means nothing and kitty gets DejaVu Sans.)
     mkdir -p "${MOVED}/lib" "${MOVED}/share" "${MOVED}/etc"
     cp -pP "${CVC_DEPS_PREFIX}"/lib/*.so* "${MOVED}/lib/"
+    if [ -d "${CVC_DEPS_PREFIX}/lib/dri" ]; then cp -pR "${CVC_DEPS_PREFIX}/lib/dri" "${MOVED}/lib/"; fi
     cp -pRL "${CVC_DEPS_PREFIX}/share/X11" "${MOVED}/share/"
     if [ -d "${CVC_DEPS_PREFIX}/etc/fonts" ]; then cp -pRL "${CVC_DEPS_PREFIX}/etc/fonts" "${MOVED}/etc/"; fi
     if [ -d "${CVC_DEPS_PREFIX}/share/fonts" ]; then cp -pR "${CVC_DEPS_PREFIX}/share/fonts" "${MOVED}/share/"; fi
@@ -127,12 +128,15 @@ esac
 # number, Xvfb falls back to the abstract socket there and runs.
 FB="${T}/fb"
 mkdir -p "${FB}"
-if [ -n "${XPREFIX}" ]; then export LIBGL_DRIVERS_PATH="${XPREFIX}/lib/dri"; fi
+# Xvfb's own GLX loads Mesa's swrast_dri.so from the prefix it came from.
+xenv=()
+if [ -n "${XPREFIX}" ]; then xenv=(LIBGL_DRIVERS_PATH="${XPREFIX}/lib/dri"); fi
 disp=""
 for n in $(seq 90 130); do
     [ -e "/tmp/.X${n}-lock" ] && continue
     rm -f "${FB}/Xvfb_screen0"
-    "${XVFB}" ":${n}" -screen 0 1100x700x24 -fbdir "${FB}" -nolisten tcp >"${T}/xvfb.log" 2>&1 &
+    env ${xenv[@]+"${xenv[@]}"} "${XVFB}" ":${n}" -screen 0 1100x700x24 -fbdir "${FB}" -nolisten tcp \
+        >"${T}/xvfb.log" 2>&1 &
     xpid=$!
     for _ in $(seq 1 100); do
         if [ -s "${FB}/Xvfb_screen0" ]; then disp="${n}"; break; fi
@@ -146,10 +150,19 @@ done
 export DISPLAY=":${disp}"
 unset WAYLAND_DISPLAY
 
+# kitty's OpenGL: cvcpkg's Mesa (llvmpipe) in the copy, which its GLFW
+# dlopens through the prefix RPATH. glvnd is told the vendor and Mesa where
+# its drivers are, so that a GLX vendor the host's glvnd might fall back to
+# (a distro's own, older Mesa) cannot take over. LIBGL_DEBUG puts Mesa's
+# loader messages in the log.
+glenv=(LIBGL_DEBUG=verbose)
+if [ -d "${MOVED}/lib/dri" ]; then
+    glenv+=(LIBGL_DRIVERS_PATH="${MOVED}/lib/dri" __GLX_VENDOR_LIBRARY_NAME=mesa)
+fi
 # The program in the window runs on kitty's own Python (+launch), so the test
 # needs no Python from the host. --debug-rendering logs the GL version,
 # --debug-font-fallback the fonts.
-"${K}" --config NONE --class org.cvcpkg.kitty-test --debug-rendering --debug-font-fallback \
+env "${glenv[@]}" "${K}" --config NONE --class org.cvcpkg.kitty-test --debug-rendering --debug-font-fallback \
     -o linux_display_server=x11 -o initial_window_width=1000 -o initial_window_height=600 \
     -o remember_window_size=no -o update_check_interval=0 -o allow_remote_control=no \
     -o confirm_os_window_close=0 -o font_size=11 \
@@ -158,13 +171,18 @@ unset WAYLAND_DISPLAY
 KPID=$!
 PIDS="${KPID} ${PIDS}"
 
+diag() {
+    sed 's/^/  kitty: /' "${T}/kitty.log" | tail -n 25
+    grep -i -E 'glx|dri|swrast|mesa|\(EE\)' "${T}/xvfb.log" | sed 's/^/  xvfb: /' | head -n 15 || true
+}
+
 SHOT="${FB}/Xvfb_screen0"
 rc=3
 verdict=""
 for _ in $(seq 1 120); do
     sleep 1
     if ! kill -0 "${KPID}" 2>/dev/null; then
-        echo "FAIL: kitty exited"; sed 's/^/  kitty: /' "${T}/kitty.log"; exit 1
+        echo "FAIL: kitty exited"; diag; exit 1
     fi
     rc=0
     verdict="$("${K}" +launch "${SCRIPT_DIR}/probe-check.py" "${SHOT}")" || rc=$?
@@ -182,9 +200,9 @@ echo "  screen: ${verdict}"
 case "${rc}" in
     0) echo "  OK: kitty draws the a=T,U=1 picture on its placeholder cells [GL: ${gl:-?}; font: ${font:-?}]" ;;
     2) echo "FAIL: kitty drew the U=1 picture beside its placeholder grid"; exit 1 ;;
-    3) echo "FAIL: the probe's pictures did not appear within 120 s"
-       sed 's/^/  kitty: /' "${T}/kitty.log" | tail -n 20; exit 1 ;;
-    *) echo "FAIL: unexpected screen"; sed 's/^/  kitty: /' "${T}/kitty.log" | tail -n 20; exit 1 ;;
+    3) echo "FAIL: the probe's pictures did not appear within 120 s"; diag; exit 1 ;;
+    *) echo "FAIL: unexpected screen"; diag; exit 1 ;;
 esac
+grep -E '^libGL: ' "${T}/kitty.log" | sort -u | sed 's/^/  /' | head -n 5 || true
 
 echo "-- kitty smoke test passed --"
