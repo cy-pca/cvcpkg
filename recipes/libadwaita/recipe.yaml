@@ -100,9 +100,13 @@ notes:
       (no Adw-1.typelib / .gir), so PyGObject and gjs cannot load it; Vala
       bindings need the .gir, and the demo, examples and tests are not built.
       C (and Zig through @cImport) consumers are covered.
-  - title: "Linux only"
+  - title: "Linux only; linux-arm64 waits on a gettext fix"
     platforms: [linux]
     description: >-
-      Built and tested on linux-x86_64 (Ubuntu 22.04). libadwaita also builds
-      on macOS and Windows against GTK there; add those to the matrix with a
-      consumer that needs them.
+      Built and tested on linux-x86_64 (Ubuntu 22.04) and linux-arm64
+      (ubuntu-22.04-arm). On arm64 that needed cvcpkg's iconv installed
+      beside it: the published gettext 1.0+cvc.5 for linux-arm64 ships a
+      msgfmt that needs libiconv.so.2 without declaring iconv, so the
+      translations fail there until that bundle is republished. libadwaita
+      also builds on macOS and Windows against GTK there; add those to the
+      matrix with a consumer that needs them.
