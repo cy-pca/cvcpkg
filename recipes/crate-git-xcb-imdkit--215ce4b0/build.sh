@@ -29,10 +29,10 @@ mkdir -p "${dest}"
 cp -R "${CVC_SOURCE_DIR}/." "${dest}/"
 rm -rf "${dest}/deps/xcb-imdkit"
 mkdir -p "${dest}/deps/xcb-imdkit"
-# GNU tar reads "C:\..." (a Windows builder's paths) as host:path without this.
-local_flag=""
-tar --help 2>/dev/null | grep -q -- '--force-local' && local_flag="--force-local"
-tar ${local_flag} -xzf "${sub}" -C "${dest}/deps/xcb-imdkit" --strip-components=1
+# Unpack inside the directory, reading the archive from stdin: on a Windows
+# builder GNU tar takes "C:\..." in -f as host:path and unquotes escapes in -C
+# names ("C:\Users\tfx" becomes "Users<TAB>fx"), so tar sees no Windows path.
+(cd "${dest}/deps/xcb-imdkit" && tar -xzf - --strip-components=1) < "${sub}"
 [ -f "${dest}/deps/xcb-imdkit/CMakeLists.txt" ] \
     || { echo "the fcitx/xcb-imdkit archive did not unpack into deps/xcb-imdkit" >&2; exit 1; }
 # A git source has no Cargo.lock checksum: "package" is null, as cargo vendor
