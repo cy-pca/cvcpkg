@@ -221,13 +221,15 @@ public static class CvcShot {
       var px = new byte[d.Stride * d.Height];
       Marshal.Copy(d.Scan0, px, 0, px.Length);
       bmp.UnlockBits(d);
-      long red = 0, green = 0, blue = 0;
+      long red = 0, green = 0, blue = 0, white = 0;
       for (int y = 0; y < bmp.Height; y++) for (int x = 0; x < bmp.Width; x++) {
         int i = y * d.Stride + x * 4, b = px[i], gr = px[i + 1], rd = px[i + 2];
         if (rd > 150 && gr < 100 && b < 100) red++;
         else if (gr > 150 && rd < 100 && b < 100) green++;
         else if (b > 200 && rd < 60 && gr < 60) blue++;
+        else if (rd > 250 && gr > 250 && b > 250) white++;
       }
+      if (white * 10 >= (long)bmp.Width * bmp.Height * 9) return "blank";
       return red + " " + green + " " + blue;
     }
   }
@@ -251,6 +253,12 @@ EOF
     counts="$(powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
         -File "$(cygpath -w "${T}/shot.ps1")" -Dir "$(cygpath -w "${MOVED}/bin")" \
         -Out "$(cygpath -w "${T}/window.png")" 2>&1 | tr -d '\r')"
+    # While the session is locked or its display is off, nothing is composited:
+    # PrintWindow returns the frame around a blank white client area, which
+    # WezTerm (dark by default) never draws. Nothing to judge the rendering by.
+    case "${counts}" in
+        blank) echo "  SKIP: pixel check (the capture is blank: locked session or display off)"; return 0 ;;
+    esac
     read -r red green blue <<<"${counts}"
     case "${red}:${green}:${blue}" in
         *[!0-9:]*|*::*|:*|*:) echo "FAIL: could not capture the window: ${counts}"; return 1 ;;
