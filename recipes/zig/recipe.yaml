@@ -1,0 +1,153 @@
+schema_version: 1
+recipe:
+  name: zig
+  # Ghostty 1.3.x pins this exact release (build.zig.zon minimum_zig_version,
+  # and upstream's "one specific Zig per Ghostty release" table). Zig has no
+  # stable language yet, so a Zig project builds with the release it was
+  # written for; bump this together with the recipes that build with it.
+  upstream_version: "0.15.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ziglang.org/
+  # The compiler and standard library are MIT. lib/zig/ also carries the libc
+  # and C++ runtime sources Zig builds on demand for its targets (musl, glibc
+  # stubs, mingw-w64, wasi-libc, libc++/libc++abi/libunwind, ...), each under
+  # its own licence in its own directory.
+  license: MIT
+  tags: [language, compiler, tools, zig]
+  description: >-
+    The Zig toolchain -- the zig compiler, build system and package manager,
+    its standard library, and the `zig cc` / `zig c++` C and C++ compilers
+    with libc for every target -- repackaged from the official ziglang.org
+    binary release. A build-time dependency for recipes that build with
+    `zig build` (ghostty), and a hermetic C/C++ cross compiler.
+
+# The payload is upstream's prebuilt release; nothing is compiled here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by the build scripts, not by cvcpkg core, so
+# this map DOCUMENTS what build.sh / build.ps1 download. The enforced sha256
+# values are in build.sh's sha_for() and build.ps1's $expected -- keep the
+# three in sync when bumping.
+#
+# Each value is the `shasum` of https://ziglang.org/download/index.json for
+# 0.15.2. Every file was downloaded, re-hashed, and its detached minisign
+# signature (<file>.minisig beside it) verified against the Zig Software
+# Foundation's release key from https://ziglang.org/download/:
+#   RWSGOq2NVecA2UPNdBUZykf1CCb147pkmdtYxgb3Ti+JO/wCYvhbAb/U
+#   -> "Signature and comment signature verified", trusted comment
+#      "file:<file> hashed" for each of the six below.
+source:
+  type: prebuilt
+  base_url: https://ziglang.org/download/0.15.2
+  artifacts:
+    linux-x86_64:
+      file: zig-x86_64-linux-0.15.2.tar.xz
+      sha256: "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239"
+    linux-arm64:
+      file: zig-aarch64-linux-0.15.2.tar.xz
+      sha256: "958ed7d1e00d0ea76590d27666efbf7a932281b3d7ba0c6b01b0ff26498f667f"
+    macos-x86_64:
+      file: zig-x86_64-macos-0.15.2.tar.xz
+      sha256: "375b6909fc1495d16fc2c7db9538f707456bfc3373b14ee83fdd3e22b3d43f7f"
+    macos-arm64:
+      file: zig-aarch64-macos-0.15.2.tar.xz
+      sha256: "3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b"
+    freebsd-x86_64:
+      file: zig-x86_64-freebsd-0.15.2.tar.xz
+      sha256: "5509ff57cd3f219165caed0da10221739af82742b9edfcda3f7bfaf4da7212dd"
+    windows-x86_64:
+      file: zig-x86_64-windows-0.15.2.zip
+      sha256: "3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c"
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/zig/
+    - share/doc/zig/
+    - glob: bin/zig
+      platforms: [linux, macos, freebsd]
+    - glob: bin/zig.exe
+      platforms: [windows]
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. The distribution's
+    zig executable becomes bin/zig and its lib/ directory lib/zig/, the
+    layout of a `zig build install` from source.
+
+notes:
+  - title: "Layout: bin/zig and lib/zig/, and it relocates"
+    description: >-
+      Upstream's archive is a directory holding the zig executable beside a
+      lib/ of the standard library, compiler-rt and libc sources. Here the
+      executable is bin/zig (bin\zig.exe) and that lib/ is lib/zig/, which is
+      where zig looks first after its own directory: it searches each parent
+      of its resolved executable path for lib/zig/std/std.zig, so nothing
+      records the install location and the prefix can be moved. test.sh
+      checks that `zig env` reports the copy's lib/zig after relocating. Do
+      not move zig away from lib/zig, and do not set ZIG_LIB_DIR. The zig
+      executable is statically linked on Linux, so there is no glibc floor.
+  - title: "Caches: ~/.cache/zig unless told otherwise"
+    description: >-
+      zig keeps compiled artifacts and fetched packages in a global cache
+      (ZIG_GLOBAL_CACHE_DIR, default ~/.cache/zig, %LOCALAPPDATA%\zig on
+      Windows) and a per-project .zig-cache (ZIG_LOCAL_CACHE_DIR). A build
+      that must not touch the user's home sets both into its build dir, as
+      test.sh and recipes/ghostty/build.sh do.
+  - title: "Hermetic builds with zig build"
+    description: >-
+      `zig build` downloads the packages a build.zig.zon lists on first use
+      and checks each against the content hash recorded there, so a pinned
+      build.zig.zon is a lockfile. For an offline build, fetch them into a
+      cache directory first (`zig fetch <url>` prints the hash it stored,
+      to compare with the expected one) and then run `zig build --system
+      <cache>/p`, which never touches the network -- the method in
+      recipes/ghostty/build.sh. `zig cc` needs no system compiler or libc
+      headers: it builds the libc it links against from lib/zig/libc.
+  - title: "macOS arm64 with Xcode 26.4+: native links fail (upstream bug)"
+    platforms: [macos]
+    description: >-
+      zig 0.15.2's Mach-O linker does not match aarch64-macos against the
+      arm64e-macos entries that the macOS 26.4+ SDKs' libSystem.tbd carries,
+      so on Apple silicon with Xcode / Command Line Tools 26.4 or newer every
+      native link (zig build-exe, zig cc, zig build) fails with undefined
+      libSystem symbols (_abort, _getenv, ...): ziglang/zig#31665, fixed for
+      zig 0.16.0, not backported. Intel Macs, and older SDKs, are not
+      affected. Workarounds: for zig build-exe / test / cc / c++, an explicit
+      target (`-target aarch64-macos`) links against zig's own
+      lib/zig/libc/darwin stubs and works. `zig build` compiles its build
+      runner natively whatever -Dtarget says, so it needs an older SDK:
+      DEVELOPER_DIR pointing at an Xcode whose macOS SDK is older than 26.4
+      (Xcode 26.3, 16.x). test.sh recognises exactly this failure and tests
+      both workarounds. The ghostty recipe does not use zig on macOS.
+  - title: "Verified platforms"
+    description: >-
+      Built, tested and packed: linux-x86_64 (Ubuntu 22.04), linux-arm64
+      (GitHub ubuntu-22.04-arm), macos-x86_64 (GitHub macos-15-intel),
+      macos-arm64 (GitHub macos-26-arm64, with the workaround above),
+      freebsd-x86_64 (the dev cluster's builder) and windows-x86_64
+      (Windows 11).
