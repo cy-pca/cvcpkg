@@ -121,6 +121,17 @@ case "${missing}" in
     *) echo "FAIL: kitty's X11 back end cannot load: ${missing}"; ldd "${GLFW_X11}"; exit 1 ;;
 esac
 
+# The window's software OpenGL is cvcpkg's mesa (a build dependency), copied
+# above. If that does not load, glvnd falls back to whatever GLX the host
+# has, which cannot use this Mesa's driver, and kitty fails to make a GL
+# context -- a fault in the mesa bundle, not in kitty. Seen with
+# mesa 25.3.6+cvc.1 for linux-arm64, whose libgallium links libLLVM.so.18.1
+# while the bundle depends on llvm20 (libLLVM.so.20.1).
+if [ -e "${MOVED}/lib/libGLX_mesa.so.0" ]; then
+    glmissing="$(ldd "${MOVED}/lib/libGLX_mesa.so.0" | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')"
+    [ -z "${glmissing}" ] || skip "cvcpkg's mesa does not load here (missing: ${glmissing% })"
+fi
+
 # -fbdir: the screen is the file FB/Xvfb_screen0 (XWD), always current; it
 # appears once the server has set its screen up. The display number is picked
 # here, not with -displayfd: that also insists on a socket in /tmp/.X11-unix,
