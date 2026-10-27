@@ -206,13 +206,19 @@ def test_unreadable_race_winner_leaves_no_temp_copy(tmp_path, embedded, meipass,
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
-def test_tree_inherits_the_cache_acl(embedded):
+def test_tree_admits_whoever_the_cache_admits(tmp_path, embedded):
     # The tree used to be a renamed tempfile.mkdtemp dir, whose protected ACL
     # (SYSTEM, Administrators, owner) shut out the same user unelevated when
-    # the elevated builder unpacked it.  icacls marks inherited entries (I).
-    tree = find_recipes_dir().parent
-    out = subprocess.run(["icacls", str(tree)], capture_output=True, text=True, check=True)
-    assert "(I)" in out.stdout
+    # an elevated process unpacked it.  Grant Users (BU) on the cache root and
+    # check that the tree has it too, by SID in the SDDL that /save writes.
+    root = tmp_path / "cache" / "bundled-recipes"
+    root.mkdir(parents=True)
+    grant = ["icacls", str(root), "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"]
+    subprocess.run(grant, capture_output=True, check=True)
+    tree = br.embedded_recipes_dir(root).parent
+    saved = tmp_path / "acl.txt"
+    subprocess.run(["icacls", str(tree), "/save", str(saved)], capture_output=True, check=True)
+    assert ";;;BU)" in saved.read_text(encoding="utf-16-le")  # no BOM
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
