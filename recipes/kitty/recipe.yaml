@@ -149,7 +149,8 @@ toolchain:
     Prebuilt release binaries -- nothing is compiled. build.sh verifies the
     pinned sha256 and stages upstream's bundle in lib/kitty/ with bin/
     launchers (linux: the self-contained .txz bundle, its objects switched
-    to DT_RPATH; macOS: the signed kitty.app from the .dmg).
+    to DT_RPATH; macOS: upstream's kitty.app from the .dmg, minus its
+    build-machine LC_RPATHs).
 
 notes:
   - title: "Unicode placeholders (U=1) work"
@@ -172,10 +173,14 @@ notes:
       a DT_RUNPATH, which LD_LIBRARY_PATH outranks, and cvcpkg's activate
       script puts the prefix's lib/ there -- so a prefix holding other
       versions of those libraries would have them loaded into kitty. build.sh
-      therefore gives every object in the bundle a DT_RPATH to the bundle's
-      lib/ (as recipes/libreoffice does), and cvcpkg appends the prefix's
-      lib/ after it for what the bundle does not carry.
-  - title: "Linux: host requirements"
+      therefore gives every object in the bundle a DT_RPATH (as
+      recipes/libreoffice does): the bundle's lib/ first, then the prefix's
+      lib/ for what the bundle does not carry. The second entry is written
+      out rather than left to cvcpkg's relocation pass, which adds it only
+      for libraries a dependency's installed manifest lists; the linux-arm64
+      libx11, libxcb and libxcursor bundles carry no manifest, and kitty's
+      X11 back end then found no libX11 in the prefix.
+  - title: "Linux: host requirement libdbus-1 and the GL driver"
     platforms: [linux]
     description: >-
       Like any GUI program, kitty takes the OpenGL driver from the host:
@@ -210,6 +215,18 @@ notes:
       Point DBUS_SESSION_BUS_ADDRESS at a path where no bus listens (as
       test.sh does) and kitty starts in seconds; it only loses the portal's
       colour-scheme hints and desktop notifications.
+  - title: "macOS: kitty.app is edited, so its seal no longer verifies"
+    platforms: [macos]
+    description: >-
+      Upstream's notarised kitty.app is staged under lib/kitty/ and run
+      through bin/kitty and bin/kitten. Its Python.framework and extension
+      modules carry an LC_RPATH into kitty's build machine
+      (/Users/Shared/kitty-build/sw/sw/lib), which build.sh deletes, and
+      cvcpkg's relocation pass rewrites the install names of the dylibs in
+      Contents/Frameworks. Each edited object is re-signed ad hoc and kitty
+      runs (test.sh), but `codesign --verify` of the whole app fails. A
+      quarantined copy would not pass Gatekeeper; one installed by cvcpkg
+      carries no quarantine attribute.
   - title: "Isolate a test run from the user's kitty"
     description: >-
       Use `kitty --config NONE` (no kitty.conf) and point

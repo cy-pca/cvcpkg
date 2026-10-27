@@ -55,11 +55,13 @@ if [ "$(uname -s)" = "Linux" ] && [ -n "${CVC_DEPS_PREFIX:-}" ]; then
     # fontconfig config and fonts and the X11 data beside it -- and drop
     # what the test harness adds, so that what runs below is the RPATHs and
     # the bin/ launchers' defaults, not LD_LIBRARY_PATH.
-    # (-L: xkeyboard-config's share/X11/xkb links to ../xkeyboard-config-2.)
+    # (-L: xkeyboard-config's share/X11/xkb links to ../xkeyboard-config-2,
+    # and fontconfig's etc/fonts/conf.d/*.conf to share/fontconfig/conf.avail.
+    # Without those rules "monospace" means nothing and kitty gets DejaVu Sans.)
     mkdir -p "${MOVED}/lib" "${MOVED}/share" "${MOVED}/etc"
     cp -pP "${CVC_DEPS_PREFIX}"/lib/*.so* "${MOVED}/lib/"
     cp -pRL "${CVC_DEPS_PREFIX}/share/X11" "${MOVED}/share/"
-    if [ -d "${CVC_DEPS_PREFIX}/etc/fonts" ]; then cp -pR "${CVC_DEPS_PREFIX}/etc/fonts" "${MOVED}/etc/"; fi
+    if [ -d "${CVC_DEPS_PREFIX}/etc/fonts" ]; then cp -pRL "${CVC_DEPS_PREFIX}/etc/fonts" "${MOVED}/etc/"; fi
     if [ -d "${CVC_DEPS_PREFIX}/share/fonts" ]; then cp -pR "${CVC_DEPS_PREFIX}/share/fonts" "${MOVED}/share/"; fi
     unset LD_LIBRARY_PATH XKB_CONFIG_ROOT XLOCALEDIR
 fi
@@ -145,8 +147,9 @@ export DISPLAY=":${disp}"
 unset WAYLAND_DISPLAY
 
 # The program in the window runs on kitty's own Python (+launch), so the test
-# needs no Python from the host. --debug-rendering logs the GL version.
-"${K}" --config NONE --class org.cvcpkg.kitty-test --debug-rendering \
+# needs no Python from the host. --debug-rendering logs the GL version,
+# --debug-font-fallback the fonts.
+"${K}" --config NONE --class org.cvcpkg.kitty-test --debug-rendering --debug-font-fallback \
     -o linux_display_server=x11 -o initial_window_width=1000 -o initial_window_height=600 \
     -o remember_window_size=no -o update_check_interval=0 -o allow_remote_control=no \
     -o confirm_os_window_close=0 -o font_size=11 \
@@ -169,11 +172,15 @@ for _ in $(seq 1 120); do
 done
 "${K}" +launch "${SCRIPT_DIR}/probe-check.py" "${SHOT}" --png "${T}/screen.png" >/dev/null || true
 if [ -n "${CVC_KITTY_SCREENSHOT:-}" ]; then cp "${T}/screen.png" "${CVC_KITTY_SCREENSHOT}"; fi
+# kitty writes the GL version to a buffered stdout; let it exit and flush.
+kill "${KPID}" 2>/dev/null || true
+for _ in $(seq 1 50); do kill -0 "${KPID}" 2>/dev/null || break; sleep 0.2; done
 gl="$(sed -n "s/.*GL version string: '\([^']*\)'.*/\1/p" "${T}/kitty.log" | head -n 1)"
+font="$(sed -n 's/.* Normal: \([^:]*\):.*/\1/p' "${T}/kitty.log" | head -n 1)"
 
 echo "  screen: ${verdict}"
 case "${rc}" in
-    0) echo "  OK: kitty draws the a=T,U=1 picture on its placeholder cells [GL: ${gl:-?}]" ;;
+    0) echo "  OK: kitty draws the a=T,U=1 picture on its placeholder cells [GL: ${gl:-?}; font: ${font:-?}]" ;;
     2) echo "FAIL: kitty drew the U=1 picture beside its placeholder grid"; exit 1 ;;
     3) echo "FAIL: the probe's pictures did not appear within 120 s"
        sed 's/^/  kitty: /' "${T}/kitty.log" | tail -n 20; exit 1 ;;

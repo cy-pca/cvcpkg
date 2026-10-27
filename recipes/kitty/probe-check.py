@@ -11,9 +11,11 @@ drawn into 16 x 4 cells; the probe's text is grey-white on black, so neither
 colour occurs anywhere else on the screen. This finds each picture's bounding
 box and exits
 
-  0  B's box starts in A's column, below A, and has A's size: B covers its
-     grid (the placeholder cells start in the same column as A's picture);
-  2  B's box starts at least a picture-width right of A's: drawn at the
+  0  B is below A, centred on A's column and no larger than A: it is on its
+     placeholder grid, which spans the same 16 columns as A's picture (kitty
+     fits a placeholder image into its grid keeping the aspect ratio, so B
+     may be narrower than A, with grid cells showing beside it);
+  2  B's centre is half a picture-width or more right of A's: drawn at the
      cursor beside the grid, i.e. the terminal ignored U=1;
   3  A or B is not on the screen (not drawn yet, or no kitty graphics);
   1  anything else.
@@ -127,20 +129,25 @@ def main():
     if teal.n < 200 or orange.n < 200:
         print(f"{line} -> a picture is missing")
         return 3
+    # A is stretched over its 16 x 4 cells; B is fitted into its grid with
+    # the aspect ratio kept and centred, so the two share a centre column
+    # but not necessarily a size. (The 4-px frame is not teal: A's box is
+    # 15/16 of its cells, near enough.)
     cell = teal.w / COLS
-    if orange.x0 >= teal.x0 + teal.w:
-        print(f"{line} -> B is {(orange.x0 - teal.x0) / cell:.1f} cells right of A:"
+    off = ((orange.x0 + orange.x1) - (teal.x0 + teal.x1)) / 2 / cell
+    if off >= COLS / 2:
+        print(f"{line} -> B's centre is {off:.1f} cells right of A's:"
               " beside the grid, U=1 ignored")
         return 2
-    same_column = abs(orange.x0 - teal.x0) <= cell
-    same_size = abs(orange.w - teal.w) <= cell and abs(orange.h - teal.h) <= teal.h / 4
+    centred = abs(off) <= 1
+    fits = 0.3 * teal.w <= orange.w <= 1.1 * teal.w and orange.h <= 1.1 * teal.h
     filled = orange.n >= 0.6 * orange.w * orange.h
     below = orange.y0 > teal.y1
-    if same_column and same_size and filled and below:
-        print(f"{line} -> B covers its placeholder grid")
+    if centred and fits and filled and below:
+        print(f"{line} -> B is on its placeholder grid (centre {off:+.1f} cells from A's)")
         return 0
-    print(f"{line} -> unexpected layout (same column {same_column}, same size"
-          f" {same_size}, filled {filled}, below A {below})")
+    print(f"{line} -> unexpected layout (centre {off:+.1f} cells from A's, fits {fits},"
+          f" filled {filled}, below A {below})")
     return 1
 
 
