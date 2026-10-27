@@ -1,0 +1,69 @@
+schema_version: 1
+recipe:
+  name: conpty
+  upstream_version: "1.25.260930003"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/microsoft/terminal
+  license: MIT
+  tags: [libraries, terminal]
+  description: >-
+    Microsoft's ConPTY, the Windows pseudo console, as Windows Terminal ships it
+    and newer than the one in Windows itself: conpty.dll and OpenConsole.exe in
+    bin\, from the Microsoft.Windows.Console.ConPTY package that Microsoft
+    attaches to its Windows Terminal 1.25.2733.0 release on GitHub. A terminal
+    that loads conpty.dll from its own directory (WezTerm) gets this one when
+    it is installed in the same prefix.
+
+# The payload is Microsoft's prebuilt package; nothing is compiled here.
+#
+# `prebuilt` sources are fetched by build.ps1, not by cvcpkg core, so this map
+# DOCUMENTS what it downloads; the enforced sha256 is build.ps1's $expected.
+# It is the asset of microsoft/terminal's v1.25.2733.0 release (stable,
+# 2026-10-02), and the sha256 is the digest GitHub publishes for it. The same
+# version is on nuget.org, repository-signed by nuget.org, so its bytes
+# differ; the conpty.dll and OpenConsole.exe inside the two are identical.
+source:
+  type: prebuilt
+  artifacts:
+    windows-x86_64:
+      url: https://github.com/microsoft/terminal/releases/download/v1.25.2733.0/Microsoft.Windows.Console.ConPTY.1.25.260930003.nupkg
+      sha256: "6d6f8b008c655d814c498d8205d4012dcd4d0b6dfc1096461d0a185d1e3caf03"
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - bin/conpty.dll
+    - bin/OpenConsole.exe
+    - share/doc/conpty/
+
+notes:
+  - title: "Why a newer ConPTY"
+    description: >-
+      ConPTY parses what a console program writes and re-emits it to the
+      terminal. Older builds -- the one WezTerm 20240203 bundled, February
+      2024 -- drop APC and DCS sequences, so kitty graphics and Sixel from a
+      Windows program never reach the terminal. This one passes them through
+      (checked with WezTerm: recipes/wezterm/README.md).
+  - title: "Layout"
+    description: >-
+      The x64 conpty.dll and OpenConsole.exe go flat in bin\: conpty.dll
+      starts the OpenConsole.exe next to it. Microsoft's own MSBuild targets
+      put OpenConsole.exe in an x64\ subdirectory; flat works as well (the
+      pane's OpenConsole.exe was seen running from bin\). The package also
+      carries x86 and arm64 builds and a conpty.h / conpty.lib for linking;
+      they are not shipped.

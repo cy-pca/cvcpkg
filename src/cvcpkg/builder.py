@@ -336,7 +336,7 @@ class Recipe:
         if not recipe_yaml.is_file():
             raise RecipeError(f"recipe.yaml not found in {recipe_dir}")
 
-        with open(recipe_yaml) as f:
+        with open(recipe_yaml, encoding="utf-8") as f:
             raw = yaml.safe_load(f)
 
         recipe_block = raw.get("recipe", {})
@@ -1909,7 +1909,7 @@ def _dep_manifest(prefixes: Sequence[Path], name: str) -> dict[str, Any] | None:
 
     def load(path: Path) -> dict[str, Any] | None:
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = yaml.load(f, Loader=loader)
         except (OSError, yaml.YAMLError):
             return None

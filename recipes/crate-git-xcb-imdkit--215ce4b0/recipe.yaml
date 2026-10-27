@@ -1,0 +1,47 @@
+schema_version: 1
+recipe:
+  name: crate-git-xcb-imdkit--215ce4b0
+  upstream_version: "0.3.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/wez/xcb-imdkit-rs
+  # The crate and the fcitx xcb-imdkit C library it compiles in are both
+  # LGPL-2.1-only.
+  license: "LGPL-2.1-only"
+  tags: [source, rust-crate]
+  description: >-
+    The xcb-imdkit 0.3.0 crate (an XIM input-method client over XCB) as a git
+    dependency pins it: github.com/wez/xcb-imdkit-rs at commit 215ce4b08ac9,
+    with its deps/xcb-imdkit submodule (fcitx/xcb-imdkit at 30e2f16f9a8b), as
+    one entry of the cargo directory source share/cargo/crates/
+    (docs/rust-crates.md). crates.io has only xcb-imdkit 0.1.x, so it is not a
+    generated crate-<name>--<version> package. WezTerm's Cargo.lock pins it.
+
+# The GitHub archive of the pinned commit (dev-cluster builders cannot fetch
+# `type: git` sources), sha256 taken after download. The submodule is a second
+# archive, fetched and checked by build.sh: the archive of a commit does not
+# include its submodules.
+source:
+  type: tarball
+  url: https://github.com/wez/xcb-imdkit-rs/archive/215ce4b08ac9c4822e541efd4f4ffb1062806051.tar.gz
+  sha256: "ccc3c08069eea1764eb72bf7e21e3e80bd9c0a528bae6eb41f7a4d68332ef63d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/cargo/crates/xcb-imdkit-0.3.0-git-215ce4b0/
