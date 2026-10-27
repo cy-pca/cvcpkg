@@ -1,0 +1,112 @@
+schema_version: 1
+recipe:
+  name: libadwaita
+  # The newest series that builds against cvcpkg's GTK 4.16: libadwaita 1.6
+  # needs GTK >= 4.15.2, 1.7 needs >= 4.17.5. Ghostty 1.3 needs >= 1.5 (its UI
+  # files use AdwDialog, AdwToolbarView, AdwTabView). Bump the series together
+  # with gtk4.
+  upstream_version: "1.6.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://gnome.pages.gitlab.gnome.org/libadwaita/
+  license: LGPL-2.1-or-later
+  tags: [graphics, gui]
+  description: >-
+    libadwaita -- the GNOME building blocks on top of GTK 4: adaptive
+    widgets (header bars, tab views, toolbar views, dialogs, toasts,
+    preferences pages), the Adwaita stylesheet, and light / dark / accent
+    colour handling. Built from source with Meson against the cvcpkg GTK 4
+    stack; Ghostty's Linux front end is written against it.
+
+source:
+  # sha256 from download.gnome.org/sources/libadwaita/1.6/libadwaita-1.6.10.sha256sum.
+  type: tarball
+  url: https://download.gnome.org/sources/libadwaita/1.6/libadwaita-1.6.10.tar.xz
+  sha256: "714a486e748e1b7de29101436fba3bbb61f74997f373c6af9651e23e859eb1f6"
+  strip_components: 1
+
+patches:
+  # Adds -Dappstream (default enabled); build.sh disables it. See the notes.
+  - appstream-optional.patch
+
+depends:
+  build:
+    - meson
+    - ninja
+    - pkg-config
+    # The stylesheet is SCSS, compiled at build time; the release tarball
+    # ships no CSS.
+    - sassc
+    # src/gen-public-types.py and glib's glib-mkenums are Python scripts
+    # (`#!/usr/bin/env python3`); build.sh puts the build prefix first on PATH.
+    - python3
+    # msgfmt for share/locale/*/libadwaita.mo. Declared so every build ships
+    # the translations: meson silently skips them when no msgfmt is found,
+    # and uses whatever host one is on PATH otherwise.
+    - name: gettext
+      platforms: [linux]
+  runtime:
+    - name: gtk4
+      version: "^4.16"
+    - name: glib
+      version: "^2.80"
+    - name: fribidi
+      version: "^1.0"
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libadwaita-1*
+    - lib/pkgconfig/libadwaita-1.pc
+    - include/libadwaita-1/
+    - share/locale/
+  pkg_config:
+    - libadwaita-1
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Built without AppStream: the *_from_appdata() About dialogs are stubs"
+    platforms: [linux]
+    description: >-
+      libadwaita links AppStream (libappstream) for exactly two functions,
+      adw_about_dialog_new_from_appdata() and the deprecated
+      adw_about_window_new_from_appdata(), which fill an About dialog from an
+      app's metainfo XML; adw_show_about_dialog_from_appdata() and
+      adw_show_about_window_from_appdata() call them. cvcpkg has no AppStream
+      (it needs libxmlb, a libyaml with pkg-config metadata, libcurl and
+      itstool), so appstream-optional.patch adds a `-Dappstream` feature
+      option (default enabled, upstream behaviour) and build.sh passes
+      -Dappstream=disabled. All four functions remain in the library, so the
+      ABI is unchanged, but the constructors log a critical and return an
+      empty About dialog (window), which the show_* variants then present
+      with only the properties the caller passed; set the fields with
+      adw_about_dialog_set_*() instead. Nothing else in libadwaita uses
+      AppStream, and Ghostty calls none of the four.
+  - title: "No introspection, no Vala bindings, no demo"
+    platforms: [linux]
+    description: >-
+      Like the gtk4 recipe, this one builds without GObject introspection
+      (no Adw-1.typelib / .gir), so PyGObject and gjs cannot load it; Vala
+      bindings need the .gir, and the demo, examples and tests are not built.
+      C (and Zig through @cImport) consumers are covered.
+  - title: "Linux only; linux-arm64 waits on a gettext fix"
+    platforms: [linux]
+    description: >-
+      Built and tested on linux-x86_64 (Ubuntu 22.04) and linux-arm64
+      (ubuntu-22.04-arm). On arm64 that needed cvcpkg's iconv installed
+      beside it: the published gettext 1.0+cvc.5 for linux-arm64 ships a
+      msgfmt that needs libiconv.so.2 without declaring iconv, so the
+      translations fail there until that bundle is republished. libadwaita
+      also builds on macOS and Windows against GTK there; add those to the
+      matrix with a consumer that needs them.
