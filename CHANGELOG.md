@@ -30,6 +30,19 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: Windows recipes could not build on a host with no pwsh 7.** On stock
+  Windows 11 every `build.ps1` failed with "pwsh 7 not found", and declaring
+  the `powershell` recipe as a dependency did not help: `--with-deps` builds it
+  into `<prefix>.build`, its own build.ps1 needed a pwsh, and the targets never
+  looked in the build prefix (lanparty-gamez on cmps-a91453, 2026-10-27). Now:
+  - pwsh is looked for in the build prefix, then the prefix, then PATH;
+  - with no pwsh 7 anywhere, a script that declares `#Requires -Version 5.1`
+    (and not `-PSEdition Core`) runs under Windows PowerShell 5.1 with
+    `-ExecutionPolicy Bypass`. A script without the declaration still needs
+    pwsh 7;
+  - the `powershell` recipe's build.ps1 declares it, so a recipe that
+    build-depends on `powershell` gets pwsh 7 on a bare Windows host.
+
 ---
 
 ## v2.5.7
