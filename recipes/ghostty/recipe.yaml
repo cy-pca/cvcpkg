@@ -9,7 +9,7 @@ recipe:
   homepage: https://ghostty.org/
   # Ghostty is MIT. It embeds JetBrains Mono and the Nerd Fonts symbols (SIL
   # OFL 1.1), and links in statically, on linux, the C/C++ libraries its
-  # build.zig.zon pins (oniguruma, glslang, SPIRV-Cross, simdutf, highway,
+  # build.zig.zon pins (HarfBuzz, oniguruma, glslang, SPIRV-Cross, simdutf, highway,
   # utfcpp, wuffs, Dear ImGui, ...) and gtk4-layer-shell as a shared library.
   # share/doc/ghostty/ carries Ghostty's licence and, on linux, every fetched
   # package's licence files (third-party/<name>/).
@@ -81,10 +81,10 @@ depends:
       platforms: [linux]
     - name: python3
       platforms: [linux]
-  # What bin/ghostty links (DT_NEEDED) besides glibc, plus fontconfig's data.
-  # gtk4 brings the rest of the GTK stack (pango, cairo, glib, graphene, ...).
-  # OpenGL comes from the host's driver through libepoxy, or from cvcpkg mesa.
-  # macOS needs nothing outside the app.
+  # Exactly what bin/ghostty links (DT_NEEDED) besides glibc and the bundled
+  # gtk4-layer-shell. gtk4 brings the rest of the GTK stack (pango, cairo,
+  # harfbuzz, graphene, ...). OpenGL comes from the host's driver through
+  # libepoxy, or from cvcpkg mesa. macOS needs nothing outside the app.
   runtime:
     - name: gtk4
       version: "^4.16"
@@ -96,15 +96,7 @@ depends:
       platforms: [linux]
     - name: freetype
       platforms: [linux]
-    - name: harfbuzz
-      platforms: [linux]
     - name: fontconfig
-      platforms: [linux]
-    - name: libpng
-      platforms: [linux]
-    - name: zlib
-      platforms: [linux]
-    - name: bzip2
       platforms: [linux]
     - name: libx11
       platforms: [linux]
@@ -138,7 +130,7 @@ package:
     - { glob: "share/bat/", platforms: [linux] }
     # macOS: the signed Ghostty.app, untouched.
     - { glob: "lib/ghostty/", platforms: [macos] }
-    - share/man/
+    - { glob: "share/man/", platforms: [macos] }
     - share/bash-completion/
     - share/zsh/
     - share/fish/
@@ -152,8 +144,8 @@ toolchain:
     linux: `zig build -Doptimize=ReleaseFast -Dcpu=baseline` with the cvcpkg
     zig 0.15.2, offline (`--system`) from a package cache that build.sh
     fills with `zig fetch` and checks against the content hashes pinned in
-    the tarball's build.zig.zon.json; GTK 4, libadwaita, freetype, harfbuzz,
-    fontconfig, libpng and zlib from the cvcpkg prefix. macOS: prebuilt.
+    the tarball's build.zig.zon.json; GTK 4, libadwaita, freetype,
+    fontconfig from the cvcpkg prefix. macOS: prebuilt.
 
 notes:
   - title: "kitty graphics with Unicode placeholders"
@@ -174,12 +166,25 @@ notes:
       themes), each with its Zig content hash. build.sh `zig fetch`es each
       into a cache in the build dir and fails unless zig reports exactly the
       pinned hash, then runs `zig build --system <cache>/p`, which cannot
-      reach the network. GTK 4, libadwaita, freetype, harfbuzz, fontconfig,
-      libpng, zlib and bzip2 link from the cvcpkg prefix (-fsys); oniguruma,
-      glslang, SPIRV-Cross, simdutf, highway and gtk4-layer-shell, which
-      cvcpkg does not package, are compiled from the pinned packages
-      (-fno-sys). gtk4-layer-shell must be a shared library and lands in
-      lib/.
+      reach the network. GTK 4, libadwaita, freetype and fontconfig link
+      from the cvcpkg prefix (-fsys); oniguruma, glslang,
+      SPIRV-Cross, simdutf, highway and gtk4-layer-shell, which cvcpkg does
+      not package, are compiled from the pinned packages (-fno-sys).
+      gtk4-layer-shell must be a shared library and lands in lib/.
+      HarfBuzz is compiled in too: Ghostty 1.3 uses HarfBuzz 11 API
+      (HB_BUFFER_CLUSTER_LEVEL_GRAPHEMES) and cvcpkg's harfbuzz is 10.2, so
+      bin/ghostty carries the pinned 11.0.0 while GTK's pango keeps the
+      prefix's shared one. That pairing, static HarfBuzz beside a shared GTK,
+      is Ghostty's own default Linux build.
+  - title: "Linux: no man pages"
+    platforms: [linux]
+    description: >-
+      Ghostty renders ghostty(1) and ghostty(5) (and their HTML versions)
+      from generated Markdown with pandoc, which cvcpkg does not package, so
+      build.sh passes -Demit-docs=false. The same reference is built into
+      the binary: `ghostty --help`, `ghostty +<action> --help` and `ghostty
+      +show-config --default --docs`. The macOS package carries the man
+      pages from the app.
   - title: "Linux: OpenGL 4.3 needed at run time"
     platforms: [linux]
     description: >-

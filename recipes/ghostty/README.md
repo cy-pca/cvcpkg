@@ -32,11 +32,12 @@ the way `PACKAGING.md` asks distributions to:
    the same URL hashes differently.
 2. **Build.** `zig build --system <cache>/p -Doptimize=ReleaseFast
    -Dcpu=baseline` then runs with no network access. GTK 4, libadwaita,
-   freetype, harfbuzz, fontconfig, libpng, zlib and bzip2 come from the
-   cvcpkg prefix (`-fsys=`). cvcpkg does not package oniguruma, glslang,
-   SPIRV-Cross, simdutf, highway or gtk4-layer-shell, so those are compiled
-   from their pinned packages (`-fno-sys=`). gtk4-layer-shell has to be a
-   shared library and is installed in `lib/`.
+   freetype and fontconfig come from the cvcpkg prefix (`-fsys=`). cvcpkg does not package oniguruma, glslang, SPIRV-Cross,
+   simdutf, highway or gtk4-layer-shell, so those are compiled from their
+   pinned packages (`-fno-sys=`). gtk4-layer-shell has to be a shared
+   library and is installed in `lib/`. HarfBuzz is compiled in as well,
+   because Ghostty 1.3 needs HarfBuzz 11 and cvcpkg's `harfbuzz` is 10.2
+   (pango keeps using the shared 10.2).
 3. **Fix up.** `bin/ghostty` gets an `$ORIGIN/../lib` RUNPATH. The desktop
    file and the AppStream metainfo call `ghostty` from PATH instead of the
    builder's install path. The D-Bus activation file and the systemd user

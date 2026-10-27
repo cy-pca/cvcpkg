@@ -7,9 +7,8 @@
 #     content hash pinned there (the JSON's key) -- a different archive at the
 #     same URL hashes differently and fails here.
 #  2. Build: `zig build --system <cache>/p`, which never touches the network,
-#     with GTK 4 / libadwaita / freetype / harfbuzz / fontconfig / libpng /
-#     zlib from the cvcpkg prefix and the libraries cvcpkg lacks compiled from
-#     the pinned packages.
+#     with GTK 4 / libadwaita / freetype / fontconfig from the cvcpkg prefix and the libraries cvcpkg lacks (or has too old: harfbuzz)
+#     compiled from the pinned packages.
 #  3. Fix up the install tree: $ORIGIN RUNPATHs, no builder paths in the
 #     desktop files, licences.
 set -euo pipefail
@@ -107,16 +106,23 @@ ZIG_ARGS=(
     --system "${PKG_CACHE}"
     -Doptimize=ReleaseFast
     -Dcpu=baseline
+    # Without a git checkout Ghostty versions itself 1.3.1-dev+0000000, on
+    # the "tip" channel; a release build states its version.
+    -Dversion-string="${GHOSTTY_VER}"
     -Dpie=true
     -Dapp-runtime=gtk
     -Dgtk-x11=true
     -Dgtk-wayland=true
     -Di18n=true
+    # --system turns docs on, and they are rendered with pandoc, which cvcpkg
+    # does not package: no man pages / HTML docs on linux (recipe notes).
+    -Demit-docs=false
     -fsys=freetype
-    -fsys=harfbuzz
     -fsys=fontconfig
-    -fsys=libpng
-    -fsys=zlib
+    # Ghostty 1.3 uses HarfBuzz 11 API (HB_BUFFER_CLUSTER_LEVEL_GRAPHEMES);
+    # cvcpkg's harfbuzz is 10.2, so the pinned 11.0.0 is compiled in. GTK's
+    # pango keeps the prefix's shared one (recipe notes).
+    -fno-sys=harfbuzz
     -fno-sys=oniguruma
     -fno-sys=glslang
     -fno-sys=spirv-cross
@@ -147,8 +153,14 @@ sed -i "s|${CVC_INSTALL_DIR}/bin/ghostty|ghostty|g" \
     "${CVC_INSTALL_DIR}/share/metainfo/com.mitchellh.ghostty.metainfo.xml"
 # D-Bus activation and the systemd user unit need an absolute path; they are
 # session glue for a system install (see the recipe notes).
-rm -rf "${CVC_INSTALL_DIR}/share/dbus-1" "${CVC_INSTALL_DIR}/share/systemd"
-if leftover="$(grep -rIl -- "${CVC_INSTALL_DIR}" "${CVC_INSTALL_DIR}/share" 2>/dev/null)"; then
+rm -rf "${CVC_INSTALL_DIR}/share/dbus-1" "${CVC_INSTALL_DIR}/share/systemd" \
+       "${CVC_INSTALL_DIR}/lib/systemd"
+# This package is the terminal. The install also lays down libghostty-vt
+# (Ghostty's new terminal-core library, 0.1.0, with headers and a .pc) and
+# gtk4-layer-shell's headers; nothing here needs them, so they are not shipped.
+rm -rf "${CVC_INSTALL_DIR}"/lib/libghostty-vt.so* "${CVC_INSTALL_DIR}/include" \
+       "${CVC_INSTALL_DIR}/share/pkgconfig"
+if leftover="$(grep -rIl -- "${CVC_INSTALL_DIR}" "${CVC_INSTALL_DIR}" 2>/dev/null)"; then
     echo "ghostty: files still name the build's install dir:" >&2
     echo "${leftover}" >&2
     exit 1

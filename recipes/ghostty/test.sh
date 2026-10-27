@@ -61,14 +61,17 @@ if [ "$(uname -s)" = "Darwin" ]; then
     ditto "${CVC_INSTALL_DIR}" "${MOVED}"
     v="$("${MOVED}/bin/ghostty" --version | sed -n 1p)"
     [ "${v}" = "Ghostty ${EXPECT}" ] || { echo "FAIL: relocated ghostty --version: '${v}'"; exit 1; }
-    echo "  OK: ${v} (relocated copy, through a symlink-free launcher)"
+    echo "  OK: ${v} (relocated copy)"
     echo "  SKIP: window test (linux only)"
     echo "-- ghostty smoke test passed --"
     exit 0
 fi
 
-echo "${ver}" | grep -qE 'app runtime *: *apprt.Runtime.gtk' || { echo "FAIL: not the GTK front end"; exit 1; }
-echo "${ver}" | grep -qE 'renderer *: *renderer.OpenGL' || { echo "FAIL: not the OpenGL renderer"; exit 1; }
+# (Enum values print as `.gtk`, `renderer.generic.Renderer(renderer.OpenGL)`.)
+echo "${ver}" | grep -qE 'app runtime *: *\.gtk$' || { echo "FAIL: not the GTK front end"; exit 1; }
+echo "${ver}" | grep -qE 'renderer *: .*OpenGL' || { echo "FAIL: not the OpenGL renderer"; exit 1; }
+echo "${ver}" | grep -qE 'libX11 *: *enabled' || { echo "FAIL: built without X11"; exit 1; }
+echo "${ver}" | grep -qE 'libwayland *: *enabled' || { echo "FAIL: built without Wayland"; exit 1; }
 # GTK and libadwaita: what the binary was built against and what it loaded.
 gtk_rt="$(echo "${ver}" | sed -n '/GTK version/,/libadwaita/p' | sed -n 's/^ *runtime *: *//p' | head -n 1)"
 adw_rt="$(echo "${ver}" | sed -n '/libadwaita/,$p' | sed -n 's/^ *runtime *: *//p' | head -n 1)"
@@ -138,9 +141,20 @@ FB="${T}/fb"
 mkdir -p "${FB}"
 "${XVFB}" ":${dpy}" -screen 0 1280x800x24 -fbdir "${FB}" -nolisten tcp -noreset \
     > "${T}/xvfb.log" 2>&1 &
-PIDS="${PIDS} $!"
-for _ in $(seq 1 50); do [ -e "/tmp/.X11-unix/X${dpy}" ] && break; sleep 0.2; done
-[ -e "/tmp/.X11-unix/X${dpy}" ] || { echo "FAIL: Xvfb did not start"; sed 's/^/  xvfb: /' "${T}/xvfb.log"; exit 1; }
+XPID=$!
+PIDS="${PIDS} ${XPID}"
+# Ready = the screen dump exists and the server is still up. (Not the
+# /tmp/.X11-unix socket: where that directory is not writable -- WSLg mounts
+# its own there -- Xvfb serves the abstract-namespace socket only.)
+for _ in $(seq 1 100); do
+    [ -s "${FB}/Xvfb_screen0" ] && kill -0 "${XPID}" 2>/dev/null && break
+    kill -0 "${XPID}" 2>/dev/null || break
+    sleep 0.2
+done
+sleep 0.5
+if ! kill -0 "${XPID}" 2>/dev/null || [ ! -s "${FB}/Xvfb_screen0" ]; then
+    echo "FAIL: Xvfb did not start"; sed 's/^/  xvfb: /' "${T}/xvfb.log"; exit 1
+fi
 
 # Ghostty under X11 on Xvfb with Mesa's llvmpipe: the copy's libraries first,
 # then the build prefix's (mesa, libglvnd). No session bus: GTK's
