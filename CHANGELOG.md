@@ -30,6 +30,40 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: a builder kept building jobs the server had already given up on.**
+  The offline reaper fails every job of a builder whose heartbeats lapse for
+  180 s and told the builder nothing. A builder only logged `job.timeout`, and
+  it ignored `job.cancel` (a force-cancel). So the build ran on: its completion
+  was refused, and meanwhile it kept the builder's slots, cores and memory
+  while the scheduler, seeing nothing running there, dispatched it jobs it
+  never started. On sandipaws (16 GB, two 20-core jobs) that kept the
+  heartbeats stalling, and a dozen-plus jobs failed "went offline" in a cascade
+  through their DAGs (2026-10-25/26). Builder #28 lost jobs the same way
+  during a DNS outage. Now:
+  - `builder run` stops a job on `job.cancel` or `job.timeout`, and whenever
+    the server shows it no longer has the job dispatched or running on this
+    builder. Stopping kills the build's whole process tree (its process group
+    on POSIX; a Job Object plus `taskkill /T` on Windows, so no cl.exe, link,
+    MSBuild or ninja is left behind), frees the slot at once (the next
+    heartbeat's `current_jobs` drops), removes the job root, and reports
+    nothing. The new `cvcpkg.proctree` does the process side; the build and
+    test scripts and the WSL and Haiku delegations start through it.
+  - Every heartbeat names the jobs being built (`job_ids`). The server answers
+    with `stale_jobs`, those it no longer has on that builder, in the HTTP
+    heartbeat's response and the socket's `heartbeat_ack`. The first beat
+    that gets through after a gap brings out what the reaper failed
+    meanwhile. Against a server too old to answer, the builder looks each job
+    up (`GET /v1/builds/{id}`) instead. No answer, an error or an unclear
+    answer never stops a build. Older builders send no `job_ids` and get the
+    same answers as before.
+  - The offline reaper pushes `job.cancel` for each job it fails, for a
+    builder whose socket outlived its heartbeats.
+  - Build scripts now run in a process group of their own on POSIX, so a stop
+    signal sent to the builder no longer reaches them. The builder still
+    drains in-flight jobs for up to 5 minutes. Then it kills the builds still
+    running and lets them report the failure, so none outlives it.
+    `CVCPKG_BUILDER_HEARTBEAT_INTERVAL` (default 60 s) sets the beat.
+
 ---
 
 ## v2.5.5
