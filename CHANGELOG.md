@@ -30,6 +30,14 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.8
+
+**A release so Windows recipes build on a host with no pwsh 7, as
+lanparty-gamez's documented `--local --with-deps` flow needs on stock
+Windows 11.**
+
 - **Fix: Windows recipes could not build on a host with no pwsh 7.** On stock
   Windows 11 every `build.ps1` failed with "pwsh 7 not found", and declaring
   the `powershell` recipe as a dependency did not help: `--with-deps` builds it
