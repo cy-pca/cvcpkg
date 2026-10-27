@@ -174,6 +174,11 @@ PIDS="${KPID} ${PIDS}"
 diag() {
     sed 's/^/  kitty: /' "${T}/kitty.log" | tail -n 25
     grep -i -E 'glx|dri|swrast|mesa|\(EE\)' "${T}/xvfb.log" | sed 's/^/  xvfb: /' | head -n 15 || true
+    # Where the GL libraries came from: one more start, with the loader's trace.
+    echo "  glfw-x11 $(readelf -d "${GLFW_X11}" 2>/dev/null | grep -E 'RPATH|RUNPATH' | sed 's/.*(\(R[A-Z]*\)).*\[\(.*\)\]/\1 \2/')"
+    env "${glenv[@]}" LD_DEBUG=libs,files timeout 60 "${K}" --config NONE -o linux_display_server=x11 true 2>&1 \
+        | grep -E 'libGL|libGLX|libGLdispatch|libgallium' | grep -E 'file=|trying file|calling init' \
+        | sed 's/^ *[0-9]*: */  ld.so: /' | head -n 30 || true
 }
 
 SHOT="${FB}/Xvfb_screen0"
