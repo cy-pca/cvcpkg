@@ -44,9 +44,15 @@ Health check endpoint. Returns server status.
   "version": "1.3.0",
   "storage_scheme": "file",
   "packages_count": 42,
-  "uptime_seconds": 86400.5
+  "uptime_seconds": 86400.5,
+  "features": ["publish-metadata-body"]
 }
 ```
+
+`features` lists optional API behaviours a client must not assume of every
+server.  `publish-metadata-body`: `POST /v1/publish` and
+`POST /v1/upload/init` take `required_deps` and `provides` in the request
+body (see below).
 
 ### `GET /metrics`
 
@@ -323,8 +329,16 @@ Upload and publish a package bundle.
 | `key_fingerprint` | string | ❌ | SHA-256 fingerprint of signing key |
 | `release_tag` | string | ❌ | Release tag (e.g. `v1.3.0`) |
 | `recipe_version` | string | ❌ | Recipe revision hash |
+| `required_deps` | string | ❌ | JSON list of runtime deps, `[{"name", "org"?, "version"?}, ...]` (default `[]`) |
+| `provides` | string | ❌ | JSON list of virtual slot names this package fills (default `[]`) |
 
 **Body**: `multipart/form-data` with a `file` field containing the `.tar.zst` archive.
+`required_deps` and `provides` may also be sent as form fields of the same
+name, and a form field wins over the query parameter.  A bundle with hundreds
+of deps needs this: front-end proxies refuse request lines over about 8 KB
+(cvcpkg.org answers `414`).  Servers that support it list
+`publish-metadata-body` in `/healthz` `features`; `cvcpkg publish` uses the
+form fields only when the query would be too long.
 
 **Response** `200 OK`:
 
@@ -346,6 +360,7 @@ Upload and publish a package bundle.
 | `403` | Insufficient role |
 | `409` | Duplicate package (same name+version+platform+arch+build_type+link) |
 | `413` | Upload exceeds size limit |
+| `422` | Invalid metadata, e.g. `required_deps` or `provides` not a JSON list |
 | `429` | Rate limit exceeded |
 
 ### Chunked uploads
@@ -363,8 +378,10 @@ Initialise a chunked upload session.  Takes the same query parameters as
 `POST /v1/publish` (including the metadata params `description`,
 `homepage`, `license`, `maintainer`, `tags`, `required_deps`,
 `provides`, and `org`, which publish also accepts) plus `total_size`
-(bytes, `0` = unknown).  Rate limited; duplicates are rejected with
-`409` up front.
+(bytes, `0` = unknown).  An optional JSON body
+`{"required_deps": [...], "provides": [...]}` carries those two as lists
+instead of query parameters, and wins over them (`publish-metadata-body`).
+Rate limited; duplicates are rejected with `409` up front.
 
 **Response** `201 Created`:
 

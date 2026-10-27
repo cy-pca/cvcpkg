@@ -634,15 +634,66 @@ def _missing_deps(row: dict, required_deps: list[dict[str, str]]) -> list[str]:
     return [_dep_key(d) for d in required_deps if _dep_key(d) not in recorded]
 
 
+# Longest publish query string sent as such.  cvcpkg.org's front end answers a
+# request line over ~8 KB with 414 (Apache's LimitRequestLine is 8190), and the
+# builder then logged only "publish completed with 1 error(s)": wezterm-crates'
+# 645 runtime deps encode to ~50 KB.  Leaves room for the path and method.
+_MAX_PUBLISH_QUERY_BYTES = 6144
+
+# Publish metadata whose size grows with the bundle; servers advertising
+# PUBLISH_METADATA_BODY_FEATURE accept these in the request body.
+_BODY_METADATA = ("required_deps", "provides")
+PUBLISH_METADATA_BODY_FEATURE = "publish-metadata-body"
+
+
+def _server_features(base: str) -> set[str]:
+    """The ``features`` a server's ``/healthz`` advertises; empty when it lists none."""
+    httpx = require_httpx("publish")
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.get(f"{base}/healthz")
+        features = resp.json().get("features") if resp.status_code == 200 else None
+    except Exception:
+        return set()
+    return {str(f) for f in features} if isinstance(features, list) else set()
+
+
+def _split_publish_metadata(base: str, params: dict) -> tuple[dict, dict]:
+    """Split publish *params* into (query, body).
+
+    Everything stays in the query unless the query would be too long for the
+    server's front end.  Then the bundle-sized lists move to the body, which only
+    a server advertising the feature reads: an older one would ignore them and
+    record no deps, so publishing to it fails here instead.
+    """
+    from urllib.parse import urlencode
+
+    size = len(urlencode(params))
+    if size <= _MAX_PUBLISH_QUERY_BYTES:
+        return params, {}
+    if PUBLISH_METADATA_BODY_FEATURE not in _server_features(base):
+        raise click.ClickException(
+            f"publish metadata is {size:,} bytes as a query string, over the "
+            f"{_MAX_PUBLISH_QUERY_BYTES:,} a front-end proxy reliably accepts, and {base} does "
+            f"not advertise '{PUBLISH_METADATA_BODY_FEATURE}' to take it in the request body "
+            "(cvcpkg servers newer than 2.5.6 do)"
+        )
+    query = {k: v for k, v in params.items() if k not in _BODY_METADATA}
+    body = {k: params[k] for k in _BODY_METADATA if k in params}
+    return query, body
+
+
 def _publish_simple(base: str, headers: dict, params: dict, archive_path: Path) -> str:
     """Upload a small archive in a single POST request.  Returns 'published' or 'skipped'."""
     httpx = require_httpx("publish")
+    query, form = _split_publish_metadata(base, params)
 
     with httpx.Client(timeout=300) as client:
         with open(archive_path, "rb") as f:
             resp = client.post(
                 f"{base}/v1/publish",
-                params=params,
+                params=query,
+                data=form or None,
                 files={"file": (archive_path.name, f, "application/octet-stream")},
                 headers=headers,
             )
@@ -675,12 +726,14 @@ def _publish_chunked(
     import hashlib
 
     httpx = require_httpx("publish")
+    query, body = _split_publish_metadata(base, params)
 
     # 1. Init upload session
     with httpx.Client(timeout=60) as client:
         resp = client.post(
             f"{base}/v1/upload/init",
-            params={**params, "total_size": file_size},
+            params={**query, "total_size": file_size},
+            json={k: json.loads(v) for k, v in body.items()} or None,
             headers=headers,
         )
 

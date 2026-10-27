@@ -30,6 +30,22 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: a bundle with hundreds of runtime deps could not be published.**
+  `cvcpkg publish` sent `required_deps` and `provides` as query parameters,
+  so wezterm-crates' 645 deps made a ~50 KB request line. cvcpkg.org's front
+  end refuses anything over ~8 KB with 414, and the builder logged only
+  "publish completed with 1 error(s)" (job 24063, 2026-10-27). Now:
+  - the server also takes them as multipart fields on `POST /v1/publish` and
+    as a JSON body on `POST /v1/upload/init`; a body value wins over the query
+    parameter. `/healthz` advertises this as
+    `features: ["publish-metadata-body"]`;
+  - the client moves them to the body only when the query string would pass
+    6 KB, and only for a server that advertises the feature. An older server
+    would ignore the body and record no deps, so publishing such a bundle to
+    it fails with a message saying so;
+  - a `required_deps` or `provides` that is not a JSON list is refused with
+    422. The DB path stored it verbatim, and catalog reads parse it as a list.
+
 ---
 
 ## v2.5.6
