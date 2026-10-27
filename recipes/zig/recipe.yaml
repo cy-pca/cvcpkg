@@ -128,9 +128,25 @@ notes:
       <cache>/p`, which never touches the network -- the method in
       recipes/ghostty/build.sh. `zig cc` needs no system compiler or libc
       headers: it builds the libc it links against from lib/zig/libc.
+  - title: "macOS arm64 with Xcode 26.4+: native links fail (upstream bug)"
+    platforms: [macos]
+    description: >-
+      zig 0.15.2's Mach-O linker does not match aarch64-macos against the
+      arm64e-macos entries that the macOS 26.4+ SDKs' libSystem.tbd carries,
+      so on Apple silicon with Xcode / Command Line Tools 26.4 or newer every
+      native link (zig build-exe, zig cc, zig build) fails with undefined
+      libSystem symbols (_abort, _getenv, ...): ziglang/zig#31665, fixed for
+      zig 0.16.0, not backported. Intel Macs, and older SDKs, are not
+      affected. Workarounds: pass an explicit target (`-target aarch64-macos`,
+      `zig build -Dtarget=aarch64-macos`), which links against zig's own
+      lib/zig/libc/darwin stubs and works; or point DEVELOPER_DIR at an
+      Xcode 26.3. test.sh recognises exactly this failure and runs the
+      compile checks with -target aarch64-macos. The ghostty recipe does not
+      use zig on macOS.
   - title: "Verified platforms"
     description: >-
-      linux-x86_64 (Ubuntu 22.04) and windows-x86_64 (Windows 11) are built
-      and tested here. linux-arm64, macos (x86_64 and arm64) and
-      freebsd-x86_64 stage ziglang.org's binaries for those platforms
-      through the same scripts.
+      Built, tested and packed: linux-x86_64 (Ubuntu 22.04), linux-arm64
+      (GitHub ubuntu-22.04-arm), macos-x86_64 (GitHub macos-15-intel),
+      macos-arm64 (GitHub macos-26-arm64, with the workaround above) and
+      windows-x86_64 (Windows 11). freebsd-x86_64 stages ziglang.org's
+      binary through the same build.sh but has not been built yet.

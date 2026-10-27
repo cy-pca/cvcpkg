@@ -85,11 +85,35 @@ test "greet" {
     try std.testing.expectEqualStrings("hello, cvcpkg", try greet(&buf, "cvcpkg"));
 }
 EOF
-"${ZIG}" build-exe "$(native "${W}/proj/src/main.zig")" -femit-bin="$(native "${W}/hello${EXE}")"
+# macOS on Apple silicon with an Xcode 26.4+ SDK: zig 0.15.2's Mach-O linker
+# cannot match aarch64-macos against the SDK libSystem.tbd's arm64e-macos
+# entries, so a NATIVE link finds no libSystem symbols at all ("undefined
+# symbol: _abort", ziglang/zig#31665, fixed for 0.16.0). An explicit -target
+# makes zig link against its own lib/zig/libc/darwin stubs instead. Recognise
+# exactly that failure, say so, and test the rest that way; anything else
+# fails.
+TARGET=()
+FORCED_TARGET=""
+if ! "${ZIG}" build-exe "$(native "${W}/proj/src/main.zig")" -femit-bin="$(native "${W}/hello${EXE}")" \
+        > "${W}/native-link.log" 2>&1; then
+    if [ "$(uname -s)-$(uname -m)" = "Darwin-arm64" ] \
+            && grep -q 'undefined symbol: _abort' "${W}/native-link.log"; then
+        sdk="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null || echo '?')"
+        echo "  KNOWN: native link fails against the macOS ${sdk} SDK (ziglang/zig#31665," \
+             "fixed in zig 0.16.0); testing with -target aarch64-macos"
+        FORCED_TARGET="aarch64-macos"
+        TARGET=(-target "${FORCED_TARGET}")
+        "${ZIG}" build-exe ${TARGET[@]+"${TARGET[@]}"} "$(native "${W}/proj/src/main.zig")" \
+            -femit-bin="$(native "${W}/hello${EXE}")"
+    else
+        cat "${W}/native-link.log"
+        echo "FAIL: zig build-exe"; exit 1
+    fi
+fi
 out="$("${W}/hello${EXE}" | tr -d '\r')"
 [ "${out}" = "hello, cvcpkg zig ${EXPECT}" ] || { echo "FAIL: zig program printed '${out}'"; exit 1; }
 echo "  OK: build-exe + run (${out})"
-"${ZIG}" test "$(native "${W}/proj/src/main.zig")" 2>&1 | tr -d '\r' | sed 's/^/  /'
+"${ZIG}" test ${TARGET[@]+"${TARGET[@]}"} "$(native "${W}/proj/src/main.zig")" 2>&1 | tr -d '\r' | sed 's/^/  /'
 echo "  OK: zig test"
 
 # ── C and C++ through zig cc / zig c++ ──────────────────────────────────
@@ -105,7 +129,7 @@ int main(void) {
     return strcmp(b, "1.4142") != 0;
 }
 EOF
-"${ZIG}" cc -O2 -o "$(native "${W}/c-bin${EXE}")" "$(native "${W}/t.c")" -lm
+"${ZIG}" cc ${TARGET[@]+"${TARGET[@]}"} -O2 -o "$(native "${W}/c-bin${EXE}")" "$(native "${W}/t.c")" -lm
 out="$("${W}/c-bin${EXE}" | tr -d '\r')"
 [ "${out}" = "c 1.4142" ] || { echo "FAIL: zig cc program printed '${out}'"; exit 1; }
 echo "  OK: zig cc (${out})"
@@ -123,7 +147,7 @@ int main() {
     return s != "c++ 10";
 }
 EOF
-"${ZIG}" c++ -O2 -std=c++17 -o "$(native "${W}/cxx-bin${EXE}")" "$(native "${W}/t.cpp")"
+"${ZIG}" c++ ${TARGET[@]+"${TARGET[@]}"} -O2 -std=c++17 -o "$(native "${W}/cxx-bin${EXE}")" "$(native "${W}/t.cpp")"
 out="$("${W}/cxx-bin${EXE}" | tr -d '\r')"
 [ "${out}" = "c++ 10" ] || { echo "FAIL: zig c++ program printed '${out}'"; exit 1; }
 echo "  OK: zig c++ with libc++ (${out})"
@@ -148,10 +172,12 @@ pub fn build(b: *std.Build) void {
 }
 EOF
 cd "${W}/proj"
-"${ZIG}" build
+ZB=()
+[ -z "${FORCED_TARGET}" ] || ZB=("-Dtarget=${FORCED_TARGET}")
+"${ZIG}" build ${ZB[@]+"${ZB[@]}"}
 [ -f "${W}/proj/zig-out/bin/hello${EXE}" ] || { echo "FAIL: zig build installed no zig-out/bin/hello${EXE}"; exit 1; }
-"${ZIG}" build test
-out="$("${ZIG}" build run 2>&1 | tr -d '\r')"
+"${ZIG}" build test ${ZB[@]+"${ZB[@]}"}
+out="$("${ZIG}" build run ${ZB[@]+"${ZB[@]}"} 2>&1 | tr -d '\r')"
 [ "${out}" = "hello, cvcpkg zig ${EXPECT}" ] || { echo "FAIL: zig build run printed '${out}'"; exit 1; }
 echo "  OK: zig build (install) + test + run"
 
