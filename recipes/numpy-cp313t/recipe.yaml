@@ -78,8 +78,9 @@ build:
   build_type_independent: true
   # openblas now builds on every native platform including macOS, so every
   # column links the same BLAS. windows is a deliberate delta: meson + MSVC + DLL
-  # discovery differ enough to need its own build.ps1 (currently a loud stub —
-  # until the port lands, windows numpy is unavailable from this recipe).
+  # discovery differ enough to need its own build.ps1. It is numpy-cp313's port
+  # under python3.13t.exe (2026-10-27, replacing a loud stub; same revision, as
+  # no windows bundle existed), with a verify that numpy loads with the GIL off.
   # wasm/wasi/cosmo are excluded: static interpreter, no extension-module ABI.
   matrix:
     - platform: linux
