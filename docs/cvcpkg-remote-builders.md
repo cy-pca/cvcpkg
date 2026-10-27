@@ -40,6 +40,16 @@ Builders register with the server on startup and maintain presence via
 periodic heartbeats. If a builder misses heartbeats, it transitions to
 "offline" status and won't receive new jobs.
 
+A builder that misses heartbeats for more than 180 s also loses its jobs: the
+server fails them ("went offline") and cancels their dependents. Each heartbeat
+names the jobs the builder is building (`job_ids`). The answer lists those the
+server no longer has dispatched or running on it (`stale_jobs`), whether failed
+like this, timed out, cancelled or moved to another builder. The builder then
+stops each one: it kills the build's whole process tree, frees the slot, and
+reports nothing. It does the same on a `job.cancel` or `job.timeout` push.
+Against an older server, whose answer has no `stale_jobs`, it looks each job up
+instead. A failed or unclear lookup never stops a build.
+
 Each heartbeat also carries the host's CPU, memory and disk figures (CPU busy
 since the last beat, load average, physical memory, and the size and free space
 of the volume holding `--work-dir`). The builders page shows them, and its

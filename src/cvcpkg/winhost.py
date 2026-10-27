@@ -386,7 +386,9 @@ def _stream_host_process(
     log_callback: Callable[[str], None] | None,
 ) -> int:
     """Run the host process, teeing CRLF-normalized output to the log."""
-    proc = subprocess.Popen(
+    from cvcpkg import proctree
+
+    proc = proctree.popen(
         cmd,
         env=env,
         stdout=subprocess.PIPE,

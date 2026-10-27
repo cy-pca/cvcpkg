@@ -1270,6 +1270,21 @@ _REPORT_RETRY_DELAY = 2.0
 # How long an extracted recipe directory may sit before it is swept.  Well
 # above any job timeout so a sweep cannot delete a directory a build is using.
 _RECIPE_DIR_TTL_SECS = 24 * 60 * 60
+# Timeout for one job-status lookup when the builder checks its in-flight
+# jobs against the server (_reconcile_jobs in builder_run).
+_RECONCILE_TIMEOUT = 15.0
+# At shutdown, after the drain wait: how long the builds that were still
+# running, and are then killed, get to report the failure.
+_SHUTDOWN_REPORT_SECS = 30.0
+# Job states in which the server still has a job on its builder.
+_ACTIVE_JOB_STATES = ("dispatched", "running")
+
+
+class _JobAbandonedError(Exception):
+    """Raised in a job's thread once the builder has stopped its job.
+
+    See ``_abandon_job`` in builder_run.  Carries the reason.
+    """
 
 
 class _ReconnectBackoff:
@@ -2427,6 +2442,7 @@ def builder_run(
 
     httpx = require_httpx("builder")
 
+    from cvcpkg import proctree
     from cvcpkg.builder import (
         Recipe,
         build_recipe,
@@ -2792,6 +2808,19 @@ def builder_run(
     # the catch-up poll had already started the job and it had finished.  See
     # _admit_job.  Guarded by jobs_lock; one int per job run, never pruned.
     claimed_job_ids: set[int] = set()
+    # In-flight job id -> the processes its build started, and -> its slot,
+    # so _abandon_job can stop the build and free the slot from another
+    # thread.  Guarded by jobs_lock; added by _admit_job, removed by
+    # _release_slot with the job id.
+    job_trees: dict[int, proctree.ProcessTree] = {}
+    job_slots: dict[int, int] = {}
+    # In-flight jobs this builder has stopped because the server no longer
+    # has them running here (job id -> why); their threads report nothing.
+    # And the jobs whose thread has begun its final complete/fail report,
+    # which are never stopped: the server's answer may already be that
+    # report.  Both guarded by jobs_lock and cleared by _release_slot.
+    abandoned_jobs: dict[int, str] = {}
+    finishing_job_ids: set[int] = set()
     _job_seq = 0
     current_jobs = 0
     jobs_lock = threading.Lock()
@@ -2859,15 +2888,192 @@ def builder_run(
             if job_id in inflight_job_ids or job_id in claimed_job_ids:
                 return None
             inflight_job_ids.add(job_id)
-        return _claim_slot()
+        slot_id = _claim_slot()
+        if job_id is not None:
+            job_slots[job_id] = slot_id
+            job_trees[job_id] = proctree.ProcessTree(label=str(job.get("recipe_name") or ""))
+        return slot_id
 
     def _release_slot(slot_id: int, job_id: int | None = None) -> None:
+        """Free *slot_id*; with *job_id*, also forget the job was in flight.
+
+        _abandon_job frees a stopped job's slot alone, before its thread is
+        done; the thread's own release (with the job id) comes later, and
+        releasing a slot twice is harmless.
+        """
         nonlocal current_jobs
+        tree = None
         with jobs_lock:
             active_jobs.discard(slot_id)
             if job_id is not None:
                 inflight_job_ids.discard(job_id)
+                job_slots.pop(job_id, None)
+                tree = job_trees.pop(job_id, None)
+                abandoned_jobs.pop(job_id, None)
+                finishing_job_ids.discard(job_id)
             current_jobs = len(active_jobs)
+        if tree is not None:
+            tree.close()
+
+    def _running_job_ids() -> list[int]:
+        """The jobs to name in a heartbeat: claimed here and still building.
+
+        Not one being stopped or making its final report.  A newer server
+        answers with those it no longer has running on this builder.
+        """
+        with jobs_lock:
+            ids = (claimed_job_ids & inflight_job_ids) - finishing_job_ids
+            return sorted(ids - abandoned_jobs.keys())
+
+    def _abandon_job(job_id: int, why: str) -> bool:
+        """Stop building *job_id*: the server no longer has it running here.
+
+        The server failed it (the offline reaper, after this builder's
+        heartbeats lapsed), timed it out, cancelled it or gave it to another
+        builder, so nothing will accept its result.  Kills every process the
+        build started (cvcpkg.proctree) and frees its slot as soon as they
+        are gone, so ``current_jobs`` drops and the slot takes new work while
+        the job's thread winds down; that thread removes the job root and
+        reports nothing (_JobAbandonedError).
+
+        False when the job is not in flight here, is already being stopped,
+        or has begun its final report.
+        """
+        with jobs_lock:
+            if (
+                job_id not in inflight_job_ids
+                or job_id in abandoned_jobs
+                or job_id in finishing_job_ids
+            ):
+                return False
+            abandoned_jobs[job_id] = why
+            tree = job_trees.get(job_id)
+            slot_id = job_slots.get(job_id)
+        click.echo(f"  [{job_id}] Stopping the build: {why}", err=True)
+
+        def _stop() -> None:
+            if tree is not None:
+                tree.kill()
+            if slot_id is not None:
+                _release_slot(slot_id)
+
+        # The kill waits out a grace period; not on the caller's thread,
+        # which is the socket loop or a heartbeat.
+        try:
+            threading.Thread(target=_stop, name=f"cvcpkg-stop-job-{job_id}", daemon=True).start()
+        except RuntimeError:  # no thread to be had
+            _stop()
+        return True
+
+    def _check_abandoned(job_id: int) -> None:
+        """Raise _JobAbandonedError when *job_id* has been stopped (a job-thread checkpoint)."""
+        with jobs_lock:
+            why = abandoned_jobs.get(job_id)
+        if why is not None:
+            raise _JobAbandonedError(why)
+
+    def _begin_report(job_id: int) -> None:
+        """Commit *job_id* to its final report; _JobAbandonedError if it was stopped.
+
+        Either the job was stopped first and reports nothing, or it reports
+        and can no longer be stopped: never a build killed while its
+        completion is on the way.
+        """
+        with jobs_lock:
+            why = abandoned_jobs.get(job_id)
+            if why is None:
+                finishing_job_ids.add(job_id)
+        if why is not None:
+            raise _JobAbandonedError(why)
+
+    def _stop_reason(info) -> str | None:
+        """Why a job whose server row is *info* must be stopped here, or None.
+
+        None also for anything that is not a clear answer, so a build is
+        never stopped on a guess.
+        """
+        if not isinstance(info, dict):
+            return None
+        status = info.get("status")
+        if not isinstance(status, str) or not status:
+            return None
+        if status in _ACTIVE_JOB_STATES:
+            if builder_id is not None:
+                holder = info.get("builder_id")
+                ours, where = holder == builder_id, f"builder #{holder}"
+            else:
+                holder = info.get("claimed_by")
+                ours, where = holder == name, repr(holder)
+            if holder is None or ours:
+                return None
+            return f"the server has it {status} on {where}"
+        lines = str(info.get("error_message") or "").strip().splitlines()
+        return f"the server has it {status}" + (f": {lines[0][:200]}" if lines else "")
+
+    def _reconcile_jobs(job_ids: list[int]) -> None:
+        """Ask the server about each job in *job_ids*; stop those it is done with.
+
+        For a server whose heartbeat answer does not list them (older than
+        ``stale_jobs``) and for an unregistered drainer, which has no
+        heartbeat.  The offline reaper fails a builder's jobs without telling
+        it, so this is how a builder whose heartbeats lapsed finds out.  No
+        answer, or an error, keeps the job building.
+        """
+        for job_id in job_ids:
+            try:
+                with httpx.Client(timeout=_RECONCILE_TIMEOUT) as client:
+                    resp = client.get(f"{base}/v1/builds/{job_id}", headers=headers)
+                info = resp.json() if resp.status_code == 200 else None
+            except Exception:  # noqa: BLE001 - unknown: keep building
+                continue
+            why = _stop_reason(info)
+            if why:
+                _abandon_job(job_id, why)
+
+    reconcile_thread: threading.Thread | None = None
+
+    def _start_reconcile(job_ids: list[int]) -> None:
+        """_reconcile_jobs on its own thread, one at a time.
+
+        Never on the loop's thread: a lookup that hangs must not hold up
+        the heartbeat or the socket (see gc_thread).
+        """
+        nonlocal reconcile_thread
+        if not job_ids or (reconcile_thread is not None and reconcile_thread.is_alive()):
+            return
+        reconcile_thread = threading.Thread(
+            target=_reconcile_jobs, args=(job_ids,), name="cvcpkg-builder-reconcile", daemon=True
+        )
+        try:
+            reconcile_thread.start()
+        except RuntimeError:  # no thread to be had: the next beat tries again
+            reconcile_thread = None
+
+    def _act_on_beat_answer(answer, sent: list[int]) -> None:
+        """Stop the jobs a heartbeat answer says this builder no longer has.
+
+        *sent* is the ``job_ids`` the beat named.  A server that knows the
+        field answers ``stale_jobs``: those of them it does not have
+        dispatched or running here, with their status when they are this
+        builder's.  An older server's answer lacks it, so the jobs are looked
+        up one by one instead.
+        """
+        stale = answer.get("stale_jobs") if isinstance(answer, dict) else None
+        if not isinstance(stale, list):
+            _start_reconcile(sent)
+            return
+        for entry in stale:
+            job_id = entry.get("id") if isinstance(entry, dict) else entry
+            if not isinstance(job_id, int) or job_id not in sent:
+                continue
+            status = entry.get("status") if isinstance(entry, dict) else None
+            if not status:
+                why = "the server no longer has it running on this builder"
+            elif status in _ACTIVE_JOB_STATES:
+                why = f"the server has it {status} on another builder"
+            else:
+                why = f"the server has it {status}"
+            _abandon_job(job_id, why)
 
     def _handle_signal(signum, frame):
         nonlocal shutdown
@@ -2901,12 +3107,20 @@ def builder_run(
         running job, the periodic GC sweep, a co-tenant), and the scheduler's
         disk filter is only as good as the number it matches against.  Worst
         case the server's figure is one heartbeat interval old.
+
+        Names the jobs building here (``job_ids``), and stops those the answer
+        says the server no longer has running here (_act_on_beat_answer), so
+        the first beat after a gap finds out about jobs the offline reaper
+        failed meanwhile.  Unregistered, there is no beat to send, but the
+        jobs are still checked, one lookup each.
         """
         if builder_id is None:
+            _start_reconcile(_running_job_ids())
             return
         with jobs_lock:
             jobs_now = current_jobs
-        payload: dict = {"status": "online", "current_jobs": jobs_now}
+        sent = _running_job_ids()
+        payload: dict = {"status": "online", "current_jobs": jobs_now, "job_ids": sent}
         _free = _measure_free_disk()
         if _free is not None:
             payload["free_disk_gb"] = _free
@@ -2935,6 +3149,12 @@ def builder_run(
                 )
             elif resp.status_code >= 400:
                 click.echo(f"  heartbeat failed: {resp.status_code} {_detail_of(resp)}", err=True)
+            elif sent:
+                try:
+                    answer = resp.json()
+                except ValueError:  # an empty or non-JSON 2xx: an older or odd server
+                    answer = None
+                _act_on_beat_answer(answer, sent)
         except Exception as exc:
             click.echo(f"  heartbeat error: {exc}", err=True)
 
@@ -3873,6 +4093,9 @@ def builder_run(
         dep_prefix: Path | None = None
         job_root: Path | None = None
         try:
+            # Checkpoints like this one end a job the server is done with
+            # (_abandon_job) between steps; a running build is killed.
+            _check_abandoned(job_id)
             # 2. Download recipe
             _stream_log(job_id, f"Downloading recipe '{recipe_name}'...\n")
             recipe_dir = _fetch_recipe(recipe_name)
@@ -3962,6 +4185,7 @@ def builder_run(
                 )
 
             # 3b. Build + package (output dir under the per-job root)
+            _check_abandoned(job_id)
             output_dir = Path(tempfile.mkdtemp(prefix=f"cvcpkg-out-{recipe_name}-", dir=job_root))
             try:
                 archive_path, sha256, size = pack_recipe(
@@ -3987,6 +4211,7 @@ def builder_run(
                 raise
 
             # 4. Publish the archive to the server
+            _check_abandoned(job_id)
             _stream_log(job_id, f"Publishing {archive_path.name}...\n")
             try:
                 _publish_to_server(
@@ -4020,6 +4245,7 @@ def builder_run(
             # ignores the extra fields.
             # _report_job never raises, so a report that goes wrong cannot fall
             # into the handler below and fail a job that built and published.
+            _begin_report(job_id)
             outcome = _report_job(job_id, "complete", {"result_archive_url": result_url})
             if outcome == "ok":
                 click.echo(f"  [{job_id}] Completed: {recipe_name}")
@@ -4030,7 +4256,19 @@ def builder_run(
                     err=True,
                 )
 
+        except _JobAbandonedError as stopped:
+            click.echo(f"  [{job_id}] Stopped: {recipe_name} ({stopped}); not reported", err=True)
+
         except Exception as exc:
+            try:
+                # A build killed by _abandon_job fails like any other; the
+                # server is done with it, so that is not reported either.
+                _begin_report(job_id)
+            except _JobAbandonedError as stopped:
+                click.echo(
+                    f"  [{job_id}] Stopped: {recipe_name} ({stopped}); not reported", err=True
+                )
+                return
             # Report failure
             if not error_message:
                 error_message = f"{exc}\n{traceback.format_exc()}"
@@ -4076,9 +4314,15 @@ def builder_run(
         failed-claim early return
         skipped, permanently leaking a slot (a max-jobs=2 builder wedged at
         2/2 after two failed claims and stopped taking work).
+
+        The job's process tree is bound to this thread, so the build and test
+        scripts start in it and _abandon_job can kill them (cvcpkg.proctree).
         """
         try:
-            _execute_job(job)
+            with jobs_lock:
+                tree = job_trees.get(job.get("id"))
+            with proctree.bound(tree):
+                _execute_job(job)
         finally:
             _release_slot(slot_id, job.get("id"))
 
@@ -4276,6 +4520,8 @@ def builder_run(
                 # run it again on the next turns (see catch_up_deadline).
                 catch_up_again = False
                 catch_up_deadline = 0.0
+                # The job_ids of the last heartbeat sent, for its ack.
+                beat_job_ids: list[int] = []
                 while not shutdown:
                     # Wall-clock budget: stop claiming, drain in-flight, exit.
                     if _past_deadline():
@@ -4289,10 +4535,14 @@ def builder_run(
                     # Send heartbeat if due
                     now = time.time()
                     if now - last_heartbeat >= heartbeat_interval:
+                        # The jobs building here: the server's heartbeat_ack
+                        # names those it no longer has running here.
+                        beat_job_ids = _running_job_ids()
                         _hb: dict = {
                             "type": "heartbeat",
                             "status": "online",
                             "current_jobs": current_jobs,
+                            "job_ids": beat_job_ids,
                         }
                         # Re-measured per beat, same as the REST path — the
                         # WebSocket loop is the one a long-lived builder
@@ -4522,12 +4772,28 @@ def builder_run(
                                     pending_update = server_ver
                                     _apply_pending_update()
 
-                    elif msg_type == "job.timeout":
+                    elif msg_type == "heartbeat_ack":
+                        if beat_job_ids:
+                            _act_on_beat_answer(msg, beat_job_ids)
+
+                    elif msg_type in ("job.cancel", "job.timeout"):
+                        # The server is done with the job: force-cancelled,
+                        # past the build timeout, or failed by the offline
+                        # reaper (which sends job.cancel).  Its result would
+                        # be refused, so stop building it.
                         job_id = msg.get("job_id")
-                        click.echo(
-                            f"  [{job_id}] Server timed out job",
-                            err=True,
-                        )
+                        if msg_type == "job.cancel":
+                            what, why = "cancelled", "the server cancelled it"
+                        else:
+                            what, why = "timed out", "the server timed it out"
+                        detail = str(msg.get("message") or "").strip()[:200]
+                        if detail:
+                            why += f" ({detail})"
+                        if not (isinstance(job_id, int) and _abandon_job(job_id, why)):
+                            click.echo(
+                                f"  [{job_id}] Server {what} job, which is not building here",
+                                err=True,
+                            )
 
         except Exception as exc:
             if connected_at is None:
@@ -4548,7 +4814,10 @@ def builder_run(
     # -- Main loop -------------------------------------------
 
     last_heartbeat = 0.0
-    heartbeat_interval = 60.0
+    # Every beat also checks the in-flight jobs against the server (see
+    # _heartbeat), so this bounds how long a job the server is done with
+    # keeps building here once the server can be reached.
+    heartbeat_interval = float(os.environ.get("CVCPKG_BUILDER_HEARTBEAT_INTERVAL", "60"))
     poll_interval = 5.0  # seconds between next-job polls
 
     # WebSocket reconnect schedule.  A failed handshake or a dropped socket
@@ -4805,6 +5074,27 @@ def builder_run(
         while current_jobs > 0 and time.time() < deadline:
             click.echo(f"  Waiting for {current_jobs} in-flight job(s)...")
             time.sleep(5)
+        # A build still running would outlive this process: it runs in a
+        # process group (POSIX) or job (Windows) of its own, which the signal
+        # that stopped the builder does not reach.  Kill it, and give its
+        # thread a moment to report the failure; otherwise the job would sit
+        # "running" on the server until the build timeout.
+        with jobs_lock:
+            leftover = [
+                job_trees[j] for j in inflight_job_ids if j in job_trees and j not in abandoned_jobs
+            ]
+        if current_jobs > 0 and leftover:
+            click.echo(f"  Stopping {len(leftover)} build(s) still running...")
+            for tree in leftover:
+                tree.kill()
+        # Their threads, and those of jobs _abandon_job stopped (which freed
+        # their slots first), are still removing their job roots.
+        deadline = time.time() + _SHUTDOWN_REPORT_SECS
+        while time.time() < deadline:
+            with jobs_lock:
+                if not inflight_job_ids:
+                    break
+            time.sleep(0.2)
 
         if builder_id is None:
             click.echo("Drain finished (nothing registered, nothing to clean up).")

@@ -949,6 +949,42 @@ class BuilderHeartbeatRequest(BaseModel):
             "stored figures untouched."
         ),
     )
+    job_ids: list[int] | None = Field(
+        default=None,
+        max_length=1024,
+        description=(
+            "The jobs the builder is building right now.  The answer's "
+            "stale_jobs lists those the server no longer has dispatched or "
+            "running on it, so it can stop them.  Omitted (older builders): "
+            "no stale_jobs in the answer."
+        ),
+    )
+
+
+class StaleJob(BaseModel):
+    """A job a builder reported building that the server no longer has on it."""
+
+    id: int
+    status: str | None = Field(
+        default=None,
+        description=(
+            "Its status (failed, cancelled, timed_out, ...) when the job was "
+            "this builder's; None for a job on another builder or unknown."
+        ),
+    )
+
+
+class BuilderHeartbeatResponse(BuilderInfo):
+    """A builder, as a heartbeat recorded it, plus the jobs it should stop."""
+
+    stale_jobs: list[StaleJob] | None = Field(
+        default=None,
+        description=(
+            "Of the heartbeat's job_ids, those not dispatched or running on "
+            "this builder: failed by the offline reaper, timed out, cancelled "
+            "or moved.  None when the heartbeat sent no job_ids."
+        ),
+    )
 
 
 class BuilderListResponse(BaseModel):

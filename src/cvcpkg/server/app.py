@@ -77,6 +77,7 @@ from cvcpkg.server.models import (
     DevicePollRequest,
     RevokeRequest,
     BuilderHeartbeatRequest,
+    BuilderHeartbeatResponse,
     BuilderInfo,
     BuilderListResponse,
     BuilderRegisterRequest,
@@ -1267,6 +1268,56 @@ async def _ws_send(builder_id: int, msg: dict) -> bool:
         return False
 
 
+# At most this many of a heartbeat's job_ids are looked at (a builder runs a
+# handful of jobs at once).
+_HEARTBEAT_JOB_IDS_MAX = 1024
+
+
+async def _stale_jobs(builder_id: int, job_ids) -> list[dict] | None:
+    """Which of *job_ids*, the jobs a builder says it is building, to stop.
+
+    Every one this server does not have dispatched or running on that
+    builder: failed by the offline reaper while its heartbeats lapsed (which
+    tells the builder nothing it is sure to hear), timed out, cancelled, or
+    moved to another builder.  Its result would be refused, and the build
+    holds one of the builder's slots meanwhile.  Each comes with its status
+    when it was this builder's job; another builder's job, or one this
+    server does not know, gets None, so a builder learns nothing about jobs
+    it was never given.
+
+    None when the heartbeat named no jobs (older builders), and when the
+    lookup fails: the answer then has no ``stale_jobs`` at all, which a
+    builder takes as "ask about each job" rather than "all is well", and the
+    beat itself (already recorded) still succeeds.
+    """
+    if not isinstance(job_ids, list) or _db_build_jobs is None:
+        return None
+    ids = sorted(
+        {
+            j
+            for j in job_ids[:_HEARTBEAT_JOB_IDS_MAX]
+            if isinstance(j, int) and not isinstance(j, bool)
+        }
+    )
+    if not ids:
+        return []
+    try:
+        active = {j.id for j in await _db_build_jobs.list_active_by_builder(builder_id)}
+        stale: list[dict] = []
+        for job_id in ids:
+            if job_id in active:
+                continue
+            info = await _db_build_jobs.get(job_id)
+            status = None
+            if info is not None and info.builder_id == builder_id:
+                status = str(getattr(info.status, "value", info.status))
+            stale.append({"id": job_id, "status": status})
+    except Exception:  # noqa: BLE001 - never fail the heartbeat over it
+        logger.exception("builder %d: stale-job lookup failed", builder_id)
+        return None
+    return stale
+
+
 async def _ws_broadcast(msg: dict) -> None:
     """Send a JSON message to all connected builders."""
     dead: list[tuple[int, WebSocket]] = []
@@ -1591,6 +1642,20 @@ async def _build_scheduler_loop() -> None:
                         continue
                     if failed is None:
                         continue
+                    # Tell the builder, in case it is still there to hear it:
+                    # one whose loop stalled (memory pressure) can keep its
+                    # socket, and reads this when it resumes instead of
+                    # building on for a result that would be refused.  One
+                    # that missed it learns from its next heartbeat's answer.
+                    await _ws_send(
+                        builder.id,
+                        {
+                            "type": "job.cancel",
+                            "job_id": job.id,
+                            "message": err,
+                            "reason": "builder_reaped",
+                        },
+                    )
                     await _db_build_jobs.cancel_downstream(job.id)
                     await emit_webhook_event(
                         "build.failed",
@@ -9848,7 +9913,7 @@ def create_app(
 
     @app.post(
         "/v1/builders/{builder_id}/heartbeat",
-        response_model=BuilderInfo,
+        response_model=BuilderHeartbeatResponse,
         tags=["builders"],
     )
     async def builder_heartbeat(
@@ -9866,6 +9931,10 @@ def create_app(
         ``free_disk_gb`` rides along so the scheduler's disk filter matches
         against a live measurement rather than whatever was true at
         registration; omitting it leaves the stored value alone.
+
+        A beat that names the jobs the builder is building (``job_ids``) is
+        answered with ``stale_jobs``, those this server no longer has on it
+        (see ``_stale_jobs``), so the builder stops them.
         """
         _require_db_builders()
         await _require_builder_identity(actor, builder_id)
@@ -9880,7 +9949,9 @@ def create_app(
         if info is None:
             raise HTTPException(404, f"builder {builder_id} not found")
         _live_poke("builders")
-        return info
+        return BuilderHeartbeatResponse(
+            **info.model_dump(), stale_jobs=await _stale_jobs(builder_id, body.job_ids)
+        )
 
     @app.delete("/v1/builders/{builder_id}", tags=["builders"])
     async def unregister_builder(
@@ -10765,7 +10836,9 @@ def create_app(
         (older builders pass ``token`` as a query parameter).  Once
         connected the builder receives ``job.dispatch``, ``job.cancel``,
         ``job.timeout``, ``recipe.push``, ``builder.update`` and ``ping``
-        messages from the server, and sends ``heartbeat`` and ``pong``.
+        messages from the server, and sends ``heartbeat`` and ``pong``.  A
+        heartbeat that names the jobs being built (``job_ids``) gets a
+        ``heartbeat_ack`` carrying ``stale_jobs`` (see ``_stale_jobs``).
 
         Job-state changes -- claim, log, complete, fail -- go over HTTP
         only, where org visibility, the holder check, auditing and webhooks
@@ -10881,7 +10954,11 @@ def create_app(
                         await websocket.close(code=4004, reason="builder not found")
                         break
                     _live_poke("builders")
-                    await websocket.send_json({"type": "heartbeat_ack"})
+                    ack: dict = {"type": "heartbeat_ack"}
+                    stale = await _stale_jobs(builder_id, data.get("job_ids"))
+                    if stale is not None:
+                        ack["stale_jobs"] = stale
+                    await websocket.send_json(ack)
 
                 elif msg_type in _WS_HTTP_ONLY_JOB_FRAMES:
                     # Job-state frames are HTTP-only; see

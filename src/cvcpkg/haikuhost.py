@@ -350,7 +350,9 @@ def _stream_ssh(
     log_callback: Callable[[str], None] | None,
 ) -> int:
     """Run a remote command, teeing its output to stdout and the log."""
-    proc = subprocess.Popen(
+    from cvcpkg import proctree
+
+    proc = proctree.popen(
         _ssh_cmd(remote_command),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,

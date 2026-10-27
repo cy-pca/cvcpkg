@@ -31,6 +31,7 @@ from typing import Any
 import yaml
 
 from cvcpkg import linkage as _linkage
+from cvcpkg import proctree
 from cvcpkg._archive import materialize_symlinks
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
@@ -2358,7 +2359,9 @@ def run_build(
 
     if log_callback:
         # Stream output line-by-line so it reaches the server in real time.
-        proc = subprocess.Popen(
+        # In the job's process tree when a fleet builder runs it, so the
+        # builder can stop the whole build (see cvcpkg.proctree).
+        proc = proctree.popen(
             cmd,
             cwd=ctx.build_dir.resolve(),
             env=env,
@@ -2581,7 +2584,7 @@ def run_test(
         log_callback(f"{header}\n")
 
     if log_callback:
-        proc = subprocess.Popen(
+        proc = proctree.popen(
             [bash, str(test_path)],
             cwd=ctx.install_dir,
             env=env,
