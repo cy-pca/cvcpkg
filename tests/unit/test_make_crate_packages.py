@@ -13,10 +13,14 @@ import textwrap
 from pathlib import Path
 
 import pytest
-import tomllib
 import yaml
 
 from cvcpkg.validation import validate_recipe_dir
+
+try:  # pragma: no cover - version shim
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: the backport (in the dev environment)
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 

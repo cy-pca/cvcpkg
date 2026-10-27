@@ -47,7 +47,10 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-import tomllib
+try:  # pragma: no cover - version shim
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10: the backport (in the dev environment)
+    import tomli as tomllib
 
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 USER_AGENT = "cvcpkg tools/make_crate_packages.py (https://github.com/cy-pca/cvcpkg)"
