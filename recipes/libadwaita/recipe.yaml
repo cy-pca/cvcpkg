@@ -42,6 +42,11 @@ depends:
     # src/gen-public-types.py and glib's glib-mkenums are Python scripts
     # (`#!/usr/bin/env python3`); build.sh puts the build prefix first on PATH.
     - python3
+    # msgfmt for share/locale/*/libadwaita.mo. Declared so every build ships
+    # the translations: meson silently skips them when no msgfmt is found,
+    # and uses whatever host one is on PATH otherwise.
+    - name: gettext
+      platforms: [linux]
   runtime:
     - name: gtk4
       version: "^4.16"
