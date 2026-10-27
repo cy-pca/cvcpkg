@@ -137,12 +137,13 @@ notes:
       native link (zig build-exe, zig cc, zig build) fails with undefined
       libSystem symbols (_abort, _getenv, ...): ziglang/zig#31665, fixed for
       zig 0.16.0, not backported. Intel Macs, and older SDKs, are not
-      affected. Workarounds: pass an explicit target (`-target aarch64-macos`,
-      `zig build -Dtarget=aarch64-macos`), which links against zig's own
-      lib/zig/libc/darwin stubs and works; or point DEVELOPER_DIR at an
-      Xcode 26.3. test.sh recognises exactly this failure and runs the
-      compile checks with -target aarch64-macos. The ghostty recipe does not
-      use zig on macOS.
+      affected. Workarounds: for zig build-exe / test / cc / c++, an explicit
+      target (`-target aarch64-macos`) links against zig's own
+      lib/zig/libc/darwin stubs and works. `zig build` compiles its build
+      runner natively whatever -Dtarget says, so it needs an older SDK:
+      DEVELOPER_DIR pointing at an Xcode whose macOS SDK is older than 26.4
+      (Xcode 26.3, 16.x). test.sh recognises exactly this failure and tests
+      both workarounds. The ghostty recipe does not use zig on macOS.
   - title: "Verified platforms"
     description: >-
       Built, tested and packed: linux-x86_64 (Ubuntu 22.04), linux-arm64
