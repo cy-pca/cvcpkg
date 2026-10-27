@@ -1,0 +1,145 @@
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -20,3 +20,10 @@
+ option('examples',
+        type: 'boolean', value: true,
+        description: 'Build and install the examples and demo applications (currently not built for MSVC builds)')
++
++# cvcpkg: AppStream is only used by adw_about_{dialog,window}_new_from_appdata()
++# (and adw_show_about_{dialog,window}_from_appdata(), which call them). Disabled,
++# they still exist (the ABI is unchanged) but log a critical and give an empty one.
++option('appstream',
++       type: 'feature', value: 'enabled',
++       description: 'Parse AppStream metainfo in the new_from_appdata() constructors')
+--- a/src/adw-about-dialog.c
++++ b/src/adw-about-dialog.c
+@@ -7,7 +7,9 @@
+ 
+ #include "config.h"
+ #include <glib/gi18n-lib.h>
++#ifdef HAVE_APPSTREAM
+ #include <appstream.h>
++#endif
+ 
+ #include "adw-about-dialog.h"
+ 
+@@ -423,12 +425,14 @@
+   self->legal_showing_idle_id = 0;
+ }
+ 
++#ifdef HAVE_APPSTREAM
+ static gboolean
+ get_release_for_version (AsRelease  *rel,
+                          const char *version)
+ {
+   return !g_strcmp0 (as_release_get_version (rel), version);
+ }
++#endif
+ 
+ static void
+ update_credits_legal_group (AdwAboutDialog *self)
+@@ -1996,6 +2000,7 @@
+  *
+  * Since: 1.5
+  */
++#ifdef HAVE_APPSTREAM
+ AdwDialog *
+ adw_about_dialog_new_from_appdata (const char *resource_path,
+                                    const char *release_notes_version)
+@@ -2146,6 +2151,21 @@
+ 
+   return ADW_DIALOG (self);
+ }
++#else
++AdwDialog *
++adw_about_dialog_new_from_appdata (const char *resource_path,
++                                   const char *release_notes_version)
++{
++  g_return_val_if_fail (resource_path, NULL);
++
++  /* cvcpkg: built with -Dappstream=disabled, so there is no metainfo
++   * parser; keep the symbol and hand back an empty one. */
++  g_critical ("adw_about_dialog_new_from_appdata: libadwaita was built without AppStream "
++              "and cannot read %s", resource_path);
++
++  return adw_about_dialog_new ();
++}
++#endif
+ 
+ /**
+  * adw_about_dialog_get_application_icon:
+--- a/src/adw-about-window.c
++++ b/src/adw-about-window.c
+@@ -6,7 +6,9 @@
+ 
+ #include "config.h"
+ #include <glib/gi18n-lib.h>
++#ifdef HAVE_APPSTREAM
+ #include <appstream.h>
++#endif
+ 
+ #include "adw-about-window.h"
+ 
+@@ -422,12 +424,14 @@
+     g_idle_add_once ((GSourceOnceFunc) legal_showing_idle_cb, self);
+ }
+ 
++#ifdef HAVE_APPSTREAM
+ static gboolean
+ get_release_for_version (AsRelease  *rel,
+                          const char *version)
+ {
+   return !g_strcmp0 (as_release_get_version (rel), version);
+ }
++#endif
+ 
+ static void
+ update_credits_legal_group (AdwAboutWindow *self)
+@@ -2019,6 +2023,7 @@
+  * Since: 1.4
+  * Deprecated: 1.6: Use [class@AboutDialog].
+  */
++#ifdef HAVE_APPSTREAM
+ GtkWidget *
+ adw_about_window_new_from_appdata (const char *resource_path,
+                                    const char *release_notes_version)
+@@ -2169,6 +2174,21 @@
+ 
+   return GTK_WIDGET (self);
+ }
++#else
++GtkWidget *
++adw_about_window_new_from_appdata (const char *resource_path,
++                                   const char *release_notes_version)
++{
++  g_return_val_if_fail (resource_path, NULL);
++
++  /* cvcpkg: built with -Dappstream=disabled, so there is no metainfo
++   * parser; keep the symbol and hand back an empty one. */
++  g_critical ("adw_about_window_new_from_appdata: libadwaita was built without AppStream "
++              "and cannot read %s", resource_path);
++
++  return adw_about_window_new ();
++}
++#endif
+ 
+ /**
+  * adw_about_window_get_application_icon:
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -303,6 +303,7 @@
+ gio_dep = dependency('gio-2.0', version: glib_min_version)
+ gtk_dep = dependency('gtk4', version: gtk_min_version)
+ appstream_dep = dependency('appstream',
++  required : get_option('appstream'),
+   fallback : ['appstream', 'appstream_dep'],
+   default_options : [
+     'systemd=false', 'apidocs=false', 'install-docs=false',
+@@ -331,6 +332,7 @@
+ config_h = configuration_data()
+ config_h.set_quoted('GETTEXT_PACKAGE', 'libadwaita')
+ config_h.set_quoted('LOCALEDIR', get_option('prefix') / get_option('localedir'))
++config_h.set('HAVE_APPSTREAM', appstream_dep.found())
+ 
+ # Symbol visibility
+ if target_system == 'windows'
