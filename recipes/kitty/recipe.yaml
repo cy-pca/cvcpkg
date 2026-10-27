@@ -1,0 +1,246 @@
+schema_version: 1
+recipe:
+  name: kitty
+  # The latest stable release (2026-10-01). Upstream tags are immutable and
+  # every asset is signed, so a binary pin holds.
+  upstream_version: "0.49.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://sw.kovidgoyal.net/kitty/
+  # kitty is GPL-3.0-only. Its builds bundle Python 3.14, OpenSSL, cairo,
+  # HarfBuzz, FreeType, GLib, libxkbcommon, Wayland and more, each under its
+  # own licence; share/doc/kitty/ carries kitty's LICENSE and upstream's SPDX
+  # SBOM for the release, which names every bundled component and its licence
+  # (recipes/kitty/licenses/, copied from the v0.49.2 tag and release). The
+  # corresponding source is upstream's kitty-0.49.2.tar.xz in the same
+  # release.
+  license: GPL-3.0-only
+  tags: [tools, terminal]
+  description: >-
+    kitty -- a fast, GPU-based terminal emulator, and the reference
+    implementation of the kitty graphics protocol, including Unicode
+    placeholders (U=1). Repackaged from the official release binaries of
+    0.49.2 for Linux (x86_64, arm64) and macOS: kitty and kitten in bin/. A
+    terminal for testing programs that draw images into the terminal
+    (libcvc's `arigl --terminal`), without a system install. kitty has no
+    Windows build.
+
+# The payload is upstream's prebuilt release (linux: a self-contained bundle
+# with its own Python, built against glibc 2.35 at most); nothing is compiled
+# here.
+prebuilt_payload: true
+
+# `prebuilt` sources are fetched by build.sh, not by cvcpkg core, so this map
+# DOCUMENTS what build.sh downloads. The enforced sha256 values are in
+# build.sh's EXPECTED -- keep the two in sync when bumping.
+#
+# Chain of custody, checked 2026-10-26 for every asset below: upstream signs
+# each release asset with a detached GPG signature (<asset>.sig in the same
+# GitHub release), made with Kovid Goyal's key
+#   3CE1 780F 78DD 88DF 4519  4FD7 06BC 317B 515A CE7C
+#   ("Kovid Goyal (New longer key) <kovid@kovidgoyal.net>", rsa4096, 2015),
+# which the release notes point at (https://calibre-ebook.com/signatures/kovid.gpg)
+# and which Arch Linux's kitty PKGBUILD pins as its validpgpkeys. Each
+# downloaded asset verified as "Good signature" against that key, and its
+# sha256 matched the digest GitHub records for the asset. The sha256 pins
+# guard against the asset changing after that check. macOS has one universal
+# (x86_64 + arm64) .dmg for both arches.
+source:
+  type: prebuilt
+  base_url: https://github.com/kovidgoyal/kitty/releases/download/v0.49.2
+  artifacts:
+    linux-x86_64:
+      file: kitty-0.49.2-x86_64.txz
+      sha256: "d573618b911e9c461bd421b96c13c74c7f1cb2f1ac9c327818d4ff84366cf5c6"
+    linux-arm64:
+      file: kitty-0.49.2-arm64.txz
+      sha256: "0c81a995614426cccf0fecaf7d104d47cd63bbccf173d14976e9f92e3d60fce6"
+    macos-x86_64:
+      file: kitty-0.49.2.dmg
+      sha256: "e524b894145d89cb76b584e3a9691196ae56bfa31d51384a44aa774252b7cef7"
+    macos-arm64:
+      file: kitty-0.49.2.dmg
+      sha256: "e524b894145d89cb76b584e3a9691196ae56bfa31d51384a44aa774252b7cef7"
+
+patches: []
+
+depends:
+  build:
+    # build.sh gives the bundle's objects a DT_RPATH (see there).
+    - name: patchelf
+      platforms: [linux]
+    # test.sh's window test: an X server, software OpenGL for kitty (it needs
+    # OpenGL 3.1; Mesa's llvmpipe gives 4.5) and a monospace font for a
+    # builder that has none. Build-time only; at run time kitty uses the
+    # host's display, GL driver and fonts.
+    - name: xvfb
+      platforms: [linux]
+    - name: mesa
+      platforms: [linux]
+    - name: liberation-fonts
+      platforms: [linux]
+  # What upstream's linux bundle needs but does not carry, from the DT_NEEDED
+  # of every ELF object in it: libX11, libX11-xcb and libXcursor (the X11
+  # back end), libxcb and libxcb-xkb (its bundled libxkbcommon-x11),
+  # libfontconfig (its bundled cairo, and kitty's font discovery). Plus what
+  # the X11 back end dlopens and does without, more limited, when absent:
+  # XRandR and Xinerama (monitors), XInput2, XRender (transparency), XShape
+  # (libXext) and XF86VidMode. And data: xkeyboard-config's share/X11/xkb,
+  # which with libx11's share/X11/locale is what bin/* point xkbcommon and
+  # libX11 at (see the notes). Its own copies of libxkbcommon, Wayland, cairo,
+  # FreeType, HarfBuzz, OpenSSL, zlib and Python are used, not the prefix's.
+  # libdbus-1 and the GL driver (libGL / libEGL, libwayland-egl) come from
+  # the host (see the notes). macOS needs nothing outside the OS.
+  runtime:
+    - name: libx11
+      platforms: [linux]
+    - name: libxcursor
+      platforms: [linux]
+    - name: libxcb
+      platforms: [linux]
+    - name: fontconfig
+      platforms: [linux]
+    - name: libxrandr
+      platforms: [linux]
+    - name: libxinerama
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxrender
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+    - name: libxxf86vm
+      platforms: [linux]
+    - name: xkeyboard-config
+      platforms: [linux]
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+
+package:
+  files:
+    # Upstream's bundle, whole, in lib/kitty/ (linux: bin/ lib/ share/ as
+    # upstream lays it out; macOS: the signed kitty.app), with launchers for
+    # it in bin/.
+    - { glob: "bin/kitty", platforms: [linux, macos] }
+    - { glob: "bin/kitten", platforms: [linux, macos] }
+    - { glob: "lib/kitty/", platforms: [linux, macos] }
+    - { glob: "share/man/man1/kitty.1", platforms: [linux, macos] }
+    - { glob: "share/man/man1/kitten*.1", platforms: [linux, macos] }
+    - { glob: "share/man/man5/kitty.conf.5", platforms: [linux, macos] }
+    - { glob: "share/applications/kitty*.desktop", platforms: [linux] }
+    - { glob: "share/icons/hicolor/", platforms: [linux] }
+    - share/doc/kitty/
+
+test:
+  script: test.sh
+
+toolchain:
+  note: >-
+    Prebuilt release binaries -- nothing is compiled. build.sh verifies the
+    pinned sha256 and stages upstream's bundle in lib/kitty/ with bin/
+    launchers (linux: the self-contained .txz bundle, its objects switched
+    to DT_RPATH; macOS: upstream's kitty.app from the .dmg, minus its
+    build-machine LC_RPATHs).
+
+notes:
+  - title: "Unicode placeholders (U=1) work"
+    description: >-
+      kitty draws a kitty-graphics image transmitted with a=T,U=1 onto the
+      U+10EEEE placeholder cells, the way libcvc's `arigl --terminal` places
+      its frames. test.sh checks it on linux wherever cvcpkg's software GL
+      loads (see "Built and tested"): it runs
+      recipes/kitty/kitty-placeholder-probe.py in a kitty window under Xvfb
+      and measures, in the screenshot, that panel B's picture covers its
+      placeholder grid (and not the cells beside it, where a terminal that
+      ignores U=1 draws it). kitty has no DEC Sixel; panel C stays empty.
+      Details: recipes/kitty/README.md.
+  - title: "Linux: the bundle keeps its own libraries (DT_RPATH)"
+    platforms: [linux]
+    description: >-
+      Upstream's bundle carries its own Python 3.14, OpenSSL, cairo,
+      FreeType, HarfBuzz, GLib, libxkbcommon, Wayland and more, and its
+      launcher is linked with a DT_RPATH so they win over LD_LIBRARY_PATH.
+      cvcpkg's packaging would give the bundled libraries and Python modules
+      a DT_RUNPATH, which LD_LIBRARY_PATH outranks, and cvcpkg's activate
+      script puts the prefix's lib/ there -- so a prefix holding other
+      versions of those libraries would have them loaded into kitty. build.sh
+      therefore gives every object in the bundle a DT_RPATH (as
+      recipes/libreoffice does): the bundle's lib/ first, then the prefix's
+      lib/ for what the bundle does not carry. The second entry is written
+      out rather than left to cvcpkg's relocation pass, which adds it only
+      for libraries a dependency's installed manifest lists; the linux-arm64
+      libx11, libxcb and libxcursor bundles carry no manifest, and kitty's
+      X11 back end then found no libX11 in the prefix.
+  - title: "Linux: host requirement libdbus-1 and the GL driver"
+    platforms: [linux]
+    description: >-
+      Like any GUI program, kitty takes the OpenGL driver from the host:
+      libGL.so.1 (X11) or libEGL.so.1 + libwayland-egl.so.1 (Wayland),
+      OpenGL 3.1 or newer. Mesa's llvmpipe, e.g. cvcpkg's `mesa` in the same
+      prefix, is enough on a machine without a GPU. kitty's GLFW back ends
+      also link libdbus-1.so.3, which cvcpkg does not package; every desktop
+      Linux has it (Debian/Ubuntu: libdbus-1-3). test.sh skips the window
+      test when it is missing (CVC_KITTY_GUI_TEST=1 makes that a failure).
+      Fonts come from fontconfig, which reads the host's font directories
+      and <prefix>/share/fonts; on a host with none, install liberation-fonts
+      into the prefix.
+  - title: "Linux: bin/* set XKB_CONFIG_ROOT and XLOCALEDIR"
+    platforms: [linux]
+    description: >-
+      kitty builds keymaps and its Compose table with libxkbcommon, and
+      libX11 (from the prefix) looks up locale data, at directories fixed
+      when each was compiled -- the host's /usr/share/X11 for the bundled
+      libxkbcommon, a path on the build machine for cvcpkg's libX11. The bin/
+      launchers therefore export XKB_CONFIG_ROOT=<prefix>/share/X11/xkb (from
+      xkeyboard-config) and XLOCALEDIR=<prefix>/share/X11/locale (from
+      libx11) unless they are already set, then exec lib/kitty/bin/<name>, as
+      the wezterm recipe's launchers do. Programs started inside the terminal
+      inherit both variables.
+  - title: "kitty and a session bus without a desktop portal"
+    platforms: [linux]
+    description: >-
+      kitty asks the desktop portal on the D-Bus session bus for settings and
+      notifications at start. Where a session bus runs but nothing answers
+      those calls (WSL, minimal containers), each call waits out D-Bus's
+      25-second timeout, so the first window takes a minute or more to appear.
+      Point DBUS_SESSION_BUS_ADDRESS at a path where no bus listens (as
+      test.sh does) and kitty starts in seconds; it only loses the portal's
+      colour-scheme hints and desktop notifications.
+  - title: "macOS: kitty.app is edited, so its seal no longer verifies"
+    platforms: [macos]
+    description: >-
+      Upstream's notarised kitty.app is staged under lib/kitty/ and run
+      through bin/kitty and bin/kitten. Its Python.framework and extension
+      modules carry an LC_RPATH into kitty's build machine
+      (/Users/Shared/kitty-build/sw/sw/lib), which build.sh deletes, and
+      cvcpkg's relocation pass rewrites the install names of the dylibs in
+      Contents/Frameworks. Each edited object is re-signed ad hoc and kitty
+      runs (test.sh), but `codesign --verify` of the whole app fails. A
+      quarantined copy would not pass Gatekeeper; one installed by cvcpkg
+      carries no quarantine attribute.
+  - title: "Isolate a test run from the user's kitty"
+    description: >-
+      Use `kitty --config NONE` (no kitty.conf) and point
+      KITTY_CONFIG_DIRECTORY / XDG_CONFIG_HOME / XDG_CACHE_HOME at a scratch
+      directory; add `-o update_check_interval=0` so the official build does
+      not check for updates over the network. kitty does not hand windows to
+      a running instance unless asked to (--single-instance).
+  - title: "Built and tested"
+    description: >-
+      All four platforms are built, tested and packed by this recipe:
+      linux-x86_64 under WSL Ubuntu 22.04, linux-arm64 and macOS (arm64,
+      x86_64) on the cvcpkg CI recipe checks. The placeholder pixel check
+      ran on linux-x86_64. On linux-arm64 test.sh skips the window test
+      because cvcpkg's mesa 25.3.6+cvc.1 for arm64 links libLLVM.so.18.1
+      while it depends on llvm20; it runs once mesa is rebuilt. macOS has no
+      window test. Details: recipes/kitty/README.md.
