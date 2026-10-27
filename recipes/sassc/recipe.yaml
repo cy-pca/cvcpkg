@@ -1,0 +1,64 @@
+schema_version: 1
+recipe:
+  name: sassc
+  upstream_version: "3.6.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/sass/sassc
+  # sassc and libsass are both MIT.
+  license: MIT
+  tags: [tools, css]
+  description: >-
+    SassC -- the command-line Sass (SCSS) to CSS compiler, statically linked
+    against LibSass 3.6.6. A build-time tool: libadwaita compiles its
+    stylesheets with it (and GTK themes generally do). LibSass and SassC are
+    deprecated upstream in favour of Dart Sass but remain what the GNOME
+    stack's meson builds call.
+
+# The sassc release tarball; libsass is the second download, pinned in
+# build.sh (sassc builds it in-tree as a static library, upstream's default
+# BUILD=static, so nothing of libsass is installed).
+source:
+  type: tarball
+  url: https://github.com/sass/sassc/archive/refs/tags/3.6.2.tar.gz
+  sha256: "608dc9002b45a91d11ed59e352469ecc05e4f58fc1259fc9a9f5b8f0f8348a03"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # A C/C++ compiler and GNU make from the builder; nothing from cvcpkg.
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - bin/sassc
+    - share/doc/sassc/
+
+test:
+  script: test.sh
+
+notes:
+  - title: "A build tool: one static binary"
+    platforms: [linux]
+    description: >-
+      bin/sassc links LibSass statically and needs only glibc and the C++
+      runtime (libstdc++), so the package has no runtime dependencies and the
+      prefix can be moved. No libsass library or headers are installed; a
+      recipe that wants to link LibSass itself needs a separate libsass
+      package.
+  - title: "Linux only"
+    platforms: [linux]
+    description: >-
+      Built and tested on linux-x86_64 (Ubuntu 22.04) because that is where
+      the one consumer, libadwaita, is built. sassc's Makefile also supports
+      macOS and the BSDs; add them to the matrix when a recipe there needs it.
