@@ -15,8 +15,9 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
-# GTK's meson build imports the Python 'packaging' module, same as glib's.
-& python -m pip install --quiet packaging 2>$null
+# GTK's meson build imports the Python 'packaging' module, same as glib's. It
+# comes from the packaging-cp312 build dep in the prefix that meson.cmd's
+# python.exe runs from, not from a pip install off PyPI at build time.
 
 Invoke-CvcMesonBuild @(
     # Win32 (GDI/Direct2D) is GTK's native Windows backend. Wayland and X11 are
@@ -40,5 +41,10 @@ Invoke-CvcMesonBuild @(
     '-Dprint-cpdb=disabled',
     # GStreamer is not a declared dependency of this recipe on any platform, so
     # do not let meson pick up a system copy.
-    '-Dmedia-gstreamer=disabled'
+    '-Dmedia-gstreamer=disabled',
+    # No Vulkan renderer, as in build.sh: GTK 4.16 enables it by default and then
+    # requires the Vulkan loader and glslc, which cvcpkg does not package
+    # ('Dependency "vulkan" not found', job 24069 on sandipaws). GTK renders with
+    # its GL renderer (WGL via libepoxy) or falls back to cairo.
+    '-Dvulkan=disabled'
 )
