@@ -30,6 +30,14 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+---
+
+## v2.5.7
+
+**A release so the fleet can publish a bundle with hundreds of runtime deps.
+The server half went live on cvcpkg.org with #484. Builders publish through
+the client, so they need this release.**
+
 - **Fix: a bundle with hundreds of runtime deps could not be published.**
   `cvcpkg publish` sent `required_deps` and `provides` as query parameters,
   so wezterm-crates' 645 deps made a ~50 KB request line. cvcpkg.org's front
