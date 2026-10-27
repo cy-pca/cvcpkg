@@ -42,8 +42,12 @@ the way `PACKAGING.md` asks distributions to:
    file and the AppStream metainfo call `ghostty` from PATH instead of the
    builder's install path. The D-Bus activation file and the systemd user
    unit, which need an absolute path, are left out. Licences go to
-   `share/doc/ghostty/`, including every fetched package's under
-   `third-party/`.
+   `share/doc/ghostty/`, with every licence file a fetched package carries
+   under `third-party/<package>/`. z2d, the gobject bindings, Dear Bindings
+   and the themes archive carry none; their sources state their licence
+   in SPDX headers. Ghostty 1.3 also installs `libghostty-vt` (its new
+   terminal-core library), its headers and gtk4-layer-shell's. This package
+   is the terminal, so `build.sh` removes them.
 
 Ghostty locates `share/ghostty` (themes, shell integration) and its
 `xterm-ghostty` terminfo relative to its own executable, so the prefix can
@@ -73,6 +77,16 @@ window that opens but never draws panel A. That matters: a WezTerm build that
 opened fine but drew solid blocks is what showed "it started" proves
 nothing. To look at the result yourself, pass
 `CVC_GHOSTTY_SCREENSHOT=/path/shot.png` to `test.sh`.
+
+Observed on 2026-10-26, linux-x86_64 (Ubuntu 22.04 under WSL, Xvfb with
+Mesa 25.3 llvmpipe, a 100×30-cell window at 12 pt):
+
+- A: 10,800 px at x=7..156, 150×72.
+- B: 10,496 px at x=7..156, 150×70, directly below A. It is **on** the
+  grid, with no missing-glyph boxes beside it.
+- C: empty.
+
+The probe's last line shows `TERM_PROGRAM=ghostty 1.3.1`.
 
 For arigl this means Ghostty's kitty mode shows each frame on the cells arigl
 reserved for it.

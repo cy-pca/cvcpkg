@@ -169,17 +169,20 @@ fi
 DOC="${CVC_INSTALL_DIR}/share/doc/ghostty"
 mkdir -p "${DOC}/third-party"
 cp -p "${SRC}/LICENSE" "${DOC}/LICENSE"
-# Every fetched package's own licence files, by package name.
+# Every licence file a fetched package carries, by package name. Some carry
+# none (a Zig package's build.zig.zon `paths` can leave it out): z2d, the
+# gobject bindings, Dear Bindings, the themes archive.
 while read -r hash url name; do
     found=0
     for f in "${PKG_CACHE}/${hash}"/LICEN[CS]E* "${PKG_CACHE}/${hash}"/COPYING* \
-             "${PKG_CACHE}/${hash}"/OFL* "${PKG_CACHE}/${hash}"/*/OFL.txt; do
+             "${PKG_CACHE}/${hash}"/Copyright "${PKG_CACHE}/${hash}"/OFL* \
+             "${PKG_CACHE}/${hash}"/*/OFL.txt; do
         [ -f "${f}" ] || continue
         mkdir -p "${DOC}/third-party/${name}"
         cp -p "${f}" "${DOC}/third-party/${name}/"
         found=1
     done
-    [ "${found}" = 1 ] || echo "note: no licence file at the top of package ${name} (${url##*/})"
+    [ "${found}" = 1 ] || echo "note: package ${name} (${url##*/}) carries no licence file" >&2
 done < "${DEPS}"
 
 "${BIN}" --version
