@@ -68,6 +68,53 @@ $env:PATH = $env:PATH + ";" + (@(
     (Join-Path $bld 'Scripts'), (Join-Path $deps 'Scripts')
 ) -join ';')
 
+# ── UCRT imports for numpy's MSVC-built npymath ─────────────────────────────
+# scipy.special links numpy's static npymath.lib. numpy-cp312 compiles it with
+# MSVC, so its long-double code calls UCRT's own creall/cabsl/expm1l/
+# copysignl/... through __imp_ pointers. Those are the right functions: MSVC's
+# long double is double, and SciPy's meson.build builds its C with
+# -mlong-double-64 to match. But mingw-w64's libucrt.a no longer exports UCRT's
+# long-double entry points on x86 (MinGW's own long double is 80-bit), so
+# scipy/special/_ufuncs failed to link with 17 undefined __imp_*l (job 23396).
+#
+# Build exactly the imports npymath needs and libucrt.a lacks into a small
+# import library for ucrtbase.dll, after checking ucrtbase.dll exports each
+# one, and hand it to every link through LDFLAGS.
+$npymath = & $py -c "import numpy, os; print(os.path.normpath(os.path.join(numpy.get_include(), '..', 'lib', 'npymath.lib')))"
+if ($LASTEXITCODE -ne 0 -or -not $npymath -or -not (Test-Path $npymath)) {
+    throw "scipy-cp312: numpy's npymath.lib not found ('$npymath')"
+}
+$needed = & (Join-Path $gccBin 'nm.exe') -u $npymath |
+    ForEach-Object { if ($_ -match '\s__imp_(\w+)$') { $Matches[1] } } | Sort-Object -Unique
+# Quoted: PowerShell splits an unquoted -opt=name.ext argument at the dot.
+$libucrt = & $env:CC '-print-file-name=libucrt.a'
+if (-not (Test-Path $libucrt)) { throw "scipy-cp312: $env:CC has no libucrt.a ('$libucrt')" }
+$inLibucrt = @{}
+& (Join-Path $gccBin 'nm.exe') $libucrt |
+    ForEach-Object { if ($_ -match '\sI __imp_(\w+)$') { $inLibucrt[$Matches[1]] = $true } }
+$missing = @($needed | Where-Object { -not $inLibucrt.ContainsKey($_) })
+if ($missing.Count -gt 0) {
+    $ucrtbase = Join-Path $env:SystemRoot 'System32\ucrtbase.dll'
+    $exported = @{}
+    & (Join-Path $gccBin 'objdump.exe') -p $ucrtbase |
+        ForEach-Object { if ($_ -match '^\s*\[\s*\d+\] \+base\[\s*\d+\]\s+[0-9a-fA-F]+ (\S+)$') { $exported[$Matches[1]] = $true } }
+    $absent = @($missing | Where-Object { -not $exported.ContainsKey($_) })
+    if ($absent.Count -gt 0) {
+        throw "scipy-cp312: npymath imports $($absent -join ', '), in neither mingw's libucrt.a nor $ucrtbase"
+    }
+    $ldDir = Join-Path $env:CVC_BUILD_DIR 'ucrt-longdouble'
+    New-Item -ItemType Directory -Force -Path $ldDir | Out-Null
+    $def = Join-Path $ldDir 'ucrt-longdouble.def'
+    Set-Content -Path $def -Encoding ascii -Value (@('LIBRARY ucrtbase.dll', 'EXPORTS') + ($missing | ForEach-Object { "    $_" }))
+    & (Join-Path $gccBin 'dlltool.exe') -d $def -l (Join-Path $ldDir 'libucrt-longdouble.a')
+    if ($LASTEXITCODE -ne 0) { throw "scipy-cp312: dlltool failed ($LASTEXITCODE)" }
+    # meson splits LDFLAGS shell-style, which would eat backslashes.
+    $env:LDFLAGS = (@("-L$($ldDir -replace '\\', '/')", '-lucrt-longdouble') + @($env:LDFLAGS | Where-Object { $_ })) -join ' '
+    Write-Output "scipy-cp312: ucrtbase.dll imports for npymath: $($missing -join ' ')"
+} else {
+    Write-Output "scipy-cp312: mingw's libucrt.a covers every UCRT import of npymath"
+}
+
 # ── Hermetic pkg-config so meson finds OUR openblas and nothing else ────────
 # PKG_CONFIG_LIBDIR *replaces* the default search path. No fallback to a
 # pkg-config on PATH: that resolves to C:\Strawberry\perl\bin\pkg-config.bat
@@ -170,7 +217,7 @@ $env:PYTHONPATH = "$(Join-Path $env:CVC_INSTALL_DIR 'Lib\site-packages');$env:PY
 import os
 import numpy as np
 import scipy
-from scipy import linalg, ndimage
+from scipy import linalg, ndimage, special
 
 a = np.array([[3.0, 1.0], [1.0, 2.0]])
 x = linalg.solve(a, np.array([9.0, 8.0]))          # LAPACK gesv
@@ -183,6 +230,11 @@ assert np.allclose(q @ r, a)
 # the function this whole exercise was for: geometry-scene-gen's clearance field
 d = ndimage.distance_transform_edt(np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]]))
 assert np.isclose(d[1, 1], 0.0) and np.isclose(d[0, 0], 1.4142135623730951), d
+
+# scipy.special's _ufuncs is the extension linked with numpy's npymath and the
+# ucrtbase.dll imports above: importing it resolves them, calling it uses them.
+assert np.isclose(special.gamma(5.0), 24.0)
+assert np.isclose(abs(special.gamma(1 + 1j)) ** 2, np.pi / np.sinh(np.pi))   # |G(1+i)|^2 = pi/sinh(pi)
 
 sd = os.path.dirname(scipy.__file__)
 vendored = [x for x in os.listdir(sd) if x.endswith('.libs')]
