@@ -58,24 +58,5 @@ foreach ($extra in @('bin\glib-gettextize', 'share\bash-completion')) {
     if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
 }
 
-# Nothing installed may still name this build's install or deps prefix: those
-# directories are gone once the job ends.  Binaries (any NUL byte) are skipped.
-$prefixForms = foreach ($p in @($env:CVC_INSTALL_DIR, $env:CVC_DEPS_PREFIX)) {
-    if (-not $p) { continue }
-    $p = $p.TrimEnd('\', '/')
-    $p; ($p -replace '\\', '/'); (ConvertTo-CvcMsysPath $p)
-}
-$prefixForms = @($prefixForms | Sort-Object -Unique)
-$leftover = Get-ChildItem -LiteralPath $env:CVC_INSTALL_DIR -Recurse -File | Where-Object {
-    $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
-    if ([Array]::IndexOf($bytes, [byte]0) -ge 0) { return $false }
-    $t = [System.Text.Encoding]::UTF8.GetString($bytes)
-    foreach ($form in $prefixForms) {
-        if ($t.IndexOf($form, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
-    }
-    $false
-}
-if ($leftover) {
-    $leftover | ForEach-Object { Write-Host "  $($_.FullName)" }
-    throw 'glib: installed files still name the build''s install or deps prefix (listed above)'
-}
+# Nothing installed may still name this build's install or deps prefix.
+Assert-CvcNoBuildPrefixPaths 'glib'

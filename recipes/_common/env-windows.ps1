@@ -333,6 +333,42 @@ function Invoke-CvcRewriteInstallPaths {
     }
 }
 
+# Fail when an installed file still names this build's install or deps prefix.
+# Invoke-CvcRewriteInstallPaths relocates .pc and .cmake files only; scripts
+# bake --prefix in forms it never touches -- glib's bin/gdbus-codegen
+# ('C:/Users/.../install/share') and openssl's bin/c_rehash.pl (a Perl string,
+# "C:\\Users\\...\\install") -- and both directories are gone once the job
+# ends.  Recipes call this last, after fixing what they install.  Every
+# spelling is checked, case-insensitively: backslash, forward slash, MSYS, and
+# the doubled backslashes of a quoted C or Perl string.  Binaries (any NUL
+# byte) are skipped.  -ExtraPrefixes adds directories of the recipe's own that
+# must not leak either (CVC_BUILD_DIR, a DESTDIR staging dir).
+function Assert-CvcNoBuildPrefixPaths {
+    param([string]$Recipe = 'recipe', [string[]]$ExtraPrefixes = @())
+    $root = $env:CVC_INSTALL_DIR
+    if (-not $root -or -not (Test-Path -LiteralPath $root)) { return }
+    $forms = foreach ($p in @($env:CVC_INSTALL_DIR, $env:CVC_DEPS_PREFIX) + $ExtraPrefixes) {
+        if (-not $p) { continue }
+        $p = $p.TrimEnd('\', '/')
+        if (-not $p) { continue }
+        $p; ($p -replace '\\', '/'); ($p -replace '\\', '\\'); (ConvertTo-CvcMsysPath $p)
+    }
+    $forms = @($forms | Sort-Object -Unique)
+    $leftover = @(Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object {
+        $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+        if ([Array]::IndexOf($bytes, [byte]0) -ge 0) { return $false }
+        $t = [System.Text.Encoding]::UTF8.GetString($bytes)
+        foreach ($form in $forms) {
+            if ($t.IndexOf($form, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+        }
+        $false
+    })
+    if ($leftover) {
+        $leftover | ForEach-Object { Write-Host "  $($_.FullName)" }
+        throw "${Recipe}: installed files still name the build's install or deps prefix (listed above)"
+    }
+}
+
 # ── MSYS2 / MinGW autotools helper ──────────────────────────────────
 #
 # A handful of dependencies (gmp, mpfr, gsl) have no working native
