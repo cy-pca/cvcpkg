@@ -32,6 +32,33 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## v2.5.9
+
+**A release so the builders' temp-path rewrite stops corrupting Windows
+paths (#491). The server needs nothing; builders rewrite installed deps
+themselves, so they need this release.**
+
+- **Fix: rewriting a dependency's baked build path broke Windows scripts.**
+  When a builder installs a dep, it rewrites the dep's build-time install dir
+  (`.../cvcpkg-<name>-<id>/install`) in its scripts and data files to the
+  job's prefix. The match stopped at the `:` after a drive letter, so on a
+  Windows path the `C:` survived in front of the new one. glib's
+  `bin/gdbus-codegen` became
+  `path = os.path.join('C:C:\Users\...\share', 'glib-2.0')`, which Python
+  cannot parse, so every gdbus-codegen run in gtk4's Windows build failed
+  (job 24083, 2026-10-27). Now:
+  - the match takes an optional drive letter, and either separator. The
+    letter is not taken when it ends a path component, as in
+    `/opt/b:/tmp/...`;
+  - the replacement keeps the separators of the path it replaces. A
+    forward-slash path gets the new prefix with forward slashes, the only
+    spelling that is safe inside a Python or CMake string.
+
+  glib 2.80.5+cvc.5 no longer bakes the path at all, so gtk4 built on 2.5.8
+  builders too. This covers any other dep that does.
+
+---
+
 ## v2.5.8
 
 **A release so Windows recipes build on a host with no pwsh 7, as
