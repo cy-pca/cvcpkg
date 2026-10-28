@@ -134,7 +134,9 @@ class TestScriptRehoming:
 
     # glib's bin/gdbus-codegen as the prod Windows bundle (2.80.5+cvc.4) ships
     # it: meson bakes the build's datadir into the fallback branch.
-    _GDBUS_BAKED = "C:/Users/jmr/cvcpkg-builder/cvcpkg-job-glib-6g8q6v_y/cvcpkg-glib-hm_lc9i4/install"
+    _GDBUS_BAKED = (
+        "C:/Users/jmr/cvcpkg-builder/cvcpkg-job-glib-6g8q6v_y/cvcpkg-glib-hm_lc9i4/install"
+    )
     _GDBUS_SCRIPT = (
         "import os\n"
         "path = ''\n"
