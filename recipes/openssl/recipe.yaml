@@ -38,7 +38,19 @@ recipe:
   # CPython's Windows bundle ships libcrypto/libssl in DLLs\ and builds its
   # LICENSE.txt from this file, as python.org's does; without it the OpenSSL
   # text was missing there.  Other platforms rebuild unchanged.
-  cvc_revision: 10
+  #
+  # Bumped 10 -> 11: Windows libcrypto no longer compiles in the builder's job
+  # dir.  OPENSSLDIR (openssl.cnf), ENGINESDIR and MODULESDIR were the install
+  # dir of the job that built it, a path any local user can create under a job
+  # dir like C:\cvb\...; they are now OpenSSL's admin-only Windows defaults
+  # (C:\Program Files\Common Files\SSL, C:\Program Files\OpenSSL\lib\...), as in
+  # python.org's libcrypto, installed through DESTDIR.  bin/c_rehash.pl finds
+  # openssl.exe beside itself instead of in the job dir, looks for it under
+  # that name, and copies rather than symlinks; before, it never found
+  # openssl.exe and its symlinks failed silently without the privilege.
+  # build.ps1 fails if any packaged file but a PDB names the build tree.  Other
+  # platforms rebuild unchanged.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
