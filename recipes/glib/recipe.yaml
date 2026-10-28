@@ -12,7 +12,14 @@ recipe:
   # include/libintl.h, which replace gettext's in a shared prefix.  The -I is now
   # in CPPFLAGS (all C-family languages), and build.sh fails if a libintl is
   # staged.  Since #316's --wrap-mode=nofallback a macOS build failed outright.
-  cvc_revision: 4
+  # cvc.5: the Windows bin/gdbus-codegen no longer falls back to the builder's
+  # install dir (cvc.4 shipped 'C:/Users/jmr/cvcpkg-builder/.../install/share');
+  # its fallback resolves bin/../share/glib-2.0 from the script itself, and
+  # build.ps1 fails if any installed text file still names a build prefix.  It
+  # also drops bin/glib-gettextize and the bash completions, which meson
+  # installs only when sh/bash is on PATH (cvc.4's Windows bundle has neither).
+  # The other platforms' payloads are unchanged.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -42,8 +42,8 @@ class TestScriptRehoming:
         _rewrite_script_prefixes(p)
         text = aclocal.read_text()
         assert _BAKED not in text
-        assert f"{p}/share/aclocal-" in text
-        assert f"{p}/share/automake-1.17" in text
+        assert f"{p.as_posix()}/share/aclocal-" in text
+        assert f"{p.as_posix()}/share/automake-1.17" in text
 
     def test_automake_config_pm_under_share_is_rehomed(self, tmp_path):
         # THE gap: rewriting only bin/ fixes aclocal but leaves automake broken,
@@ -57,7 +57,7 @@ class TestScriptRehoming:
         _rewrite_script_prefixes(p)
         text = cfg.read_text()
         assert _BAKED not in text
-        assert f"{p}/share/automake-1.17" in text
+        assert f"{p.as_posix()}/share/automake-1.17" in text
 
     def test_libtool_la_archive_is_rehomed(self, tmp_path):
         # .la files carry an absolute libdir= that breaks downstream libtool links.
@@ -66,7 +66,7 @@ class TestScriptRehoming:
         la.parent.mkdir(parents=True)
         la.write_text(f"dlname='libfoo.so.1'\nlibdir='{_BAKED}/lib'\n")
         _rewrite_script_prefixes(p)
-        assert f"libdir='{p}/lib'" in la.read_text()
+        assert f"libdir='{p.as_posix()}/lib'" in la.read_text()
 
     def test_binary_file_is_never_rewritten(self, tmp_path):
         # Substitution changes length; doing it to a binary corrupts offsets.
@@ -130,7 +130,53 @@ class TestScriptRehoming:
         _rewrite_script_prefixes(p)  # must not raise re.error
         text = script.read_text()
         assert _BAKED not in text
-        assert str(p) in text
+        assert p.as_posix() in text
+
+    # glib's bin/gdbus-codegen as the prod Windows bundle (2.80.5+cvc.4) ships
+    # it: meson bakes the build's datadir into the fallback branch.
+    _GDBUS_BAKED = (
+        "C:/Users/jmr/cvcpkg-builder/cvcpkg-job-glib-6g8q6v_y/cvcpkg-glib-hm_lc9i4/install"
+    )
+    _GDBUS_SCRIPT = (
+        "import os\n"
+        "path = ''\n"
+        "if not os.path.isfile(os.path.join(path, 'codegen', 'codegen_main.py')):\n"
+        f"    path = os.path.join('{_GDBUS_BAKED}/share', 'glib-2.0')\n"
+    )
+
+    def test_windows_drive_letter_is_part_of_the_rewritten_path(self, tmp_path):
+        # The match used to start after "C:", which survived in front of the
+        # new path: a Windows builder job's deps prefix got
+        #   path = os.path.join('C:C:\Users\tfx\...\share', 'glib-2.0')
+        # a SyntaxError (truncated \UXXXXXXXX escape), so gdbus-codegen could not
+        # run and gtk4's Windows build died on it (dev job #23592).
+        p = _prefix(tmp_path)
+        script = p / "bin" / "gdbus-codegen"
+        script.write_text(self._GDBUS_SCRIPT)
+        _rewrite_script_prefixes(p)
+        text = script.read_text()
+        assert self._GDBUS_BAKED[2:] not in text
+        assert f"    path = os.path.join('{p.as_posix()}/share', 'glib-2.0')\n" in text
+        compile(text, str(script), "exec")  # what failed on the dev builder
+
+    def test_backslash_windows_path_keeps_backslashes(self, tmp_path):
+        # A file that spells the path natively (a .cmd, a PowerShell-written
+        # file) gets the native form back, drive letter included.
+        p = _prefix(tmp_path)
+        script = p / "bin" / "glib-env.cmd"
+        baked = r"C:\Users\jmr\AppData\Local\Temp\cvcpkg-glib-hm_lc9i4\install"
+        script.write_text(f'set "GLIB_DATADIR={baked}\\share"\n')
+        _rewrite_script_prefixes(p)
+        assert script.read_text() == f'set "GLIB_DATADIR={p}\\share"\n'
+
+    def test_letter_before_a_colon_in_a_path_list_is_not_a_drive(self, tmp_path):
+        # "b:" ends a path component here, so it is not a drive letter and
+        # must stay where it is.
+        p = _prefix(tmp_path)
+        script = p / "bin" / "env.sh"
+        script.write_text(f"PATH=/opt/b:{_BAKED}/bin\n")
+        _rewrite_script_prefixes(p)
+        assert script.read_text() == f"PATH=/opt/b:{p.as_posix()}/bin\n"
 
     def test_is_idempotent(self, tmp_path):
         p = _prefix(tmp_path)
