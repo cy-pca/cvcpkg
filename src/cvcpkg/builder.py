@@ -3650,8 +3650,25 @@ def _rewrite_pc_prefixes(target_dir: Path) -> None:
 #   /tmp/cvcpkg-automake-ab12cd34/install
 #   /var/folders/xx/.../cvcpkg-openssl-7f8g9h0i/install
 #   /home/joe/cvcpkg-builder/cvcpkg-prefix-zstd-tl1ob1i9
+#   C:/Users/joe/cvcpkg-builder/cvcpkg-job-glib-6g8q6v_y/cvcpkg-glib-hm_lc9i4/install
+#   C:\Users\joe\AppData\Local\Temp\cvcpkg-glib-hm_lc9i4\install
 # The key pattern is a directory component starting with "cvcpkg-".
-_TEMP_PREFIX_RE = re.compile(r"(?:/[^\s'\",:;)}\]]+)?/cvcpkg-[A-Za-z0-9_-]+-[A-Za-z0-9_]+/install")
+#
+# A Windows path's drive letter is part of the match.  Without it (the
+# character class stops at ':', for PATH-style lists) the match began at
+# "/Users/...", the "C:" before it survived, and the rewrite produced
+# "C:C:\Users\...": glib's bin/gdbus-codegen carries its build-time datadir
+# inside a Python string literal, and in a Windows builder job's deps prefix
+# that line became
+#   path = os.path.join('C:C:\Users\tfx\...\cvcpkg-prefix-gtk4-...\share', 'glib-2.0')
+# which Python cannot even parse (truncated \UXXXXXXXX escape), so every
+# gdbus-codegen run in gtk4's Windows build failed.  The lookbehind keeps a
+# letter that ends a path component ("/opt/b:/tmp/cvcpkg-...") out of it.
+_TEMP_PREFIX_RE = re.compile(
+    r"(?:(?<![\w.\\/-])[A-Za-z]:)?"
+    r"(?:[/\\][^\s'\",:;)}\]]+)?"
+    r"[/\\]cvcpkg-[A-Za-z0-9_-]+-[A-Za-z0-9_]+[/\\]install"
+)
 
 
 # Data files that commonly bake the configure-time --prefix.  bin/ is scanned
@@ -3686,9 +3703,21 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
     aclocal but leaves ``automake`` broken, because its libdir lives in
     ``share/automake-X.Y/Automake/Config.pm`` and it reads ``$libdir/am/*.am``
     at runtime.
+
+    The replacement takes the separators of the path it replaces: a path
+    written with forward slashes gets *target_dir* with forward slashes.
+    That is how nearly every generated file spells a Windows path (meson,
+    CMake), and it is the only spelling that is safe inside a Python or CMake
+    string, where a backslash starts an escape.  On POSIX both forms are the
+    same string.
     """
     bin_dir = target_dir / "bin"
     target_str = str(target_dir)
+    target_fwd = target_dir.as_posix()
+
+    def _rehome(m: re.Match[str]) -> str:
+        return target_str if "\\" in m.group(0) else target_fwd
+
     for path in _prefix_files(target_dir):
         if path.parent != bin_dir and path.suffix not in _BAKED_PATH_SUFFIXES:
             continue
@@ -3714,7 +3743,7 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
         # Replace via a function, not a string: re treats backslashes in a
         # replacement as escapes, so a Windows target_str (C:\Users\...) raises
         # "bad escape \U".  A callable's return value is used literally.
-        new_text = _TEMP_PREFIX_RE.sub(lambda _m: target_str, text)
+        new_text = _TEMP_PREFIX_RE.sub(_rehome, text)
         if new_text != text:
             _write_text_preserving_mode(path, new_text)
 
