@@ -101,11 +101,25 @@ $sharedFlag = if ($env:CVC_LINK -eq 'static') { 'no-shared' } else { 'shared' }
 # _ssl.load_dh_params did exactly that.  Uplink only matters when OpenSSL and
 # its caller use different C runtimes; everything here links the UCRT (/MD).
 # CPython builds the OpenSSL it ships the same way (PCbuild\openssl.vcxproj).
+#
+# --prefix and --openssldir are compiled into libcrypto as OPENSSLDIR (where it
+# reads openssl.cnf, which can load any DLL), ENGINESDIR and MODULESDIR (where
+# it loads providers such as "legacy").  They used to be the job's install dir,
+# so every machine with this package looked for its config and providers in a
+# builder's temp tree.  Under a builder job dir like C:\cvb\... that is a path
+# any local user can create, then plant an openssl.cnf for every process using
+# this libcrypto to load (CVE-2019-1552 is the same flaw in mingw builds).  Use
+# OpenSSL's own Windows defaults instead, which only administrators can write
+# and which python.org's libcrypto also uses, and install through DESTDIR.
+$prefix = 'C:\Program Files\OpenSSL'
+$openssldir = 'C:\Program Files\Common Files\SSL'
+$stage = Join-Path $env:CVC_BUILD_DIR 'destdir'
+if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 Push-Location $env:CVC_SOURCE_DIR
 try {
     & perl Configure $target `
-        --prefix="$env:CVC_INSTALL_DIR" `
-        --openssldir="$env:CVC_INSTALL_DIR\ssl" `
+        --prefix="$prefix" `
+        --openssldir="$openssldir" `
         $sharedFlag `
         no-uplink `
         no-tests
@@ -114,12 +128,69 @@ try {
     & nmake /NOLOGO
     if ($LASTEXITCODE -ne 0) { throw "nmake build failed" }
 
-    & nmake /NOLOGO install_sw install_ssldirs
+    # windows-makefile.tmpl drops the drive letter under DESTDIR, so this lands
+    # in $stage\Program Files\OpenSSL and $stage\Program Files\Common Files\SSL.
+    & nmake /NOLOGO install_sw install_ssldirs "DESTDIR=$stage"
     if ($LASTEXITCODE -ne 0) { throw "nmake install failed" }
 }
 finally {
     Pop-Location
 }
+
+# The prefix tree is the package root; OPENSSLDIR's files (openssl.cnf,
+# misc\CA.pl, ...) ship in ssl\ as before.
+New-Item -ItemType Directory -Force -Path $env:CVC_INSTALL_DIR | Out-Null
+Copy-Item -Recurse -Force (Join-Path $stage ($prefix.Substring(2) + '\*')) $env:CVC_INSTALL_DIR
+$sslDest = Join-Path $env:CVC_INSTALL_DIR 'ssl'
+New-Item -ItemType Directory -Force -Path $sslDest | Out-Null
+Copy-Item -Recurse -Force (Join-Path $stage ($openssldir.Substring(2) + '\*')) $sslDest
+
+# c_rehash.pl puts "$prefix/bin" first on PATH to find openssl.exe. Point it at
+# the openssl.exe beside it rather than one in C:\Program Files\OpenSSL. $dir
+# (OPENSSLDIR, the default certs directory) stays: it is what libcrypto reads.
+# It also looks for a file named "openssl" in each PATH directory, which never
+# exists on Windows, so without OPENSSL=openssl.exe it always skipped
+# rehashing; name the .exe. And Strawberry Perl implements symlink(), so it
+# chose symlinks, which need a privilege most Windows users lack; the failure
+# went unreported (`symlink $f, $h || warn` binds || to $h) and the hash links
+# never appeared. Copy, its fallback where symlinks are missing.
+$rehash = Join-Path $env:CVC_INSTALL_DIR 'bin\c_rehash.pl'
+$text = [IO.File]::ReadAllText($rehash)
+$edits = @(
+    @('(?m)^my \$prefix = "[^"\r\n]*";', 'use FindBin (); my $$prefix = "$$FindBin::RealBin/..";'),
+    @('(?m)^my \$openssl = \$ENV\{OPENSSL\} \|\| "openssl";', 'my $$openssl = $$ENV{OPENSSL} || "openssl.exe";'),
+    @('(?m)^my \$symlink_exists=eval \{symlink\("",""\); 1\};', 'my $$symlink_exists=0;')
+)
+foreach ($e in $edits) {
+    if ([regex]::Matches($text, $e[0]).Count -ne 1) { throw "openssl: c_rehash.pl does not have exactly one line matching $($e[0])" }
+    $text = [regex]::Replace($text, $e[0], $e[1])
+}
+[IO.File]::WriteAllText($rehash, $text)
+
+# The installed openssl.exe must report the fixed directories, and no file in
+# the package may name the build tree (PDBs record source and object paths
+# for the debugger, which is what they are for).
+$dirs = & (Join-Path $env:CVC_INSTALL_DIR 'bin\openssl.exe') version -d -e -m
+if ($LASTEXITCODE -ne 0) { throw "openssl: the installed openssl.exe does not run" }
+$dirs | ForEach-Object { Write-Host "openssl: $_" }
+$want = @(
+    "OPENSSLDIR: `"$openssldir`"",
+    "ENGINESDIR: `"$prefix\lib\engines-3`"",
+    "MODULESDIR: `"$prefix\lib\ossl-modules`""
+)
+foreach ($w in $want) {
+    if ($dirs -notcontains $w) { throw "openssl: expected '$w' from openssl version -d -e -m" }
+}
+$buildRoots = @($env:CVC_INSTALL_DIR, $env:CVC_BUILD_DIR, $stage) | Where-Object { $_ } |
+    ForEach-Object { $_.TrimEnd('\', '/') } | ForEach-Object { $_; $_ -replace '\\', '/'; $_ -replace '\\', '\\' }
+$leaks = Get-ChildItem -Recurse -File $env:CVC_INSTALL_DIR | Where-Object { $_.Extension -ne '.pdb' } | Where-Object {
+    $bytes = [IO.File]::ReadAllBytes($_.FullName)
+    $s = [Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    $hit = $false
+    foreach ($r in $buildRoots) { if ($s.IndexOf($r, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit = $true; break } }
+    $hit
+}
+if ($leaks) { throw "openssl: files name the build tree: $(($leaks | ForEach-Object { $_.FullName }) -join ', ')" }
 
 # The license travels with the DLLs, as Apache-2.0 asks.  CPython's Windows
 # bundle ships libcrypto/libssl in DLLs\ and appends this text to its
