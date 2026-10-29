@@ -1,0 +1,60 @@
+schema_version: 1
+recipe:
+  name: imath
+  upstream_version: "3.2.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/AcademySoftwareFoundation/Imath
+  license: BSD-3-Clause
+  tags: [libraries, cpp, math, vfx]
+  description: >-
+    Imath — the ASWF C++ library of 2D/3D vectors, matrices, quaternions and
+    the 16-bit `half` float used by computer graphics.  Split out of OpenEXR
+    in 3.0; OpenEXR, OpenColorIO, OpenImageIO, OSL, OpenVDB, Alembic and USD
+    all build on it.  3.2.2 is Blender 5.2's pin.  The Python bindings are
+    not built.
+
+source:
+  type: tarball
+  url: https://github.com/AcademySoftwareFoundation/Imath/archive/refs/tags/v3.2.2.tar.gz
+  sha256: "b4275d83fb95521510e389b8d13af10298ed5bed1c8e13efd961d91b1105e462"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/Imath/
+    - lib/libImath*
+    # MSVC: Imath-3_2.lib + bin/Imath-3_2.dll.
+    - lib/Imath*
+    - { glob: "bin/Imath*", platforms: [windows] }
+    - lib/cmake/Imath/
+    - lib/pkgconfig/Imath.pc
+  pkg_config:
+    - Imath
+  cmake_packages:
+    - { name: Imath, targets: ["Imath::Imath", "Imath::ImathConfig"] }
+
+abi:
+  cxx_std: 17

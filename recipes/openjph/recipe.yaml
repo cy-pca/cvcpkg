@@ -1,0 +1,65 @@
+schema_version: 1
+recipe:
+  name: openjph
+  upstream_version: "0.25.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/aous72/OpenJPH
+  license: BSD-2-Clause
+  tags: [libraries, imaging, codec]
+  description: >-
+    OpenJPH — an implementation of High-Throughput JPEG 2000 (HTJ2K, ISO/IEC
+    15444-15).  OpenEXR 3.4 uses it for its HTJ2K compression and OpenImageIO
+    for .j2c/.jph; OpenEXR otherwise downloads its own copy at configure
+    time.  0.25.2 is Blender 5.2's pin.  Library only (no ojph_compress /
+    ojph_expand tools, no TIFF support).
+
+source:
+  type: tarball
+  url: https://github.com/aous72/OpenJPH/archive/refs/tags/0.25.2.tar.gz
+  sha256: "ae5f09562cb811cb2fb881c5eb74583e18db941848cfa3c35787e2580f3defc6"
+  strip_components: 1
+
+# The race fix Blender carries (build_environment/patches/openjph_table_init_243.diff,
+# upstream aous72/OpenJPH#243): the encoder's lookup tables were initialised
+# behind a plain static bool, so two threads encoding at once could read
+# half-built tables. OpenEXR encodes HTJ2K from several threads.
+patches:
+  - openjph-table-init-race.patch
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/openjph/
+    - lib/libopenjph*
+    # MSVC: OUTPUT_NAME is openjph.<major>.<minor> (openjph.0.25.lib + bin/openjph.0.25.dll).
+    - lib/openjph*
+    - { glob: "bin/openjph*", platforms: [windows] }
+    - lib/cmake/openjph/
+    - lib/pkgconfig/openjph.pc
+  pkg_config:
+    - openjph
+  cmake_packages:
+    - { name: openjph, targets: ["openjph"] }
+
+abi:
+  cxx_std: 17

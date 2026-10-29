@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: minizip-ng
+  upstream_version: "4.0.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/zlib-ng/minizip-ng
+  license: Zlib
+  tags: [libraries, compression, zip]
+  description: >-
+    minizip-ng — a zip archive manipulation library in C, the successor of
+    zlib's contrib/minizip.  OpenColorIO uses it to read .ocioz config
+    archives.  4.0.10 is Blender 5.2's pin.  Built with zlib only (no bzip2,
+    lzma, zstd, encryption, iconv or OpenSSL) and without the minizip
+    compatibility layer, so it installs as `minizip-ng` (libminizip-ng,
+    include/minizip-ng/) and cannot collide with another minizip.
+
+source:
+  type: tarball
+  url: https://github.com/zlib-ng/minizip-ng/archive/refs/tags/4.0.10.tar.gz
+  sha256: "c362e35ee973fa7be58cc5e38a4a6c23cc8f7e652555daf4f115a9eb2d3a6be7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/minizip-ng/
+    - lib/libminizip-ng*
+    # MSVC: minizip-ng.lib + bin/minizip-ng.dll.
+    - lib/minizip-ng*
+    - { glob: "bin/minizip-ng*", platforms: [windows] }
+    - lib/cmake/minizip-ng/
+    - lib/pkgconfig/minizip-ng.pc
+  pkg_config:
+    - minizip-ng
+  cmake_packages:
+    - { name: minizip-ng, targets: ["MINIZIP::minizip-ng"] }
