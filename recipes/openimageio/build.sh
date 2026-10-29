@@ -24,6 +24,7 @@ esac
 cvc_cmake_build \
     -DOpenImageIO_REQUIRED_DEPS="${required}" \
     -DOpenImageIO_BUILD_MISSING_DEPS="" \
+    -DZLIB_ROOT="${CVC_DEPS_PREFIX}" \
     -DOIIO_BUILD_TOOLS=ON \
     -DOIIO_BUILD_TESTS=OFF \
     -DBUILD_TESTING=OFF \

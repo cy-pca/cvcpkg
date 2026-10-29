@@ -10,6 +10,7 @@ $required = 'ZLIB;Imath;OpenEXR;libjpeg-turbo;TIFF;PNG;OpenColorIO;TBB;OpenJPEG;
 Invoke-CvcCMakeBuild @(
     "-DOpenImageIO_REQUIRED_DEPS=$required",
     '-DOpenImageIO_BUILD_MISSING_DEPS=',
+    "-DZLIB_ROOT=$env:CVC_DEPS_PREFIX",
     '-DOIIO_BUILD_TOOLS=ON',
     '-DOIIO_BUILD_TESTS=OFF',
     '-DBUILD_TESTING=OFF',

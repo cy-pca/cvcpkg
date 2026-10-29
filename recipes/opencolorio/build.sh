@@ -4,6 +4,9 @@
 # OCIO_INSTALL_EXT_PACKAGES=NONE makes a missing dependency a configure error
 # instead of a download. On arm64 OCIO's SIMD path needs the sse2neon header,
 # which it would also download, so SIMD is off there (x86_64 keeps SSE/AVX).
+# ZLIB_ROOT: with the dependencies split across a deps and a build prefix
+# (`cvcpkg build --with-deps`), OCIO's find_package(ZLIB 1.2.13) missed the
+# prefix's zlib and rejected the host's 1.2.11; point it at the deps prefix.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -29,4 +32,5 @@ cvc_cmake_build \
     -DOCIO_BUILD_GPU_TESTS=OFF \
     -DOCIO_USE_OIIO_FOR_APPS=OFF \
     -DOCIO_INSTALL_EXT_PACKAGES=NONE \
+    -DZLIB_ROOT="${CVC_DEPS_PREFIX}" \
     "${simd[@]}"
