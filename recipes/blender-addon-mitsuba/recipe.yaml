@@ -1,0 +1,59 @@
+schema_version: 1
+recipe:
+  name: blender-addon-mitsuba
+  # mitsuba_blender/blender_manifest.toml says 0.5.0; there is no 0.5.0
+  # release yet (the last tag, v0.4.0 of 2024, needs mitsuba 3.5.0, which has
+  # no Python 3.13 build). The source is pinned to a master commit below.
+  upstream_version: "0.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/mitsuba-renderer/mitsuba-blender
+  license: BSD-3-Clause
+  tags: [blender, addons, rendering]
+  description: >-
+    mitsuba-blender — the Mitsuba 3 renderer integration for Blender: export
+    a Blender scene to Mitsuba's XML scene format (what Sionna RT loads), and
+    import or render Mitsuba scenes.  Installed as a Blender extension in the
+    prefix's "System" repository (share/blender/extensions/system/), module
+    bl_ext.system.mitsuba_blender; the blender package's bin/blender points
+    Blender there.  It imports the prefix's mitsuba, the one sionna-rt uses,
+    instead of bundling wheels.
+
+source:
+  # master as of 7d80b948's parent: the last commit before the add-on started
+  # depending on mitsuba 3.10 (unreleased; mi.PostProcess, the C++ math/lut
+  # textures). sionna-rt 2.2.0 pins mitsuba==3.9.1, and Blender and sionna-rt
+  # share one mitsuba here, so the add-on must work with 3.9.1. This commit
+  # has the extension layout, Python 3.13 support and the Blender 5.0 API
+  # updates (compat.py).
+  type: tarball
+  url: https://github.com/mitsuba-renderer/mitsuba-blender/archive/8fd74eb5dc902cab92f0ee3fa25050599ada66c1.tar.gz
+  sha256: "390c765c340f3c4815b7fb74b14e32aad5e6bf567c25b6bea1b4856352f29f90"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: blender
+      version: "^5.2"
+    - name: mitsuba-cp313
+      version: "==3.9.1"
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/blender/extensions/system/mitsuba_blender/
+    - share/doc/blender-addon-mitsuba/
+
+test:
+  script: test.sh
