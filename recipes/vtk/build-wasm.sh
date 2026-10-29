@@ -13,6 +13,13 @@ source "${SCRIPT_DIR}/../_common/env-wasm.sh"
 _vtk_threads=OFF
 [[ "${CVC_WASM_THREADS:-0}" == "1" ]] && _vtk_threads=ON
 
+# libxml2 comes from cvcpkg, not VTK's bundled copy. VTK renames only libxml2's
+# public API (vtklibxml2_xml*); its internals (__xmlRaiseError, xmlBuf*, xmlDict*,
+# ...) keep their plain names. A static wasm link that also takes cvcpkg's
+# libxml2 (ImageMagick brings it) then gets both copies, mixed: pycvc-gl's 3.7.2
+# host linked that way and was invalid wasm. With one libxml2 there is nothing to
+# mix, and the bundle has no libvtklibxml2 archive.
+
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \
     -B "${CVC_BUILD_DIR}" \
@@ -38,6 +45,7 @@ cmake -G Ninja \
     -DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES \
     -DVTK_MODULE_ENABLE_VTK_IOImage=YES \
     -DVTK_MODULE_ENABLE_VTK_InteractionWidgets=DEFAULT \
+    -DVTK_MODULE_USE_EXTERNAL_VTK_libxml2=ON \
     -DVTK_WEBASSEMBLY_THREADS=${_vtk_threads} \
     -DVTK_ENABLE_WRAPPING=OFF
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
