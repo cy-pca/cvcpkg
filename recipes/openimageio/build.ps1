@@ -38,5 +38,9 @@ Invoke-CvcCMakeBuild @(
     '-DUSE_OPENJPEG=ON',
     '-DUSE_WEBP=ON',
     '-DUSE_EXTERNAL_PUGIXML=ON',
-    '-DUSE_SIMD=sse4.2'
+    '-DUSE_SIMD=sse4.2',
+    # OIIO's CPack setup includes InstallRequiredSystemLibraries, which copies
+    # the MSVC runtime (msvcp140*, vcruntime140*, concrt140) into bin/; the
+    # consumer's prefix or the system provides it, as for every other package.
+    '-DCMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP=ON'
 )

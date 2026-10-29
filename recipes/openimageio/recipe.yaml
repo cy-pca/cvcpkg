@@ -99,7 +99,8 @@ package:
     - bin/igrep*
     - bin/iconvert*
     - lib/cmake/OpenImageIO/
-    - lib/pkgconfig/OpenImageIO.pc
+    # OIIO installs no .pc under MSVC.
+    - { glob: "lib/pkgconfig/OpenImageIO.pc", platforms: [linux, macos] }
   pkg_config:
     - OpenImageIO
   cmake_packages:
