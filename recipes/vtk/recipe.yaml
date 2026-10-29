@@ -9,8 +9,9 @@ recipe:
   # backend) + ESSL 3.00 volume-composer patch. The published 9.5.0+cvc.2 wasm
   # bundle is compute-only; without this bump the recipe change would no-op
   # against the immutable published variant.
-  # Bumped 3 -> 4: the wasm builds use cvcpkg's libxml2 instead of VTK's bundled
-  # copy (see build-wasm.sh). Other platforms rebuild unchanged.
+  # Bumped 3 -> 4: the wasm builds use cvcpkg's libxml2, libtiff, liblzma and
+  # freetype instead of VTK's bundled copies (see build-wasm.sh). Other
+  # platforms rebuild unchanged.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -37,6 +38,12 @@ patches:
   # own CMake package define the target.  Only reached when VTK uses an external
   # libxml2 (the wasm builds); the desktop builds keep VTK's bundled copy.
   - vtk-findlibxml2-prefer-config.patch
+  # libtiff 4.7.0's TiffConfig.cmake never imports the targets its static
+  # TIFF::tiff links (LERC::LERC, ZSTD::ZSTD, WebP::webp, ...), so CMake stops at
+  # generate time.  Adds a FindTIFF.cmake (installed for consumers too) that
+  # defines the missing ones, then runs CMake's own FindTIFF.  Only reached when
+  # VTK uses an external libtiff (the wasm builds).
+  - vtk-findtiff-import-deps.patch
 
 depends:
   build:
@@ -59,11 +66,17 @@ depends:
       version: "^4.6"
     - name: zlib
       version: "^1.3"
-    # wasm/wasm-mt: VTK links this instead of its bundled libxml2
-    # (VTK_MODULE_USE_EXTERNAL_VTK_libxml2). It is a runtime dep because VTK's
-    # installed config looks for LibXml2 again in every consumer.
+    # wasm/wasm-mt: VTK links these, and tiff above, instead of its bundled
+    # copies (VTK_MODULE_USE_EXTERNAL_VTK_*). They are runtime deps because VTK's
+    # installed config looks for them again in every consumer.
     - name: libxml2
       version: "^2.12"
+      platforms: [wasm, wasm-mt]
+    - name: xz
+      version: "^5.6"
+      platforms: [wasm, wasm-mt]
+    - name: freetype
+      version: "^2.13"
       platforms: [wasm, wasm-mt]
     # Hermetic X11 + OpenGL (Linux only; macOS/Windows use native windowing/GL).
     # VTK's X11 render window + RenderingOpenGL2 link these instead of system libs.
