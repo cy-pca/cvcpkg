@@ -32,6 +32,11 @@ patches:
   # composer emitted `mat4 g_eyeToTexture = <uniform expr>;` at global scope,
   # which kills every shaded/scattering volume under WebGL2.
   - vtk-essl3-no-global-uniform-init.patch
+  # VTK's FindLibXml2 (installed for consumers too) gives LibXml2::LibXml2 no
+  # link deps, so a static libxml2 leaves zlib's gz* undefined.  Let libxml2's
+  # own CMake package define the target.  Only reached when VTK uses an external
+  # libxml2 (the wasm builds); the desktop builds keep VTK's bundled copy.
+  - vtk-findlibxml2-prefer-config.patch
 
 depends:
   build:
