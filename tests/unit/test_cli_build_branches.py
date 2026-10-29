@@ -576,6 +576,75 @@ class TestBuildNoDeps:
         assert "--host-tools-prefix is deprecated" in err
         assert "--keep-host-tools/--strip-host-tools is deprecated" in err
 
+    def _run_no_deps(self, tmp_path, monkeypatch, *extra):
+        build_recipe = mock.MagicMock()
+        strip = mock.MagicMock()
+        monkeypatch.setattr(_build, "_resolve_recipe_dir", lambda name, *a, **k: tmp_path / name)
+        monkeypatch.setattr("cvcpkg.builder.build_recipe", build_recipe)
+        monkeypatch.setattr("cvcpkg.host_tools.strip_host_tools", strip)
+        ret = main(
+            [
+                "build",
+                "doc",
+                "--local",
+                "--platform",
+                "linux",
+                "--prefix",
+                str(tmp_path / "P"),
+                *extra,
+            ]
+        )
+        assert ret == 0
+        assert build_recipe.call_count == 1
+        assert not strip.called
+        return build_recipe.call_args.kwargs
+
+    def test_no_deps_passes_explicit_build_prefix(self, tmp_path, monkeypatch, capsys):
+        # `cvcpkg install texlive --prefix P.build` then a --no-deps build with
+        # --build-prefix P.build: the build must see P.build (CVC_BUILD_PREFIX,
+        # PATH), not fall back to --prefix and the system pdflatex.
+        (tmp_path / "P.build" / "bin").mkdir(parents=True)
+        kw = self._run_no_deps(
+            tmp_path,
+            monkeypatch,
+            "--build-prefix",
+            str(tmp_path / "P.build"),
+            "--keep-build-prefix",
+        )
+        assert kw["build_prefix"] == (tmp_path / "P.build").resolve()
+        assert kw["prefix"] == (tmp_path / "P").resolve()
+        assert capsys.readouterr().err == ""
+
+    def test_no_deps_default_build_prefix_is_the_prefix(self, tmp_path, monkeypatch):
+        # Deps are documented as already installed in --prefix, so no
+        # '<prefix>.build' default is imposed: the builder falls back to --prefix.
+        kw = self._run_no_deps(tmp_path, monkeypatch)
+        assert kw["build_prefix"] is None
+
+    def test_no_deps_deprecated_host_tools_prefix_alias(self, tmp_path, monkeypatch):
+        (tmp_path / "ht").mkdir()
+        kw = self._run_no_deps(tmp_path, monkeypatch, "--host-tools-prefix", str(tmp_path / "ht"))
+        assert kw["build_prefix"] == (tmp_path / "ht").resolve()
+
+    def test_no_deps_missing_build_prefix_warns(self, tmp_path, monkeypatch, capsys):
+        kw = self._run_no_deps(tmp_path, monkeypatch, "--build-prefix", str(tmp_path / "nope"))
+        assert kw["build_prefix"] == (tmp_path / "nope").resolve()
+        assert "does not exist" in capsys.readouterr().err
+
+    def test_no_deps_never_strips_a_supplied_build_prefix(self, tmp_path, monkeypatch, capsys):
+        bp = tmp_path / "P.build"
+        bp.mkdir()
+        self._run_no_deps(tmp_path, monkeypatch, "--build-prefix", str(bp), "--strip-build-prefix")
+        assert bp.is_dir()
+        assert "--strip-build-prefix has no effect with --no-deps" in capsys.readouterr().err
+
+    def test_no_deps_default_strip_is_silent(self, tmp_path, monkeypatch, capsys):
+        bp = tmp_path / "P.build"
+        bp.mkdir()
+        self._run_no_deps(tmp_path, monkeypatch, "--build-prefix", str(bp))
+        assert bp.is_dir()
+        assert capsys.readouterr().err == ""
+
 
 class TestBuildWithDeps:
     def _setup(self, tmp_path, monkeypatch):

@@ -295,8 +295,11 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
         "Separate prefix for the build-dependency closure -- host tools "
         "(cmake, ninja, cross-toolchains) and staged source packages under "
         "'src/<name>' -- so the deliverable --prefix ships only the runtime "
-        "closure.  Defaults to '<prefix>.build' beside --prefix; pass the same "
-        "path as --prefix to disable the separation (legacy behaviour)."
+        "closure.  With --with-deps it defaults to '<prefix>.build' beside "
+        "--prefix; pass the same path as --prefix to disable the separation "
+        "(legacy behaviour).  With --no-deps it defaults to --prefix itself; "
+        "pass it to use a build closure already installed elsewhere (its bin/ "
+        "goes first on PATH and it is exported as CVC_BUILD_PREFIX)."
     ),
 )
 @click.option(
@@ -313,7 +316,9 @@ def _try_pull_server_recipes() -> tuple[str, ...]:
         "Keep the build prefix after the build instead of stripping it.  By "
         "default it is removed once the build completes (it is a build-time "
         "byproduct); pass --keep-build-prefix to retain it -- e.g. to reuse a "
-        "toolchain for a later build, or to ship the staged sources."
+        "toolchain for a later build, or to ship the staged sources.  Only a "
+        "build prefix this run built into is stripped, so with --no-deps it is "
+        "always kept."
     ),
 )
 @click.option(
@@ -598,6 +603,25 @@ def build(
                         "(pass --keep-build-prefix to keep it)"
                     )
     else:
+        # --no-deps builds nothing into a build prefix: the dependencies are
+        # already installed, by default all in --prefix (as `cvcpkg install`
+        # lays them out), so the '<prefix>.build' default does not apply here.
+        # An explicit --build-prefix names where the build closure was put
+        # instead (e.g. `cvcpkg install texlive --prefix P.build`); it is an
+        # input to this build, never created or stripped by it.
+        nodeps_build_prefix = Path(build_prefix).resolve() if build_prefix else None
+        if nodeps_build_prefix is not None and not nodeps_build_prefix.is_dir():
+            click.echo(
+                f"cvcpkg: warning — build prefix {nodeps_build_prefix} does not exist; "
+                "with --no-deps it must already hold the build dependencies.",
+                err=True,
+            )
+        if not keep_build_prefix and _strip_explicitly_requested():
+            click.echo(
+                "cvcpkg: note — --strip-build-prefix has no effect with --no-deps: "
+                "this build installs nothing into the build prefix, so it is left as is.",
+                err=True,
+            )
         for name in recipe:
             recipe_dir = _resolve_recipe_dir(name, recipes_dirs, no_default=no_default_recipes)
             build_recipe(
@@ -608,8 +632,20 @@ def build(
                 prefix=prefix_path,
                 keep_build_dir=keep_build_dir,
                 host_platform=host_platform,
+                build_prefix=nodeps_build_prefix,
                 incremental=incremental,
             )
+
+
+def _strip_explicitly_requested() -> bool:
+    """Whether --strip-build-prefix (or its deprecated alias) was passed, not defaulted."""
+    from click.core import ParameterSource
+
+    ctx = click.get_current_context()
+    return any(
+        ctx.get_parameter_source(name) not in (None, ParameterSource.DEFAULT)
+        for name in ("keep_build_prefix", "keep_host_tools")
+    )
 
 
 # ── pack ────────────────────────────────────────────────────────
