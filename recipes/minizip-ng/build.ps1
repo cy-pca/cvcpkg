@@ -1,11 +1,15 @@
 # recipes/minizip-ng/build.ps1 — build minizip-ng (zlib only, no compat layer) on Windows.
 # MZ_FETCH_LIBS defaults ON for WIN32 upstream; it is off here as in build.sh.
+# minizip-ng marks nothing __declspec(dllexport), so a shared MSVC build makes a
+# DLL with no exports and no import library; export every symbol (its API is
+# plain C functions, which needs no dllimport on the consumer side).
 $ErrorActionPreference = 'Stop'
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$scriptDir\..\_common\env-windows.ps1"
 
 Invoke-CvcCMakeBuild @(
+    '-DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON',
     '-DMZ_COMPAT=OFF',
     '-DMZ_ZLIB=ON',
     '-DMZ_BZIP2=OFF',
