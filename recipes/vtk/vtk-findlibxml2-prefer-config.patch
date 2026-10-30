@@ -1,0 +1,20 @@
+--- a/CMake/FindLibXml2.cmake
++++ b/CMake/FindLibXml2.cmake
+@@ -44,6 +44,17 @@
+   path to the LibXml2 library
+ #]=======================================================================]
+ 
++# cvcpkg: let libxml2's own CMake package define LibXml2::LibXml2 when the
++# prefix has one.  Its target carries libxml2's link dependencies (ZLIB::ZLIB
++# for a static libxml2); the one created below names the library alone, so a
++# static link that pulls in libxml2's xmlIO.o is left with undefined gz*
++# symbols.  The lookup runs in a function to keep the package's variables out
++# of this scope; the search below still sets the usual result variables.
++function (_vtk_find_libxml2_config)
++  find_package(LibXml2 CONFIG QUIET)
++endfunction ()
++_vtk_find_libxml2_config()
++
+ # use pkg-config to get the directories and then use these values
+ # in the find_path() and find_library() calls
+ find_package(PkgConfig QUIET)

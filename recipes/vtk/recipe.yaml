@@ -9,7 +9,10 @@ recipe:
   # backend) + ESSL 3.00 volume-composer patch. The published 9.5.0+cvc.2 wasm
   # bundle is compute-only; without this bump the recipe change would no-op
   # against the immutable published variant.
-  cvc_revision: 3
+  # Bumped 3 -> 4: the wasm builds use cvcpkg's libxml2, libtiff, liblzma and
+  # freetype instead of VTK's bundled copies (see build-wasm.sh). Other
+  # platforms rebuild unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -30,6 +33,17 @@ patches:
   # composer emitted `mat4 g_eyeToTexture = <uniform expr>;` at global scope,
   # which kills every shaded/scattering volume under WebGL2.
   - vtk-essl3-no-global-uniform-init.patch
+  # VTK's FindLibXml2 (installed for consumers too) gives LibXml2::LibXml2 no
+  # link deps, so a static libxml2 leaves zlib's gz* undefined.  Let libxml2's
+  # own CMake package define the target.  Only reached when VTK uses an external
+  # libxml2 (the wasm builds); the desktop builds keep VTK's bundled copy.
+  - vtk-findlibxml2-prefer-config.patch
+  # libtiff 4.7.0's TiffConfig.cmake never imports the targets its static
+  # TIFF::tiff links (LERC::LERC, ZSTD::ZSTD, WebP::webp, ...), so CMake stops at
+  # generate time.  Adds a FindTIFF.cmake (installed for consumers too) that
+  # defines the missing ones, then runs CMake's own FindTIFF.  Only reached when
+  # VTK uses an external libtiff (the wasm builds).
+  - vtk-findtiff-import-deps.patch
 
 depends:
   build:
@@ -52,6 +66,18 @@ depends:
       version: "^4.6"
     - name: zlib
       version: "^1.3"
+    # wasm/wasm-mt: VTK links these, and tiff above, instead of its bundled
+    # copies (VTK_MODULE_USE_EXTERNAL_VTK_*). They are runtime deps because VTK's
+    # installed config looks for them again in every consumer.
+    - name: libxml2
+      version: "^2.12"
+      platforms: [wasm, wasm-mt]
+    - name: xz
+      version: "^5.6"
+      platforms: [wasm, wasm-mt]
+    - name: freetype
+      version: "^2.13"
+      platforms: [wasm, wasm-mt]
     # Hermetic X11 + OpenGL (Linux only; macOS/Windows use native windowing/GL).
     # VTK's X11 render window + RenderingOpenGL2 link these instead of system libs.
     - name: libx11
@@ -81,15 +107,17 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
-    - platform: freebsd
-      script: build.sh
-      env:
-        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    # No freebsd or netbsd entries for now; they need to come back.  vtk has
+    # never been built for either: its qt6 dep stops at configure on those
+    # builders ("The OpenGL functionality tests failed!", dev jobs 23606 and
+    # 23609, 2026-10-29) because they have no OpenGL, and VTK's rendering needs
+    # it too.  qt6 is likewise unpublished there.  With the entries in place,
+    # every vtk change sent qt6 for those platforms to the dev cluster and
+    # failed the PR's build-on-dev check.  To restore them: give the FreeBSD
+    # and NetBSD builders OpenGL (Mesa) or port the hermetic GL recipes the
+    # Linux build uses, get qt6 publishing there, then re-add both entries
+    # with CXXFLAGS "-O2 -fPIC -std=c++17", as openbsd has.
     - platform: openbsd
-      script: build.sh
-      env:
-        CXXFLAGS: "-O2 -fPIC -std=c++17"
-    - platform: netbsd
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
