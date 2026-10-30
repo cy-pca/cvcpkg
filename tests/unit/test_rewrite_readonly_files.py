@@ -83,6 +83,8 @@ class TestRewritersTolerateReadOnlyFiles:
 
         text = cfg.read_text(encoding="utf-8")
         assert STALE not in text, "the stale temp prefix should have been rewritten"
+        # STALE is spelled with forward slashes, so the rewrite keeps them
+        # (_rewrite_script_prefixes); on Windows that is not str(prefix).
         assert prefix.as_posix() in text
         assert _mode(cfg) == 0o444, "mode must be restored"
 

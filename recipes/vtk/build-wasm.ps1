@@ -11,6 +11,10 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # needs its own switch to size worker pools and enable the threaded SMP backend.
 $vtkThreads = if ($env:CVC_WASM_THREADS -eq '1') { 'ON' } else { 'OFF' }
 
+# libxml2, libtiff, liblzma and freetype come from cvcpkg, not VTK's bundled
+# copies, whose internals keep their plain names and mix with cvcpkg's copies in
+# a static link (see build-wasm.sh).
+
 $allArgs = @(
     '-G', 'Ninja',
     '-S', $env:CVC_SOURCE_DIR,
@@ -37,6 +41,10 @@ $allArgs = @(
     '-DVTK_MODULE_ENABLE_VTK_InteractionStyle=YES',
     '-DVTK_MODULE_ENABLE_VTK_IOImage=YES',
     '-DVTK_MODULE_ENABLE_VTK_InteractionWidgets=DEFAULT',
+    '-DVTK_MODULE_USE_EXTERNAL_VTK_libxml2=ON',
+    '-DVTK_MODULE_USE_EXTERNAL_VTK_tiff=ON',
+    '-DVTK_MODULE_USE_EXTERNAL_VTK_lzma=ON',
+    '-DVTK_MODULE_USE_EXTERNAL_VTK_freetype=ON',
     "-DVTK_WEBASSEMBLY_THREADS=$vtkThreads",
     '-DVTK_ENABLE_WRAPPING=OFF'
 )
