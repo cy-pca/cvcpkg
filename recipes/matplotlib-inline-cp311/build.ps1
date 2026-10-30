@@ -31,4 +31,4 @@ if ($LASTEXITCODE -ne 0) { throw "matplotlib-inline-cp311: pip install failed ($
 
 # The check must exercise the runtime closure, not the build-only backend.
 $env:PYTHONPATH = ''
-Invoke-CvcPythonCheck 'import matplotlib_inline'
+Invoke-CvcPythonCheck 'import importlib.util, importlib.metadata as md; s = importlib.util.find_spec(''matplotlib_inline''); assert s is not None and s.submodule_search_locations, s; assert md.version(''matplotlib-inline'') == ''0.2.2'''

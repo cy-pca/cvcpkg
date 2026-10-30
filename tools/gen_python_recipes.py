@@ -1868,7 +1868,15 @@ SEED_PACKAGES = {
         "license": "BSD-3-Clause",
         "deps": ["traitlets"],
         "files": ["matplotlib_inline/", "*.dist-info/"],
-        "check": "import matplotlib_inline",
+        # Importing it imports matplotlib (backend_inline), which it does not
+        # require: IPython loads it only for %matplotlib inline.  Check the
+        # installed package without importing it.
+        "check": (
+            "import importlib.util, importlib.metadata as md; "
+            "s = importlib.util.find_spec('matplotlib_inline'); "
+            "assert s is not None and s.submodule_search_locations, s; "
+            "assert md.version('matplotlib-inline') == '0.2.2'"
+        ),
     },
     "parso": {
         "version": "0.8.7",

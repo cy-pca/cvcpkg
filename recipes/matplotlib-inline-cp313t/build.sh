@@ -82,4 +82,4 @@ echo "matplotlib-inline-cp313t: built $(basename "${WHEEL}")"
 # Drop the build-prefix bridge first: the check must exercise the RUNTIME
 # closure, not accidentally import a build-only backend.
 unset PYTHONPATH
-cvc_python_check "import matplotlib_inline"
+cvc_python_check "import importlib.util, importlib.metadata as md; s = importlib.util.find_spec('matplotlib_inline'); assert s is not None and s.submodule_search_locations, s; assert md.version('matplotlib-inline') == '0.2.2'"
