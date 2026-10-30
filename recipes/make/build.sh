@@ -30,7 +30,8 @@ cd "${CVC_SOURCE_DIR}"
 case "$(uname -s)" in
     Haiku)
         export CFLAGS="${CFLAGS:-} -DNO_ARCHIVES"
-        sed -i 's/sizeof (\*d) - sizeof (d->d_name) + len/__builtin_offsetof (struct dirent, d_name) + len/' src/dir.c
+        sed -i.orig 's/sizeof (\*d) - sizeof (d->d_name) + len/__builtin_offsetof (struct dirent, d_name) + len/' src/dir.c \
+            && rm -f src/dir.c.orig
         grep -q '__builtin_offsetof (struct dirent, d_name)' src/dir.c \
             || { echo "make: the src/dir.c d_name sizing fix did not apply" >&2; exit 1; }
         ;;
