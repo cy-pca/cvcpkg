@@ -33,7 +33,14 @@ source:
   sha256: "390c765c340f3c4815b7fb74b14e32aad5e6bf567c25b6bea1b4856352f29f90"
   strip_components: 1
 
-patches: []
+patches:
+  # Upstream 1daf5c56 ("Port the add-on to the rewritten Mitsuba Mesh")
+  # committed two unresolved merge conflicts in textures.py, and every commit
+  # up to 912a64f carries them: importing the add-on raises SyntaxError, so it
+  # does not register.  912a64f resolved them by keeping the HEAD side, but it
+  # comes after the mitsuba 3.10 dependency, so it cannot be the pin.  This is
+  # that resolution, applied to the pinned commit.
+  - mitsuba-blender-conflict-markers.patch
 
 depends:
   build: []
