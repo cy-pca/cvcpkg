@@ -1,0 +1,48 @@
+schema_version: 1
+recipe:
+  name: blender-src
+  upstream_version: "5.2.3"
+  cvc_revision: 1
+  maintainer: cvcpkg group
+  maintainer_email: info@cvcpkg.org
+  maintainer_url: https://cvcpkg.org
+  homepage: https://www.blender.org/
+  # Blender's own code carries GPL-2.0-or-later SPDX headers (doc/license/);
+  # Cycles (intern/cycles) is Apache-2.0, and extern/ holds third-party code
+  # under its own licences (doc/license/ lists them).
+  license: GPL-2.0-or-later AND Apache-2.0
+  tags: [source]
+  description: >-
+    The unmodified upstream source of Blender 5.2.3 LTS (supported to
+    2028-07): the release tarball from download.blender.org, verified against
+    the sha256 below and staged at src/blender-src/.  The blender recipe
+    builds from it (source.type package), so the 94 MB tarball is fetched
+    once and every other build -- another platform, a builder that cannot
+    reach download.blender.org, a user building from source -- installs this
+    package from the catalog instead.  It also serves the GPL's source offer
+    for the blender binaries cvcpkg publishes.  The tarball includes the
+    bundled add-ons, assets and locale; the precompiled lib/ trees and test
+    data are not part of it.
+
+source:
+  type: tarball
+  url: https://download.blender.org/source/blender-5.2.3.tar.xz
+  sha256: "5c66e0ab20da26d684deecfc27e84c4d39e456daaa9112b47eeb45d0e0283876"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - src/blender-src/
