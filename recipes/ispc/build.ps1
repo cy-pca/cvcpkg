@@ -4,7 +4,11 @@
 #     component libraries.  ISPC links only a fixed list of Windows system
 #     libraries on top (it never asks llvm-config --system-libs there), which
 #     misses zlib: cvcpkg's LLVMSupport is built with LLVM_ENABLE_ZLIB.  Pass
-#     llvm-config's own --system-libs, with the prefixes' lib dirs, to the link.
+#     llvm-config's own --system-libs to the link, with zlib's STATIC library
+#     in place of its import library: ISPC links with /DEPENDENTLOADFLAG:0x800,
+#     so ispc.exe resolves its DLL imports from System32 only and can never
+#     load zlib1.dll (linked against the import library, ispc-slim.exe died
+#     silently on its first run in the build).
 #   - Python is the prefix's python.exe (python313), never a python on PATH:
 #     on a stock Windows box that name is the Microsoft Store alias stub.
 #   - m4 is cvcpkg's m4.exe; bison.exe and flex.exe (winflexbison) are found
@@ -32,8 +36,14 @@ Write-Host "ispc: LLVM $llvmVer from $llvmConfig"
 
 $sysLibs = @((& $llvmConfig --link-static --system-libs) -split '\s+' | Where-Object { $_ })
 if ($LASTEXITCODE -ne 0) { throw "ispc: $llvmConfig --system-libs failed" }
-$libDirs = @($roots | ForEach-Object { '/LIBPATH:"' + (Join-Path $_ 'lib') + '"' })
-$linkFlags = ($libDirs + $sysLibs) -join ' '
+# llvm-config names zlib z.lib (zlib.pc's -lz); cvcpkg's zlib ships that as a
+# copy of the DLL import library, so swap in zlibstatic.lib (built /MD, like
+# ISPC).
+$zlibStatic = Find-CvcPrefixFile 'lib\zlibstatic.lib'
+$sysLibs = @($sysLibs | ForEach-Object {
+    if ($_ -match '^(lib)?z(lib)?d?\.lib$') { '"' + $zlibStatic + '"' } else { $_ }
+})
+$linkFlags = $sysLibs -join ' '
 Write-Host "ispc: extra link flags: $linkFlags"
 
 # CMake wants forward slashes in paths it pastes into generated commands.
@@ -66,9 +76,11 @@ Invoke-CvcCMakeBuild @(
 
 # Smoke test: the installed compiler starts and compiles a kernel for the
 # host's default target (stdlib and builtins come from inside the binary).
+# A DLL it cannot load outside System32 shows up here as a silent exit
+# 0xC0000135, so print the exit code.
 $ispc = Join-Path $env:CVC_INSTALL_DIR 'bin\ispc.exe'
 & $ispc --version
-if ($LASTEXITCODE -ne 0) { throw "ispc: $ispc --version failed" }
+if ($LASTEXITCODE -ne 0) { throw ("ispc: $ispc --version failed (exit 0x{0:X8})" -f $LASTEXITCODE) }
 $smoke = Join-Path $env:CVC_BUILD_DIR 'cvc-smoke'
 New-Item -ItemType Directory -Force -Path $smoke | Out-Null
 $src = Join-Path $smoke 'scale.ispc'

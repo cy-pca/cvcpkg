@@ -66,18 +66,21 @@ depends:
       platforms: [linux, macos]
     - name: python313
       platforms: [windows]
+    # Windows: LLVMSupport is built with zlib and ISPC links LLVM statically
+    # there, so ispc.exe links zlibstatic.lib (see build.ps1).
+    - name: zlib
+      version: "^1.3"
+      platforms: [windows]
   runtime:
     # Unix: llvm-config hands ISPC the libLLVM shared library (the llvm recipe
     # builds with LLVM_LINK_LLVM_DYLIB), so bin/ispc loads libLLVM at run time.
     # Windows: MSVC builds no libLLVM DLL, so ISPC links LLVM's static
-    # component libraries and needs no llvm at run time -- only the zlib DLL
-    # LLVMSupport was built against.
+    # component libraries (and zlib statically), and ispc.exe loads nothing
+    # but system DLLs -- upstream links it /DEPENDENTLOADFLAG:0x800, so it
+    # could not load any other.
     - name: llvm
       version: "^22.1"
       platforms: [linux, macos]
-    - name: zlib
-      version: "^1.3"
-      platforms: [windows]
   host_tools:
     - cmake
     - ninja

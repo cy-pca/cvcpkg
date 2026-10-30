@@ -157,3 +157,20 @@ upstream's behaviour.
  
      LLVMInitializeAArch64TargetInfo();
      LLVMInitializeAArch64Target();
+--- a/tools/ispc-opt.cpp
++++ b/tools/ispc-opt.cpp
+@@ -93,12 +93,14 @@
+ #endif
+ 
+ #ifdef ISPC_ARM_ENABLED
++#ifndef ISPC_64BIT_ONLY
+     LLVMInitializeARMTargetInfo();
+     LLVMInitializeARMTarget();
+     LLVMInitializeARMAsmPrinter();
+     LLVMInitializeARMAsmParser();
+     LLVMInitializeARMDisassembler();
+     LLVMInitializeARMTargetMC();
++#endif
+ 
+     LLVMInitializeAArch64TargetInfo();
+     LLVMInitializeAArch64Target();
