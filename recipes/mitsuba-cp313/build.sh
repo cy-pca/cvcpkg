@@ -68,6 +68,13 @@ NASM_ARGS=()
 if [ -x "${BLD}/bin/nasm" ]; then
     NASM_ARGS+=( -C "cmake.define.CMAKE_ASM_NASM_COMPILER=${BLD}/bin/nasm" )
 fi
+# x86-64-v2 on x86_64, as drjit-cp313 (see there): upstream's -march=haswell
+# dies with SIGILL on AVX-only hosts.  Embree keeps its per-ISA kernels and
+# picks one at run time.
+ARCH_ARGS=()
+case "$(uname -m)" in
+    x86_64|amd64) ARCH_ARGS+=( -C "cmake.define.MI_NATIVE_FLAGS=-march=x86-64-v2" ) ;;
+esac
 
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
@@ -84,7 +91,16 @@ mkdir -p "${WHEELHOUSE}"
     -C cmake.define.MI_ENABLE_EMBREE=ON \
     ${ZLIB_ARGS[@]+"${ZLIB_ARGS[@]}"} \
     ${NASM_ARGS[@]+"${NASM_ARGS[@]}"} \
+    ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} \
     "${CVC_SOURCE_DIR}"
+case "$(uname -m)" in
+    x86_64|amd64)
+        NINJA_FILE="${CVC_BUILD_DIR}/skbuild/build.ninja"
+        if ! grep -q -- '-march=x86-64-v2' "${NINJA_FILE}" || grep -q -- '-march=haswell' "${NINJA_FILE}"; then
+            echo "mitsuba-cp313: the build did not take MI_NATIVE_FLAGS=-march=x86-64-v2 (see ${NINJA_FILE})" >&2
+            exit 1
+        fi ;;
+esac
 
 shopt -s nullglob
 _wheels=( "${WHEELHOUSE}"/[Mm]itsuba-*.whl )

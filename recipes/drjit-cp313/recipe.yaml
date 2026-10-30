@@ -125,6 +125,9 @@ notes:
   - title: "CPU baseline"
     platforms: [linux, macos]
     description: >-
-      Upstream's scikit-build defaults are kept: -march=haswell (AVX2 + FMA)
-      on x86_64, -march=armv8-a on linux arm64, -mcpu=apple-m1 on macOS
-      arm64, as in the PyPI wheels.
+      x86_64 builds target x86-64-v2 (SSE4.2, Blender's minimum CPU) instead
+      of upstream's scikit-build default -march=haswell (AVX2 + FMA), which
+      dies with SIGILL on AVX-only hosts such as Sandy/Ivy Bridge Xeons.  The
+      LLVM backend still JIT-compiles for the host CPU.  Upstream's defaults
+      are kept elsewhere: -march=armv8-a on linux arm64, -mcpu=apple-m1 on
+      macOS arm64.

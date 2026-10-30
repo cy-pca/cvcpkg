@@ -52,6 +52,17 @@ export CMAKE_BUILD_PARALLEL_LEVEL="${CVC_JOBS}"
 # checkout (a CI workspace) if anything asks.
 export GIT_CEILING_DIRECTORIES="$(dirname "${CVC_SOURCE_DIR}")"
 
+# CPU baseline on x86_64: x86-64-v2 (SSE4.2), Blender's own minimum, not
+# upstream's scikit-build default -march=haswell (AVX2 + FMA).  A Haswell
+# build dies with SIGILL on an AVX-only host (Sandy/Ivy Bridge Xeons) as soon
+# as anything imports it -- nanobind's stubgen does, mid-build.  DRJIT_ is the
+# prefix cmake-defaults uses for drjit-core and nanothread too.  The llvm_*
+# backends are unaffected: Dr.Jit JIT-compiles them for the host CPU.
+ARCH_ARGS=()
+case "$(uname -m)" in
+    x86_64|amd64) ARCH_ARGS+=( -C "cmake.define.DRJIT_NATIVE_FLAGS=-march=x86-64-v2" ) ;;
+esac
+
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
 "${PY}" -m pip wheel \
@@ -63,7 +74,16 @@ mkdir -p "${WHEELHOUSE}"
     -C build-dir="${CVC_BUILD_DIR}/skbuild" \
     -C cmake.build-type=Release \
     -C cmake.define.DRJIT_ENABLE_TESTS=OFF \
+    ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} \
     "${CVC_SOURCE_DIR}"
+case "$(uname -m)" in
+    x86_64|amd64)
+        NINJA_FILE="${CVC_BUILD_DIR}/skbuild/build.ninja"
+        if ! grep -q -- '-march=x86-64-v2' "${NINJA_FILE}" || grep -q -- '-march=haswell' "${NINJA_FILE}"; then
+            echo "drjit-cp313: the build did not take DRJIT_NATIVE_FLAGS=-march=x86-64-v2 (see ${NINJA_FILE})" >&2
+            exit 1
+        fi ;;
+esac
 
 shopt -s nullglob
 _wheels=( "${WHEELHOUSE}"/drjit-*.whl )
