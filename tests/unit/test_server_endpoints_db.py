@@ -127,6 +127,75 @@ class TestPublishLifecycleDb:
         assert _publish(client, pub, name="dup", version="1.0").status_code == 200
         assert _publish(client, pub, name="dup", version="1.0").status_code == 409
 
+    def test_noarch_publish_is_recorded_none_none(self, db_env):
+        """An any/noarch upload is config/link-neutral whatever the client sent.
+
+        An older client or builder still sends release/shared, debug/static, ...
+        for one noarch bundle; the first lands as none/none and the rest are
+        answered 409 "already published" (which publish treats as skipped).
+        """
+        client, admin, pub, reader, _ = db_env
+        r = _publish(
+            client,
+            pub,
+            name="certifi",
+            version="1.0",
+            platform="any",
+            arch="noarch",
+            build_type="release",
+            link="static",
+        )
+        assert r.status_code == 200, r.text
+        assert "-any-noarch-none-none." in r.json()["archive_url"]
+        again = _publish(
+            client,
+            pub,
+            name="certifi",
+            version="1.0",
+            platform="any",
+            arch="noarch",
+            build_type="debug",
+            link="shared",
+        )
+        assert again.status_code == 409
+        (row,) = client.get("/v1/packages").json()["packages"]
+        assert (row["build_type"], row["link"]) == ("none", "none")
+
+    def test_none_variant_refused_for_a_concrete_platform(self, db_env):
+        client, admin, pub, reader, _ = db_env
+        r = _publish(client, pub, name="zlib", version="1.0", build_type="none", link="none")
+        assert r.status_code == 422
+        assert "platform-independent" in r.text
+
+    def test_catalog_expands_neutral_bundles_for_older_clients(self, db_env):
+        """A client that does not send X-Cvcpkg-Neutral-Variants filters by exact
+        config/link, so it gets each none/none bundle once per concrete variant;
+        one that does gets it once."""
+        client, admin, pub, reader, _ = db_env
+        _publish(client, pub, name="certifi", version="1.0", platform="any", arch="noarch")
+        _publish(client, pub, name="zlib", version="1.3")
+
+        def _variants(headers=None):
+            bundles = client.get("/v1/catalog", headers=headers or {}).json()["bundles"]
+            return sorted((b["name"], b["build_type"], b["link"]) for b in bundles)
+
+        assert _variants({"X-Cvcpkg-Neutral-Variants": "1"}) == [
+            ("certifi", "none", "none"),
+            ("zlib", "release", "shared"),
+        ]
+        old = _variants()
+        assert [v for v in old if v[0] == "certifi"] == [
+            ("certifi", "debug", "shared"),
+            ("certifi", "debug", "static"),
+            ("certifi", "release", "shared"),
+            ("certifi", "release", "static"),
+        ]
+        assert ("zlib", "release", "shared") in old
+        # The two bodies differ, so their ETags must too.
+        e1 = client.get("/v1/catalog").headers["etag"]
+        e2 = client.get("/v1/catalog", headers={"X-Cvcpkg-Neutral-Variants": "1"}).headers["etag"]
+        assert e1 != e2
+
     def test_delete_missing_404(self, db_env):
         client, admin, *_ = db_env
         assert client.delete("/v1/packages/ghost/9.9", headers=_h(admin)).status_code == 404

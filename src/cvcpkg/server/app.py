@@ -61,6 +61,14 @@ from fastapi.responses import (
 )
 
 from cvcpkg import __version__
+from cvcpkg.platform import (
+    NEUTRAL_CONFIG,
+    NEUTRAL_LINK,
+    NEUTRAL_VARIANTS_HEADER,
+    expand_neutral_bundles,
+    is_noarch,
+    variant_for,
+)
 from cvcpkg.server import archive_store
 from cvcpkg.server.limits import (
     DEFAULT_MAX_UPLOAD_BYTES,
@@ -290,6 +298,25 @@ def _reject_noncanonical_platform_arch(platform: str, arch: str) -> None:
             422,
             f"non-canonical arch '{arch}'; expected one of " f"{sorted(CANONICAL_ARCHES)}{suffix}",
         )
+
+
+def _neutral_variant(platform: str, arch: str, build_type: str, link: str) -> tuple[str, str]:
+    """The (build_type, link) a published bundle is recorded under.
+
+    An any/noarch bundle is config/link-neutral: it is recorded as none/none
+    whatever the client sent, so an older client's (or builder's) release/shared,
+    debug/static, ... uploads of one noarch bundle land on ONE catalog row, the
+    later ones answered 409 "already published".  ``none`` on a concrete
+    platform is refused: such a row would match every config/link request.
+    """
+    build_type, link = variant_for(platform, arch, build_type, link)
+    if not is_noarch(platform, arch) and NEUTRAL_CONFIG in (build_type, link):
+        raise HTTPException(
+            422,
+            f"config/link 'none' is only for platform-independent bundles "
+            f"(platform any / arch noarch), not {platform}/{arch}",
+        )
+    return build_type, link
 
 
 def _reject_overlong_package_fields(**fields: str) -> None:
@@ -2037,6 +2064,9 @@ async def _mirror_sync_loop(state_dir: Path) -> None:
             if MIRROR_TOKEN:
                 headers["Authorization"] = f"Bearer {MIRROR_TOKEN}"
             upstream = MIRROR_UPSTREAM.rstrip("/")
+            # Neutral (none/none) bundles as such: this server expands them
+            # itself for its own older clients (see get_catalog).
+            headers[NEUTRAL_VARIANTS_HEADER] = "1"
             async with httpx.AsyncClient(timeout=60, headers=headers) as client:
                 resp = await client.get(f"{upstream}/v1/catalog")
                 resp.raise_for_status()
@@ -2158,7 +2188,8 @@ async def _populate_sync_once() -> int:
     state = _get_state()
     upstream = POPULATE_UPSTREAM.rstrip("/")
     mirror_policy = _load_mirror_policy()
-    headers: dict[str, str] = {}
+    # Neutral (none/none) bundles once each, not one copy per concrete variant.
+    headers: dict[str, str] = {NEUTRAL_VARIANTS_HEADER: "1"}
     if POPULATE_UPSTREAM_TOKEN:
         headers["Authorization"] = f"Bearer {POPULATE_UPSTREAM_TOKEN}"
 
@@ -3211,14 +3242,19 @@ def create_app(
     _catalog_cache = CatalogCache(_CATALOG_CACHE_TTL)
 
     async def _build_catalog_body(
-        scope: frozenset[str] | None, include_yanked: bool
+        scope: frozenset[str] | None, include_yanked: bool, neutral: bool = True
     ) -> CatalogBody:
         revision, rows = await _db_packages.catalog_rows(scope, include_yanked=include_yanked)
+
+        def _encode() -> CatalogBody:
+            bundles = _db_packages.catalog_bundles(rows)
+            if not neutral:
+                bundles = expand_neutral_bundles(bundles)
+            return CatalogBody.encode(revision, bundles)
+
         # Sorting and encoding several MB is CPU work; in a thread the event
         # loop can keep answering other requests in between.
-        return await asyncio.to_thread(
-            lambda: CatalogBody.encode(revision, _db_packages.catalog_bundles(rows))
-        )
+        return await asyncio.to_thread(_encode)
 
     @app.get("/v1/catalog", response_model=CatalogResponse, tags=["catalog"])
     async def get_catalog(
@@ -3236,11 +3272,17 @@ def create_app(
         The database-backed catalog is cached until the next write that changes
         it, and carries an ``ETag``: a client that sends it back in
         ``If-None-Match`` gets a bodiless 304 while nothing has changed.
+
+        A noarch bundle is config/link-neutral (none/none).  A client that does
+        not send ``X-Cvcpkg-Neutral-Variants`` predates that and filters by
+        exact config/link, so it gets each such bundle once per concrete
+        variant instead (:func:`cvcpkg.platform.expand_neutral_bundles`).
         """
         # Resolve relative archive_url paths (e.g. "/v1/download/…")
         # to absolute URLs so clients can download without knowing
         # the server origin separately.
         base = str(request.base_url).rstrip("/")
+        neutral = bool(request.headers.get(NEUTRAL_VARIANTS_HEADER, "").strip())
         if _use_db and not MIRROR_MODE:
             caller = _auth or _caller
             scope = await _db_packages.catalog_scope(
@@ -3248,7 +3290,8 @@ def create_app(
                 is_admin=caller is not None and caller.role == TokenRole.admin,
             )
             body = await _catalog_cache.get(
-                (scope, include_yanked), lambda: _build_catalog_body(scope, include_yanked)
+                (scope, include_yanked, neutral),
+                lambda: _build_catalog_body(scope, include_yanked, neutral),
             )
             gzipped = accepts_gzip(request.headers.get("accept-encoding", ""))
             headers = {
@@ -3256,7 +3299,7 @@ def create_app(
                 # Revalidate every time (the ETag makes that cheap), and keep a
                 # caller's private-org packages out of shared caches.
                 "Cache-Control": "private, no-cache" if caller else "no-cache",
-                "Vary": "Accept-Encoding",
+                "Vary": f"Accept-Encoding, {NEUTRAL_VARIANTS_HEADER}",
             }
             # Either encoding's tag means the caller holds the current catalog.
             if_none_match = request.headers.get("if-none-match", "")
@@ -3278,6 +3321,8 @@ def create_app(
         state = _get_state()
         revision = state.index.get("revision", 0)
         bundles = list(state.index.get("bundles", []))
+        if not neutral:
+            bundles = expand_neutral_bundles(bundles)
         # NOTE: copy each dict to avoid mutating in-memory state.
         resolved = []
         for b in bundles:
@@ -3951,16 +3996,16 @@ def create_app(
             bundles = [b for b in bundles if b.get("name") == name]
         # A noarch bundle (platform=any/arch=noarch) is valid on every host, so a
         # platform/arch query must still surface it (platform_matches/arch_matches).
-        from cvcpkg.platform import arch_matches, platform_matches
+        from cvcpkg.platform import arch_matches, config_matches, link_matches, platform_matches
 
         if platform:
             bundles = [b for b in bundles if platform_matches(b.get("platform", ""), platform)]
         if arch:
             bundles = [b for b in bundles if arch_matches(b.get("arch", ""), arch)]
         if build_type:
-            bundles = [b for b in bundles if b.get("build_type") == build_type]
+            bundles = [b for b in bundles if config_matches(b.get("build_type", ""), build_type)]
         if link:
-            bundles = [b for b in bundles if b.get("link") == link]
+            bundles = [b for b in bundles if link_matches(b.get("link", ""), link)]
         if recipe_version:
             bundles = [b for b in bundles if b.get("recipe_version") == recipe_version]
         if org:
@@ -4149,16 +4194,16 @@ def create_app(
         if not include_yanked:
             bundles = [b for b in bundles if not b.get("yanked", False)]
         # noarch bundles (platform=any/arch=noarch) are valid on every host.
-        from cvcpkg.platform import arch_matches, platform_matches
+        from cvcpkg.platform import arch_matches, config_matches, link_matches, platform_matches
 
         if platform:
             bundles = [b for b in bundles if platform_matches(b.get("platform", ""), platform)]
         if arch:
             bundles = [b for b in bundles if arch_matches(b.get("arch", ""), arch)]
         if build_type:
-            bundles = [b for b in bundles if b.get("build_type") == build_type]
+            bundles = [b for b in bundles if config_matches(b.get("build_type", ""), build_type)]
         if link:
-            bundles = [b for b in bundles if b.get("link") == link]
+            bundles = [b for b in bundles if link_matches(b.get("link", ""), link)]
         if recipe_version:
             bundles = [b for b in bundles if b.get("recipe_version") == recipe_version]
         if org:
@@ -4890,6 +4935,7 @@ def create_app(
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
         _reject_noncanonical_platform_arch(platform, arch)
+        build_type, link = _neutral_variant(platform, arch, build_type, link)
         _reject_overlong_package_fields(
             name=name,
             version=version,
@@ -5186,6 +5232,7 @@ def create_app(
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)
         _reject_noncanonical_platform_arch(platform, arch)
+        build_type, link = _neutral_variant(platform, arch, build_type, link)
         _reject_overlong_package_fields(
             name=name,
             version=version,
@@ -11370,8 +11417,8 @@ def create_app(
                 version=version,
                 platform="any",
                 arch="noarch",
-                build_type="release",
-                link="shared",
+                build_type=NEUTRAL_CONFIG,
+                link=NEUTRAL_LINK,
                 sha256="",
                 size_bytes=0,
                 archive_url="",

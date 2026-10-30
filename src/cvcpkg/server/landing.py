@@ -4082,6 +4082,7 @@ def builds_html() -> str:
             <option value="">All</option>
             <option value="release">Release</option>
             <option value="debug">Debug</option>
+            <option value="none">None (noarch)</option>
           </select>
         </div></div></div>
       </div>
@@ -4092,6 +4093,7 @@ def builds_html() -> str:
             <option value="">All</option>
             <option value="shared">Shared</option>
             <option value="static">Static</option>
+            <option value="none">None (noarch)</option>
           </select>
         </div></div></div>
       </div>

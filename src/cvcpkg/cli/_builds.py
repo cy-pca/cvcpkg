@@ -13,6 +13,7 @@ import click
 from cvcpkg.cli import cli
 from cvcpkg.cli._server import _api_request
 from cvcpkg.optional import require_httpx
+from cvcpkg.platform import NEUTRAL_CONFIG, NEUTRAL_LINK
 
 # Build-job states that never change again.  "unschedulable" IS terminal:
 # the server reaps a pending job to it when no registered builder covers
@@ -1001,6 +1002,9 @@ def builds_submit(
     if platform in ("wasm", "wasm-mt", "wasi") and link != "static":
         link = "static"
         click.echo(f"  Note: forcing --link=static for {platform} (shared not supported)")
+    # A noarch build publishes one config/link-neutral bundle.
+    if platform == "any":
+        config, link = NEUTRAL_CONFIG, NEUTRAL_LINK
 
     body: dict = {
         "recipe_name": recipe_name,
@@ -1448,6 +1452,10 @@ def builds_submit_dag(
     # auto-deps (only pull UNpublished deps into the DAG) need to know
     # what the catalog already carries, so fetch it for either.
     _published: set[tuple[str, str, str, str, str, str]] = set()
+    # (name, version) of every published any/noarch bundle.  One noarch bundle
+    # serves every config/link: it is none/none, or (published before neutral
+    # variants) one of release/debug x shared/static with identical contents.
+    _published_noarch: set[tuple[str, str]] = set()
     _published_ok = False
     if skip_existing or auto_deps:
         _httpx = require_httpx("publish")
@@ -1481,6 +1489,7 @@ def builds_submit_dag(
                     if not _batch or _offset >= int(_data.get("total", 0)):
                         break
             _published_ok = True
+            _published_noarch.update((p[0], p[1]) for p in _published if p[2] == "any")
         except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
             click.echo(
                 f"  Warning: could not read published packages ({_e}); "
@@ -1532,14 +1541,7 @@ def builds_submit_dag(
             if not (plat and n in recipe_data):
                 return False
             ver = _full_version(n)
-            return (n, ver, plat, ar, cfg, lnk) in _published or (
-                n,
-                ver,
-                "any",
-                "noarch",
-                cfg,
-                lnk,
-            ) in _published
+            return (n, ver, plat, ar, cfg, lnk) in _published or (n, ver) in _published_noarch
 
         seen: set[str] = set()
         queue = [d for s in seeds for d in _dep_names(s, plat)]
@@ -1577,7 +1579,7 @@ def builds_submit_dag(
 
     dag_ids: list[str] = []
 
-    # ── One DAG per (config, link), spanning every platform AND noarch ──
+    # ── One DAG per (config, link), spanning every platform, plus noarch ──
     #
     # `depends_on` is resolved as indices INTO THE SUBMITTED BODY, so an edge
     # can only be expressed between jobs in the same submission. Emitting a DAG
@@ -1589,9 +1591,10 @@ def builds_submit_dag(
     # occur, so no ordering of two separate DAGs can fix it — the jobs have to
     # be submitted TOGETHER so the edges are expressible.
     #
-    # Accumulate per (config, link) and resolve edges once at the end.
-    # `_slot` identifies a job for dep lookup: concrete jobs by their own
-    # platform/arch, noarch jobs by ("any", "noarch").
+    # Accumulate per (config, link) -- the noarch jobs once, under none/none --
+    # and resolve edges once at the end.  `_slot` identifies a job for dep
+    # lookup: concrete jobs by their own platform/arch, noarch jobs by
+    # ("any", "noarch").
     pending_jobs: dict[tuple[str, str], list[dict]] = {}
     pending_index: dict[tuple[str, str], dict[tuple[str, str, str], int]] = {}
 
@@ -1695,8 +1698,7 @@ def builds_submit_dag(
                             # Already in the catalog → builder installs it.
                             if has_recipe and (
                                 (dep, _full_version(dep), plat, ar, cfg, lnk) in _published
-                                or (dep, _full_version(dep), "any", "noarch", cfg, lnk)
-                                in _published
+                                or (dep, _full_version(dep)) in _published_noarch
                             ):
                                 continue
                             if not has_recipe:
@@ -1850,8 +1852,8 @@ def builds_submit_dag(
 
     # ── Schedule platform-independent (noarch) recipes ONCE ──────────
     # A `platform: any` recipe builds one bundle valid everywhere, so it is
-    # submitted as a single any/noarch DAG (per config/link) rather than once
-    # per target platform.  The server routes these to a builder on the noarch
+    # submitted once, as any/noarch with config/link none, rather than once per
+    # target platform and config/link.  The server routes these to a builder on the noarch
     # build target (see _choose_builder) -- the reference platform that has the
     # interpreter/toolchain deps -- which builds natively and publishes the
     # result as platform=any/arch=noarch (see pack_recipe).
@@ -1867,115 +1869,138 @@ def builds_submit_dag(
                 f"for the noarch build target {_noarch_target[0]}/{_noarch_target[1]}"
             )
         else:
-            for cfg in configs:
-                for lnk in links:
-                    eligible = list(any_names)
+            eligible = list(any_names)
 
-                    # --skip-existing: drop noarch variants already published.
-                    if skip_existing and eligible:
-                        satisfied = [
-                            n
-                            for n in eligible
-                            if (n, _full_version(n), "any", "noarch", cfg, lnk) in _published
-                        ]
-                        if satisfied:
-                            click.echo(
-                                f"  Skipping {len(satisfied)} already-published noarch "
-                                f"recipe(s) for {cfg}/{lnk}: {', '.join(sorted(satisfied))}"
-                            )
-                            eligible = [n for n in eligible if n not in set(satisfied)]
+            # --skip-existing: drop noarch recipes already published.
+            if skip_existing and eligible:
+                satisfied = [n for n in eligible if (n, _full_version(n)) in _published_noarch]
+                if satisfied:
+                    click.echo(
+                        f"  Skipping {len(satisfied)} already-published noarch "
+                        f"recipe(s): {', '.join(sorted(satisfied))}"
+                    )
+                    eligible = [n for n in eligible if n not in set(satisfied)]
 
-                    # A noarch job is BUILT on the reference target, so its
-                    # capabilities (including that platform's glibc floor) and
-                    # its disk requirement are checked against the builders
-                    # that cover that target, not against the fleet at large.
-                    if _builder_check and eligible:
-                        _np = _noarch_target[0]
-                        _uncapable = [
-                            n
-                            for n in eligible
-                            if _job_caps(n, _np)
-                            and not _has_builder(*_noarch_target, _job_caps(n, _np))
-                        ]
-                        if _uncapable:
-                            click.echo(
-                                f"  Skipping {len(_uncapable)} noarch recipe(s): no registered "
-                                f"builder advertises every required capability: "
-                                + ", ".join(
-                                    f"{n} ({', '.join(_job_caps(n, _np))})"
-                                    for n in sorted(_uncapable)
-                                )
-                            )
-                            eligible = [n for n in eligible if n not in set(_uncapable)]
-                        _undersized = [
-                            n
-                            for n in eligible
-                            if _min_disk(n)
-                            and not _has_builder(*_noarch_target, _job_caps(n, _np), _min_disk(n))
-                        ]
-                        if _undersized:
-                            click.echo(
-                                f"  Skipping {len(_undersized)} noarch recipe(s): no "
-                                f"registered builder has enough free disk: "
-                                + ", ".join(
-                                    f"{n} ({_min_disk(n)} GiB)" for n in sorted(_undersized)
-                                )
-                            )
-                            eligible = [n for n in eligible if n not in set(_undersized)]
+            # A noarch job is BUILT on the reference target, so its
+            # capabilities (including that platform's glibc floor) and
+            # its disk requirement are checked against the builders
+            # that cover that target, not against the fleet at large.
+            if _builder_check and eligible:
+                _np = _noarch_target[0]
+                _uncapable = [
+                    n
+                    for n in eligible
+                    if _job_caps(n, _np) and not _has_builder(*_noarch_target, _job_caps(n, _np))
+                ]
+                if _uncapable:
+                    click.echo(
+                        f"  Skipping {len(_uncapable)} noarch recipe(s): no registered "
+                        f"builder advertises every required capability: "
+                        + ", ".join(
+                            f"{n} ({', '.join(_job_caps(n, _np))})" for n in sorted(_uncapable)
+                        )
+                    )
+                    eligible = [n for n in eligible if n not in set(_uncapable)]
+                _undersized = [
+                    n
+                    for n in eligible
+                    if _min_disk(n)
+                    and not _has_builder(*_noarch_target, _job_caps(n, _np), _min_disk(n))
+                ]
+                if _undersized:
+                    click.echo(
+                        f"  Skipping {len(_undersized)} noarch recipe(s): no "
+                        f"registered builder has enough free disk: "
+                        + ", ".join(f"{n} ({_min_disk(n)} GiB)" for n in sorted(_undersized))
+                    )
+                    eligible = [n for n in eligible if n not in set(_undersized)]
 
-                    if not eligible:
-                        click.echo(f"  No eligible noarch recipes for {cfg}/{lnk}")
-                        continue
+            if not eligible:
+                click.echo("  No eligible noarch recipes")
 
-                    for name in eligible:
-                        job: dict = {
-                            "recipe_name": name,
-                            "platform": "any",
-                            "arch": "noarch",
-                            "config": cfg,
-                            "link": lnk,
-                            "org_slug": org_slug,
-                            "depends_on": [],
-                        }
-                        # A noarch job is built on the reference target, so it
-                        # inherits THAT platform's floor even though the bundle
-                        # itself is platform-independent.
-                        _rc = _job_caps(name, _noarch_target[0])
-                        if _rc:
-                            job["required_capabilities"] = _rc
-                        _d = _min_disk(name)
-                        if _d is not None:
-                            job["min_disk_gb"] = _d
-                        _t = _job_timeout(name)
-                        if _t is not None:
-                            job["timeout_seconds"] = _t
-                        _stage(cfg, lnk, job)
-                    click.echo(f"  Staged {len(eligible)} noarch job(s) for {cfg}/{lnk}")
+            for name in eligible:
+                job: dict = {
+                    "recipe_name": name,
+                    "platform": "any",
+                    "arch": "noarch",
+                    "config": NEUTRAL_CONFIG,
+                    "link": NEUTRAL_LINK,
+                    "org_slug": org_slug,
+                    "depends_on": [],
+                }
+                # A noarch job is built on the reference target, so it
+                # inherits THAT platform's floor even though the bundle
+                # itself is platform-independent.
+                _rc = _job_caps(name, _noarch_target[0])
+                if _rc:
+                    job["required_capabilities"] = _rc
+                _d = _min_disk(name)
+                if _d is not None:
+                    job["min_disk_gb"] = _d
+                _t = _job_timeout(name)
+                if _t is not None:
+                    job["timeout_seconds"] = _t
+                _stage(NEUTRAL_CONFIG, NEUTRAL_LINK, job)
+            if eligible:
+                click.echo(f"  Staged {len(eligible)} noarch job(s) (config/link none)")
 
     # ── Resolve edges across the whole submission, then submit ───────
-    # Every job for a (config, link) now lives in one list, so an edge can be
-    # expressed no matter which side of the concrete/noarch split it crosses.
+    # `depends_on` indexes into ONE submitted body, so the jobs an edge joins
+    # must be submitted together.  The concrete jobs of each (config, link) form
+    # one DAG, as before.  The noarch jobs are staged once, as none/none, and
+    # any concrete variant may depend on them -- as they may depend on concrete
+    # jobs for the reference target.  So with noarch jobs and more than one
+    # concrete variant the whole submission is ONE DAG ("<dag-id>-all");
+    # otherwise the noarch jobs join the one variant's DAG, or with no concrete
+    # jobs form "<dag-id>-none-none" alone.
     #
     # A noarch job is BUILT on the reference build target (see _choose_builder),
-    # so its concrete deps must resolve to the jobs for THAT platform — not to
-    # some other platform's copy of the same recipe.
-    from cvcpkg.platform import noarch_build_target
+    # as release/shared, so its concrete deps resolve to THAT platform's jobs --
+    # not to some other platform's copy of the same recipe.
+    from cvcpkg.platform import NEUTRAL_BUILD_VARIANT, noarch_build_target
 
     _noarch_plat, _noarch_arch = noarch_build_target()
+    _neutral_key = (NEUTRAL_CONFIG, NEUTRAL_LINK)
+    _concrete_keys = [k for k in pending_jobs if k != _neutral_key]
+    _groups: list[list[tuple[str, str]]]
+    if _neutral_key not in pending_jobs:
+        _groups = [[k] for k in _concrete_keys]
+    else:
+        _groups = [[*_concrete_keys, _neutral_key]]
 
-    for (cfg, lnk), jobs in pending_jobs.items():
-        index = pending_index[(cfg, lnk)]
+    for keys in _groups:
+        if len(keys) > 2:
+            label = "all"
+        else:
+            label = "-".join(keys[0])
+        jobs: list[dict] = []
+        job_keys: list[tuple[str, str]] = []
+        index: dict[tuple[str, str, str, str, str], int] = {}
+        for key in keys:
+            for job in pending_jobs[key]:
+                index[(job["recipe_name"], job["platform"], job["arch"], *key)] = len(jobs)
+                jobs.append(job)
+                job_keys.append(key)
+        # Reference-target variants a noarch job's deps may come from, best first.
+        ref_keys = [NEUTRAL_BUILD_VARIANT] + [
+            k for k in keys if k not in (NEUTRAL_BUILD_VARIANT, _neutral_key)
+        ]
         for idx, job in enumerate(jobs):
             if job["platform"] == "any":
                 # noarch: prefer another noarch job, else the reference target.
-                lookups = [("any", "noarch"), (_noarch_plat, _noarch_arch)]
+                lookups = [("any", "noarch", *_neutral_key)] + [
+                    (_noarch_plat, _noarch_arch, *k) for k in ref_keys
+                ]
             else:
                 # concrete: prefer the same target, else a noarch build tool.
-                lookups = [(job["platform"], job["arch"]), ("any", "noarch")]
+                lookups = [
+                    (job["platform"], job["arch"], *job_keys[idx]),
+                    ("any", "noarch", *_neutral_key),
+                ]
             dep_indices: list[int] = []
             for dep_name in _dep_names(job["recipe_name"]):
-                for plat_key, arch_key in lookups:
-                    dep_idx = index.get((dep_name, plat_key, arch_key))
+                for lookup in lookups:
+                    dep_idx = index.get((dep_name, *lookup))
                     if dep_idx is not None:
                         if dep_idx != idx and dep_idx not in dep_indices:
                             dep_indices.append(dep_idx)
@@ -1984,7 +2009,7 @@ def builds_submit_dag(
 
         body: dict = {"jobs": jobs}
         if dag_id:
-            body["dag_id"] = f"{dag_id}-{cfg}-{lnk}"
+            body["dag_id"] = f"{dag_id}-{label}"
 
         data = _api_request(
             "post",
@@ -1995,7 +2020,8 @@ def builds_submit_dag(
         )
         dag_ids.append(data["dag_id"])
         _edges = sum(len(j["depends_on"]) for j in jobs)
-        click.echo(f"DAG {data['dag_id']}: {data['total']} jobs, {_edges} edges ({cfg}/{lnk})")
+        _variants = ", ".join("/".join(k) for k in keys)
+        click.echo(f"DAG {data['dag_id']}: {data['total']} jobs, {_edges} edges ({_variants})")
 
     if wait:
         _wait_for_dags(

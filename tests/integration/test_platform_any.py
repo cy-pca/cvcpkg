@@ -582,8 +582,10 @@ class TestPlatformAnyManifest:
             recipe_dir, platform="linux", arch="x86_64", output_dir=out
         )
 
-        # Built on linux/x86_64, but packaged noarch — no host in the stem.
-        assert "any-noarch" in archive_path.name
+        # Built on linux/x86_64, but packaged noarch — no host in the stem —
+        # and config/link-neutral (none/none), not the release/shared it was
+        # built as.
+        assert "any-noarch-none-none" in archive_path.name
         assert "linux" not in archive_path.name
         assert archive_path.name.endswith(".tar.gz")
         assert size > 0
@@ -594,6 +596,55 @@ class TestPlatformAnyManifest:
         manifest = yaml.safe_load(raw)
         assert manifest["bundle"]["platform"] == "any"
         assert manifest["bundle"]["arch"] == "noarch"
+        assert manifest["bundle"]["build_type"] == "none"
+        assert manifest["bundle"]["link"] == "none"
+
+    def test_pack_recipe_builds_noarch_as_release_shared(self, tmp_path, monkeypatch):
+        """A noarch bundle comes from ONE build variant whatever was requested.
+
+        Asked for debug/static, the build still runs as release/shared (its
+        environment needs a real config/link) and the bundle is none/none.
+        """
+        import cvcpkg.builder as builder_mod
+        from cvcpkg.builder import BuildContext, Recipe, pack_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        _create_any_recipe(recipes_dir, "widgets", files={"w.js": "console.log(1)"})
+        seen: list[tuple[str, str]] = []
+
+        def _fake_build_recipe(rdir, *, platform, config, link, prefix, **kw):
+            seen.append((config, link))
+            work = tmp_path / "work"
+            install = work / "install"
+            (install / "share" / "widgets").mkdir(parents=True)
+            (install / "share" / "widgets" / "w.js").write_text("console.log(1)")
+            return BuildContext(
+                recipe=Recipe.load(rdir),
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix or install,
+                source_dir=work / "src",
+                build_dir=work / "build",
+                install_dir=install,
+                work_dir=work,
+            )
+
+        monkeypatch.setattr(builder_mod, "build_recipe", _fake_build_recipe)
+        archive_path, _sha, _size = pack_recipe(
+            recipes_dir / "widgets",
+            platform="linux",
+            arch="x86_64",
+            config="debug",
+            link="static",
+            output_dir=tmp_path / "dist",
+        )
+        assert seen == [("release", "shared")]
+        assert archive_path.name.startswith("widgets-") and "-any-noarch-none-none." in (
+            archive_path.name
+        )
 
     def test_pack_recipe_cvc_revision_override(self, tmp_path, monkeypatch):
         """pack_recipe stamps a --bump cvc_revision into the manifest + name."""

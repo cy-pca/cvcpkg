@@ -70,6 +70,7 @@ def _fetch_url(
     the result's status is then 304 when that ETag is still current.
     """
     from cvcpkg.config import authorize_request
+    from cvcpkg.platform import NEUTRAL_VARIANTS_HEADER
     from cvcpkg.storage import get_backend
 
     # Authenticate ONLY to our own server (origin-scoped): a private org's
@@ -80,6 +81,9 @@ def _fetch_url(
     headers = dict(auth)
     if url.startswith(("https://", "http://")):
         headers["Accept-Encoding"] = "gzip"
+        # List noarch bundles once, as none/none (catalog_entries matches
+        # them); without it the server expands them for older clients.
+        headers[NEUTRAL_VARIANTS_HEADER] = "1"
         if if_none_match:
             headers["If-None-Match"] = if_none_match
 
@@ -335,7 +339,7 @@ def catalog_entries(
     trust_mirror: bool | None = None,
 ) -> list[CatalogEntry]:
     """Extract CatalogEntry objects from a catalog dict, optionally filtered."""
-    from cvcpkg.platform import arch_matches, platform_matches
+    from cvcpkg.platform import arch_matches, config_matches, link_matches, platform_matches
 
     _trust = trust_mirror_default() if trust_mirror is None else trust_mirror
     entries: list[CatalogEntry] = []
@@ -347,9 +351,9 @@ def catalog_entries(
             continue
         if arch and not arch_matches(b.get("arch", ""), arch):
             continue
-        if build_type and b.get("build_type", "") != build_type:
+        if build_type and not config_matches(b.get("build_type", ""), build_type):
             continue
-        if link and b.get("link", "") != link:
+        if link and not link_matches(b.get("link", ""), link):
             continue
         # Upstream retired this bundle; the mirror serving it has overridden
         # that locally.  Upstream is authoritative unless told otherwise.

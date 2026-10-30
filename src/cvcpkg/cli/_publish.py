@@ -371,6 +371,10 @@ def _resolve_publish_archives(
 
         pattern = f"{pkg}-*-{platform}-{arch}-{config}-{link}.*"
         matches = sorted(dist.glob(pattern))
+        if not matches:
+            # A recipe served by its `any` entry packs one config/link-neutral
+            # noarch bundle whatever tuple it was packed for.
+            matches = sorted(dist.glob(f"{pkg}-*-any-noarch-none-none.*"))
         # Filter out signature files.
         matches = [m for m in matches if not m.name.endswith(".sig")]
         if not matches:
@@ -399,12 +403,13 @@ def _resolve_all_archives(
     Includes the ``any-noarch`` bundles built alongside them: ``cvcpkg pack``
     and ``pack-all`` give a recipe served by its ``any`` matrix entry that
     identity whatever the host, so a ``--platform macos`` glob alone left
-    them unpublished.
+    them unpublished.  Such a bundle is config/link-neutral (``none-none``);
+    one packed by an older cvcpkg carries the tuple's config/link instead.
     """
     dist = Path(output_dir).resolve()
     if not dist.is_dir():
         return []
-    patterns = [f"*-{platform}-{arch}-{config}-{link}.*"]
+    patterns = [f"*-{platform}-{arch}-{config}-{link}.*", "*-any-noarch-none-none.*"]
     if (platform, arch) != ("any", "noarch"):
         patterns.append(f"*-any-noarch-{config}-{link}.*")
     matches = sorted({m for pattern in patterns for m in dist.glob(pattern)})
@@ -980,16 +985,16 @@ def remove(components: tuple[str, ...], from_file: str) -> None:
 def _scope_opts(fn):
     fn = click.option(
         "--link",
-        type=click.Choice(["shared", "static"], case_sensitive=False),
+        type=click.Choice(["shared", "static", "none"], case_sensitive=False),
         default=None,
-        help="Only this link mode.  Omit to match every link mode.",
+        help="Only this link mode ('none': a noarch bundle).  Omit to match every link mode.",
     )(fn)
     fn = click.option(
         "--config",
         "build_type",
-        type=click.Choice(["release", "debug"], case_sensitive=False),
+        type=click.Choice(["release", "debug", "none"], case_sensitive=False),
         default=None,
-        help="Only this build configuration.  Omit to match both.",
+        help="Only this build configuration ('none': a noarch bundle).  Omit to match all.",
     )(fn)
     fn = click.option(
         "--arch", default=None, metavar="ARCH", help="Only this arch.  Omit to match every arch."

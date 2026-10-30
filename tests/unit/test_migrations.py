@@ -438,3 +438,87 @@ def test_migration_035_creates_the_dag_id_prefix_index(tmp_path):
     indexes = {r[1] for r in con.execute("PRAGMA index_list(build_jobs)")}
     con.close()
     assert "ix_build_jobs_dag_id_pattern" in indexes
+
+
+def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
+    """036 gives each noarch version ONE none/none row and yanks the rest.
+
+    The extra variants are yanked, not deleted: a row still decides its
+    archive's org visibility and keeps it downloadable for a pinned lockfile,
+    and the yank-retention GC removes it later.
+    """
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "noarch_neutral.db"
+    p = _alembic_upgrade(db, "035")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    rows = [
+        # name, version, platform, arch, build_type, link, org, yanked
+        ("certifi", "1.0", "any", "noarch", "release", "static", "", 0),
+        ("certifi", "1.0", "any", "noarch", "release", "shared", "", 0),
+        ("certifi", "1.0", "any", "noarch", "debug", "shared", "", 0),
+        # A live row wins over a yanked release/shared one.
+        ("attrs", "2.0", "any", "noarch", "release", "shared", "", 1),
+        ("attrs", "2.0", "any", "noarch", "debug", "static", "", 0),
+        # Concrete bundles are untouched.
+        ("zlib", "1.3", "linux", "x86_64", "release", "shared", "", 0),
+        # Two orgs, one version: a SQLite chain's unique index has no org_slug,
+        # so only the first can take the none/none slot.
+        ("dup", "1.0", "any", "noarch", "release", "shared", "a", 0),
+        ("dup", "1.0", "any", "noarch", "release", "static", "b", 0),
+    ]
+    for n, v, pl, ar, bt, ln, org, y in rows:
+        con.execute(
+            "INSERT INTO packages (name, version, platform, arch, build_type, link, org_slug, "
+            "yanked, sha256, archive_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'x', ?)",
+            (n, v, pl, ar, bt, ln, org, y, f"/v1/download/{n}-{v}-{pl}-{ar}-{bt}-{ln}.tar.zst"),
+        )
+    con.commit()
+    con.close()
+
+    p = _alembic_upgrade(db, "036")
+    assert p.returncode == 0, p.stderr
+
+    def _state() -> set[tuple]:
+        c = sqlite3.connect(db)
+        try:
+            return set(
+                c.execute(
+                    "SELECT name, platform, build_type, link, org_slug, yanked, "
+                    "yanked_at IS NOT NULL FROM packages"
+                ).fetchall()
+            )
+        finally:
+            c.close()
+
+    assert _state() == {
+        ("certifi", "any", "none", "none", "", 0, 0),
+        ("certifi", "any", "release", "static", "", 1, 1),
+        ("certifi", "any", "debug", "shared", "", 1, 1),
+        ("attrs", "any", "release", "shared", "", 1, 0),
+        ("attrs", "any", "none", "none", "", 0, 0),
+        ("zlib", "linux", "release", "shared", "", 0, 0),
+        ("dup", "any", "none", "none", "a", 0, 0),
+        ("dup", "any", "release", "static", "b", 0, 0),
+    }
+
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    p = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "035"],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0, p.stderr
+    # Each none/none row takes the first variant its version does not hold.
+    state = _state()
+    assert ("certifi", "any", "release", "shared", "", 0, 0) in state
+    assert ("attrs", "any", "release", "static", "", 0, 0) in state
+    assert ("dup", "any", "release", "shared", "a", 0, 0) in state
+    assert not any(r[2] == "none" for r in state)

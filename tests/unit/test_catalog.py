@@ -199,6 +199,23 @@ class TestCatalogEntries:
         entries = catalog_entries(self.NOARCH_CATALOG, platform="any", arch="noarch")
         assert {e.name for e in entries} == {"idna"}
 
+    def test_neutral_noarch_bundle_matches_every_config_and_link(self):
+        """A none/none (config/link-neutral) noarch bundle serves every variant."""
+        cat = {
+            "bundles": [
+                {**self.NOARCH_CATALOG["bundles"][0], "build_type": "none", "link": "none"},
+                self.NOARCH_CATALOG["bundles"][1],
+            ]
+        }
+        for cfg, lnk in (("release", "shared"), ("debug", "static")):
+            entries = catalog_entries(
+                cat, platform="linux", arch="x86_64", build_type=cfg, link=lnk
+            )
+            names = {e.name for e in entries}
+            assert "idna" in names
+            # The concrete release/shared bundle still filters exactly.
+            assert ("numpy-cp311" in names) == ((cfg, lnk) == ("release", "shared"))
+
 
 # ── generate_catalog ────────────────────────────────────────────
 
