@@ -110,6 +110,12 @@ $prefixArgs = @(
 & $mesonExe @($mesonArgs + @(
     'setup', $env:CVC_BUILD_DIR,
     "--prefix=$env:CVC_INSTALL_DIR",
+    # libpq reads pg_service.conf (connection settings for a service name)
+    # from SYSCONFDIR, compiled in.  Under the prefix it was the job's install
+    # dir, C:\cvb\... on the Windows builder, which any local user can create
+    # on a machine that uses this libpq.  Use a directory only administrators
+    # can write; PostgreSQL appends \postgresql.  Nothing is installed there.
+    '--sysconfdir=C:/Program Files/PostgreSQL/etc',
     '--buildtype=release',
     '--wrap-mode=nofallback') + $prefixArgs + @(
     '-Dssl=openssl',
@@ -162,6 +168,15 @@ Copy-Item (Join-Path $pqBuild 'libpq.dll') (Join-Path $dst 'bin')
 Copy-Item (Join-Path $pqBuild 'libpq.lib') (Join-Path $dst 'lib')
 Copy-Item (Join-Path $pqBuild 'libpq.a')   (Join-Path $dst 'lib')
 Copy-Item (Join-Path $bld 'meson-private\libpq.pc') (Join-Path $dst 'lib\pkgconfig')
+
+# The DLL must carry the SYSCONFDIR above and no path into the install dir.
+$dll = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes((Join-Path $dst 'bin\libpq.dll')))
+if ($dll.IndexOf('C:/Program Files/PostgreSQL/etc/postgresql', [StringComparison]::Ordinal) -lt 0) {
+    throw 'libpq: libpq.dll does not compile in C:/Program Files/PostgreSQL/etc/postgresql'
+}
+foreach ($form in @($dst.TrimEnd('\'), ($dst.TrimEnd('\') -replace '\\', '/'))) {
+    if ($dll.IndexOf($form, [StringComparison]::OrdinalIgnoreCase) -ge 0) { throw "libpq: libpq.dll names the install dir ($form)" }
+}
 # The headers src/include/meson.build and src/interfaces/libpq/meson.build
 # install into includedir (not the internal/server ones).
 Copy-Item (Join-Path $src 'src\interfaces\libpq\libpq-fe.h'),

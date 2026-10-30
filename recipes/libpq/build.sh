@@ -51,10 +51,20 @@ cd "${CVC_SOURCE_DIR}"
 # Meson-based build.  readline is psql's line editor: libpq never links it and
 # psql is not packaged, so it is off.  (Enabled, it failed the build once the
 # readline build dep moved to CVC_BUILD_PREFIX, which this script never searched.)
+#
+# libpq compiles in SYSCONFDIR, where it reads pg_service.conf (connection
+# settings for a service name), and LOCALEDIR, where it binds its message
+# catalogs (format strings it prints errors through) unless PGLOCALEDIR is set.
+# Both used to be under the job's install dir, /tmp/cvcpkg-builder/... on most
+# builders, a path any local user can create on a machine that uses this
+# libpq.  Use the system locations instead, which only root can write; libpq
+# reads them as a /usr build of PostgreSQL does.
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir=lib \
+    --sysconfdir=/etc \
+    --localedir=/usr/share/locale \
     --buildtype=release \
     --pkg-config-path="${_PC}" \
     -Dextra_include_dirs="${CVC_DEPS_PREFIX}/include" \
@@ -73,7 +83,28 @@ cd "${CVC_BUILD_DIR}"
 # Meson's install step will install everything, but the package.files
 # glob in recipe.yaml filters to just the libpq artifacts.
 ninja -j "${CVC_JOBS}"
-ninja install
+# Install through DESTDIR: the catalogs' install dir is now /usr/share/locale,
+# which must not be written on the builder.  They ship in share/locale as
+# before (PGLOCALEDIR points libpq at them).
+_stage="${CVC_BUILD_DIR}/destdir"
+rm -rf "${_stage}"
+DESTDIR="${_stage}" ninja install
+mkdir -p "${CVC_INSTALL_DIR}"
+cp -R "${_stage}${CVC_INSTALL_DIR}/." "${CVC_INSTALL_DIR}/"
+if [ -d "${_stage}/usr/share/locale" ]; then
+    mkdir -p "${CVC_INSTALL_DIR}/share/locale"
+    cp -R "${_stage}/usr/share/locale/." "${CVC_INSTALL_DIR}/share/locale/"
+fi
+
+# The library must carry the system directories and not the job's.
+for _lib in "${CVC_INSTALL_DIR}"/lib/libpq.so.* "${CVC_INSTALL_DIR}"/lib/libpq.*.dylib; do
+    [ -f "${_lib}" ] && [ ! -L "${_lib}" ] || continue
+    if ! LC_ALL=C grep -a -q -F -e /etc/postgresql "${_lib}" ||
+        LC_ALL=C grep -a -q -F -e "${CVC_INSTALL_DIR}/etc" -e "${CVC_INSTALL_DIR}/share/locale" "${_lib}"; then
+        echo "libpq: ${_lib} does not compile in /etc/postgresql, or still names the job's etc or locale dir" >&2
+        exit 1
+    fi
+done
 
 # Generate a minimal CMake find module so find_package(PostgreSQL) works.
 mkdir -p "${CVC_INSTALL_DIR}/lib/cmake/PostgreSQL"
