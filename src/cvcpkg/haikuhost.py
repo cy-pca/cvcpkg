@@ -103,6 +103,7 @@ import queue
 import re
 import shlex
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -454,6 +455,31 @@ class _Watch:
         self.last_activity = time.monotonic()
 
 
+def _no_sigpipe(fd: int) -> None:
+    """Make a write to *fd* whose reader is gone fail with EPIPE, not SIGPIPE.
+
+    Called on the thread that writes.  The cvcpkg CLI restores SIGPIPE's
+    default action (cli._restore_default_sigpipe), and haikuhost runs inside
+    ``cvcpkg builder`` and ``cvcpkg pack``: a relay write to an ssh or a tar
+    that had already exited ended the whole process, every other job of the
+    builder with it.  Linux and the BSDs raise the signal on the writing
+    thread, so blocking it there leaves only EPIPE (the pending signal goes
+    away with the thread).  macOS raises it on the process, so there the
+    descriptor is marked F_SETNOSIGPIPE instead.  Windows has no SIGPIPE.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        if sys.platform == "darwin":
+            import fcntl
+
+            fcntl.fcntl(fd, getattr(fcntl, "F_SETNOSIGPIPE", 73), 1)
+        else:
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGPIPE})
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
 def _pump_lines(
     pipe: IO[bytes],
     emit: Callable[[bytes], object],
@@ -494,6 +520,8 @@ def _pump_chunks(pipe: IO[bytes], dest: IO[bytes] | list[bytes], watch: _Watch) 
     """
     broken = False
     try:
+        if not isinstance(dest, list):
+            _no_sigpipe(dest.fileno())
         while chunk := pipe.read1(_CHUNK):  # type: ignore[attr-defined]
             watch.moved()
             if isinstance(dest, list):
@@ -516,6 +544,7 @@ def _pump_chunks(pipe: IO[bytes], dest: IO[bytes] | list[bytes], watch: _Watch) 
 def _feed(src: bytes | IO[bytes], pipe: IO[bytes], watch: _Watch) -> None:
     """Write *src* (bytes, or a binary file read to EOF) into *pipe*, then close it."""
     try:
+        _no_sigpipe(pipe.fileno())
         if isinstance(src, bytes):
             view = memoryview(src)
             for i in range(0, len(view), _CHUNK):

@@ -2002,3 +2002,63 @@ class TestRestampSource:
         # Both kept one time, with the .5 fraction, and the real clock is far
         # ahead of 1010, so nothing moved.
         assert stamps == {1010 * _S + 500_000_000}
+
+
+# A child that runs haikuhost the way the cvcpkg CLI does, SIGPIPE at its
+# default action, and has every relay write land on a reader that has gone:
+# a push and a put_text into an ssh whose remote side failed at once, and a
+# pull into a local tar that failed at once.
+_SIGPIPE_CHILD = """
+import os, signal, sys
+from pathlib import Path
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)  # cvcpkg.cli._restore_default_sigpipe
+from cvcpkg import haikuhost
+fake, tmp = sys.argv[1], Path(sys.argv[2])
+haikuhost._ssh_cmd = lambda cmd: [sys.executable, fake, "exit", cmd]
+src = tmp / "src"
+src.mkdir()
+for i in range(8):
+    (src / f"f{i}").write_bytes(os.urandom(1 << 20))
+(tmp / "file").write_text("not a dir")
+outcomes = []
+try:
+    haikuhost._push_tree(src, str(tmp / "file" / "source"), what="push")
+except haikuhost.HaikuhostError:
+    outcomes.append("push failed")
+try:
+    haikuhost._put_text("x" * (8 << 20), str(tmp / "file" / "runner.sh"), what="put")
+except haikuhost.HaikuhostError:
+    outcomes.append("put failed")
+try:
+    haikuhost._pull_tree(str(src), tmp / "file", what="pull")
+except (haikuhost.HaikuhostError, OSError):
+    outcomes.append("pull failed")
+print("survived:", ", ".join(outcomes))
+"""
+
+
+@_NEEDS_SH
+@pytest.mark.skipif(shutil.which("tar") is None, reason="needs tar")
+def test_a_write_to_a_dead_reader_does_not_kill_the_cli_process(tmp_path):
+    """The cvcpkg CLI restores SIGPIPE's default action, and haikuhost runs in
+    that process (``cvcpkg builder``, ``cvcpkg pack``).  A relay write to an ssh
+    or tar that has already exited must fail with EPIPE, not end the process
+    and every other job of the builder with it.  CI died with exit 141 here."""
+    fake = tmp_path / "fake_ssh.py"
+    fake.write_text(_FAKE_SSH)
+    env = {
+        **os.environ,
+        "CVCPKG_HAIKU_SSH": "user@haiku-build",
+        "CVCPKG_HAIKU_TRANSFER": "tar",
+        "FAKE_SSH_PIDFILE": str(tmp_path / "pids"),
+        "PYTHONPATH": str(Path(haikuhost.__file__).resolve().parents[1]),
+    }
+    r = subprocess.run(
+        [sys.executable, "-c", _SIGPIPE_CHILD, str(fake), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        env=env,
+    )
+    assert r.returncode == 0, f"rc={r.returncode} (-13 is SIGPIPE): {r.stderr[-2000:]}"
+    assert "survived: push failed, put failed, pull failed" in r.stdout
