@@ -4,7 +4,11 @@ recipe:
   upstream_version: "1.24.13"
   # cvc.3: the libraries gstreamer links on linux are declared runtime deps
   # (see depends.runtime); cvc.2 named only glib.
-  cvc_revision: 3
+  # cvc.4: no frei0r plugin, which loaded every library in <job install
+  # dir>/lib/frei0r-1 -- a path any local user can create on a consumer
+  # machine -- and the missing-plugin installer helper is no longer looked
+  # for in the job dir either (build.sh, build.ps1).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

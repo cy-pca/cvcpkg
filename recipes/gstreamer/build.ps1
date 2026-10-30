@@ -22,6 +22,20 @@ Invoke-CvcMesonBuild @(
     # undeclared under MSVC 19.44 although d3d11 configures; the NVIDIA
     # hardware codecs are optional here, so leave the plugin out.
     '-Dgst-plugins-bad:nvcodec=disabled',
+    # frei0r loads every DLL it finds in $FREI0R_PATH or, without it, in
+    # <libdir>\frei0r-1 -- the job's install dir, C:\cvb\... on the Windows
+    # builder, which any local user can create on a consumer machine -- and in
+    # /usr/lib/frei0r-1 and friends, which Windows resolves against the
+    # current drive (C:\usr\lib\frei0r-1), just as creatable.  Every GStreamer
+    # process that scans plugins could be made to load a planted DLL.  No
+    # cvcpkg package ships frei0r effects, so leave the plugin out.
+    '-Dgst-plugins-bad:frei0r=disabled',
+    # libgstpbutils runs GST_INSTALL_PLUGINS_HELPER when an application asks
+    # to install a missing plugin.  Its default is <prefix>\libexec\..., the
+    # job dir again.  Point it where only an administrator can put anything,
+    # as a /usr build's /usr/libexec; no cvcpkg package installs a helper, and
+    # the GST_INSTALL_PLUGINS_HELPER environment variable still overrides it.
+    '-Dgst-plugins-base:install_plugins_helper=C:/Program Files/GStreamer/libexec/gst-install-plugins-helper.exe',
     '-Dlibav=disabled',
     '-Ddevtools=disabled',
     '-Dges=disabled',

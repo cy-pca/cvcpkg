@@ -40,6 +40,17 @@ if [ "$(uname -s)" = OpenBSD ]; then _extra+=(-Dgst-plugins-good:v4l2=disabled);
 
 cd "${CVC_SOURCE_DIR}"
 
+# frei0r loads every shared object it finds in $FREI0R_PATH or, without it, in
+# <libdir>/frei0r-1 -- the job's install dir, under /tmp on most builders,
+# which any local user can create on a consumer machine -- so every GStreamer
+# process that scans plugins could be made to load a planted library.  No
+# cvcpkg package ships frei0r effects, so leave the plugin out.
+#
+# libgstpbutils runs GST_INSTALL_PLUGINS_HELPER when an application asks to
+# install a missing plugin.  Its default is <prefix>/libexec/..., the job dir
+# again; use the path a /usr build of GStreamer has, which only root can
+# create.  The GST_INSTALL_PLUGINS_HELPER environment variable still overrides
+# it.
 meson setup "${CVC_BUILD_DIR}" \
     ${_extra[@]+"${_extra[@]}"} \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -53,6 +64,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dgood=enabled \
     -Dugly=disabled \
     -Dbad=enabled \
+    -Dgst-plugins-bad:frei0r=disabled \
+    -Dgst-plugins-base:install_plugins_helper=/usr/libexec/gst-install-plugins-helper \
     -Dlibav=disabled \
     -Ddevtools=disabled \
     -Dges=disabled \
