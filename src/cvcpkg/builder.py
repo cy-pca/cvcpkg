@@ -4307,7 +4307,6 @@ def pack_recipe(
     # A noarch bundle is also config/link-neutral: published once as none/none
     # whatever variant the caller asked for, and always built as release/shared
     # so that one bundle comes from one deterministic build.
-    pkg_config, pkg_link = variant_for(pkg_platform, pkg_arch, config, link)
     if is_any:
         config, link = NEUTRAL_BUILD_VARIANT
     elif NEUTRAL_CONFIG in (config, link):
@@ -4337,6 +4336,10 @@ def pack_recipe(
     # assignment flows into both the manifest and the archive filename below.
     if cvc_revision is not None:
         ctx.recipe.cvc_revision = cvc_revision
+
+    # From what the build ran as, not what was asked: build_recipe forces
+    # static on the static-only platforms (wasm/wasi/cosmo).
+    pkg_config, pkg_link = variant_for(pkg_platform, pkg_arch, ctx.config, ctx.link)
 
     # ── glibc floor gate (linux) ────────────────────────────────────────
     # glibc is backward- but not forward-compatible, so a bundle built on a
