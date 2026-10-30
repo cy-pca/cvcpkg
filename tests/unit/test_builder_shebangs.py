@@ -222,8 +222,56 @@ def test_readonly_script_rewritten_and_mode_restored(tmp_path):
         assert (script.stat().st_mode & 0o777) == 0o555
 
 
+# What pip writes into a Windows package's scripts= file (Scripts\jp.py) under
+# the Windows builder, whose job dirs sit in C:\cvb: a path any local user can
+# create on a consumer machine, where the py launcher would run the
+# python.exe planted there.
+WIN_JOB_PREFIX = r"C:\cvb\cvcpkg-job-jmespath-cp311-pb97un5g\cvcpkg-prefix-jmespath-cp311-_l7_hwbi"
+
+
+def _win_script(root, relpath, shebang, body=b"import sys\r\nsys.exit(0)\r\n"):
+    path = root / relpath
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"#!" + shebang.encode() + b"\r\n" + body)
+    return path
+
+
+def test_rewrites_windows_scripts_text_shebang(tmp_path):
+    script = _win_script(tmp_path, "Scripts/jp.py", WIN_JOB_PREFIX + r"\python.exe")
+    _rewrite_shebangs(tmp_path)
+    assert script.read_bytes() == b"#!/usr/bin/env python\r\nimport sys\r\nsys.exit(0)\r\n"
+
+
+def test_windows_shebang_keeps_versioned_interpreter_name(tmp_path):
+    script = _win_script(tmp_path, "Scripts/tool.py", WIN_JOB_PREFIX + r"\python3.13t.exe")
+    _rewrite_shebangs(tmp_path)
+    assert script.read_bytes().startswith(b"#!/usr/bin/env python3.13t\r\n")
+
+
+def test_windows_shebang_quoted_and_matched_by_temp_prefix(tmp_path):
+    # A user's pack --prefix with a space: pip quotes the path, and only the
+    # caller knows it is ephemeral.  Matched with either slash, any case.
+    shebang = r'"C:\Users\Jo Doe\deps\python.exe"'
+    script = _win_script(tmp_path, "Scripts/tool.py", shebang)
+
+    _rewrite_shebangs(tmp_path)
+    assert script.read_bytes().startswith(b"#!" + shebang.encode())
+
+    _rewrite_shebangs(tmp_path, temp_prefixes=("c:/users/jo doe/deps",))
+    assert script.read_bytes().startswith(b"#!/usr/bin/env python\r\n")
+
+
+def test_windows_system_interpreter_and_launchers_untouched(tmp_path):
+    script = _win_script(tmp_path, "Scripts/tool.py", r"C:\Python312\python.exe")
+    launcher = tmp_path / "Scripts" / "tool.exe"
+    launcher.write_bytes(b"MZ\x90\x00" + f"#!{WIN_JOB_PREFIX}\\python.exe\r\n".encode())
+    _rewrite_shebangs(tmp_path)
+    assert script.read_bytes().startswith(b"#!C:\\Python312\\python.exe\r\n")
+    assert launcher.read_bytes().startswith(b"MZ\x90\x00#!C:\\cvb\\")
+
+
 def test_scan_is_bounded_to_script_dirs(tmp_path):
-    # Payload outside bin/sbin/libexec is not scanned -- the pass stays
+    # Payload outside bin/sbin/libexec/Scripts is not scanned -- the pass stays
     # O(script dirs), not O(prefix), and never rewrites package data.
     shebang = f"{JOB_PREFIX}/bin/python3.11"
     data = _script(tmp_path, "share/pkg/helper.py", shebang)
