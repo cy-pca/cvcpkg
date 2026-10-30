@@ -6,7 +6,11 @@ recipe:
   # (jp.py) carry the build machine's interpreter as their shebang (the old
   # libcvc-deps macOS CI prefix), so they cannot run anywhere; packing today
   # rewrites it to /usr/bin/env.
-  cvc_revision: 4
+  # cvc.5: republish from a cvcpkg 2.5.10 builder.  On Windows, Scripts/jp.py
+  # carried pip's #!C:\cvb\...\python.exe shebang (the job's deps prefix,
+  # a path any local user can create), which the py launcher runs;
+  # cy-pca/cvcpkg#506 taught packing to rewrite it to /usr/bin/env python.
+  cvc_revision: 5
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
