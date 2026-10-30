@@ -32,7 +32,7 @@ _sha256() {
 cvc_submodule() {
     local path="$1" repo="$2" commit="$3" want="$4" archive got
     archive="${CVC_BUILD_DIR}/$(printf '%s' "${repo}" | tr '/' '_')-${commit}.tar.gz"
-    curl -fSL --retry 3 -o "${archive}" "https://github.com/${repo}/archive/${commit}.tar.gz"
+    curl -fsSL --retry 3 -o "${archive}" "https://github.com/${repo}/archive/${commit}.tar.gz"
     got="$(_sha256 "${archive}")"
     if [ "${got}" != "${want}" ]; then
         echo "drjit-src: sha256 mismatch for ${repo}@${commit}: got ${got}, want ${want}" >&2
