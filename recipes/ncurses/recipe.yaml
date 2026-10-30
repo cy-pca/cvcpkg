@@ -6,7 +6,14 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 2
+  # cvc.3: the terminfo database is found where the bundle is installed
+  # (terminfo-relative-to-library.patch).  cvc.2's search path was the build
+  # job's own /tmp/cvcpkg-builder/... dir and then the host's, so the
+  # bundle's share/terminfo was never read.  Rebuilt with today's relocation
+  # pass, bin/ tools get RUNPATH $ORIGIN/../lib (cvc.2's had $ORIGIN, so
+  # infocmp, tput, tic... loaded the host's libncursesw and could fail with
+  # "undefined symbol: _nc_disable_period"); test.sh checks both.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -24,7 +31,12 @@ source:
   type: package
   package: ncurses-src
 
-patches: []
+patches:
+  # Linux and macOS: search <prefix>/share/terminfo, <prefix> being the parent
+  # of the directory the library was loaded from (dladdr), ahead of the
+  # configured /usr/share/terminfo:/etc/terminfo.  The BSDs keep the
+  # configured list only.
+  - terminfo-relative-to-library.patch
 
 depends:
   build:
@@ -85,6 +97,9 @@ package:
     - bin/tput*
     - bin/tset*
   cmake_packages: []
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17

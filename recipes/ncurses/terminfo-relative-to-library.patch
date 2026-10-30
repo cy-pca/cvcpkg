@@ -1,0 +1,108 @@
+--- a/ncurses/tinfo/db_iterator.c
++++ b/ncurses/tinfo/db_iterator.c
+@@ -35,11 +35,28 @@
+  * Iterators for terminal databases.
+  */
+ 
++/*
++ * cvcpkg: dladdr() and Dl_info for relocated_dirs(), declared only with these.
++ */
++#if defined(__linux__) && !defined(_GNU_SOURCE)
++#define _GNU_SOURCE
++#endif
++#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
++#define _DARWIN_C_SOURCE
++#endif
++
+ #include <curses.priv.h>
+ 
+ #include <time.h>
+ #include <tic.h>
+ 
++#if defined(__linux__) || defined(__APPLE__)
++#include <dlfcn.h>
++#define CVCPKG_RELOCATED_TERMINFO 1
++#else
++#define CVCPKG_RELOCATED_TERMINFO 0
++#endif
++
+ #if USE_HASHED_DB
+ #include <hashed_db.h>
+ #endif
+@@ -195,6 +212,62 @@
+     return result;
+ }
+ 
++#if NCURSES_USE_DATABASE && CVCPKG_RELOCATED_TERMINFO
++/*
++ * cvcpkg: a bundle is unpacked into whatever prefix it is installed in, so
++ * directories configured at build time name a prefix that does not exist
++ * where the library runs.  Search <prefix>/share/terminfo first, <prefix>
++ * being the parent of the directory this library was loaded from, then the
++ * configured list.  When ncurses is linked statically, dladdr names the
++ * program instead, so the directory is <program's prefix>/share/terminfo; a
++ * directory that does not exist is dropped from the search like any other.
++ * The configured list is returned unchanged if the path cannot be found.
++ */
++static const char *
++relocated_dirs(const char *configured)
++{
++    static char *result;
++    static bool done;
++
++    if (!done) {
++	Dl_info info;
++
++	done = TRUE;
++	if (dladdr((const void *) &done, &info) != 0
++	    && info.dli_fname != 0) {
++	    char *path = realpath(info.dli_fname, NULL);
++
++	    if (path != 0) {
++		char *slash = strrchr(path, '/');	/* <libdir>/<library> */
++
++		if (slash != 0) {
++		    *slash = '\0';
++		    slash = strrchr(path, '/');	/* <prefix>/<libdir> */
++		}
++		if (slash != 0) {
++		    size_t need;
++
++		    *slash = '\0';
++		    need = strlen(path) + sizeof("/share/terminfo") + 1
++			+ strlen(configured);
++		    if ((result = malloc(need)) != 0) {
++			if (*configured != '\0') {
++			    _nc_SPRINTF(result, _nc_SLIMIT(need) "%s/share/terminfo%c%s",
++					path, NCURSES_PATHSEP, configured);
++			} else {
++			    _nc_SPRINTF(result, _nc_SLIMIT(need) "%s/share/terminfo",
++					path);
++			}
++		    }
++		}
++		free(path);
++	    }
++	}
++    }
++    return (result != 0) ? result : configured;
++}
++#endif
++
+ static void
+ free_cache(void)
+ {
+@@ -312,7 +385,13 @@
+ 	values[dbdTIC] = TicDirectory;
+ 
+ #if NCURSES_USE_DATABASE
++#if CVCPKG_RELOCATED_TERMINFO
+ #ifdef TERMINFO_DIRS
++	values[dbdCfgList] = relocated_dirs(TERMINFO_DIRS);
++#else
++	values[dbdCfgList] = relocated_dirs("");
++#endif
++#elif defined(TERMINFO_DIRS)
+ 	values[dbdCfgList] = TERMINFO_DIRS;
+ #endif
+ #ifdef TERMINFO
