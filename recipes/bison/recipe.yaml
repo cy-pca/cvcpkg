@@ -65,6 +65,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
@@ -73,10 +77,10 @@ package:
     - bin/bison*
     - share/bison/
     # GNU Bison's own install only; winflexbison on Windows ships none of these.
-    - { glob: "bin/yacc*",              platforms: [linux, macos, freebsd, openbsd, netbsd] }
-    - { glob: "lib/liby*",              platforms: [linux, macos, freebsd, openbsd, netbsd] }
-    - { glob: "share/aclocal/bison*",   platforms: [linux, macos, freebsd, openbsd, netbsd] }
-    - { glob: "share/man/man1/bison*",  platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/yacc*",              platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
+    - { glob: "lib/liby*",              platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
+    - { glob: "share/aclocal/bison*",   platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
+    - { glob: "share/man/man1/bison*",  platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
 
 toolchain:
   cc:

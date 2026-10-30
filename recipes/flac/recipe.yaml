@@ -55,16 +55,20 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
 package:
   files:
     # Unix name; MSVC (build.ps1): FLAC.lib and FLAC++.lib, DLLs in bin/ (local build on cmps-a91453, 2026-10-19).
-    - { glob: "lib/libFLAC*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libFLAC*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - { glob: "lib/FLAC*.lib", platforms: [windows] }
     - { glob: "bin/FLAC*.dll", platforms: [windows] }
-    - { glob: "lib/libFLAC++*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libFLAC++*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - lib/pkgconfig/flac.pc
     - lib/pkgconfig/flac++.pc
     - lib/cmake/FLAC/
