@@ -59,40 +59,53 @@ depends:
       version: "^1.3"
     - name: pcre2
       version: "^10.0"
-    # Hermetic X11/xcb + OpenGL for the xcb QPA platform plugin (Linux only;
-    # macOS uses cocoa, Windows uses its native QPA). xkbcommon is the base
-    # keymap lib; xkbcommon-x11 gives the xcb plugin full X keyboard handling
-    # (keymaps from the X server over xcb-xkb).
+    # Hermetic X11/xcb + OpenGL for the xcb QPA platform plugin on Linux,
+    # FreeBSD and NetBSD (macOS uses cocoa, Windows its native QPA, and OpenBSD
+    # its base X11 and Mesa). xkbcommon is the base keymap lib; xkbcommon-x11
+    # gives the xcb plugin full X keyboard handling (keymaps from the X server
+    # over xcb-xkb).
     - name: libxcb
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util-image
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util-keysyms
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util-renderutil
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util-wm
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xcb-util-cursor
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libx11
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxi
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxext
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxfixes
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxrender
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libglvnd
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xkbcommon
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: xkbcommon-x11
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
+    # FreeBSD and NetBSD: the GL driver behind libglvnd (llvmpipe), so a Qt
+    # application there gets a working OpenGL with no system Mesa.  On Linux
+    # the GLVND vendor library comes from the host, or from a cvcpkg mesa
+    # installed separately.
+    - name: mesa
+      platforms: [freebsd, netbsd]
+    # FreeBSD and NetBSD: QtCore and QtNetwork link zstd when they find it
+    # (zstd-compressed resources and HTTP bodies).  Declared so it is cvcpkg's,
+    # not the ports libzstd in /usr/local the FreeBSD builder has
+    # (freebsd-build-2, 2026-10-30).
+    - name: zstd
+      platforms: [freebsd, netbsd]
   host_tools: []
 
 build:
