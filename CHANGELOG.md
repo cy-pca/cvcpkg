@@ -28,8 +28,27 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.10
 
+**A release so builders rewrite Windows script shebangs (#506), and so
+installs resolve noarch bundles for any config and link mode (#510). The server
+needs nothing for #506; packing runs on the builders, so they need this
+release.**
+
+- **Fix: Windows text scripts kept the build's interpreter as their shebang.**
+  pip writes a package's `scripts=` files (jmespath's `jp.py`, xlsxwriter's
+  `vba_extract.py`) into `Scripts\` as text, with a `#!C:\...\python.exe` line
+  naming the job's deps-prefix interpreter. Packing rewrote shebangs only in
+  `bin/`, `sbin/` and `libexec/`, and only forward-slash paths, so these shipped
+  as is. On the Windows builder that path is `C:\cvb\cvcpkg-job-...`, which any
+  local user can create on a machine with the package, and the `py` launcher
+  runs it. Now:
+  - `Scripts/` is scanned too (its `.exe` launchers are still left to the
+    launcher pass);
+  - a Windows interpreter path matches with either slash and in any case,
+    quoted or not;
+  - it becomes `#!/usr/bin/env python`, which the launcher resolves on PATH.
+    Versioned names such as `python3.13t` are kept, and a CRLF line stays CRLF.
 - **Fix: a noarch bundle never resolved for a static or debug install.** A
   noarch recipe (`platform: any`: fonts, data sets, pure Python, JavaScript)
   publishes one any/noarch/release/shared bundle. The catalog filter matched it
