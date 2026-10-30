@@ -159,3 +159,32 @@ def test_binding_is_per_thread_and_restored():
         t.join()
     assert seen == [None], "another thread's processes must not join this tree"
     assert proctree.current() is None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+def test_stop_ends_one_process_group_without_waiting_out_the_grace(tmp_path):
+    """stop() is for a caller's own timeout (haikuhost's stuck ssh): it ends the
+    process and what it started, and returns as soon as they are gone."""
+    pidfile = tmp_path / "grandchild.pid"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _CHILD, _GRANDCHILD, str(pidfile), "stay"],
+        stdin=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    assert _wait_for(lambda: pidfile.is_file() and pidfile.read_text().strip()), "no grandchild"
+    grandchild = int(pidfile.read_text())
+
+    t0 = time.monotonic()
+    proctree.stop(proc, grace=30.0)
+    # Both exit on SIGTERM, so the 30 s grace is not waited out, though the
+    # leader is our own child and stays a zombie until reaped.
+    assert time.monotonic() - t0 < 10
+    assert proc.returncode is not None and proc.returncode != 0
+    assert _wait_for(lambda: not _alive(grandchild)), "the grandchild outlived stop()"
+
+
+def test_stop_kills_a_process_that_shares_our_group():
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    proctree.stop(proc)
+    assert proc.wait(timeout=20) != 0
+    proctree.stop(proc)  # already gone: nothing to do, and no error

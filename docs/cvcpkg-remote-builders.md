@@ -436,6 +436,26 @@ have it, tar-over-ssh otherwise), runs a generated `run-job.sh` there while
 streaming the log, and copies the install tree back so the normal
 pack/publish path runs unchanged.
 
+Two Haiku quirks are handled on the way:
+
+- **Sessions that never end.** Haiku's sshd sometimes keeps a session open
+  after its command has exited (about one run in three on hrev57937 with
+  openssh 9.8p1; a prod job once sat 70 minutes in a push). Every remote
+  command therefore reports its own exit status as a marker line on stderr.
+  Once it is in, ssh gets 5 s to exit and is then stopped, and the job goes
+  on with the reported status. Transfers, commands and the remote build are
+  also stopped when no data moves for too long (the timeouts below), and
+  file transfers run in the job's process tree, so a cancelled job stops
+  them too.
+- **Source timestamps.** BFS does not store a whole-second mtime as given (it
+  fills in the sub-second part at the moment of the call), and the VM's clock
+  is not the builder's (phm's ran 21 s behind). After the push, the source
+  tree is re-stamped on the Haiku side from its local times: each file keeps
+  its second, with a fixed nonzero fraction, and the whole tree moves back
+  below the Haiku clock if it has to. Without this, make regenerated shipped
+  files (gperf's manual, flex's Makefiles) and automake's configure stopped
+  with "newly created file is older than distributed files!" (m4).
+
 A haiku job that cannot be delegated is a **hard error, never a local
 build**: there is no local Haiku toolchain, so the only thing a "fallback"
 could produce is Linux binaries packaged as `haiku/x86_64`. An unconfigured
@@ -454,6 +474,9 @@ annotated list is the module docstring of `src/cvcpkg/haikuhost.py`):
 | `CVCPKG_HAIKU_JOBS` | Overrides `CVC_JOBS` for the remote build. |
 | `CVCPKG_HAIKU_KEEP_JOBS` | How many kept (failed / `--keep-build-dir`) remote job dirs to leave behind; the next job reaps the rest. `0` disables reaping. |
 | `CVCPKG_HAIKU_JOB_TTL` | Seconds a job dir's liveness marker protects it from the reaper (default 86400). |
+| `CVCPKG_HAIKU_IDLE_TIMEOUT` | Seconds a file transfer or remote command may go with no data moving before it is stopped (default 900; `0` disables). |
+| `CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT` | The same for the remote build and test scripts, measured on their output (default 10800; `0` disables). |
+| `CVCPKG_HAIKU_TRANSFER_TIMEOUT` | Hard limit on one file transfer (default 14400; `0` disables). |
 | `CVCPKG_HAIKUHOST` | `0`/`false` makes this builder **refuse** haiku jobs. It does not fall back to a local build. |
 
 Routing is the normal cross-target mechanism: register the owning Linux

@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -32,6 +33,93 @@ _NEEDS_BASH = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("bash") is None,
     reason="POSIX-only build-time helper (bash); windows recipes use build.ps1",
 )
+
+
+# The fake ssh below runs its "remote" command with sh, on this machine.
+_NEEDS_SH = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None,
+    reason="the fake ssh runs its remote command with a POSIX sh",
+)
+
+# Stands in for ssh.  argv: <mode> <remote command>.  The remote command runs
+# with sh, on this machine, wired to this process's stdin/stdout/stderr as a
+# remote command is wired to ssh's.
+#   exit    exit with the command's status, as ssh does
+#   hang    the Haiku sshd failure: the command finishes and stdout reaches
+#           EOF (the server's channel EOF), but the session never ends, so
+#           this process never exits
+#   refuse  never reach the host: ssh's own error and status 255
+_FAKE_SSH = """
+import os, subprocess, sys, time
+mode, command = sys.argv[1], sys.argv[2]
+with open(os.environ["FAKE_SSH_PIDFILE"], "a") as f:
+    f.write(f"{os.getpid()}\\n")
+if mode == "refuse":
+    sys.stderr.write("ssh: connect to host haiku-build port 22: Connection refused\\n")
+    sys.exit(255)
+rc = subprocess.call(["sh", "-c", command])
+if mode == "hang":
+    os.close(1)
+    time.sleep(600)
+sys.exit(rc)
+"""
+
+
+def _gnu_touch() -> bool:
+    if sys.platform == "win32" or shutil.which("touch") is None:
+        return False
+    out = subprocess.run(["touch", "--version"], capture_output=True, text=True, check=False)
+    return "GNU" in out.stdout
+
+
+# The re-stamp script uses `touch -d @SECONDS.FRACTION`, as Haiku's coreutils has it.
+_NEEDS_GNU_TOUCH = pytest.mark.skipif(not _gnu_touch(), reason="needs GNU touch")
+
+
+class _FakeSsh:
+    def __init__(self, pidfile: Path) -> None:
+        self.mode = "exit"
+        self.pidfile = pidfile
+
+    def pids(self) -> list[int]:
+        if not self.pidfile.exists():
+            return []
+        return [int(x) for x in self.pidfile.read_text().split()]
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _gone_soon(pid: int, timeout: float = 10.0) -> bool:
+    """True once *pid* has exited (a reaped child of ours, or an orphan init reaps)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+@pytest.fixture
+def fake_ssh(tmp_path, monkeypatch):
+    """Route haikuhost's ssh to _FAKE_SSH (mode "exit"), with a short exit grace."""
+    script = tmp_path / "fake_ssh.py"
+    script.write_text(_FAKE_SSH)
+    fake = _FakeSsh(tmp_path / "fake_ssh.pids")
+    monkeypatch.setenv("CVCPKG_HAIKU_SSH", "user@haiku-build")
+    monkeypatch.setenv("FAKE_SSH_PIDFILE", str(fake.pidfile))
+    monkeypatch.setattr(
+        haikuhost, "_ssh_cmd", lambda cmd: [sys.executable, str(script), fake.mode, cmd]
+    )
+    monkeypatch.setattr(haikuhost, "EXIT_GRACE_SECS", 0.3)
+    return fake
 
 
 def _extract_block(text: str, start: str, end: str) -> str:
@@ -182,6 +270,12 @@ class TestSshCommand:
         assert cmd[cmd.index("-i") + 1] == "/keys/haiku_ed25519"
         assert cmd[cmd.index("-p") + 1] == "2222"
 
+    def test_keepalives_end_a_session_with_a_dead_vm(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_HAIKU_SSH", "user@haiku-build")
+        cmd = haikuhost._ssh_cmd("true")
+        assert "ServerAliveInterval=15" in cmd
+        assert "ServerAliveCountMax=4" in cmd
+
     def test_unconfigured_target_is_actionable(self):
         with pytest.raises(haikuhost.HaikuhostError, match="CVCPKG_HAIKU_SSH"):
             haikuhost._ssh_cmd("true")
@@ -300,6 +394,8 @@ class _FakeHaiku:
         self.pushes: list[tuple[Path, str]] = []
         self.installed_files = ["lib/libfake.so", "include/fake.h"]
         self.transfer = "tar"
+        # (local tree, remote dir, pushes made so far) per source re-stamp.
+        self.restamps: list[tuple[Path, str, int]] = []
 
         monkeypatch.setenv("CVCPKG_HAIKU_SSH", "user@haiku-build")
         monkeypatch.setattr(haikuhost, "_transfer_mode", lambda: self.transfer)
@@ -308,6 +404,7 @@ class _FakeHaiku:
         monkeypatch.setattr(haikuhost, "_pull_tree", self._pull_tree)
         monkeypatch.setattr(haikuhost, "_put_text", self._put_text)
         monkeypatch.setattr(haikuhost, "_stream_ssh", self._stream_ssh)
+        monkeypatch.setattr(haikuhost, "_restamp_source", self._restamp_source)
 
     # -- remote path mapping --
 
@@ -340,6 +437,9 @@ class _FakeHaiku:
         local.mkdir(parents=True, exist_ok=True)
         shutil.copytree(self.local(remote_dir), local, symlinks=True, dirs_exist_ok=True)
         return self.transfer
+
+    def _restamp_source(self, local: Path, remote_dir: str, log) -> None:
+        self.restamps.append((local, remote_dir, len(self.pushes)))
 
     def _put_text(self, text: str, remote_path: str, *, what: str) -> None:
         dst = self.local(remote_path)
@@ -398,6 +498,19 @@ class TestRunHaikuBuild:
         assert any("via tar" in line for line in logs)
         # Remote work dir removed on success.
         assert host.job_dirs == []
+
+    def test_the_source_tree_is_restamped_right_after_its_push(self, tmp_path, monkeypatch):
+        host = _FakeHaiku(tmp_path, monkeypatch)
+        recipe = _make_recipe(tmp_path)
+        ctx = _make_ctx(tmp_path, recipe)
+        haikuhost.run_haiku_build(ctx, recipe.build_matrix[0], recipe.recipe_dir / "build.sh")
+        assert len(host.restamps) == 1
+        local, remote, pushes_before = host.restamps[0]
+        assert local == ctx.source_dir
+        assert remote.endswith("/source")
+        # After the source push, and before the recipe and prefixes follow.
+        assert pushes_before == 1
+        assert host.pushes[0] == (ctx.source_dir, remote)
 
     def test_remote_layout_and_runner_env(self, tmp_path, monkeypatch):
         host = _FakeHaiku(tmp_path, monkeypatch)
@@ -1236,26 +1349,27 @@ class TestAvailability:
         monkeypatch.setenv("CVCPKG_HAIKU_SSH", "user@haiku-build")
         seen: dict = {}
 
-        def _fake_run(cmd, **kwargs):
-            seen["cmd"] = cmd
+        def _fake_exec(command, **kwargs):
+            seen["argv"] = haikuhost._ssh_cmd(command)
+            return haikuhost._Outcome(rc=0)
 
-            class R:
-                returncode = 0
-
-            return R()
-
-        monkeypatch.setattr(haikuhost.subprocess, "run", _fake_run)
+        monkeypatch.setattr(haikuhost, "_ssh_exec", _fake_exec)
         assert haikuhost.haikuhost_available() is True
-        assert "BatchMode=yes" in seen["cmd"]
-        assert seen["cmd"][-1] == "true"
+        assert "BatchMode=yes" in seen["argv"]
+        assert seen["argv"][-1] == "true"
 
-    def test_unreachable_host(self, monkeypatch):
+    @_NEEDS_SH
+    def test_answering_host(self, fake_ssh):
+        assert haikuhost.haikuhost_available() is True
+
+    @_NEEDS_SH
+    def test_unreachable_host(self, fake_ssh):
+        fake_ssh.mode = "refuse"
+        assert haikuhost.haikuhost_available() is False
+
+    def test_ssh_that_cannot_start(self, monkeypatch):
         monkeypatch.setenv("CVCPKG_HAIKU_SSH", "user@haiku-build")
-
-        def _fake_run(cmd, **kwargs):
-            raise OSError("no route to host")
-
-        monkeypatch.setattr(haikuhost.subprocess, "run", _fake_run)
+        monkeypatch.setattr(haikuhost, "_ssh_cmd", lambda cmd: ["/nonexistent/ssh", cmd])
         assert haikuhost.haikuhost_available() is False
 
 
@@ -1455,3 +1569,436 @@ class TestRunTestHook:
         )
         with pytest.raises(builder_mod.BuildError, match="bash probe"):
             builder_mod.run_test(ctx)
+
+
+# ── ssh that never exits (the Haiku sshd hang) ──────────────────
+
+
+def _tree(root: Path) -> dict[str, str]:
+    """``relative path -> content`` (``-> target`` for a symlink, ``/`` for a dir)."""
+    out: dict[str, str] = {}
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root).as_posix()
+        if p.is_symlink():
+            out[rel] = "-> " + os.readlink(p)
+        elif p.is_dir():
+            out[rel] = "/"
+        else:
+            out[rel] = p.read_text()
+    return out
+
+
+@_NEEDS_SH
+class TestCompletionMarker:
+    """Every remote command reports its own status; ssh's exit is not waited for."""
+
+    @pytest.mark.parametrize("mode", ["exit", "hang"])
+    def test_stdout_comes_back(self, fake_ssh, mode):
+        fake_ssh.mode = mode
+        t0 = time.monotonic()
+        assert haikuhost._run_ssh("echo hello", what="echo") == "hello"
+        assert time.monotonic() - t0 < 10
+
+    def test_a_hung_ssh_is_stopped_after_the_grace(self, fake_ssh):
+        fake_ssh.mode = "hang"
+        notices: list[str] = []
+        with haikuhost._notices_to(notices.append):
+            r = haikuhost._ssh_exec("echo hello", what="saying hello")
+        assert (r.rc, r.stdout, r.lingered) == (0, b"hello\n", True)
+        [pid] = fake_ssh.pids()
+        assert _gone_soon(pid), "the stuck ssh was left running"
+        assert len(notices) == 1
+        assert "saying hello" in notices[0] and "stopped" in notices[0]
+
+    def test_an_ssh_that_exits_is_not_stopped(self, fake_ssh):
+        notices: list[str] = []
+        with haikuhost._notices_to(notices.append):
+            r = haikuhost._ssh_exec("true", what="t")
+        assert (r.rc, r.lingered) == (0, False)
+        assert notices == []
+
+    @pytest.mark.parametrize("mode", ["exit", "hang"])
+    def test_the_status_is_the_commands(self, fake_ssh, mode):
+        fake_ssh.mode = mode
+        r = haikuhost._ssh_exec("echo oops >&2; exit 7", what="t")
+        assert r.rc == 7
+        # The marker line, and the blank line its leading newline leaves, are gone.
+        assert r.stderr == b"oops\n"
+
+    def test_an_exit_in_the_command_still_reports(self, fake_ssh):
+        fake_ssh.mode = "hang"
+        r = haikuhost._ssh_exec("exit 3", what="t")
+        assert (r.rc, r.stderr) == (3, b"")
+
+    def test_unterminated_stderr_keeps_its_text(self, fake_ssh):
+        r = haikuhost._ssh_exec("printf 'no newline' >&2; exit 1", what="t")
+        assert (r.rc, r.stderr) == (1, b"no newline\n")
+
+    def test_another_commands_marker_is_not_taken(self, fake_ssh):
+        fake_ssh.mode = "hang"
+        r = haikuhost._ssh_exec("echo __CVCPKG_RC_deadbeef=0 >&2; exit 5", what="t")
+        assert r.rc == 5
+        assert b"__CVCPKG_RC_deadbeef=0" in r.stderr
+
+    def test_the_marker_never_appears_in_the_command_line(self):
+        wrapped = haikuhost._with_rc_marker("true", "abc123")
+        assert "abc123" in wrapped
+        assert "__CVCPKG_RC_abc123" not in wrapped
+
+    def test_a_failed_command_raises_with_its_stderr(self, fake_ssh):
+        fake_ssh.mode = "hang"
+        with pytest.raises(haikuhost.HaikuhostError, match=r"rc=2\): no such dir"):
+            haikuhost._run_ssh("echo no such dir >&2; exit 2", what="t")
+
+    def test_an_unreachable_host_reports_ssh_s_error(self, fake_ssh):
+        fake_ssh.mode = "refuse"
+        with pytest.raises(haikuhost.HaikuhostError, match="rc=255.*Connection refused"):
+            haikuhost._run_ssh("true", what="t")
+
+    def test_put_text_through_a_hung_ssh(self, fake_ssh, tmp_path):
+        fake_ssh.mode = "hang"
+        dst = tmp_path / "runner.sh"
+        haikuhost._put_text("echo hi\n", str(dst), what="writing")
+        assert dst.read_text() == "echo hi\n"
+
+    @pytest.mark.parametrize("mode", ["exit", "hang"])
+    def test_the_build_stream_drops_the_marker(self, fake_ssh, mode, capsys):
+        fake_ssh.mode = mode
+        logged: list[str] = []
+        rc = haikuhost._stream_ssh("echo one; echo two >&2; exit 4", logged.append)
+        assert rc == 4
+        assert "".join(logged) == "one\ntwo\n"
+        assert capsys.readouterr().out == "one\ntwo\n"
+
+
+@_NEEDS_SH
+class TestTimeouts:
+    """No wait on ssh is unbounded: a silent or endless command is stopped."""
+
+    def test_a_silent_command_hits_the_idle_timeout(self, fake_ssh, tmp_path):
+        pid_file = tmp_path / "sleep.pid"
+        t0 = time.monotonic()
+        with pytest.raises(haikuhost.HaikuhostError, match="nothing moved for 0.5s"):
+            haikuhost._ssh_exec(
+                f"sleep 30 & echo $! > {shlex.quote(str(pid_file))}; wait",
+                what="t",
+                idle_timeout=0.5,
+            )
+        assert time.monotonic() - t0 < 10
+        [ssh_pid] = fake_ssh.pids()
+        assert _gone_soon(ssh_pid)
+        # Everything it started went with it.
+        assert _gone_soon(int(pid_file.read_text()))
+
+    def test_a_busy_command_hits_the_hard_timeout(self, fake_ssh):
+        with pytest.raises(haikuhost.HaikuhostError, match="still running after 0.5s"):
+            haikuhost._ssh_exec(
+                "while :; do echo x; sleep 0.05; done", what="t", timeout=0.5, idle_timeout=30
+            )
+
+    def test_output_keeps_a_command_alive(self, fake_ssh):
+        r = haikuhost._ssh_exec(
+            "for i in 1 2 3 4 5 6 7 8; do echo $i; sleep 0.1; done", what="t", idle_timeout=0.5
+        )
+        assert r.rc == 0
+        assert r.stdout.split() == [str(i).encode() for i in range(1, 9)]
+
+    def test_the_build_idle_timeout_knob(self, fake_ssh, monkeypatch):
+        monkeypatch.setenv("CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT", "0.5")
+        with pytest.raises(haikuhost.HaikuhostError, match="nothing moved"):
+            haikuhost._stream_ssh("sleep 30", None)
+
+    def test_zero_disables_a_timeout(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_HAIKU_IDLE_TIMEOUT", "0")
+        assert haikuhost._idle_timeout() is None
+        monkeypatch.setenv("CVCPKG_HAIKU_IDLE_TIMEOUT", "")
+        assert haikuhost._idle_timeout() == haikuhost.DEFAULT_IDLE_TIMEOUT
+
+    def test_an_invalid_timeout_is_an_error(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_HAIKU_TRANSFER_TIMEOUT", "soon")
+        with pytest.raises(haikuhost.HaikuhostError, match="CVCPKG_HAIKU_TRANSFER_TIMEOUT"):
+            haikuhost._transfer_timeout()
+
+
+@_NEEDS_SH
+@pytest.mark.skipif(shutil.which("tar") is None, reason="needs tar")
+class TestTarTransfers:
+    """tar-over-ssh both ways, with an ssh that exits and with one that hangs."""
+
+    @pytest.fixture(autouse=True)
+    def _tar_mode(self, monkeypatch):
+        monkeypatch.setenv("CVCPKG_HAIKU_TRANSFER", "tar")
+
+    def _source(self, tmp_path: Path) -> Path:
+        src = tmp_path / "src"
+        (src / "sub" / "deeper").mkdir(parents=True)
+        (src / "empty").mkdir()
+        (src / "a.txt").write_text("alpha")
+        (src / "sub" / "b.txt").write_text("beta" * 100_000)
+        (src / "sub" / "deeper" / "c with space").write_text("gamma")
+        (src / "link").symlink_to("a.txt")
+        return src
+
+    @pytest.mark.parametrize("mode", ["exit", "hang"])
+    def test_push_then_pull_round_trip(self, fake_ssh, tmp_path, mode):
+        fake_ssh.mode = mode
+        src = self._source(tmp_path)
+        remote = tmp_path / "remote" / "job" / "source"
+        back = tmp_path / "back"
+        t0 = time.monotonic()
+        for _ in range(3):
+            assert haikuhost._push_tree(src, str(remote), what="push") == "tar"
+            assert haikuhost._pull_tree(str(remote), back, what="pull") == "tar"
+        assert time.monotonic() - t0 < 30
+        assert _tree(remote) == _tree(src)
+        assert _tree(back) == _tree(src)
+        assert all(_gone_soon(pid) for pid in fake_ssh.pids())
+
+    def test_a_failed_remote_extract_fails_the_push(self, fake_ssh, tmp_path):
+        src = self._source(tmp_path)
+        blocker = tmp_path / "file"
+        blocker.write_text("not a dir")
+        with pytest.raises(haikuhost.HaikuhostError, match="push failed"):
+            haikuhost._push_tree(src, str(blocker / "source"), what="push")
+
+    @pytest.mark.parametrize("mode", ["exit", "hang"])
+    def test_a_failed_remote_archive_fails_the_pull(self, fake_ssh, tmp_path, mode):
+        fake_ssh.mode = mode
+        with pytest.raises(haikuhost.HaikuhostError, match="pull failed"):
+            haikuhost._pull_tree(str(tmp_path / "missing"), tmp_path / "back", what="pull")
+
+
+@_NEEDS_SH
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+class TestStoppedJob:
+    """job.cancel and the other abandon paths still stop delegated work."""
+
+    def test_killing_the_job_tree_stops_the_build_stream(self, fake_ssh, tmp_path):
+        from cvcpkg import proctree
+
+        tree = proctree.ProcessTree("haiku-job")
+        result: dict = {}
+
+        def _job() -> None:
+            with proctree.bound(tree):
+                result["rc"] = haikuhost._stream_ssh("sleep 60", None)
+
+        t = threading.Thread(target=_job)
+        t.start()
+        deadline = time.monotonic() + 10
+        while not fake_ssh.pids() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        tree.kill(grace=1.0)
+        t.join(timeout=15)
+        assert not t.is_alive(), "the stream outlived its stopped job"
+        assert result["rc"] != 0
+
+    def test_a_stopped_job_starts_no_transfer(self, fake_ssh, tmp_path, monkeypatch):
+        from cvcpkg import proctree
+
+        monkeypatch.setenv("CVCPKG_HAIKU_TRANSFER", "tar")
+        (tmp_path / "src").mkdir()
+        tree = proctree.ProcessTree("haiku-job")
+        tree.kill()
+        with proctree.bound(tree):
+            with pytest.raises(proctree.ProcessTreeKilledError):
+                haikuhost._push_tree(tmp_path / "src", str(tmp_path / "remote"), what="push")
+            # The short commands stay outside the tree, so the job can still
+            # clean up its remote dir.
+            assert haikuhost._run_ssh("echo cleaned", what="cleanup") == "cleaned"
+
+
+# ── re-stamping the source tree on the Haiku side ───────────────
+
+_S = 1_000_000_000
+
+
+class TestRestampPlan:
+    def test_one_time_in_a_second_gets_a_half(self):
+        plan = haikuhost._restamp_plan(
+            [("a", 1000 * _S), ("b", 1000 * _S), ("c", 1001 * _S + 7)], remote_now=5000
+        )
+        assert plan.shift == 0
+        assert plan.groups == [("@1000.500000000", ["a", "b"]), ("@1001.500000000", ["c"])]
+        assert plan.entries == 3
+
+    def test_order_within_a_second_is_kept(self):
+        # A file a recipe patch changed in the second the tree was settled in.
+        settled, patched = 1000 * _S + 200_000_000, 1000 * _S + 700_000_000
+        plan = haikuhost._restamp_plan(
+            [("tree", settled), ("patched", patched), ("tree2", settled)], remote_now=5000
+        )
+        assert plan.groups == [
+            ("@1000.333333333", ["tree", "tree2"]),
+            ("@1000.666666666", ["patched"]),
+        ]
+
+    def test_groups_come_oldest_first(self):
+        plan = haikuhost._restamp_plan([("n", 1003 * _S), ("o", 999 * _S)], remote_now=5000)
+        assert [g[0] for g in plan.groups] == ["@999.500000000", "@1003.500000000"]
+
+    def test_a_tree_ahead_of_the_haiku_clock_moves_back(self):
+        # The builder stamped the tree with its "now"; the VM runs 21 s behind.
+        plan = haikuhost._restamp_plan(
+            [("old", 900 * _S), ("settled", 1021 * _S + 400_000_000)], remote_now=1000
+        )
+        assert plan.shift == 1021 + 1 + haikuhost._RESTAMP_MARGIN_SECS - 1000
+        newest = float(plan.groups[-1][0][1:])
+        assert newest < 1000 - haikuhost._RESTAMP_MARGIN_SECS
+        # One shift for everything, so the gap between them is kept.
+        assert plan.groups == [
+            (f"@{900 - plan.shift}.500000000", ["old"]),
+            (f"@{1021 - plan.shift}.500000000", ["settled"]),
+        ]
+
+    @pytest.mark.parametrize(
+        ("newest", "shift"),
+        [(996, 0), (997, 0), (998, 1), (1000, 3)],
+    )
+    def test_the_margin_below_the_haiku_clock(self, newest, shift):
+        plan = haikuhost._restamp_plan([("f", newest * _S)], remote_now=1000)
+        assert plan.shift == shift
+        assert float(plan.groups[0][0][1:]) < 1000 - haikuhost._RESTAMP_MARGIN_SECS
+
+    def test_an_empty_tree(self):
+        plan = haikuhost._restamp_plan([], remote_now=1000)
+        assert (plan.shift, plan.groups, plan.entries) == (0, [], 0)
+
+    def test_the_tree_walk(self, tmp_path):
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "f").write_text("x")
+        (tmp_path / "top").write_text("y")
+        if sys.platform != "win32":
+            (tmp_path / "l").symlink_to("missing-target")
+        names = sorted(p for p, _ in haikuhost._tree_mtimes(tmp_path))
+        expect = [".", "d", "d/f", "top"] + (["l"] if sys.platform != "win32" else [])
+        assert names == sorted(expect)
+
+
+class TestRestampScript:
+    def _plan(self, groups):
+        return haikuhost._RestampPlan(
+            shift=0, groups=groups, entries=sum(len(p) for _, p in groups)
+        )
+
+    def test_one_touch_per_time(self):
+        script = haikuhost._restamp_script(
+            self._plan([("@1000.500000000", ["a", "b"]), ("@1001.500000000", ["c"])])
+        ).decode()
+        assert script.splitlines() == [
+            "rc=0",
+            "touch -c -h -d @1000.500000000 -- a b || rc=1",
+            "touch -c -h -d @1001.500000000 -- c || rc=1",
+            'exit "$rc"',
+        ]
+
+    def test_paths_are_quoted(self):
+        script = haikuhost._restamp_script(
+            self._plan([("@1.500000000", ["it's here", "-rf", "$(boom)"])])
+        ).decode()
+        line = script.splitlines()[1]
+        assert shlex.split(line)[-6:] == ["--", "it's here", "-rf", "$(boom)", "||", "rc=1"]
+
+    def test_a_large_group_is_split(self):
+        paths = [f"dir/file-{i:06d}.c" for i in range(20_000)]
+        script = haikuhost._restamp_script(self._plan([("@1.500000000", paths)])).decode()
+        touches = [ln for ln in script.splitlines() if ln.startswith("touch ")]
+        assert len(touches) > 1
+        assert all(len(ln) < haikuhost._RESTAMP_ARG_BYTES + 100 for ln in touches)
+        assert [w for ln in touches for w in shlex.split(ln)[6:-2]] == paths
+
+    @_NEEDS_GNU_TOUCH
+    def test_the_script_applies_the_plan(self, tmp_path):
+        root = tmp_path / "source"
+        (root / "doc").mkdir(parents=True)
+        for name in ("configure.ac", "aclocal.m4", "doc/gperf.texi", "doc/gperf.html"):
+            (root / name).write_text(name)
+        (root / "link").symlink_to("configure.ac")
+        t = 1_700_000_000
+        os.utime(root / "configure.ac", ns=(t * _S, t * _S))
+        os.utime(root / "aclocal.m4", ns=(t * _S, t * _S))
+        os.utime(root / "doc/gperf.texi", ns=(t * _S, (t + 5) * _S))
+        os.utime(root / "doc/gperf.html", ns=(t * _S, (t + 5) * _S + 3))
+        entries = haikuhost._tree_mtimes(root)
+        plan = haikuhost._restamp_plan(entries, remote_now=t + 2)  # tree is ahead
+        subprocess.run(["sh"], input=haikuhost._restamp_script(plan), cwd=root, check=True)
+        stamps = {path: stamp for stamp, paths in plan.groups for path in paths}
+        for path, _ in entries:
+            sec, frac = stamps[path][1:].split(".")
+            assert os.lstat(root / path).st_mtime_ns == int(sec) * _S + int(frac), path
+        m = {p: os.lstat(root / p).st_mtime_ns for p, _ in entries}
+        assert m["configure.ac"] == m["aclocal.m4"]
+        assert m["doc/gperf.texi"] < m["doc/gperf.html"]
+        assert max(m.values()) < (t + 2 - haikuhost._RESTAMP_MARGIN_SECS) * _S
+
+
+class TestRestampSource:
+    def _tree(self, tmp_path: Path) -> Path:
+        src = tmp_path / "source"
+        src.mkdir()
+        for name in ("a", "b"):
+            (src / name).write_text(name)
+            os.utime(src / name, (1010, 1010))
+        os.utime(src, (1010, 1010))
+        return src
+
+    def test_reads_the_haiku_clock_then_stamps_in_the_source_dir(self, tmp_path, monkeypatch):
+        src = self._tree(tmp_path)
+        calls: list = []
+
+        def _run(command, **kwargs):
+            calls.append(("run", command))
+            return "1000"
+
+        def _exec(command, **kwargs):
+            calls.append(("exec", command, kwargs["stdin"], kwargs.get("in_tree")))
+            return haikuhost._Outcome(rc=0)
+
+        monkeypatch.setattr(haikuhost, "_run_ssh", _run)
+        monkeypatch.setattr(haikuhost, "_ssh_exec", _exec)
+        logs: list[str] = []
+        haikuhost._restamp_source(src, "/boot/home/jobs/x y/source", logs.append)
+        assert calls[0] == ("run", "date -u +%s")
+        _, command, script, in_tree = calls[1]
+        assert command == "cd '/boot/home/jobs/x y/source' && sh"
+        assert in_tree is True
+        shift = 1010 + 1 + haikuhost._RESTAMP_MARGIN_SECS - 1000
+        assert f"touch -c -h -d @{1010 - shift}.500000000 -- . a b || rc=1".encode() in script
+        assert len(logs) == 1
+        assert f"moved back {shift}s" in logs[0] and "3 source entries" in logs[0]
+
+    def test_an_unreadable_clock_is_logged_not_fatal(self, tmp_path, monkeypatch):
+        def _run(command, **kwargs):
+            raise haikuhost.HaikuhostError("date: not found")
+
+        monkeypatch.setattr(haikuhost, "_run_ssh", _run)
+        logs: list[str] = []
+        haikuhost._restamp_source(self._tree(tmp_path), "/r/source", logs.append)
+        assert "could not re-stamp" in logs[0] and "date: not found" in logs[0]
+
+    def test_a_failed_touch_is_logged_not_fatal(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(haikuhost, "_run_ssh", lambda command, **kw: "1000")
+        monkeypatch.setattr(
+            haikuhost,
+            "_ssh_exec",
+            lambda command, **kw: haikuhost._Outcome(rc=1, stderr=b"touch: invalid date"),
+        )
+        logs: list[str] = []
+        haikuhost._restamp_source(self._tree(tmp_path), "/r/source", logs.append)
+        assert "re-stamping the source tree failed (rc=1): touch: invalid date" in logs[0]
+
+    @_NEEDS_SH
+    @_NEEDS_GNU_TOUCH
+    def test_end_to_end_through_a_hung_ssh(self, fake_ssh, tmp_path, monkeypatch):
+        fake_ssh.mode = "hang"
+        monkeypatch.setenv("CVCPKG_HAIKU_TRANSFER", "tar")
+        src = self._tree(tmp_path)
+        remote = tmp_path / "remote" / "source"
+        haikuhost._push_tree(src, str(remote), what="push")
+        logs: list[str] = []
+        haikuhost._restamp_source(src, str(remote), logs.append)
+        assert "re-stamped 3 source entries" in logs[0], logs
+        stamps = {os.lstat(remote / n).st_mtime_ns for n in ("a", "b")}
+        # Both kept one time, with the .5 fraction, and the real clock is far
+        # ahead of 1010, so nothing moved.
+        assert stamps == {1010 * _S + 500_000_000}
