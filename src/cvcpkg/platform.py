@@ -184,13 +184,29 @@ def is_noarch(platform: str, arch: str = "") -> bool:
     return platform == "any" or arch == "noarch"
 
 
-def variant_for(platform: str, arch: str, config: str, link: str) -> tuple[str, str]:
+def variant_neutral_matrix(matrix_platforms: Sequence[str]) -> bool:
+    """True when every bundle of a recipe with this build matrix is config/link-neutral.
+
+    An ``any`` entry declares the recipe's contents platform-independent, so
+    they do not depend on release/debug or shared/static either.  That holds
+    for the targets with an entry of their own, too: a pure-Python column's
+    ``windows`` entry exists only because Windows installs to
+    ``Lib/site-packages`` with ``build.ps1``, so its bundle is
+    ``windows``/``x86_64``/``none``/``none``, not release/shared.
+    """
+    return any(PLATFORM_ALIASES.get(p, p) == "any" for p in matrix_platforms if p)
+
+
+def variant_for(
+    platform: str, arch: str, config: str, link: str, *, neutral: bool = False
+) -> tuple[str, str]:
     """The ``(config, link)`` a bundle for *platform*/*arch* is published as.
 
-    A noarch bundle is always ``none``/``none``; every other bundle keeps the
-    *config* and *link* it was built with.
+    A noarch bundle is always ``none``/``none``, and so is any bundle of a
+    *neutral* recipe (:func:`variant_neutral_matrix`); every other bundle keeps
+    the *config* and *link* it was built with.
     """
-    if is_noarch(platform, arch):
+    if neutral or is_noarch(platform, arch):
         return NEUTRAL_CONFIG, NEUTRAL_LINK
     return config, link
 

@@ -1159,7 +1159,8 @@ def _pack_built(
     gate, a manifest with the recipe's runtime deps, shebangs rewritten off
     the build prefix, the relocatability check -- and never the build cache's
     raw install tree.  Returns ``(archive, sha256, size)``.  An any/noarch
-    bundle is labelled none/none whatever *config*/*link* the pass was for.
+    bundle, or any bundle of a recipe with an ``any`` entry, is labelled
+    none/none whatever *config*/*link* the pass was for.
     """
     from cvcpkg.builder import (
         create_archive,
@@ -1170,7 +1171,7 @@ def _pack_built(
     )
     from cvcpkg.platform import variant_for
 
-    config, link = variant_for(plat, arch, config, link)
+    config, link = variant_for(plat, arch, config, link, neutral=ctx.recipe.variant_neutral)
 
     # Inline staging rather than pack_recipe, so the declaration gate is
     # called explicitly -- a check placed only in pack_recipe would miss it.
@@ -1475,7 +1476,9 @@ def pack_all_cmd(
                 click.echo(f"cvcpkg: not packing -- {ctx.recipe.not_redistributable_reason}")
                 return
             ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
-            ctx_cfg, ctx_lnk = variant_for(ctx_plat, ctx_arch, config, link)
+            ctx_cfg, ctx_lnk = variant_for(
+                ctx_plat, ctx_arch, config, link, neutral=ctx.recipe.variant_neutral
+            )
             # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
             # mutable and full_version derives from it, so this flows into both the
             # manifest and the archive name below.

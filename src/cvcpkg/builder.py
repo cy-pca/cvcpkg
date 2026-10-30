@@ -323,6 +323,17 @@ class Recipe:
         return f"{self.upstream_version}+cvc.{self.cvc_revision}"
 
     @property
+    def variant_neutral(self) -> bool:
+        """True when every bundle of this recipe is published as none/none.
+
+        A recipe with an ``any`` entry -- including the ``windows`` bundle of a
+        pure-Python column -- see :func:`cvcpkg.platform.variant_neutral_matrix`.
+        """
+        from cvcpkg.platform import variant_neutral_matrix
+
+        return variant_neutral_matrix([m.platform for m in self.build_matrix])
+
+    @property
     def not_redistributable_reason(self) -> str:
         """Why this recipe is never packed, for refusals and skip messages."""
         return (
@@ -4306,13 +4317,14 @@ def pack_recipe(
     pkg_arch = "noarch" if is_any else arch
     # A noarch bundle is also config/link-neutral: published once as none/none
     # whatever variant the caller asked for, and always built as release/shared
-    # so that one bundle comes from one deterministic build.
-    if is_any:
+    # so that one bundle comes from one deterministic build.  So is every other
+    # bundle of a recipe with an `any` entry (a pure-Python column's windows one).
+    if is_any or recipe.variant_neutral:
         config, link = NEUTRAL_BUILD_VARIANT
     elif NEUTRAL_CONFIG in (config, link):
         raise BuildError(
             f"{recipe.name}: config/link 'none' is only for platform-independent "
-            f"(any/noarch) bundles, and {target_platform} is built by its own entry"
+            f"bundles (a recipe with an `any` entry), and {recipe.name} has none"
         )
 
     if output_dir is None:
@@ -4339,7 +4351,9 @@ def pack_recipe(
 
     # From what the build ran as, not what was asked: build_recipe forces
     # static on the static-only platforms (wasm/wasi/cosmo).
-    pkg_config, pkg_link = variant_for(pkg_platform, pkg_arch, ctx.config, ctx.link)
+    pkg_config, pkg_link = variant_for(
+        pkg_platform, pkg_arch, ctx.config, ctx.link, neutral=ctx.recipe.variant_neutral
+    )
 
     # ── glibc floor gate (linux) ────────────────────────────────────────
     # glibc is backward- but not forward-compatible, so a bundle built on a
@@ -4553,8 +4567,9 @@ def pack_from_prefix(
     # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
     if is_static_only_platform(platform):
         link = "static"
-    # An any/noarch bundle is config/link-neutral (none/none), as in pack_recipe.
-    config, link = variant_for(platform, arch, config, link)
+    # An any/noarch bundle is config/link-neutral (none/none), as in pack_recipe,
+    # and so is every bundle of a recipe with an `any` entry.
+    config, link = variant_for(platform, arch, config, link, neutral=recipe.variant_neutral)
 
     if output_dir is None:
         output_dir = Path.cwd() / "dist"
@@ -5687,7 +5702,9 @@ def build_all(
         eff_arch = _detect_arch_for_platform(eff_platform)
         # ... and likewise none/none for its config/link, built as release/shared
         # whatever variant this pass is for.
-        eff_config, eff_link = variant_for(eff_platform, eff_arch, config, link)
+        eff_config, eff_link = variant_for(
+            eff_platform, eff_arch, config, link, neutral=recipe.variant_neutral
+        )
         build_config, build_link = (
             NEUTRAL_BUILD_VARIANT if eff_config == NEUTRAL_CONFIG else (config, link)
         )

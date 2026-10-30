@@ -1251,9 +1251,23 @@ def builds_submit_dag(
         Such a recipe is scheduled once (platform=any/arch=noarch) for every
         target that entry serves, instead of being fanned out per platform.  It
         may ALSO have explicit entries (a pure-Python column with a `windows`
-        script); those are scheduled separately by the per-platform passes.
+        script); those are scheduled separately by the per-platform passes, once
+        each and as none/none, since every bundle of such a recipe is
+        config/link-neutral (see cvcpkg.platform.variant_neutral_matrix).
         """
         return "any" in _matrix_platforms(name)
+
+    def _is_published(name: str, plat: str, ar: str, cfg: str, lnk: str) -> bool:
+        """True when the catalog has *name*'s bundle for this target and variant.
+
+        A neutral recipe's bundle (see _has_any_entry) serves every variant: it
+        is none/none, or (published before neutral variants) one of release/debug
+        x shared/static with identical contents.
+        """
+        ver = _full_version(name)
+        if _has_any_entry(name):
+            return (name, ver, plat, ar) in _published_targets
+        return (name, ver, plat, ar, cfg, lnk) in _published
 
     def _has_explicit_entry(name: str) -> bool:
         """True if *name* has at least one entry naming a concrete platform."""
@@ -1456,6 +1470,10 @@ def builds_submit_dag(
     # serves every config/link: it is none/none, or (published before neutral
     # variants) one of release/debug x shared/static with identical contents.
     _published_noarch: set[tuple[str, str]] = set()
+    # (name, version, platform, arch) of every published bundle: a neutral
+    # recipe's concrete bundle (a pure-Python column's windows one) serves every
+    # config/link whatever it is labelled.
+    _published_targets: set[tuple[str, str, str, str]] = set()
     _published_ok = False
     if skip_existing or auto_deps:
         _httpx = require_httpx("publish")
@@ -1490,6 +1508,7 @@ def builds_submit_dag(
                         break
             _published_ok = True
             _published_noarch.update((p[0], p[1]) for p in _published if p[2] == "any")
+            _published_targets.update(p[:4] for p in _published)
         except Exception as _e:  # noqa: BLE001 — best-effort, must not block submit
             click.echo(
                 f"  Warning: could not read published packages ({_e}); "
@@ -1540,8 +1559,9 @@ def builds_submit_dag(
         def _published_for_combo(n: str) -> bool:
             if not (plat and n in recipe_data):
                 return False
-            ver = _full_version(n)
-            return (n, ver, plat, ar, cfg, lnk) in _published or (n, ver) in _published_noarch
+            return (
+                _is_published(n, plat, ar, cfg, lnk) or (n, _full_version(n)) in _published_noarch
+            )
 
         seen: set[str] = set()
         queue = [d for s in seeds for d in _dep_names(s, plat)]
@@ -1655,11 +1675,7 @@ def builds_submit_dag(
                     # already published.  Dependents keep building — they
                     # install the published package as a dependency.
                     if skip_existing and eligible:
-                        satisfied = [
-                            n
-                            for n in eligible
-                            if (n, _full_version(n), plat, ar, cfg, lnk) in _published
-                        ]
+                        satisfied = [n for n in eligible if _is_published(n, plat, ar, cfg, lnk)]
                         if satisfied:
                             click.echo(
                                 f"  Skipping {len(satisfied)} already-published recipe(s) "
@@ -1697,7 +1713,7 @@ def builds_submit_dag(
                             has_recipe = dep in recipe_data
                             # Already in the catalog → builder installs it.
                             if has_recipe and (
-                                (dep, _full_version(dep), plat, ar, cfg, lnk) in _published
+                                _is_published(dep, plat, ar, cfg, lnk)
                                 or (dep, _full_version(dep)) in _published_noarch
                             ):
                                 continue
@@ -1827,14 +1843,19 @@ def builds_submit_dag(
                         continue
 
                     # Stage the jobs; edges are resolved after every platform
-                    # and the noarch set have been collected (see _stage).
+                    # and the noarch set have been collected (see _stage).  A
+                    # neutral recipe's job (a pure-Python column's windows one)
+                    # is staged once, as none/none, whatever this variant is.
                     for name in eligible:
+                        job_cfg, job_lnk = (
+                            (NEUTRAL_CONFIG, NEUTRAL_LINK) if _has_any_entry(name) else (cfg, lnk)
+                        )
                         job: dict = {
                             "recipe_name": name,
                             "platform": plat,
                             "arch": ar,
-                            "config": cfg,
-                            "link": lnk,
+                            "config": job_cfg,
+                            "link": job_lnk,
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
@@ -1847,7 +1868,7 @@ def builds_submit_dag(
                         _t = _job_timeout(name)
                         if _t is not None:
                             job["timeout_seconds"] = _t
-                        _stage(cfg, lnk, job)
+                        _stage(job_cfg, job_lnk, job)
                     click.echo(f"  Staged {len(eligible)} job(s) for {plat}/{ar}/{cfg}/{lnk}")
 
     # ── Schedule platform-independent (noarch) recipes ONCE ──────────
@@ -1956,7 +1977,9 @@ def builds_submit_dag(
     #
     # A noarch job is BUILT on the reference build target (see _choose_builder),
     # as release/shared, so its concrete deps resolve to THAT platform's jobs --
-    # not to some other platform's copy of the same recipe.
+    # not to some other platform's copy of the same recipe.  The none/none key
+    # also holds the concrete jobs of neutral recipes (a pure-Python column's
+    # windows bundle), which are built as release/shared on their own target.
     from cvcpkg.platform import NEUTRAL_BUILD_VARIANT, noarch_build_target
 
     _noarch_plat, _noarch_arch = noarch_build_target()
@@ -1989,12 +2012,22 @@ def builds_submit_dag(
             if job["platform"] == "any":
                 # noarch: prefer another noarch job, else the reference target.
                 lookups = [("any", "noarch", *_neutral_key)] + [
-                    (_noarch_plat, _noarch_arch, *k) for k in ref_keys
+                    (_noarch_plat, _noarch_arch, *k) for k in [_neutral_key, *ref_keys]
+                ]
+            elif job_keys[idx] == _neutral_key:
+                # A neutral recipe's concrete job (a pure-Python column's windows
+                # one) builds as release/shared, like a noarch job but on its own
+                # target: that target's jobs, else a noarch build tool.
+                lookups = [
+                    *((job["platform"], job["arch"], *k) for k in [_neutral_key, *ref_keys]),
+                    ("any", "noarch", *_neutral_key),
                 ]
             else:
-                # concrete: prefer the same target, else a noarch build tool.
+                # concrete: prefer the same target and variant, else the same
+                # target's neutral job, else a noarch build tool.
                 lookups = [
                     (job["platform"], job["arch"], *job_keys[idx]),
+                    (job["platform"], job["arch"], *_neutral_key),
                     ("any", "noarch", *_neutral_key),
                 ]
             dep_indices: list[int] = []

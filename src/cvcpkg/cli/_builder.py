@@ -4076,11 +4076,12 @@ def builder_run(
         is_noarch = job_platform == "any" or job_arch == "noarch"
         build_platform = platform if is_noarch else job_platform
         build_arch = arch if is_noarch else job_arch
-        # It is config/link-neutral too (published none/none, see pack_recipe):
-        # its deps install, and it builds, as release/shared.
-        if is_noarch:
-            from cvcpkg.platform import NEUTRAL_BUILD_VARIANT
+        # It is config/link-neutral too (published none/none, see pack_recipe),
+        # as is a none/none job for a concrete target (a pure-Python column's
+        # windows bundle): its deps install, and it builds, as release/shared.
+        from cvcpkg.platform import NEUTRAL_BUILD_VARIANT, NEUTRAL_CONFIG
 
+        if is_noarch or NEUTRAL_CONFIG in (job_config, job_link):
             dep_config, dep_link = NEUTRAL_BUILD_VARIANT
         else:
             dep_config, dep_link = job_config, job_link

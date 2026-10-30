@@ -227,6 +227,18 @@ class TestNeutralVariant:
 
         assert variant_for("linux", "x86_64", "debug", "static") == ("debug", "static")
 
+    def test_any_recipe_bundles_are_all_neutral(self):
+        """Every bundle of a recipe with an `any` entry -- a pure-Python column's
+        windows one too -- is none/none; a recipe without one keeps its variant."""
+        from cvcpkg.platform import variant_for, variant_neutral_matrix
+
+        assert variant_neutral_matrix(["any", "windows"]) is True
+        assert variant_neutral_matrix(["linux", "windows"]) is False
+        assert variant_for("windows", "x86_64", "release", "shared", neutral=True) == (
+            "none",
+            "none",
+        )
+
     def test_none_matches_every_request(self):
         from cvcpkg.platform import config_matches, link_matches
 

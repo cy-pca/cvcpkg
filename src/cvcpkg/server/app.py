@@ -66,7 +66,6 @@ from cvcpkg.platform import (
     NEUTRAL_LINK,
     NEUTRAL_VARIANTS_HEADER,
     expand_neutral_bundles,
-    is_noarch,
     variant_for,
 )
 from cvcpkg.server import archive_store
@@ -306,15 +305,19 @@ def _neutral_variant(platform: str, arch: str, build_type: str, link: str) -> tu
     An any/noarch bundle is config/link-neutral: it is recorded as none/none
     whatever the client sent, so an older client's (or builder's) release/shared,
     debug/static, ... uploads of one noarch bundle land on ONE catalog row, the
-    later ones answered 409 "already published".  ``none`` on a concrete
-    platform is refused: such a row would match every config/link request.
+    later ones answered 409 "already published".
+
+    A concrete-platform bundle may be none/none too: every bundle of a recipe
+    with an ``any`` entry is (a pure-Python column's windows one), which only
+    the client, holding the recipe, can tell.  Half of it -- ``none`` with a
+    real config or link -- is refused.
     """
     build_type, link = variant_for(platform, arch, build_type, link)
-    if not is_noarch(platform, arch) and NEUTRAL_CONFIG in (build_type, link):
+    if (build_type == NEUTRAL_CONFIG) != (link == NEUTRAL_LINK):
         raise HTTPException(
             422,
-            f"config/link 'none' is only for platform-independent bundles "
-            f"(platform any / arch noarch), not {platform}/{arch}",
+            f"config/link 'none' marks a config/link-neutral bundle and must be "
+            f"given for both, not {build_type}/{link}",
         )
     return build_type, link
 

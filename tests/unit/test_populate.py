@@ -638,6 +638,42 @@ class TestSubmitDagNoarch:
         ]
         assert all(j["depends_on"] == noarch for j in h5py)
 
+    def test_pure_python_windows_job_is_neutral_and_staged_once(self, tmp_path, monkeypatch):
+        """A pure-Python column (`any` + `windows`) gets ONE windows job, none/none,
+        whatever variants are asked for, and each windows variant of a dependent
+        orders after it."""
+        rdir = _write_any_recipe(tmp_path, "attrs-cp313")
+        (rdir / "recipe.yaml").write_text(
+            (rdir / "recipe.yaml").read_text()
+            + "    - platform: windows\n      script: build.ps1\n"
+        )
+        _write_recipe(tmp_path, "app", deps=("attrs-cp313",), platforms=("windows",))
+        posted: list = []
+        ret = self._submit(
+            tmp_path,
+            monkeypatch,
+            posted,
+            "attrs-cp313",
+            "app",
+            extra=("--config", "all", "--link", "all", "--dag-id", "pop"),
+        )
+        assert ret == 0
+        (body,) = posted
+        jobs = body["jobs"]
+        attrs = [
+            (i, j["platform"], j["config"], j["link"])
+            for i, j in enumerate(jobs)
+            if j["recipe_name"] == "attrs-cp313"
+        ]
+        assert sorted(a[1:] for a in attrs) == [
+            ("any", "none", "none"),
+            ("windows", "none", "none"),
+        ]
+        (win_attrs,) = [a[0] for a in attrs if a[1] == "windows"]
+        app = [j for j in jobs if j["recipe_name"] == "app"]
+        assert len(app) == 4
+        assert all(j["depends_on"] == [win_attrs] for j in app)
+
     def test_only_any_recipes_submits_just_the_noarch_dag(self, tmp_path, monkeypatch):
         _write_any_recipe(tmp_path, "certifi")
         posted: list = []

@@ -646,6 +646,57 @@ class TestPlatformAnyManifest:
             archive_path.name
         )
 
+    def test_pack_recipe_windows_entry_of_an_any_recipe_is_neutral(self, tmp_path, monkeypatch):
+        """A pure-Python column's windows bundle is none/none, like its noarch one.
+
+        The recipe's `any` entry makes its contents config/link-independent; the
+        `windows` entry exists only for the Windows layout, so that bundle keeps
+        its platform but not the release/shared it is built as.
+        """
+        import cvcpkg.builder as builder_mod
+        from cvcpkg.builder import BuildContext, Recipe, pack_recipe
+
+        recipes_dir = tmp_path / "recipes"
+        recipes_dir.mkdir()
+        (recipes_dir / "_common").mkdir()
+        rdir = _create_any_recipe(recipes_dir, "widgets", files={"w.js": "console.log(1)"})
+        doc = yaml.safe_load((rdir / "recipe.yaml").read_text())
+        doc["build"]["matrix"].append({"platform": "windows", "script": "build.ps1"})
+        (rdir / "recipe.yaml").write_text(yaml.dump(doc, default_flow_style=False))
+        (rdir / "build.ps1").write_text("exit 0\n")
+        assert Recipe.load(rdir).variant_neutral
+        seen: list[tuple[str, str, str]] = []
+
+        def _fake_build_recipe(rdir, *, platform, config, link, prefix, **kw):
+            seen.append((platform, config, link))
+            work = tmp_path / "work"
+            install = work / "install"
+            (install / "share" / "widgets").mkdir(parents=True)
+            (install / "share" / "widgets" / "w.js").write_text("console.log(1)")
+            return BuildContext(
+                recipe=Recipe.load(rdir),
+                platform=platform,
+                config=config,
+                link=link,
+                prefix=prefix or install,
+                source_dir=work / "src",
+                build_dir=work / "build",
+                install_dir=install,
+                work_dir=work,
+            )
+
+        monkeypatch.setattr(builder_mod, "build_recipe", _fake_build_recipe)
+        archive_path, _sha, _size = pack_recipe(
+            rdir,
+            platform="windows",
+            arch="x86_64",
+            config="debug",
+            link="static",
+            output_dir=tmp_path / "dist",
+        )
+        assert seen == [("windows", "release", "shared")]
+        assert "-windows-x86_64-none-none." in archive_path.name
+
     def test_pack_recipe_cvc_revision_override(self, tmp_path, monkeypatch):
         """pack_recipe stamps a --bump cvc_revision into the manifest + name."""
         import tarfile

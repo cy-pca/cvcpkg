@@ -372,9 +372,12 @@ def _resolve_publish_archives(
         pattern = f"{pkg}-*-{platform}-{arch}-{config}-{link}.*"
         matches = sorted(dist.glob(pattern))
         if not matches:
-            # A recipe served by its `any` entry packs one config/link-neutral
-            # noarch bundle whatever tuple it was packed for.
-            matches = sorted(dist.glob(f"{pkg}-*-any-noarch-none-none.*"))
+            # A recipe with an `any` entry packs config/link-neutral bundles
+            # whatever tuple it was packed for: noarch, or this target's own
+            # (a pure-Python column's windows bundle).
+            matches = sorted(dist.glob(f"{pkg}-*-{platform}-{arch}-none-none.*")) or sorted(
+                dist.glob(f"{pkg}-*-any-noarch-none-none.*")
+            )
         # Filter out signature files.
         matches = [m for m in matches if not m.name.endswith(".sig")]
         if not matches:
@@ -403,13 +406,18 @@ def _resolve_all_archives(
     Includes the ``any-noarch`` bundles built alongside them: ``cvcpkg pack``
     and ``pack-all`` give a recipe served by its ``any`` matrix entry that
     identity whatever the host, so a ``--platform macos`` glob alone left
-    them unpublished.  Such a bundle is config/link-neutral (``none-none``);
-    one packed by an older cvcpkg carries the tuple's config/link instead.
+    them unpublished.  Such a bundle is config/link-neutral (``none-none``),
+    as is the target's own bundle of a recipe with an ``any`` entry; one packed
+    by an older cvcpkg carries the tuple's config/link instead.
     """
     dist = Path(output_dir).resolve()
     if not dist.is_dir():
         return []
-    patterns = [f"*-{platform}-{arch}-{config}-{link}.*", "*-any-noarch-none-none.*"]
+    patterns = [
+        f"*-{platform}-{arch}-{config}-{link}.*",
+        f"*-{platform}-{arch}-none-none.*",
+        "*-any-noarch-none-none.*",
+    ]
     if (platform, arch) != ("any", "noarch"):
         patterns.append(f"*-any-noarch-{config}-{link}.*")
     matches = sorted({m for pattern in patterns for m in dist.glob(pattern)})

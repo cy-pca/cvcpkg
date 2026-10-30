@@ -461,8 +461,14 @@ def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
         # A live row wins over a yanked release/shared one.
         ("attrs", "2.0", "any", "noarch", "release", "shared", "", 1),
         ("attrs", "2.0", "any", "noarch", "debug", "static", "", 0),
-        # Concrete bundles are untouched.
+        # Concrete bundles are untouched...
         ("zlib", "1.3", "linux", "x86_64", "release", "shared", "", 0),
+        # ...unless their version also has a noarch bundle: a pure-Python
+        # column's windows bundle is neutral too.
+        ("certifi", "1.0", "windows", "x86_64", "release", "shared", "", 0),
+        ("certifi", "1.0", "windows", "x86_64", "debug", "shared", "", 0),
+        # Not another version's: 0.9 has no noarch bundle.
+        ("certifi", "0.9", "windows", "x86_64", "release", "shared", "", 0),
         # Two orgs, one version: a SQLite chain's unique index has no org_slug,
         # so only the first can take the none/none slot.
         ("dup", "1.0", "any", "noarch", "release", "shared", "a", 0),
@@ -486,7 +492,7 @@ def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
             return set(
                 c.execute(
                     "SELECT name, platform, build_type, link, org_slug, yanked, "
-                    "yanked_at IS NOT NULL FROM packages"
+                    "yanked_at IS NOT NULL FROM packages WHERE version != '0.9'"
                 ).fetchall()
             )
         finally:
@@ -499,6 +505,8 @@ def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
         ("attrs", "any", "release", "shared", "", 1, 0),
         ("attrs", "any", "none", "none", "", 0, 0),
         ("zlib", "linux", "release", "shared", "", 0, 0),
+        ("certifi", "windows", "none", "none", "", 0, 0),
+        ("certifi", "windows", "debug", "shared", "", 1, 1),
         ("dup", "any", "none", "none", "a", 0, 0),
         ("dup", "any", "release", "static", "b", 0, 0),
     }
@@ -519,6 +527,14 @@ def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
     # Each none/none row takes the first variant its version does not hold.
     state = _state()
     assert ("certifi", "any", "release", "shared", "", 0, 0) in state
+    assert ("certifi", "windows", "release", "shared", "", 0, 0) in state
     assert ("attrs", "any", "release", "static", "", 0, 0) in state
     assert ("dup", "any", "release", "shared", "a", 0, 0) in state
     assert not any(r[2] == "none" for r in state)
+    c = sqlite3.connect(db)
+    try:
+        assert c.execute(
+            "SELECT build_type, link, yanked FROM packages WHERE version = '0.9'"
+        ).fetchall() == [("release", "shared", 0)]
+    finally:
+        c.close()

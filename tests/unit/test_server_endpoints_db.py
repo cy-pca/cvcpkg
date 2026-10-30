@@ -161,11 +161,29 @@ class TestPublishLifecycleDb:
         (row,) = client.get("/v1/packages").json()["packages"]
         assert (row["build_type"], row["link"]) == ("none", "none")
 
-    def test_none_variant_refused_for_a_concrete_platform(self, db_env):
+    def test_none_none_accepted_for_a_concrete_platform(self, db_env):
+        """A pure-Python column's windows bundle is config/link-neutral too."""
         client, admin, pub, reader, _ = db_env
-        r = _publish(client, pub, name="zlib", version="1.0", build_type="none", link="none")
+        r = _publish(
+            client,
+            pub,
+            name="certifi-cp313",
+            version="1.0",
+            platform="windows",
+            arch="x86_64",
+            build_type="none",
+            link="none",
+        )
+        assert r.status_code == 200, r.text
+        assert "-windows-x86_64-none-none." in r.json()["archive_url"]
+        (row,) = client.get("/v1/packages").json()["packages"]
+        assert (row["platform"], row["build_type"], row["link"]) == ("windows", "none", "none")
+
+    def test_half_none_variant_refused(self, db_env):
+        client, admin, pub, reader, _ = db_env
+        r = _publish(client, pub, name="zlib", version="1.0", build_type="none", link="shared")
         assert r.status_code == 422
-        assert "platform-independent" in r.text
+        assert "must be given for both" in r.text
 
     def test_catalog_expands_neutral_bundles_for_older_clients(self, db_env):
         """A client that does not send X-Cvcpkg-Neutral-Variants filters by exact

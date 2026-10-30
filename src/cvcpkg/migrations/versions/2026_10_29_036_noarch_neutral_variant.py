@@ -14,7 +14,14 @@ per version (release/shared, release/static, debug/shared, debug/static), each
 listed with a meaningless "release"/"static" label.  It is now published once,
 as ``none``/``none`` (cvcpkg.platform.NEUTRAL_CONFIG / NEUTRAL_LINK).
 
-This relabels what is already published.  For each noarch version (name,
+Every other bundle of a recipe with an ``any`` entry is neutral too: a
+pure-Python column's ``windows`` bundle exists only for the Windows layout
+(``Lib/site-packages``).  The server cannot see recipes, so it takes a
+concrete-platform row whose (name, version, org) also has an any/noarch row to
+be one of those; today every recipe with an ``any`` entry and another entry is
+such a pure-Python column.
+
+This relabels what is already published.  For each such version (name,
 version, platform, arch, org) ONE row becomes none/none -- a live row before a
 yanked one, then release/shared, release/static, debug/shared, debug/static,
 then the oldest -- and the others are YANKED rather than deleted:
@@ -82,15 +89,10 @@ def _unique_index_has_org(insp: sa.Inspector) -> bool:
     return True  # no such index: nothing to violate
 
 
-def upgrade() -> None:
-    conn = op.get_bind()
-    insp = sa.inspect(conn)
-    if "packages" not in insp.get_table_names():
-        return
+def _version_rows(conn, marks: sa.ColumnElement[bool], *extra: sa.Column) -> list:
+    """Every row of each (name, version, org) that has a row matching *marks*."""
     p = _packages
-    has_yanked_at = "yanked_at" in {c["name"] for c in insp.get_columns("packages")}
-    index_has_org = _unique_index_has_org(insp)
-
+    names = sa.select(p.c.name).where(marks).distinct().scalar_subquery()
     rows = conn.execute(
         sa.select(
             p.c.id,
@@ -101,12 +103,29 @@ def upgrade() -> None:
             p.c.build_type,
             p.c.link,
             p.c.org_slug,
-            p.c.yanked,
+            marks.label("marked"),
+            *extra,
         )
-        .where(p.c.platform == "any")
+        .where(p.c.name.in_(names))
         .order_by(p.c.id)
     ).all()
+    marked = {(r.name, r.version, r.org_slug or "") for r in rows if r.marked}
+    return [r for r in rows if (r.name, r.version, r.org_slug or "") in marked]
 
+
+def upgrade() -> None:
+    conn = op.get_bind()
+    insp = sa.inspect(conn)
+    if "packages" not in insp.get_table_names():
+        return
+    p = _packages
+    has_yanked_at = "yanked_at" in {c["name"] for c in insp.get_columns("packages")}
+    index_has_org = _unique_index_has_org(insp)
+
+    # The any/noarch rows and their versions' concrete-platform siblings.
+    rows = _version_rows(conn, p.c.platform == "any", p.c.yanked)
+
+    # One group per published bundle: the any/noarch one and, say, windows/x86_64.
     groups: dict[tuple[str, str, str, str, str], list] = {}
     for r in rows:
         groups.setdefault((r.name, r.version, r.platform, r.arch, r.org_slug or ""), []).append(r)
@@ -153,18 +172,7 @@ def downgrade() -> None:
         return
     p = _packages
     index_has_org = _unique_index_has_org(insp)
-    rows = conn.execute(
-        sa.select(
-            p.c.id,
-            p.c.name,
-            p.c.version,
-            p.c.platform,
-            p.c.arch,
-            p.c.build_type,
-            p.c.link,
-            p.c.org_slug,
-        ).where(p.c.platform == "any")
-    ).all()
+    rows = _version_rows(conn, p.c.build_type == _NONE)
 
     def _slot(r) -> tuple:
         base = (r.name, r.version, r.platform, r.arch)
