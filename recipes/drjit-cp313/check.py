@@ -5,7 +5,29 @@ where no libLLVM is in the closure (the check then skips the LLVM backend).
 """
 
 import os
+import platform
 import sys
+
+
+def cpu_has_fma():
+    """False only on an x86_64 Linux CPU without FMA (Sandy/Ivy Bridge).
+
+    Dr.Jit's LLVM backend needs FMA and shuts itself down without it
+    (jit_llvm_init: "your CPU does not support the `fma` instruction set"),
+    like the CUDA backend without a GPU.  arm64 always has FMA; elsewhere the
+    answer is unknown, so the LLVM checks stay on.
+    """
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        return True
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("flags"):
+                    return "fma" in line.split()
+    except OSError:
+        pass
+    return True
+
 
 expected_llvm = sys.argv[1] if len(sys.argv) > 1 else ""
 # Only the patched lookup may choose libLLVM.
@@ -27,6 +49,11 @@ if expected_llvm:
     got = os.environ.get("DRJIT_LIBLLVM_PATH", "")
     assert got, "drjit/__init__.py did not set DRJIT_LIBLLVM_PATH"
     assert os.path.realpath(got) == os.path.realpath(expected_llvm), (got, expected_llvm)
+
+if expected_llvm and not dr.has_backend(dr.JitBackend.LLVM) and not cpu_has_fma():
+    print("drjit LLVM backend not checked: this x86_64 CPU has no FMA, which the backend needs;",
+          "the patched lookup chose", got)
+elif expected_llvm:
     assert dr.has_backend(dr.JitBackend.LLVM), "LLVM backend inactive: libLLVM did not load from " + got
 
     from drjit.llvm import Float  # noqa: E402
