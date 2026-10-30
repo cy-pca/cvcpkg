@@ -33,4 +33,4 @@ cvc_cmake_build \
     -DOCIO_USE_OIIO_FOR_APPS=OFF \
     -DOCIO_INSTALL_EXT_PACKAGES=NONE \
     -DZLIB_ROOT="${CVC_DEPS_PREFIX}" \
-    "${simd[@]}"
+    ${simd[@]+"${simd[@]}"}
