@@ -22,25 +22,24 @@ recipe:
     instead of bundling wheels.
 
 source:
-  # master as of 7d80b948's parent: the last commit before the add-on started
-  # depending on mitsuba 3.10 (unreleased; mi.PostProcess, the C++ math/lut
-  # textures). sionna-rt 2.2.0 pins mitsuba==3.9.1, and Blender and sionna-rt
-  # share one mitsuba here, so the add-on must work with 3.9.1. This commit
-  # has the extension layout, Python 3.13 support and the Blender 5.0 API
-  # updates (compat.py).
+  # master 8848ded5 (2026-08-06), the parent of 1daf5c56 ("Port the add-on to
+  # the rewritten Mitsuba Mesh").  From 1daf5c56 on, the exporter calls
+  # mi.Mesh.from_corners unconditionally, which mitsuba 3.9.1 does not have
+  # ("'mitsuba.Mesh' object has no attribute 'from_corners'"); later commits
+  # add more unreleased-mitsuba features (mi.PostProcess, the C++ math/lut
+  # textures).  1daf5c56 also committed unresolved merge conflicts in
+  # textures.py, which stay until 912a64f.  sionna-rt 2.2.0 pins
+  # mitsuba==3.9.1 and Blender shares that mitsuba here, so the add-on must
+  # work with 3.9.1.  This commit uses from_corners only behind
+  # hasattr(mi.Mesh, 'from_corners'), registers its Math/Mix/ColorRamp/RGB
+  # Curve/Hue textures as Python plugins, and already has the extension
+  # layout, Python 3.13 support and the Blender 5 API updates (compat.py).
   type: tarball
-  url: https://github.com/mitsuba-renderer/mitsuba-blender/archive/8fd74eb5dc902cab92f0ee3fa25050599ada66c1.tar.gz
-  sha256: "390c765c340f3c4815b7fb74b14e32aad5e6bf567c25b6bea1b4856352f29f90"
+  url: https://github.com/mitsuba-renderer/mitsuba-blender/archive/8848ded5e5df575f2cd0a9c10061d3f6b7137905.tar.gz
+  sha256: "3cec024b171d321452d421396ed50f00409a8322876dfc23a17a6a461c715eb3"
   strip_components: 1
 
-patches:
-  # Upstream 1daf5c56 ("Port the add-on to the rewritten Mitsuba Mesh")
-  # committed two unresolved merge conflicts in textures.py, and every commit
-  # up to 912a64f carries them: importing the add-on raises SyntaxError, so it
-  # does not register.  912a64f resolved them by keeping the HEAD side, but it
-  # comes after the mitsuba 3.10 dependency, so it cannot be the pin.  This is
-  # that resolution, applied to the pinned commit.
-  - mitsuba-blender-conflict-markers.patch
+patches: []
 
 depends:
   build: []

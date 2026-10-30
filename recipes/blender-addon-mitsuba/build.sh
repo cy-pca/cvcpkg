@@ -10,7 +10,7 @@ mkdir -p "${DEST}"
 cp -R "${CVC_SOURCE_DIR}/mitsuba_blender/." "${DEST}/"
 find "${DEST}" -name '__pycache__' -type d -prune -exec rm -rf {} +
 [ -f "${DEST}/blender_manifest.toml" ] || { echo "mitsuba_blender: no blender_manifest.toml" >&2; exit 1; }
-# Upstream has committed merge-conflict markers before (see recipe.yaml); a pin
+# Upstream has committed merge-conflict markers (1daf5c56..912a64f); a pin
 # bump must not ship one.
 if grep -rln -E '^(<<<<<<<|>>>>>>>) ' "${DEST}" >&2; then
     echo "mitsuba_blender: the files above contain merge-conflict markers" >&2
