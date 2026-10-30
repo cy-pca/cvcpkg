@@ -25,8 +25,13 @@ fi
 # in libc), so it failed and qlogging.cpp took its non-dladdr backtrace path,
 # which clang rejects ("1st argument ('void *const') would lose const
 # qualifier", the error OpenBSD hit, see below).  This keeps the backtraces.
+# And no GSSAPI: NetBSD's base Heimdal libgssapi loads the base libcrypto.so.15,
+# whose symbols carry the same OPENSSL_3.0.0 versions as the cvcpkg libcrypto.so.3
+# Qt loads for TLS, so cvcpkg's libssl could bind into the base OpenSSL.  It only
+# drops Kerberos/Negotiate HTTP auth; FreeBSD's ports Qt turns it off too.
 if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
-    CMAKE_EXTRA+=("-DCMAKE_IGNORE_PATH=/usr/X11R7/include;/usr/X11R7/lib" -DTEST_dladdr=ON)
+    CMAKE_EXTRA+=("-DCMAKE_IGNORE_PATH=/usr/X11R7/include;/usr/X11R7/lib" -DTEST_dladdr=ON
+                  -DFEATURE_gssapi=OFF)
 fi
 # OpenBSD: no backtrace feature.  Qt 6.8.2's qlogging.cpp passes a const frame
 # pointer to a lambda taking `void *&` in its execinfo backtrace path, which
