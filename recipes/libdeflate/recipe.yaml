@@ -1,0 +1,57 @@
+schema_version: 1
+recipe:
+  name: libdeflate
+  upstream_version: "1.18"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/ebiggers/libdeflate
+  license: MIT
+  tags: [libraries, compression]
+  description: >-
+    libdeflate — a heavily optimised library for whole-buffer DEFLATE, zlib
+    and gzip compression and decompression.  OpenEXR 3.x uses it for its ZIP
+    compressors (it vendors a copy when none is found; this package keeps one
+    shared copy for OpenEXR and OpenImageIO).  1.18 is Blender 5.2's pin.
+    Shared library only; the libdeflate-gzip program is not built.
+
+source:
+  type: tarball
+  url: https://github.com/ebiggers/libdeflate/archive/refs/tags/v1.18.tar.gz
+  sha256: "225d982bcaf553221c76726358d2ea139bb34913180b20823c782cede060affd"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/libdeflate.h
+    - lib/libdeflate*
+    # MSVC: the shared target's OUTPUT_NAME is "deflate" (deflate.lib + bin/deflate.dll).
+    - lib/deflate*
+    - { glob: "bin/deflate*", platforms: [windows] }
+    - lib/cmake/libdeflate/
+    - lib/pkgconfig/libdeflate.pc
+  pkg_config:
+    - libdeflate
+  cmake_packages:
+    - { name: libdeflate, targets: ["libdeflate::libdeflate_shared"] }

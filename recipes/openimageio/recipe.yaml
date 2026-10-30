@@ -1,0 +1,110 @@
+schema_version: 1
+recipe:
+  name: openimageio
+  # Upstream's tag is v3.1.13.1; cvcpkg versions are three-part SemVer, so the
+  # fourth (point) number is pinned by the source URL + sha256 below.
+  upstream_version: "3.1.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://openimageio.org
+  license: Apache-2.0
+  tags: [libraries, imaging, vfx]
+  description: >-
+    OpenImageIO — the ASWF library for reading, writing and processing images
+    in dozens of formats (OpenEXR, TIFF, PNG, JPEG, JPEG 2000, HTJ2K, WebP,
+    DDS, HDR, ...), with ImageBuf/ImageBufAlgo, the ImageCache/TextureSystem
+    and the oiiotool, maketx, iinfo, idiff, igrep and iconvert tools.
+    Blender (image I/O, Cycles textures) and OpenShadingLanguage require it.
+    3.1.13.1 is Blender 5.2's pin.  The formats are Blender's set minus
+    libheif (HEIF/AVIF) for now; no Python bindings, Qt viewer (iv), FFmpeg,
+    OpenVDB, Ptex, LibRaw, JPEG XL or OpenCV.
+
+source:
+  type: tarball
+  url: https://github.com/AcademySoftwareFoundation/OpenImageIO/archive/refs/tags/v3.1.13.1.tar.gz
+  sha256: "0fc59b8e2708ded02d3793b8f3331f037ed49bfcde38158f05ac0e876ebb85b7"
+  strip_components: 1
+
+# Upstream AcademySoftwareFoundation/OpenImageIO#5133 (fixes #5132), which
+# Blender 5.2 carries as openimageio_dds_3d_5133.diff: reading volumetric DDS
+# files broke when 3.0 added the span-based read API.
+patches:
+  - openimageio-dds-volume-5133.patch
+
+depends:
+  build:
+    # Header-only; not part of OIIO's public headers.
+    - name: robin-map
+      version: "^1.3"
+  runtime:
+    - name: imath
+      version: "^3.2"
+    - name: openexr
+      version: "^3.4"
+    - name: opencolorio
+      version: "^2.5"
+    - name: tbb
+      version: ">=2021"
+    # OIIO_INTERNALIZE_FMT copies fmt's headers into include/OpenImageIO/detail/fmt;
+    # the compiled library still links libfmt.
+    - name: fmt
+      version: ">=9"
+    - name: libdeflate
+      version: ">=1.18"
+    - name: openjph
+      version: ">=0.21.2"
+    - name: openjpeg
+      version: "^2.5"
+    - name: pugixml
+      version: "^1.8"
+    - name: libjpeg-turbo
+      version: ">=2.1"
+    - name: libpng
+      version: "^1.6"
+    - name: tiff
+      version: "^4.0"
+    - name: libwebp
+      version: ">=1.1"
+    - name: zlib
+      version: "^1.3"
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/OpenImageIO/
+    - lib/libOpenImageIO*
+    # MSVC: OpenImageIO.lib / OpenImageIO_Util.lib + bin/ DLLs.
+    - lib/OpenImageIO*
+    - { glob: "bin/OpenImageIO*", platforms: [windows] }
+    - bin/oiiotool*
+    - bin/maketx*
+    - bin/iinfo*
+    - bin/idiff*
+    - bin/igrep*
+    - bin/iconvert*
+    - lib/cmake/OpenImageIO/
+    # OIIO installs no .pc under MSVC.
+    - { glob: "lib/pkgconfig/OpenImageIO.pc", platforms: [linux, macos] }
+  pkg_config:
+    - OpenImageIO
+  cmake_packages:
+    - { name: OpenImageIO, targets: ["OpenImageIO::OpenImageIO", "OpenImageIO::OpenImageIO_Util"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: openjpeg
+  upstream_version: "2.5.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.openjpeg.org
+  license: BSD-2-Clause
+  tags: [libraries, imaging, codec]
+  description: >-
+    OpenJPEG — the reference open-source JPEG 2000 codec (libopenjp2).
+    OpenImageIO reads and writes .jp2/.j2k through it, and Blender's own
+    image I/O (WITH_IMAGE_OPENJPEG) links it.  2.5.3 is Blender 5.2's pin.
+    Library only: the opj_* command-line codecs are not built.
+
+source:
+  type: tarball
+  url: https://github.com/uclouvain/openjpeg/archive/refs/tags/v2.5.3.tar.gz
+  sha256: "368fe0468228e767433c9ebdea82ad9d801a3ad1e4234421f352c8b06e7aa707"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/openjpeg-2.5/
+    - lib/libopenjp2*
+    # MSVC: openjp2.lib + bin/openjp2.dll.
+    - lib/openjp2*
+    - { glob: "bin/openjp2*", platforms: [windows] }
+    - lib/cmake/openjpeg-2.5/
+    - lib/pkgconfig/libopenjp2.pc
+  pkg_config:
+    - libopenjp2
+  cmake_packages:
+    - { name: OpenJPEG, targets: ["openjp2"] }

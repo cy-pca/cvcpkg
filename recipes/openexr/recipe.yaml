@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: openexr
+  upstream_version: "3.4.10"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://openexr.com
+  license: BSD-3-Clause
+  tags: [libraries, imaging, vfx]
+  description: >-
+    OpenEXR — the ASWF high-dynamic-range, multi-channel image file format
+    and its C/C++ libraries (OpenEXR, OpenEXRCore, OpenEXRUtil, Iex,
+    IlmThread).  3.4.10 is Blender 5.2's pin.  Built against the cvcpkg
+    imath, libdeflate and openjph instead of the copies OpenEXR vendors or
+    downloads; tools, examples, docs and the Python bindings are not built.
+
+source:
+  type: tarball
+  url: https://github.com/AcademySoftwareFoundation/openexr/archive/refs/tags/v3.4.10.tar.gz
+  sha256: "b61ae2d0fa4872c5f5fc45618f107945df37c0eba4853263091b949c513d3319"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: imath
+      version: "^3.2"
+    - name: libdeflate
+      version: ">=1.18"
+    - name: openjph
+      version: ">=0.21"
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/OpenEXR/
+    - lib/libOpenEXR*
+    - lib/libIex*
+    - lib/libIlmThread*
+    # MSVC: <name>-3_4.lib import libs + bin/<name>-3_4.dll.
+    - lib/OpenEXR*
+    - lib/Iex*
+    - lib/IlmThread*
+    - { glob: "bin/OpenEXR*", platforms: [windows] }
+    - { glob: "bin/Iex*", platforms: [windows] }
+    - { glob: "bin/IlmThread*", platforms: [windows] }
+    - lib/cmake/OpenEXR/
+    - lib/pkgconfig/OpenEXR.pc
+  pkg_config:
+    - OpenEXR
+  cmake_packages:
+    - { name: OpenEXR, targets: ["OpenEXR::OpenEXR", "OpenEXR::OpenEXRCore", "OpenEXR::OpenEXRUtil", "OpenEXR::Iex", "OpenEXR::IlmThread"] }
+
+abi:
+  cxx_std: 17

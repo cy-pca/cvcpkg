@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: pystring
+  upstream_version: "1.1.4"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/imageworks/pystring
+  license: BSD-3-Clause
+  tags: [libraries, cpp, text]
+  description: >-
+    pystring — C++ functions matching the interface and behaviour of Python's
+    string methods (split, strip, startswith, ...), from Sony Pictures
+    Imageworks.  OpenColorIO requires it.  A static, position-independent
+    library: OpenColorIO links it privately, so it is a build dependency
+    only.  1.1.4 (Blender 5.2 pins 1.1.3; 1.1.4 adds the CMake build this
+    recipe replaces, and no API change).
+
+source:
+  type: tarball
+  url: https://github.com/imageworks/pystring/archive/refs/tags/v1.1.4.tar.gz
+  sha256: "49da0fe2a049340d3c45cce530df63a2278af936003642330287b68cefd788fb"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/pystring/pystring.h
+    - lib/libpystring.a
+    - { glob: "lib/pystring.lib", platforms: [windows] }
+    - lib/cmake/pystring/
+  cmake_packages:
+    - { name: pystring, targets: ["pystring::pystring"] }
+
+abi:
+  cxx_std: 17
