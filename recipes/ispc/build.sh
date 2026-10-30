@@ -7,6 +7,11 @@
 #   X86/ARM_ENABLED      the host architecture only, as Blender builds it.
 #   GIT_BINARY           not found, so the version string never records the
 #                        commit of whatever git checkout the build dir sits in.
+#   CMAKE_C(XX)_COMPILER the platform compiler (gcc / Apple clang), as Blender
+#                        passes on Linux: unset, ISPC's CMakeLists picks
+#                        "clang" off PATH, which is the llvm recipe's clang in
+#                        the build prefix.  That clang still builds the
+#                        builtins (CLANG_EXECUTABLE, found next to llvm-config).
 # llvm-config is the one from the llvm recipe (ISPC reads its libraries and
 # flags from it, and finds clang, clang++ and llvm-as next to it).
 set -euo pipefail
@@ -41,6 +46,8 @@ case "$(uname -m)" in
 esac
 
 cvc_cmake_build \
+    -DCMAKE_C_COMPILER="${CC}" \
+    -DCMAKE_CXX_COMPILER="${CXX}" \
     -DLLVM_CONFIG_EXECUTABLE="${llvm_config}" \
     -DPython3_EXECUTABLE="${python}" \
     -DISPC_64BIT_ONLY=ON \

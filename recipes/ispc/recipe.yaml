@@ -41,6 +41,10 @@ patches:
   # without this ISPC cannot be built for an arm64 host at all.  See the
   # patch header.
   - ispc-64bit-only.patch
+  # The x86 dispatcher is compiled for x86_64-unknown-unknown; in hosted mode
+  # clang then pulls the host's <stdint.h> without the Debian/Ubuntu multiarch
+  # include dir and fails.  It needs no libc: build it freestanding.
+  - ispc-dispatch-freestanding.patch
 
 depends:
   build:

@@ -1,0 +1,22 @@
+Compile the x86 dispatcher (builtins/dispatch.c) with -ffreestanding.
+
+dispatch.c is built for --target=x86_64-unknown-unknown and includes only
+<stdatomic.h>.  In hosted mode clang's stdatomic.h/stdint.h include_next the
+host libc's <stdint.h>, and with no OS in the triple clang does not add the
+Debian/Ubuntu multiarch include directory, so on those hosts the build stops
+at "/usr/include/stdint.h: 'bits/libc-header-start.h' file not found" (hosts
+with a flat /usr/include, e.g. RHEL/Rocky where Blender builds, do not see
+it).  The dispatcher uses no libc at all; freestanding, clang's own headers
+supply everything.
+
+--- a/cmake/GenerateBuiltins.cmake
++++ b/cmake/GenerateBuiltins.cmake
+@@ -120,7 +120,7 @@
+ 
+     add_custom_command(
+         OUTPUT ${bc}
+-        COMMAND ${CLANGPP_EXECUTABLE} -x c ${DISP_TYPE} -I${CMAKE_SOURCE_DIR}/src ${EXTRA_OPTS} --target=x86_64-unknown-unknown -march=core2 -mtune=generic -O2 -emit-llvm ${input} -c -o ${bc}
++        COMMAND ${CLANGPP_EXECUTABLE} -x c ${DISP_TYPE} -I${CMAKE_SOURCE_DIR}/src ${EXTRA_OPTS} -ffreestanding --target=x86_64-unknown-unknown -march=core2 -mtune=generic -O2 -emit-llvm ${input} -c -o ${bc}
+         DEPENDS ${input} ${CMAKE_SOURCE_DIR}/src/isa.h
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+     )
