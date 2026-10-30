@@ -667,6 +667,38 @@ class TestYankFlow:
         pkgs = client.get("/v1/packages/boost?include_yanked=true").json()
         assert all(p["yanked"] for p in pkgs["packages"])
 
+    def test_package_list_is_newest_revision_first_without_yanked(self, server_env):
+        """The package page lists the first bundle of each variant as its latest
+        revision, so /v1/packages/{name} must come back newest version first
+        (+cvc.10 above +cvc.9, not publish order or string order) and without
+        yanked revisions."""
+        client, _, pub_tok, _ = server_env
+        for rev in (9, 10, 2, 11):
+            resp = client.post(
+                "/v1/publish",
+                params={
+                    "name": "boost",
+                    "version": f"1.86.0+cvc.{rev}",
+                    "platform": "linux",
+                    "arch": "x86_64",
+                },
+                files={"file": (f"b{rev}.tar.zst", io.BytesIO(b"boost %d" % rev))},
+                headers={"Authorization": f"Bearer {pub_tok}"},
+            )
+            assert resp.status_code == 200, resp.text
+        resp = client.post(
+            "/v1/packages/boost/1.86.0+cvc.11/yank",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200
+
+        pkgs = client.get("/v1/packages/boost").json()["packages"]
+        assert [p["version"] for p in pkgs] == [
+            "1.86.0+cvc.10",
+            "1.86.0+cvc.9",
+            "1.86.0+cvc.2",
+        ]
+
 
 class TestPublishDepsFlow:
     """Verify that required_deps flow through publish → catalog."""
