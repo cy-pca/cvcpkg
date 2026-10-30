@@ -2672,6 +2672,16 @@ def builder_run(
             if _g is not None:
                 click.echo(f"cvcpkg-builder: host glibc {format_version(_g)}")
 
+        # x86-64 levels this CPU satisfies (x86_64 hosts only).  Builder-only
+        # like the floors: a recipe's build.min_cpu routes its jobs here, and a
+        # consumer never sees them.  See cvcpkg/cpu.py.
+        from cvcpkg.cpu import builder_capabilities as _cpu_levels
+
+        _levels = _cpu_levels()
+        advertised_caps |= _levels
+        if _levels:
+            click.echo(f"cvcpkg-builder: CPU levels {', '.join(sorted(_levels))}")
+
     # -- Advertised free disk --------------------------------
     # A capability is a yes/no property of the host, so it is probed once.
     # Free disk is a *measurement* that one job can move by tens of GiB, so it

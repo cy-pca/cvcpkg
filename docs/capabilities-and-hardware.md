@@ -110,6 +110,35 @@ additionally advertise the glibc floors they can produce for (a 2.35 machine
 satisfies the 2.35, 2.38 and 2.39 floors); those names are builder-only and
 never part of the install-side set.
 
+### x86-64 levels (`build.min_cpu`)
+
+Builders on x86_64 hosts also advertise the x86-64 psABI levels their CPU
+satisfies: `x86-64-v2` (SSE4.2), `x86-64-v3` (AVX2, FMA, F16C, BMI, MOVBE) and
+`x86-64-v4` (AVX-512). Each level includes the ones below, so a v4 host
+advertises all three. Linux reads them from `/proc/cpuinfo` and macOS from
+`sysctl machdep.cpu.*`; `CVCPKG_HOST_CPU_FLAGS` overrides the flags for tests.
+A host whose flags can't be read (Windows, for now) advertises none.
+
+A recipe whose build runs code compiled for a newer CPU than the baseline
+declares the level it needs:
+
+```yaml
+build:
+  min_cpu:
+    x86_64: x86-64-v3   # Dr.Jit/Mitsuba: -march=haswell, imported by stubgen
+```
+
+submit-dag adds that level to the recipe's x86_64 jobs, and to its noarch jobs
+when the noarch build target is x86_64, so the scheduler only dispatches them to
+a builder that advertises it. Without it, those jobs die with SIGILL mid-build
+on an older host (a Sandy or Ivy Bridge Xeon). Like glibc floors, levels are
+builder-only: they never enter the install-side set, so declaring one changes
+nothing for consumers. Unlike the floor, an unknown CPU is never excused. A
+builder that advertises no level, such as an agent older than this field, does
+not get these jobs, so submit-dag skips the combination when no registered
+builder can serve it. `cvcpkg builds submit-dag --online-only`, as the dev
+cluster's PR check runs it, skips it when no *online* builder can.
+
 ### Held jobs and `unschedulable`
 
 A job whose capabilities no *online* builder currently satisfies stays
