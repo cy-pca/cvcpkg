@@ -260,6 +260,7 @@ _LEGACY_BUILD_REQ = ["setuptools", "wheel"]
 SCRIPT_PACKAGES = {
     "aioimaplib": ["imap-testing-server"],
     "alembic": ["alembic"],
+    "autopep8": ["autopep8"],
     "black": ["black", "blackd"],
     "charset-normalizer": ["normalizer"],
     "cython": ["cython", "cythonize", "cygdb"],
@@ -272,6 +273,7 @@ SCRIPT_PACKAGES = {
     "invoke": ["invoke", "inv"],
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
+    "pycodestyle": ["pycodestyle"],
     "pydle": ["pydle", "pydle-irccat"],
     "rosbags": ["rosbags-convert"],
     "pygments": ["pygmentize"],
@@ -1069,6 +1071,134 @@ SEED_PACKAGES = {
             "df = pd.read_csv(io.StringIO('t,x\\n2,b\\n1,a\\n1,a\\n'))"
             ".sort_values('t').drop_duplicates(subset='t'); "
             "assert df['t'].tolist() == [1, 2] and df['x'].tolist() == ['a', 'b']"
+        ),
+    },
+    # ── Blender 5.2's bundled Python modules ──
+    # Blender's own build pip-installs these into the Python it bundles
+    # (build_files/build_environment/cmake/versions.cmake); cvcpkg builds
+    # Blender against the prefix's python313 instead (WITH_PYTHON_INSTALL=OFF),
+    # so they have to be columns of that interpreter.  The extensions add-on
+    # (bl_pkg) does not register without cattrs (_bpy_internal/http/
+    # downloader.py), blend_render_info.py imports zstandard, and the text
+    # editor's autopep8 operator needs autopep8 + pycodestyle.  Versions are
+    # Blender 5.2.3's pins.  attrs and typing-extensions (cattrs' deps) come
+    # from poetry.lock.
+    "cattrs": {
+        # exceptiongroup is a python_version < "3.11" requirement: no column.
+        "version": "25.1.1",
+        "license": "MIT",
+        "deps": ["attrs", "typing-extensions"],
+        # cattr/ is the legacy import name, still shipped beside cattrs/.
+        "files": ["cattrs/", "cattr/", "cattrs-*.dist-info/"],
+        # An attrs class structured from (and unstructured back to) plain data,
+        # a validation error on a bad field, and the stdlib-json preconf
+        # converter round-trip.
+        "check": (
+            "import unittest, attrs, cattrs; "
+            "from cattrs.preconf.json import make_converter; "
+            "P = attrs.make_class('P', {'x': attrs.field(type=int), "
+            "'tags': attrs.field(type=list[str])}); "
+            "B = attrs.make_class('B', {'p': attrs.field(type=P), 'n': attrs.field(type=float)}); "
+            "c = cattrs.Converter(); "
+            "b = c.structure({'p': {'x': '3', 'tags': ['a']}, 'n': 1}, B); "
+            "assert b == B(P(3, ['a']), 1.0), b; "
+            "assert c.unstructure(b) == {'p': {'x': 3, 'tags': ['a']}, 'n': 1.0}, c.unstructure(b); "
+            "unittest.TestCase().assertRaises(cattrs.ClassValidationError, c.structure, "
+            "{'p': {'x': 'no', 'tags': []}, 'n': 1}, B); "
+            "j = make_converter(); "
+            "assert j.loads(j.dumps(b), B) == b"
+        ),
+    },
+    "fastjsonschema": {
+        # PyPI says only "BSD"; the LICENSE file is the 3-clause text.
+        "version": "2.21.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["fastjsonschema/", "fastjsonschema-*.dist-info/"],
+        # Compile a schema to Python, then validate: a default filled in, a
+        # minimum violated, a required property missing.
+        "check": (
+            "import unittest, fastjsonschema; "
+            "v = fastjsonschema.compile({'type': 'object', 'required': ['name'], 'properties': "
+            "{'name': {'type': 'string'}, 'n': {'type': 'integer', 'minimum': 0, 'default': 7}}}); "
+            "assert v({'name': 'x'}) == {'name': 'x', 'n': 7}; "
+            "unittest.TestCase().assertRaisesRegex(fastjsonschema.JsonSchemaValueException, "
+            "'must be bigger than or equal to 0', v, {'name': 'x', 'n': -1}); "
+            "unittest.TestCase().assertRaises(fastjsonschema.JsonSchemaValueException, v, {'n': 1})"
+        ),
+    },
+    "zstandard": {
+        # Built against the libzstd 1.5.7 its sdist bundles (zstd/zstd.c), not
+        # cvcpkg's zstd recipe, unlike backports-zstd:
+        #   * upstream guarantees the module only with the bundled copy: it
+        #     uses zstd's unstable (ZSTD_STATIC_LINKING_ONLY) API, and the
+        #     load-time guard only checks libzstd >= 1.5.6, so a later cvcpkg
+        #     zstd release could change those semantics and still load;
+        #   * against a system libzstd it compiles without zstd's private
+        #     pool.h API, which drops multi_compress_to_buffer and
+        #     multi_decompress_to_buffer from the module (backend_features);
+        #   * the bundled copy is compiled into the extension as one file with
+        #     hidden visibility, so it does not clash with the libzstd Blender
+        #     itself links;
+        #   * that is the setup Blender's own bundled zstandard has, and the
+        #     version is the one cvcpkg's zstd recipe ships;
+        #   * --system-zstd is a setup.py argv switch the generated pip build
+        #     cannot pass, so linking cvcpkg's zstd would take a hand-written
+        #     recipe; backports-zstd, the one that does, builds on linux only.
+        # The extension is BSD-3-Clause; the bundled zstd is BSD-3-Clause OR
+        # GPL-2.0-only.  No cp313t column: upstream publishes no free-threaded
+        # wheel for 0.25.0.  cffi (a [build-system] requirement) also builds
+        # the optional cffi backend; the C backend is the one imported, so cffi
+        # stays build-only, as upstream's `cffi` extra leaves it.
+        "version": "0.25.0",
+        "license": "BSD-3-Clause AND (BSD-3-Clause OR GPL-2.0-only)",
+        "deps": [],
+        "files": ["zstandard/", "zstandard-*.dist-info/"],
+        # The C backend is in use and is the bundled 1.5.7 with the pool
+        # APIs; one-shot, streaming (blend_render_info.py reads .blend files
+        # through stream_reader) and multi-threaded round trips.
+        "check": (
+            "import io, zstandard as zstd; "
+            "assert zstd.backend == 'cext', 'C backend not used: ' + zstd.backend; "
+            "assert zstd.ZSTD_VERSION == (1, 5, 7), zstd.ZSTD_VERSION; "
+            "assert {'multi_compress_to_buffer', 'multi_decompress_to_buffer'} "
+            "<= zstd.backend_features, zstd.backend_features; "
+            "data = b'cvcpkg zstandard ' * 4096; "
+            "blob = zstd.ZstdCompressor(level=19).compress(data); "
+            "assert len(blob) < len(data) // 50, len(blob); "
+            "assert zstd.ZstdDecompressor().decompress(blob) == data; "
+            "assert zstd.ZstdDecompressor().stream_reader(io.BytesIO(blob)).read() == data; "
+            "mt = zstd.ZstdCompressor(level=3, threads=2).compress(data); "
+            "assert zstd.ZstdDecompressor().decompress(mt) == data"
+        ),
+    },
+    "pycodestyle": {
+        # "Expat license" upstream: SPDX MIT.
+        "version": "2.13.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pycodestyle.py", "pycodestyle-*.dist-info/"],
+        # Two lines, two known errors: E401 (multiple imports) and E225.
+        "check": (
+            "import pycodestyle; "
+            "sg = pycodestyle.StyleGuide(quiet=True); "
+            "r = sg.init_report(); "
+            "sg.input_file('t.py', lines=['import os, sys\\n', 'x=1\\n']); "
+            "assert r.get_count() == 2 and {'E401', 'E225'} <= set(r.counters), dict(r.counters)"
+        ),
+    },
+    "autopep8": {
+        # tomli is a python_version < "3.11" requirement: no column.
+        "version": "2.3.1",
+        "license": "MIT",
+        "deps": ["pycodestyle"],
+        "files": ["autopep8.py", "autopep8-*.dist-info/"],
+        # What Blender's text editor operator does: fix_code() on a snippet.
+        "check": (
+            "import autopep8; "
+            "out = autopep8.fix_code('import os, sys\\nx=1;y = 2\\nif x :\\n  print( y )\\n'); "
+            "assert out == 'import os\\nimport sys\\nx = 1\\ny = 2\\nif x:\\n    print(y)\\n', "
+            "repr(out)"
         ),
     },
     # jsonschema and its deps (attrs, pyrsistent) come from poetry.lock, which
