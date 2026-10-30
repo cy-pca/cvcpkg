@@ -54,12 +54,16 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
 package:
   files:
-    - { glob: "lib/libz-ng*", platforms: [linux, macos, freebsd, openbsd, netbsd] }  # libz-ng.so.2* / .dylib
+    - { glob: "lib/libz-ng*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }  # libz-ng.so.2* / .dylib
     - { glob: "lib/zlib-ng.lib", platforms: [windows] }    # import library
     - { glob: "bin/zlib-ng2.dll", platforms: [windows] }
     - lib/pkgconfig/zlib-ng.pc

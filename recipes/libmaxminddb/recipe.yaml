@@ -55,15 +55,22 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    # Haiku keeps the BSD socket API (getaddrinfo, gai_strerror) in libnetwork,
+    # not libroot; without it bin/mmdblookup fails to link.
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        LDFLAGS: "-lnetwork"
     - platform: windows
       script: build.ps1
 
 package:
   files:
-    - { glob: "lib/libmaxminddb*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libmaxminddb*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - { glob: "lib/maxminddb.lib", platforms: [windows] }
     - { glob: "bin/maxminddb.dll", platforms: [windows] }
-    - { glob: "bin/mmdblookup", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/mmdblookup", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - lib/cmake/maxminddb/
     - include/maxminddb.h
     - include/maxminddb_config.h
@@ -79,7 +86,7 @@ abi:
 
 notes:
   - title: "CMake build: no pkg-config file, soname follows the CMake VERSION"
-    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
     description: >-
       Built with upstream's CMake (the one build that also covers Windows), which
       installs the maxminddb CMake package but no libmaxminddb.pc (only the

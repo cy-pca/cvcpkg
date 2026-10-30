@@ -46,11 +46,11 @@ depends:
     # relocated copy of the installed prefix through find_package(luajit) and
     # through pkg-config.
     - name: cmake
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - name: ninja
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - name: pkg-config
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
   runtime: []
   host_tools: []
 
@@ -79,25 +79,29 @@ build:
       script: build.sh
       env:
         CFLAGS: "-fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-fPIC"
     - platform: windows
       script: build.ps1
 
 package:
   files:
     - lib/libluajit-5.1.a
-    - { glob: "lib/libluajit-5.1.so*", platforms: [linux, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libluajit-5.1.so*", platforms: [linux, freebsd, openbsd, netbsd, haiku] }
     - lib/libluajit-5.1*.dylib
     - lib/lua51.lib
     - bin/lua51.dll
     - lib/pkgconfig/luajit.pc
     - lib/cmake/luajit/
     - include/luajit-2.1/
-    - { glob: "bin/luajit", platforms: [linux, macos, freebsd, openbsd, netbsd] }
-    - { glob: "bin/luajit-2.1.*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/luajit", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
+    - { glob: "bin/luajit-2.1.*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - bin/luajit.exe
     # jit.* modules: share/luajit-2.1/jit on Unix; bin/lua/jit on Windows,
     # where luajit.exe's default package.path ("!\lua\?.lua") looks.
-    - { glob: "share/luajit-2.1/jit/", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "share/luajit-2.1/jit/", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - { glob: "bin/lua/jit/", platforms: [windows] }
   cmake_packages:
     - { name: luajit, targets: ["luajit::luajit", "luajit::luajit_static"] }
@@ -121,7 +125,7 @@ notes:
       recipe; the two install side by side (LuaJIT's headers are in
       include/luajit-2.1).
   - title: "Relocation: package.path and the jit.* modules"
-    platforms: [linux, macos, freebsd, openbsd, netbsd]
+    platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
     description: >-
       LuaJIT compiles its install prefix into the default package.path. A
       cvcpkg bundle unpacks at an arbitrary prefix, so this recipe builds with

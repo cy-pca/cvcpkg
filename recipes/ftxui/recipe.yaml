@@ -52,6 +52,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     # wasm: cross-compiled with em++ (see build-wasm.sh — it also drops the
     # -sUSE_PTHREADS FTXUI's CMake forces on every Emscripten build). Static
     # only; wasm has no shared libraries. This is the browser terminal backend:

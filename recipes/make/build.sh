@@ -20,9 +20,19 @@ cd "${CVC_SOURCE_DIR}"
 # stubs, dropping support for updating .a archive members — a capability a
 # build-tool make never exercises here. Must be defined for every TU, so it
 # goes through CFLAGS.
+#
+# Haiku's struct dirent ends in a flexible `char d_name[]`, so src/dir.c's
+# `sizeof (*d) - sizeof (d->d_name) + len` (sizing the mock dirent it hands to
+# glob) fails with "invalid application of 'sizeof' to incomplete type
+# 'char[]'". The offset of d_name is what that expression means; Haiku's
+# compiler is GCC, so use its builtin rather than rely on <stddef.h> being
+# included there.
 case "$(uname -s)" in
     Haiku)
         export CFLAGS="${CFLAGS:-} -DNO_ARCHIVES"
+        sed -i 's/sizeof (\*d) - sizeof (d->d_name) + len/__builtin_offsetof (struct dirent, d_name) + len/' src/dir.c
+        grep -q '__builtin_offsetof (struct dirent, d_name)' src/dir.c \
+            || { echo "make: the src/dir.c d_name sizing fix did not apply" >&2; exit 1; }
         ;;
 esac
 

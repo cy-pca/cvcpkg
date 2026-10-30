@@ -38,6 +38,10 @@ case "$(uname -s)" in
     FreeBSD) target=freebsd;        lua_syslibs="-Wl,-E -ledit";          dl="" ;;
     NetBSD)  target=bsd;            lua_syslibs="-Wl,-E";                 dl="" ;;
     OpenBSD) target=bsd;            lua_syslibs="-Wl,-E";                 dl="" ;;
+    # Upstream has no Haiku target, and `posix` leaves out LUA_USE_DLOPEN, so
+    # bin/lua could not load C modules. `bsd` is POSIX + dlopen + -Wl,-E, which
+    # fits Haiku: dlopen is in libroot (no -ldl).
+    Haiku)   target=bsd;            lua_syslibs="-Wl,-E";                 dl="" ;;
     *)       target=posix;          lua_syslibs="";                       dl="" ;;
 esac
 
