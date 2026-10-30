@@ -4256,6 +4256,11 @@ def create_app(
         bundles = [b for b in state.index.get("bundles", []) if b.get("name") == name]
         if not include_yanked:
             bundles = [b for b in bundles if not b.get("yanked", False)]
+        # Newest version first, like the DB path: the package page shows the
+        # first bundle of each platform/arch/config as its latest revision.
+        from cvcpkg.semver import version_sort_key
+
+        bundles.sort(key=lambda b: version_sort_key(b.get("version", "")), reverse=True)
         packages = [_index_package_info(b) for b in bundles]
         return PackageListResponse(total=len(packages), packages=packages)
 
