@@ -744,6 +744,12 @@ SEED_PACKAGES = {
         "version": "2.14.0",
         "license": "BSD-3-Clause",
         "deps": [],
+        # scikit-build-core configures and installs nanobind's CMake project
+        # even though nothing compiles, so it needs cmake and ninja (which it
+        # asks for through get_requires_for_build_wheel, never consulted under
+        # --no-build-isolation), and it imports packaging and pathspec, its own
+        # runtime deps, which a backend build edge does not stage.
+        "build_deps": ["cmake", "ninja", "packaging", "pathspec"],
         "files": ["nanobind/", "*.dist-info/"],
         "check": (
             "import os, nanobind; "

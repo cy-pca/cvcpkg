@@ -40,6 +40,10 @@ depends:
     # --no-build-isolation means pip will NOT fetch it, so it has to be
     # in the build prefix already (build.sh bridges it onto sys.path).
     - name: scikit-build-core-cp312
+    - name: cmake
+    - name: ninja
+    - name: packaging-cp312
+    - name: pathspec-cp312
   runtime:
     - name: python312
   host_tools:
