@@ -310,6 +310,87 @@ class TestPublishFlow:
         assert resp.status_code == 404
 
 
+# What a publisher sends besides the coordinates, as `cvcpkg publish` reads it from a bundle's
+# manifest.  Each read endpoint returns it on every backend (the YAML one used to drop it).
+_METADATA = {
+    "description": "A general-purpose lossless compression library",
+    "homepage": "https://zlib.net/",
+    "license": "Zlib",
+    "maintainer": "cvcpkg group",
+    "tags": "compression,io",
+}
+
+
+def _assert_metadata(client, name):
+    rows = {
+        "/v1/packages/{name}": client.get(f"/v1/packages/{name}").json()["packages"],
+        "/v1/packages": [
+            r for r in client.get("/v1/packages").json()["packages"] if r["name"] == name
+        ],
+        "/v1/search": client.get("/v1/search", params={"q": name}).json()["packages"],
+        "/latest": [client.get(f"/v1/packages/{name}/latest", params={"platform": "linux"}).json()],
+    }
+    for where, found in rows.items():
+        assert found, where
+        for row in found:
+            for k, v in _METADATA.items():
+                assert row[k] == v, (where, k, row)
+
+
+class TestPublishMetadata:
+    def test_publish_keeps_metadata(self, server_env):
+        client, _, pub_tok, _ = server_env
+        resp = client.post(
+            "/v1/publish",
+            params={
+                "name": "zlib",
+                "version": "1.3.1+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                **_METADATA,
+            },
+            files={"file": ("zlib.tar.zst", io.BytesIO(b"archive"))},
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        _assert_metadata(client, "zlib")
+
+    def test_chunked_upload_keeps_metadata(self, server_env):
+        client, _, pub_tok, _ = server_env
+        content = b"B" * 1024
+        resp = client.post(
+            "/v1/upload/init",
+            params={
+                "name": "zstd",
+                "version": "1.5.6+cvc.1",
+                "platform": "linux",
+                "arch": "x86_64",
+                "total_size": len(content),
+                "org": "",
+                **_METADATA,
+            },
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 201, resp.text
+        upload_id = resp.json()["upload_id"]
+        resp = client.patch(
+            f"/v1/upload/{upload_id}",
+            content=content,
+            headers={
+                "Authorization": f"Bearer {pub_tok}",
+                "Content-Type": "application/octet-stream",
+                "Content-Range": f"bytes 0-{len(content) - 1}/{len(content)}",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        resp = client.post(
+            f"/v1/upload/{upload_id}/complete",
+            headers={"Authorization": f"Bearer {pub_tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+        _assert_metadata(client, "zstd")
+
+
 class TestSearchEndpoint:
     """Exercises ``/v1/search`` in local (non-DB) mode used by the test client."""
 

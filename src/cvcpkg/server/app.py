@@ -3981,23 +3981,7 @@ def create_app(
                 rec = state.tokens.get_public_profile(pub)
                 _pub_emails[pub] = rec.email if rec else ""
         packages = [
-            PackageInfo(
-                name=b["name"],
-                version=b["version"],
-                platform=b.get("platform", ""),
-                arch=b.get("arch", ""),
-                build_type=b.get("build_type", ""),
-                link=b.get("link", ""),
-                sha256=b.get("sha256", ""),
-                size_bytes=b.get("size_bytes", 0),
-                archive_url=b.get("archive_url", ""),
-                published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
-                yanked=b.get("yanked", False),
-                published_by=b.get("published_by", ""),
-                published_by_email=_pub_emails.get(b.get("published_by", ""), ""),
-                org=b.get("org", ""),
-            )
-            for b in page
+            _index_package_info(b, _pub_emails.get(b.get("published_by", ""), "")) for b in page
         ]
         return PackageListResponse(total=total, packages=packages)
 
@@ -4182,34 +4166,7 @@ def create_app(
         package_count = len({b.get("name", "") for b in bundles})
         total_size_bytes = sum(int(b.get("size_bytes") or 0) for b in bundles)
         page = bundles[offset : offset + limit] if limit else []
-        packages = [
-            PackageInfo(
-                name=b["name"],
-                version=b["version"],
-                platform=b.get("platform", ""),
-                arch=b.get("arch", ""),
-                build_type=b.get("build_type", ""),
-                link=b.get("link", ""),
-                sha256=b.get("sha256", ""),
-                size_bytes=b.get("size_bytes", 0),
-                archive_url=b.get("archive_url", ""),
-                published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
-                yanked=b.get("yanked", False),
-                published_by=b.get("published_by", ""),
-                published_by_email=b.get("published_by_email", ""),
-                org=b.get("org", ""),
-                release_tag=b.get("release_tag", ""),
-                recipe_version=b.get("recipe_version", ""),
-                description=b.get("description", ""),
-                homepage=b.get("homepage", ""),
-                license=b.get("license", ""),
-                maintainer=b.get("maintainer", ""),
-                tags=b.get("tags", ""),
-                signature=b.get("signature", ""),
-                key_fingerprint=b.get("key_fingerprint", ""),
-            )
-            for b in page
-        ]
+        packages = [_index_package_info(b) for b in page]
 
         facets_model = SearchFacets()
         if include_facets:
@@ -4259,8 +4216,13 @@ def create_app(
         packages = [_index_package_info(b) for b in bundles]
         return PackageListResponse(total=len(packages), packages=packages)
 
-    def _index_package_info(b: dict) -> PackageInfo:
-        """A ``state.index`` bundle dict as a PackageInfo (YAML / mirror backends)."""
+    def _index_package_info(b: dict, published_by_email: str | None = None) -> PackageInfo:
+        """A ``state.index`` bundle dict as a PackageInfo (YAML / mirror backends).
+
+        Every field the bundle carries, as the DB backend's rows do: /v1/packages,
+        /v1/packages/{name}, /latest and /v1/search all build their rows here, so the
+        backends answer alike.  *published_by_email* overrides the bundle's own.
+        """
         return PackageInfo(
             name=b["name"],
             version=b["version"],
@@ -4274,7 +4236,23 @@ def create_app(
             published_at=b.get("published_at", "1970-01-01T00:00:00+00:00"),
             yanked=b.get("yanked", False),
             published_by=b.get("published_by", ""),
+            published_by_email=(
+                b.get("published_by_email", "")
+                if published_by_email is None
+                else published_by_email
+            ),
             org=b.get("org", ""),
+            release_tag=b.get("release_tag", ""),
+            recipe_version=b.get("recipe_version", ""),
+            description=b.get("description", ""),
+            homepage=b.get("homepage", ""),
+            license=b.get("license", ""),
+            maintainer=b.get("maintainer", ""),
+            tags=b.get("tags", ""),
+            signature=b.get("signature", ""),
+            key_fingerprint=b.get("key_fingerprint", ""),
+            required_deps=b.get("required_deps") or [],
+            provides=b.get("provides") or [],
         )
 
     @app.get("/v1/packages/{name}/latest", response_model=PackageInfo, tags=["packages"])
@@ -5089,6 +5067,11 @@ def create_app(
                 "key_fingerprint": key_fingerprint,
                 "release_tag": release_tag,
                 "recipe_version": recipe_version,
+                "description": description,
+                "homepage": homepage,
+                "license": pkg_license,
+                "maintainer": maintainer,
+                "tags": pkg_tags,
                 "published_by": actor.name,
                 "org": org,
                 "required_deps": json.loads(required_deps),
@@ -5531,7 +5514,13 @@ def create_app(
                 "key_fingerprint": session.key_fingerprint,
                 "release_tag": session.release_tag,
                 "recipe_version": session.recipe_version,
+                "description": session.description,
+                "homepage": session.homepage,
+                "license": session.pkg_license,
+                "maintainer": session.maintainer,
+                "tags": session.tags,
                 "published_by": actor.name,
+                "org": session.org,
                 "required_deps": json.loads(session.required_deps),
                 "provides": json.loads(session.provides),
             }
