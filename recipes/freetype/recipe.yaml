@@ -97,6 +97,11 @@ build:
 package:
   files:
     - lib/libfreetype*
+    # MSVC: freetype.lib (import lib) + bin/freetype.dll. Without this spelling
+    # the strict package.files check fails the windows pack (dev cluster,
+    # cy-pca/cvcpkg#499).
+    - lib/freetype*
+    - { glob: "bin/freetype*", platforms: [windows] }
     - lib/pkgconfig/freetype2.pc
     - lib/cmake/freetype/
     - include/freetype2/
