@@ -1,0 +1,134 @@
+schema_version: 1
+recipe:
+  name: mitsuba-cp313
+  upstream_version: "3.9.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.mitsuba-renderer.org/
+  # Mitsuba 3 is BSD-3-Clause; the bundle also carries what its build compiles
+  # in from submodules: Embree (Apache-2.0), the OpenEXR 2 fork (BSD-3-Clause),
+  # libpng (libpng-2.0), libjpeg-turbo (IJG AND BSD-3-Clause AND Zlib), pugixml
+  # (MIT), tinyformat (BSL-1.0), fast_float (Apache-2.0 OR MIT OR BSL-1.0).
+  license: "BSD-3-Clause AND Apache-2.0 AND MIT AND BSL-1.0 AND Zlib AND IJG AND libpng-2.0"
+  tags: [python, graphics, rendering]
+  description: >-
+    Mitsuba 3.9.1 for CPython 3.13 (cp313), BUILT FROM SOURCE with
+    scikit-build-core against cvcpkg's drjit-cp313 1.5.0 and nanobind 2.14.0:
+    the retargetable forward and inverse renderer behind Sionna RT and the
+    mitsuba-blender add-on.  Variants: scalar_rgb, scalar_spectral,
+    llvm_ad_rgb, llvm_ad_mono_polarized everywhere, plus cuda_ad_rgb and
+    cuda_ad_mono_polarized on linux and metal_ad_rgb and
+    metal_ad_mono_polarized on macOS arm64.  Embree, OpenEXR, libpng and
+    libjpeg-turbo are Mitsuba's own forks, built from its source tree under
+    -mitsuba library names; zlib is cvcpkg's.
+
+source:
+  # Built from the source package mitsuba-src: the v3.9.1 commit archive plus
+  # the submodule archives its build reads (PyPI has no mitsuba sdist).
+  type: package
+  package: mitsuba-src
+
+python:
+  interpreter: python313
+  abi: cp313
+
+# Columns of a package that ships a console script (bin/mitsuba) declare the
+# base name as a mutually exclusive slot, as tools/gen_python_recipes.py does.
+provides: [mitsuba]
+
+patches: []
+
+depends:
+  build:
+    - name: mitsuba-src
+      version: "==3.9.1"
+    - name: python313
+    - name: cmake
+    - name: ninja
+    # libjpeg-turbo's x86 SIMD (as recipes/libjpeg-turbo); without nasm it
+    # silently builds without SIMD, so the result would depend on the builder.
+    - name: nasm
+    # The [build-system] requires and the PEP-517 backend's runtime deps,
+    # bridged from the build prefix by build.sh (--no-build-isolation).
+    - name: scikit-build-core-cp313
+    - name: packaging-cp313
+    - name: pathspec-cp313
+    - name: nanobind-cp313
+      version: "==2.14.0"
+    - name: typing-extensions-cp313
+    - name: hatch-fancy-pypi-readme-cp313
+    - name: hatchling-cp313
+    - name: pluggy-cp313
+    - name: trove-classifiers-cp313
+    # The build imports drjit (drjit.get_cmake_dir()) and links its libraries.
+    - name: drjit-cp313
+      version: "==1.5.0"
+    # libpng and OpenEXR link zlib; Windows would build ext/zlib instead.
+    - name: zlib
+      version: "^1.3"
+      platforms: [linux, macos]
+  runtime:
+    - name: python313
+    # sionna-rt and Mitsuba itself pin drjit==1.5.0 exactly.
+    - name: drjit-cp313
+      version: "==1.5.0"
+    - name: zlib
+      version: "^1.3"
+      platforms: [linux, macos]
+  host_tools:
+    - python313
+    - cmake
+    - ninja
+    - nasm
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  # Six variants compile every plugin six times: allow more than the 2 h
+  # default on a small builder.
+  timeout_seconds: 21600
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"   # matches drjit-cp313 and llvm20
+
+test:
+  script: test.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an
+  # empty dir).
+  files:
+    - lib/python3.13/site-packages/mitsuba/
+    - lib/python3.13/site-packages/mitsuba/data/ior/
+    - lib/python3.13/site-packages/mitsuba/data/sunsky/
+    - lib/python3.13/site-packages/*.dist-info/
+    - bin/mitsuba
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Variants"
+    platforms: [linux, macos]
+    description: >-
+      Compiled variants (MI_DEFAULT_VARIANTS, see variants.sh): scalar_rgb,
+      scalar_spectral, llvm_ad_rgb, llvm_ad_mono_polarized; plus cuda_ad_rgb,
+      cuda_ad_mono_polarized on linux and metal_ad_rgb,
+      metal_ad_mono_polarized on macOS arm64.  The llvm_* variants run on
+      libLLVM from the llvm20 package (through drjit-cp313); the cuda_*
+      variants need an NVIDIA driver at run time and nothing at build time.
+      Another variant needs a rebuild with a longer list.
+  - title: "Not built on Windows"
+    platforms: [linux, macos]
+    description: >-
+      drjit-cp313 has no Windows column: no cvcpkg llvm recipe ships the
+      LLVM-C.dll Dr.Jit's LLVM backend loads on Windows, so the llvm_*
+      variants (Sionna RT's CPU path) could not run there.

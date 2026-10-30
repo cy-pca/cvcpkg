@@ -1,0 +1,36 @@
+--- a/drjit/__init__.py
++++ b/drjit/__init__.py
+@@ -1,5 +1,33 @@
+ from __future__ import annotations
+ 
++# cvcpkg: Dr.Jit's LLVM backend dlopen()s libLLVM at run time and, unless
++# DRJIT_LIBLLVM_PATH names it, finds it only through the loader's search path
++# or a distro/Homebrew glob.  In a cvcpkg prefix libLLVM is the llvm20
++# package's <prefix>/lib/libLLVM.{so,dylib}, beside this package's
++# lib/pythonX.Y/site-packages, so point the backend at it -- relative to this
++# file, so it follows a relocated prefix -- before the extension starts the
++# backends.  A DRJIT_LIBLLVM_PATH the user set always wins.
++def _cvcpkg_default_libllvm() -> None:
++    import os
++    import sys
++    if os.environ.get('DRJIT_LIBLLVM_PATH'):
++        return
++    site = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++    if sys.platform == 'win32':
++        # <prefix>/Lib/site-packages -> <prefix>/bin/LLVM-C.dll
++        cand = os.path.join(site, os.pardir, os.pardir, 'bin', 'LLVM-C.dll')
++    elif sys.platform == 'darwin':
++        # <prefix>/lib/pythonX.Y/site-packages -> <prefix>/lib/libLLVM.dylib
++        cand = os.path.join(site, os.pardir, os.pardir, 'libLLVM.dylib')
++    else:
++        cand = os.path.join(site, os.pardir, os.pardir, 'libLLVM.so')
++    cand = os.path.normpath(cand)
++    if os.path.isfile(cand):
++        os.environ['DRJIT_LIBLLVM_PATH'] = cand
++
++_cvcpkg_default_libllvm()
++del _cvcpkg_default_libllvm
++
+ from . import detail
+ 
+ with detail.scoped_rtld_deepbind():

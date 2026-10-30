@@ -1,0 +1,103 @@
+schema_version: 1
+recipe:
+  name: sionna-rt-cp313
+  upstream_version: "2.2.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://nvlabs.github.io/sionna/rt/
+  license: Apache-2.0
+  tags: [python, wireless, ray-tracing]
+  description: >-
+    Sionna RT 2.2.0 for CPython 3.13 (cp313): NVIDIA's differentiable ray
+    tracer for radio propagation (paths, channel impulse responses, radio
+    maps), built on Mitsuba 3 and Dr.Jit.  Pure Python, BUILT FROM SOURCE
+    (setuptools) from the v2.2.0 tag: PyPI has no sdist.  It requires
+    mitsuba==3.9.1 and drjit==1.5.0 exactly, i.e. mitsuba-cp313 and
+    drjit-cp313, and runs on their llvm_ad_mono_polarized variant on a CPU
+    (cuda_ad_mono_polarized on an NVIDIA GPU, metal_ad_mono_polarized on
+    Apple silicon).  Hand-written rather than generated because there is no
+    sdist and its two native dependencies are hand-written columns.
+
+source:
+  # Built from the source package sionna-rt-src (the v2.2.0 commit archive).
+  type: package
+  package: sionna-rt-src
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: sionna-rt-src
+      version: "==2.2.0"
+    - name: python313
+    # PEP-517 backend ([build-system] requires = ["setuptools>=61.0"]).
+    - name: setuptools-cp313
+    # Runtime deps are build deps too, as in the generated columns: test.sh
+    # imports the package for real.
+    - name: mitsuba-cp313
+      version: "==3.9.1"
+    - name: drjit-cp313
+      version: "==1.5.0"
+    - name: matplotlib-cp313
+    - name: scipy-cp313
+    - name: numpy-cp313
+    - name: importlib-resources-cp313
+    - name: ipywidgets-cp313
+    - name: pythreejs-cp313
+    - name: typing-extensions-cp313
+  runtime:
+    - name: python313
+    - name: mitsuba-cp313
+      version: "==3.9.1"
+    - name: drjit-cp313
+      version: "==1.5.0"
+    - name: matplotlib-cp313
+    - name: scipy-cp313
+    - name: numpy-cp313
+    - name: importlib-resources-cp313
+    # ipywidgets and pythreejs back only the notebook previewer, but
+    # sionna/rt/__init__.py imports sionna.rt.preview, which imports them and
+    # IPython.display, at module load: without them `import sionna.rt` fails.
+    - name: ipywidgets-cp313
+    - name: pythreejs-cp313
+    - name: typing-extensions-cp313
+  host_tools:
+    - python313
+
+build:
+  build_type_independent: true
+  # A py3-none-any wheel, built once (as jax-cp313 over jaxlib).
+  matrix:
+    - platform: any
+      script: build.sh
+
+test:
+  script: test.sh
+
+package:
+  files:
+    - lib/python3.13/site-packages/sionna/rt/
+    - lib/python3.13/site-packages/sionna/rt/scenes/simple_street_canyon/
+    - lib/python3.13/site-packages/sionna_rt-*.dist-info/
+
+notes:
+  - title: "CPU variant and GPU variants"
+    platforms: [linux, macos]
+    description: >-
+      On import Sionna RT selects the first Mitsuba variant that starts:
+      cuda_ad_mono_polarized, metal_ad_mono_polarized, then
+      llvm_ad_mono_polarized.  mitsuba-cp313 compiles the CUDA pair on linux
+      and the Metal pair on macOS arm64; the LLVM pair runs everywhere on
+      llvm20's libLLVM.  Call mi.set_variant() before importing sionna.rt to
+      choose one yourself.
+  - title: "No Windows column"
+    platforms: [linux, macos]
+    description: >-
+      mitsuba-cp313 and drjit-cp313 have no Windows column (no LLVM-C.dll
+      in any cvcpkg llvm recipe), so neither does this.
