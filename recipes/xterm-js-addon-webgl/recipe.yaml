@@ -1,0 +1,47 @@
+schema_version: 1
+recipe:
+  name: xterm-js-addon-webgl
+  upstream_version: "0.18.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xtermjs.org
+  license: MIT
+  tags: [javascript, web, terminal, data]
+  description: >-
+    xterm.js's WebGL renderer addon 0.18.0: its browser build (addon-webgl.js), from the npm
+    package, installed into share/xterm.js/ with its licence in share/doc/xterm-js-addon-webgl/. A
+    page that runs a terminal program in the browser serves it from its own origin instead of a CDN,
+    so the page needs no other origin in its Content-Security-Policy; libcvc's ari pages (an Ariadne
+    document in an FTXUI or tvision terminal) do. It loads on an xterm.js Terminal (xterm-js).
+    Loaded before the terminal opens, it is the only renderer, so a page needs no inline styles (the
+    DOM renderer injects <style> elements).
+
+source:
+  # The npm registry's tarball (package/ inside, stripped). The sha256 pins the bytes; the file
+  # it installs matches the SRI hash jsDelivr serves for the same version.
+  type: tarball
+  url: https://registry.npmjs.org/@xterm/addon-webgl/-/addon-webgl-0.18.0.tgz
+  sha256: "6229e5c0b66a9de0e155602e90586605c53b91d6af657a6cbe2b8377d6019370"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: xterm-js
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: JavaScript (and CSS), identical on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/xterm.js/addon-webgl.js
+    - share/doc/xterm-js-addon-webgl/

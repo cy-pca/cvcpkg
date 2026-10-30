@@ -1,0 +1,46 @@
+schema_version: 1
+recipe:
+  name: xterm-js
+  upstream_version: "5.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xtermjs.org
+  license: MIT
+  tags: [javascript, web, terminal, data]
+  description: >-
+    xterm.js 5.5.0, the terminal emulator for the browser: its browser build (xterm.js) and style
+    sheet (xterm.css), from the npm package, installed into share/xterm.js/ with its licence in
+    share/doc/xterm-js/. A page that runs a terminal program in the browser serves it from its own
+    origin instead of a CDN, so the page needs no other origin in its Content-Security-Policy;
+    libcvc's ari pages (an Ariadne document in an FTXUI or tvision terminal) do. Its addons are the
+    xterm-js-addon-* packages.
+
+source:
+  # The npm registry's tarball (package/ inside, stripped). The sha256 pins the bytes; the file
+  # it installs matches the SRI hash jsDelivr serves for the same version.
+  type: tarball
+  url: https://registry.npmjs.org/@xterm/xterm/-/xterm-5.5.0.tgz
+  sha256: "bd954fa721872170188cc5d7e83e88db3c83c9a18a4e8d24c2783d26491f59d2"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: JavaScript (and CSS), identical on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/xterm.js/xterm.js
+    - share/xterm.js/xterm.css
+    - share/doc/xterm-js/
