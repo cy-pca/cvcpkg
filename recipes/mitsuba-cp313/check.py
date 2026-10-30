@@ -75,7 +75,9 @@ render_checked(mi.load_file(scene_xml), "scalar_rgb load_file")
 with tempfile.TemporaryDirectory() as tmp:
     for ext in ("exr", "png", "jpg"):
         path = os.path.join(tmp, "out." + ext)
-        mi.util.write_bitmap(path, img)
+        # write_async defaults to True (a background thread): read back only
+        # after the file is complete.
+        mi.util.write_bitmap(path, img, write_async=False)
         bmp = mi.Bitmap(path)
         assert (bmp.width(), bmp.height()) == (16, 16), (ext, bmp)
         print("bitmap round trip:", ext, bmp.pixel_format(), bmp.component_format())
