@@ -1,0 +1,77 @@
+diff --git a/CMake/FindTIFF.cmake b/CMake/FindTIFF.cmake
+new file mode 100644
+index 0000000..48638dd
+--- /dev/null
++++ b/CMake/FindTIFF.cmake
+@@ -0,0 +1,59 @@
++# cvcpkg: libtiff's CMake package (4.7.0) leaves its dependencies to the caller;
++# its TiffConfig.cmake says "TODO: import dependencies".  Yet the static
++# TIFF::tiff it defines links ZLIB::ZLIB, JPEG::JPEG, LERC::LERC,
++# liblzma::liblzma, ZSTD::ZSTD and WebP::webp, and CMake stops at generate time
++# on whichever of those no one has defined.  Define the missing ones, then hand
++# over to CMake's own FindTIFF, which uses libtiff's package when there is one.
++# VTK installs this module for its consumers too, since VTK's installed config
++# looks for TIFF again in each of them.  The lookups run in a function to keep
++# their variables out of this scope.
++function (_vtk_find_tiff_deps)
++  find_package(Tiff CONFIG QUIET)
++  if (NOT TARGET TIFF::tiff)
++    return ()
++  endif ()
++  get_property(_vtk_tiff_deps TARGET TIFF::tiff PROPERTY INTERFACE_LINK_LIBRARIES)
++  foreach (_vtk_tiff_dep IN LISTS _vtk_tiff_deps)
++    string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" _vtk_tiff_dep "${_vtk_tiff_dep}")
++    if (NOT _vtk_tiff_dep MATCHES "::" OR TARGET "${_vtk_tiff_dep}")
++      continue ()
++    endif ()
++    if (_vtk_tiff_dep STREQUAL "ZLIB::ZLIB")
++      find_package(ZLIB QUIET)
++      continue ()
++    elseif (_vtk_tiff_dep STREQUAL "JPEG::JPEG")
++      find_package(JPEG QUIET)
++      continue ()
++    elseif (_vtk_tiff_dep STREQUAL "LERC::LERC")
++      set(_vtk_tiff_names Lerc)
++    elseif (_vtk_tiff_dep STREQUAL "liblzma::liblzma")
++      set(_vtk_tiff_names lzma)
++    elseif (_vtk_tiff_dep STREQUAL "ZSTD::ZSTD")
++      set(_vtk_tiff_names zstd)
++    elseif (_vtk_tiff_dep STREQUAL "WebP::webp")
++      # libwebp's encoder calls into libsharpyuv.
++      set(_vtk_tiff_names webp sharpyuv)
++    else ()
++      continue ()
++    endif ()
++    set(_vtk_tiff_paths)
++    foreach (_vtk_tiff_name IN LISTS _vtk_tiff_names)
++      find_library("VTK_TIFF_${_vtk_tiff_name}_LIBRARY" NAMES "${_vtk_tiff_name}")
++      mark_as_advanced("VTK_TIFF_${_vtk_tiff_name}_LIBRARY")
++      if (NOT VTK_TIFF_${_vtk_tiff_name}_LIBRARY)
++        # Leave the target undefined; CMake's error then names it.
++        set(_vtk_tiff_paths)
++        break ()
++      endif ()
++      list(APPEND _vtk_tiff_paths "${VTK_TIFF_${_vtk_tiff_name}_LIBRARY}")
++    endforeach ()
++    if (_vtk_tiff_paths)
++      add_library("${_vtk_tiff_dep}" INTERFACE IMPORTED)
++      set_property(TARGET "${_vtk_tiff_dep}" PROPERTY
++        INTERFACE_LINK_LIBRARIES "${_vtk_tiff_paths}")
++    endif ()
++  endforeach ()
++endfunction ()
++_vtk_find_tiff_deps()
++
++include("${CMAKE_ROOT}/Modules/FindTIFF.cmake")
+diff --git a/CMake/vtkInstallCMakePackage.cmake b/CMake/vtkInstallCMakePackage.cmake
+index 663db44..5b7ed0f 100644
+--- a/CMake/vtkInstallCMakePackage.cmake
++++ b/CMake/vtkInstallCMakePackage.cmake
+@@ -126,6 +126,7 @@ set(vtk_cmake_module_files
+   FindPEGTL.cmake
+   FindTBB.cmake
+   FindTHEORA.cmake
++  FindTIFF.cmake
+   Findutf8cpp.cmake
+   FindCGNS.cmake
+   FindzSpace.cmake
