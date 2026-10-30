@@ -44,10 +44,40 @@ unset _root
 
 _python="$(_find_tool python3.11)"
 _llvm_config="$(_find_tool llvm-config)"
-_patchelf="$(_find_tool patchelf)"
 : "${_python:?cvcpkg: python3.11 (cvcpkg python311) not found}"
 : "${_llvm_config:?cvcpkg: llvm-config (cvcpkg llvm20) not found}"
-: "${_patchelf:?cvcpkg: patchelf (cvcpkg patchelf) not found}"
+
+case "${CVC_PLATFORM}" in
+    linux)
+        _patchelf="$(_find_tool patchelf)"
+        : "${_patchelf:?cvcpkg: patchelf (cvcpkg patchelf) not found}"
+        ;;
+    freebsd|netbsd)
+        # Every dependency comes from the cvcpkg prefixes.  env-<bsd>.sh adds
+        # the ports/pkgsrc include and lib dirs, where a host LLVM, expat or
+        # zstd (pkgsrc's clang brings its own LLVM) could shadow ours, so drop
+        # them for this build.
+        _drop_host_dirs() {
+            local _w _out=""
+            for _w in $1; do
+                case "${_w}" in
+                    -I/usr/local/include|-I/usr/pkg/include|-L/usr/local/lib|-L/usr/pkg/lib|-Wl,-R/usr/pkg/lib) ;;
+                    *) _out="${_out:+${_out} }${_w}" ;;
+                esac
+            done
+            printf '%s' "${_out}"
+        }
+        CFLAGS="$(_drop_host_dirs "${CFLAGS:-}")"
+        CXXFLAGS="$(_drop_host_dirs "${CXXFLAGS:-}")"
+        LDFLAGS="$(_drop_host_dirs "${LDFLAGS:-}")"
+        # No patchelf here (on NetBSD, growing an object's RPATH adds a PT_LOAD
+        # that ld.elf_so refuses): link the relocatable RUNPATH in instead.
+        # Meson keeps rpaths given in LDFLAGS on install; $ORIGIN/.. is for
+        # lib/dri and lib/gbm, and is harmless on lib/*.so.
+        LDFLAGS="${LDFLAGS:+${LDFLAGS} }-Wl,-rpath,\$ORIGIN:\$ORIGIN/.."
+        export CFLAGS CXXFLAGS LDFLAGS
+        ;;
+esac
 
 # Mesa's meson.build does find_installation('python3'), which otherwise means
 # "the interpreter running meson" (not ours, so no mako/yaml).  Pin it, and
@@ -110,17 +140,19 @@ ninja -C "${CVC_BUILD_DIR}" install
 # Meson strips the build-tree RUNPATH on install; stamp $ORIGIN-relative ones so
 # libGLX_mesa / libEGL_mesa / libgallium find their siblings (libLLVM, libdrm,
 # libxcb, libX11, ...) in whatever prefix the bundle lands in.  lib/dri/*.so
-# and lib/gbm/*.so sit one level down.
-shopt -s nullglob
-for _so in "${CVC_INSTALL_DIR}"/lib/*.so*; do
-    [[ -L "${_so}" ]] && continue
-    "${_patchelf}" --set-rpath '$ORIGIN' "${_so}"
-done
-for _so in "${CVC_INSTALL_DIR}"/lib/dri/*.so* "${CVC_INSTALL_DIR}"/lib/gbm/*.so*; do
-    [[ -L "${_so}" ]] && continue
-    "${_patchelf}" --set-rpath '$ORIGIN:$ORIGIN/..' "${_so}"
-done
-shopt -u nullglob
+# and lib/gbm/*.so sit one level down.  (The BSDs linked theirs in above.)
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    shopt -s nullglob
+    for _so in "${CVC_INSTALL_DIR}"/lib/*.so*; do
+        [[ -L "${_so}" ]] && continue
+        "${_patchelf}" --set-rpath '$ORIGIN' "${_so}"
+    done
+    for _so in "${CVC_INSTALL_DIR}"/lib/dri/*.so* "${CVC_INSTALL_DIR}"/lib/gbm/*.so*; do
+        [[ -L "${_so}" ]] && continue
+        "${_patchelf}" --set-rpath '$ORIGIN:$ORIGIN/..' "${_so}"
+    done
+    shopt -u nullglob
+fi
 
 # Never ship the libtool archives or anything pointing back at the build tree.
 find "${CVC_INSTALL_DIR}" -name '*.la' -delete
