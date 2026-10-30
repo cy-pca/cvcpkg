@@ -1,0 +1,176 @@
+schema_version: 1
+recipe:
+  name: blender
+  upstream_version: "5.2.3"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.blender.org/
+  # Blender's code is GPL-2.0-or-later; linked with Apache-2.0 libraries
+  # (OpenImageIO, oneTBB, Cycles itself) the binary is distributed under
+  # GPL-3.0-or-later, as blender.org does. The source is the blender-src
+  # package.
+  license: GPL-3.0-or-later
+  tags: [graphics, modelling, rendering, applications]
+  description: >-
+    Blender 5.2.3 LTS — the free and open-source 3D creation suite
+    (modelling, animation, simulation, rendering with Cycles, compositing,
+    video editing), built from source against cvcpkg libraries.  Uses the
+    prefix's Python 3.13 instead of a bundled interpreter, so modules
+    installed in the prefix (numpy, mitsuba, ...) are importable from
+    Blender's Python and the host's alike.  `bin/blender` runs it; the
+    application tree is lib/blender/.  First revision: X11 + OpenGL
+    interface, Cycles on the CPU, the core add-ons (glTF, FBX, SVG, ...);
+    the features whose libraries cvcpkg does not have yet are off (see the
+    notes).
+
+source:
+  # Built from the source package blender-src, which pins the upstream tarball
+  # (https://download.blender.org/source/blender-5.2.3.tar.xz).
+  type: package
+  package: blender-src
+
+patches:
+  # Headers Blender relies on newer libstdc++ to pull in transitively; the
+  # builders' libstdc++ 11 does not (std::tie needs <tuple>, std::from_chars
+  # <charconv>). The only two changes a full linux build needed.
+  - blender-libstdcxx11-includes.patch
+
+depends:
+  build:
+    - name: blender-src
+      version: "==5.2.3"
+    # The compiler: Blender 5.2 refuses GCC < 14, and the linux builders have
+    # GCC 11. clang (>= 17 is accepted) from the llvm package compiles it
+    # against the builder's own libstdc++, the one every C++ dependency here
+    # was built with.
+    - name: llvm
+      version: ">=17"
+      platforms: [linux]
+    - name: eigen
+      version: ">=3.4"
+    # Headers only: Blender dlopen()s these sound servers at run time
+    # (WITH_*_DYNLOAD), so a host without them still starts.
+    - name: jack
+      platforms: [linux]
+    - name: libpulse
+      platforms: [linux]
+    - name: pipewire
+      platforms: [linux]
+    - name: xorgproto
+      platforms: [linux]
+  runtime:
+    - name: python313
+      version: "^3.13"
+    - name: numpy-cp313
+      version: ">=1.24"
+    - name: requests-cp313
+      version: ">=2.27"
+    # The rest of the pure-Python modules Blender's own builds bundle in their
+    # Python (versions.cmake). bl_pkg, the extensions add-on enabled by
+    # default, fails to register without cattrs; blend_render_info reads
+    # zstd-compressed .blend files with zstandard; the text editor's autopep8
+    # operator needs autopep8 + pycodestyle.
+    - name: cattrs-cp313
+      version: ">=25.1"
+    - name: fastjsonschema-cp313
+      version: ">=2.21"
+    - name: zstandard-cp313
+      version: ">=0.25"
+    - name: autopep8-cp313
+      version: ">=2.3"
+    - name: pycodestyle-cp313
+      version: ">=2.13"
+    - name: openimageio
+      version: "^3.1"
+    - name: opencolorio
+      version: "^2.5"
+    - name: openexr
+      version: "^3.4"
+    - name: imath
+      version: "^3.2"
+    - name: tbb
+      version: ">=2021"
+    - name: fmt
+      version: ">=10"
+    - name: freetype
+      version: "^2.13"
+    - name: brotli
+      version: "^1.0"
+    - name: harfbuzz
+    - name: fribidi
+    - name: libepoxy
+      version: "^1.5"
+    - name: libjpeg-turbo
+    - name: libpng
+      version: "^1.6"
+    - name: zlib
+      version: "^1.3"
+    - name: zstd
+      version: "^1.5"
+    - name: openjpeg
+      version: "^2.5"
+    - name: libwebp
+    - name: pugixml
+    - name: fftw3
+      version: "^3.3"
+    - name: gmp
+      version: "^6.2"
+    - name: ffmpeg
+      version: ">=5"
+    - name: libsndfile
+    - name: openal-soft
+    - name: libx11
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxfixes
+      platforms: [linux]
+    - name: libxrender
+      platforms: [linux]
+  host_tools:
+    - cmake
+    - ninja
+    - pkg-config
+
+build:
+  # A full Blender build is ~5000 translation units: about an hour on 16
+  # cores, several on a 4-core runner.
+  timeout_seconds: 28800
+  min_disk_gb: 40
+  matrix:
+    - platform: linux
+      script: build.sh
+
+package:
+  files:
+    - bin/blender
+    - lib/blender/blender
+    - lib/blender/blender-thumbnailer
+    - lib/blender/5.2/
+    - lib/blender/blender.desktop
+    - lib/blender/blender.svg
+    - lib/blender/blender-symbolic.svg
+    - share/doc/blender/
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Features in this revision"
+    platforms: [linux]
+    body: >-
+      On: X11 interface with OpenGL, Python 3.13 (the prefix's), Cycles on
+      the CPU, OpenImageIO/OpenColorIO/OpenEXR, FFmpeg, libsndfile, OpenAL,
+      JACK/PulseAudio/PipeWire (loaded at run time), FFTW3 (ocean, smoke,
+      glare), GMP (exact boolean), HarfBuzz/FriBiDi, Bullet, Mantaflow,
+      Audaspace, Freestyle, OBJ/PLY/STL/FBX/SVG I/O and the glTF exporter.
+      Off until cvcpkg has their libraries: Embree, OSL, OpenPGL path
+      guiding and OpenImageDenoise in Cycles, GPU devices (CUDA, OptiX, HIP,
+      oneAPI), OpenVDB/NanoVDB, OpenSubdiv, Alembic, USD/Hydra, MaterialX,
+      Manifold, Potrace, libharu (PDF export), libmv motion tracking
+      (Ceres), Draco and meshoptimizer glTF compression, OpenXR, NDOF
+      devices, Rubber Band, the Vulkan backend and Wayland.
