@@ -79,6 +79,8 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: haiku
+      script: build.sh
     - platform: windows
       script: build.ps1
     # Cross targets reuse build.sh: it sources env-${CVC_PLATFORM}.sh, i.e.
@@ -111,7 +113,7 @@ package:
     - share/licenses/eigen/
     # Eigen only defines EIGEN_BUILD_PKGCONFIG off native Windows hosts.
     - glob: share/pkgconfig/eigen3.pc
-      platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi, cosmo]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo]
   cmake_packages:
     - { name: Eigen3, targets: ["Eigen3::Eigen"] }
   # No pkg_config: list.  It is copied as-is into every bundle's manifest

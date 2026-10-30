@@ -143,7 +143,11 @@ package:
     - lib/vtk*
     - lib/cmake/vtk*/
     - include/vtk*/
-    - bin/vtk*
+    # The static wasm builds install nothing under bin/, so the strict
+    # package.files check (newer than the 9.5.0+cvc.3 wasm publishes) fails
+    # them on this entry; the desktop builds install VTK's programs there,
+    # and Windows its DLLs.
+    - { glob: "bin/vtk*", platforms: [linux, macos, openbsd, windows] }
     - share/vtk*/
     - share/licenses/VTK/
   cmake_packages:

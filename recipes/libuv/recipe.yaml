@@ -57,12 +57,16 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
 package:
   files:
-    - { glob: "lib/libuv*", platforms: [linux, macos, freebsd, openbsd, netbsd] }  # libuv.so.1*/libuv.1.dylib + libuv.a
+    - { glob: "lib/libuv*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }  # libuv.so.1*/libuv.1.dylib + libuv.a
     - { glob: "lib/libuv.lib", platforms: [windows] }  # static (uv_a gets a "lib" prefix on Windows)
     - { glob: "lib/uv.lib", platforms: [windows] }     # import library for uv.dll
     - { glob: "bin/uv.dll", platforms: [windows] }

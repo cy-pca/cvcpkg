@@ -39,11 +39,11 @@ depends:
     # through pkg-config. The cross targets (wasm, wasi, cosmo) test with the
     # cross compiler alone, so they do not pull these in.
     - name: cmake
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - name: ninja
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - name: pkg-config
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
   runtime:
     # lua's line editing (linux-readline / macosx targets). liblua itself does
     # not link it — only bin/lua does — so embedders never pull readline in.
@@ -74,6 +74,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     # Cross targets: static liblua.a only (no shared libraries there); their
@@ -91,7 +95,7 @@ build:
 package:
   files:
     - lib/liblua.a
-    - { glob: "lib/liblua.so*", platforms: [linux, freebsd, openbsd, netbsd] }
+    - { glob: "lib/liblua.so*", platforms: [linux, freebsd, openbsd, netbsd, haiku] }
     - lib/liblua*.dylib
     # MSVC spellings (build.ps1): the DLL's import library, the static library
     # and the DLL itself.
@@ -107,8 +111,8 @@ package:
     - include/lua.hpp
     # The interpreter and compiler. The wasm build drops them (wasm binaries
     # cannot run on the host); wasi keeps its .wasm-format lua/luac.
-    - { glob: "bin/lua", platforms: [linux, macos, freebsd, openbsd, netbsd, wasi, cosmo] }
-    - { glob: "bin/luac", platforms: [linux, macos, freebsd, openbsd, netbsd, wasi, cosmo] }
+    - { glob: "bin/lua", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasi, cosmo] }
+    - { glob: "bin/luac", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasi, cosmo] }
     - bin/lua.exe
     - bin/luac.exe
   cmake_packages:

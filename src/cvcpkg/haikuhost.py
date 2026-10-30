@@ -49,11 +49,16 @@ generating ``run-job.sh`` per job keeps delegation working against recipe
 bundles that predate Haiku support, which matters far more here than the
 "push recipes to update the runner" property does on Windows.
 
-Two Haiku facts shape the details.  Its run-time linker reads
+Four Haiku facts shape the details.  Its run-time linker reads
 ``LIBRARY_PATH``, not ``LD_LIBRARY_PATH`` (hence
 :func:`cvcpkg.platform.lib_path_var`), and rsync is not part of the base
 system, so file exchange falls back to tar-over-ssh whenever either end
-lacks rsync.
+lacks rsync.  Its sshd sometimes never ends a session whose command has
+exited, so every remote command reports its own exit status and a stuck
+ssh is stopped (see "SSH plumbing"); nothing waits on ssh without a
+bound.  And BFS does not keep a whole-second timestamp as it is given,
+while the VM's clock is not the builder's, so the pushed source tree is
+re-stamped on the Haiku side (see "Source timestamps").
 
 A Haiku job that cannot be delegated is a hard error, never a local
 build: see :func:`ensure_delegatable`.
@@ -81,23 +86,38 @@ Environment knobs:
                             when several builders share one Haiku box: it
                             bounds how long a CRASHED builder's dir stays
                             unreapable.  Must exceed the longest build.
+``CVCPKG_HAIKU_IDLE_TIMEOUT``  Seconds a file transfer or a remote command
+                            may go with no byte moving before it is stopped
+                            (default 900; ``0`` disables).
+``CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT``  The same for the remote build and test
+                            scripts, measured on their output (default
+                            10800; ``0`` disables).
+``CVCPKG_HAIKU_TRANSFER_TIMEOUT``  Hard bound on one file transfer (default
+                            14400; ``0`` disables).
 """
 
 from __future__ import annotations
 
 import os
+import queue
 import re
 import shlex
 import shutil
+import signal
 import socket
+import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
+from cvcpkg import proctree
 from cvcpkg.errors import CvcpkgError
 from cvcpkg.platform import lib_path_var
 
@@ -265,6 +285,90 @@ def ensure_delegatable(platform: str, host_platform: str) -> None:
 
 # ── SSH plumbing ────────────────────────────────────────────────
 
+# Haiku's sshd does not always finish a session.  In about one run in three
+# (hrev57937, openssh 9.8p1, 2026-10-30) the remote command exits and the
+# server sends EOF on the channel, but neither ``exit-status`` nor ``close``
+# follows: the client waits forever, and an ``sshd-session`` waits with it on
+# the Haiku side.  A prod job sat 70 minutes that way in its recipe push.  So
+# ssh exiting is not how this module learns that a command finished: every
+# remote command reports its own exit status, as a marker line on stderr
+# (:func:`_with_rc_marker`).  Once the marker is in, ssh gets
+# :data:`EXIT_GRACE_SECS` to exit by itself and is then stopped, and the
+# marker's status is the command's.  Stopping the client ends the stuck
+# sshd-session too.
+_RC_MARKER = "__CVCPKG_RC_"
+
+# How long ssh gets to exit by itself after its remote command reported its
+# exit status (and, for a pull, after its stdout reached EOF).  A healthy
+# session is gone within milliseconds of that.
+EXIT_GRACE_SECS = 5.0
+
+# Seconds with no byte moving (out of ssh, or into it) before a file transfer
+# or a remote command is given up.  Override with CVCPKG_HAIKU_IDLE_TIMEOUT;
+# 0 disables.
+DEFAULT_IDLE_TIMEOUT = 15 * 60
+
+# The same bound for the remote build and test scripts, whose output is their
+# only sign of life, and a configure check or a link can be quiet for a long
+# time.  Override with CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT; 0 disables.
+DEFAULT_BUILD_IDLE_TIMEOUT = 3 * 60 * 60
+
+# Hard bound on one file transfer, however busy.  It is what bounds an rsync
+# transfer once rsync's own --timeout no longer applies (see _rsync).
+# Override with CVCPKG_HAIKU_TRANSFER_TIMEOUT; 0 disables.
+DEFAULT_TRANSFER_TIMEOUT = 4 * 60 * 60
+
+# Copy size of the relay threads.
+_CHUNK = 1 << 20
+
+# How often the waiting thread looks at the clock and the process.
+_POLL_SECS = 0.1
+
+# How long to wait for a relay thread or a transfer's local tar once ssh is gone.
+_DRAIN_SECS = 30.0
+
+# Where notices from this plumbing go: the job log while run_haiku_build or
+# run_haiku_test runs on this thread (see _notices_to), stderr otherwise.
+_job_log = threading.local()
+
+
+def _notice(msg: str) -> None:
+    log = getattr(_job_log, "log", None)
+    if log is not None:
+        log(msg)
+    else:
+        print(msg, file=sys.stderr)
+
+
+@contextmanager
+def _notices_to(log: Callable[[str], None]) -> Iterator[None]:
+    previous = getattr(_job_log, "log", None)
+    _job_log.log = log
+    try:
+        yield
+    finally:
+        _job_log.log = previous
+
+
+def _seconds_knob(name: str, default: float) -> float | None:
+    """A timeout knob, in seconds; None when it is set to 0 (disabled)."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise HaikuhostError(f"invalid {name}: {raw!r}") from None
+    return value if value > 0 else None
+
+
+def _idle_timeout() -> float | None:
+    return _seconds_knob("CVCPKG_HAIKU_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT)
+
+
+def _transfer_timeout() -> float | None:
+    return _seconds_knob("CVCPKG_HAIKU_TRANSFER_TIMEOUT", DEFAULT_TRANSFER_TIMEOUT)
+
 
 def _ssh_options() -> list[str]:
     """``ssh`` plus the connection options every invocation shares.
@@ -273,8 +377,22 @@ def _ssh_options() -> list[str]:
     so a missing key or an unknown host key must fail the job instead of
     blocking forever on a prompt.  Host-key checking is deliberately left
     at the OpenSSH default — the Haiku box has to be in ``known_hosts``.
+
+    The keepalives end the session in about a minute when the VM stops
+    answering (paused, rebooted, network gone).  They cannot catch the sshd
+    hang described above, where the server is alive and answers them.
     """
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={_CONNECT_TIMEOUT}"]
+    argv = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        f"ConnectTimeout={_CONNECT_TIMEOUT}",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=4",
+    ]
     key = os.environ.get("CVCPKG_HAIKU_SSH_KEY", "").strip()
     if key:
         argv += ["-i", key]
@@ -299,22 +417,342 @@ def _ssh_cmd(remote_command: str) -> list[str]:
     return [*_ssh_options(), "-T", target, remote_command]
 
 
-def _run_ssh(remote_command: str, *, what: str, timeout: float = 300) -> str:
-    """Run *remote_command* on the Haiku host, return stripped stdout."""
+def _with_rc_marker(remote_command: str, nonce: str) -> str:
+    """*remote_command*, followed by a stderr line that reports its exit status.
+
+    The command runs in a subshell, so an ``exit`` in it ends only the
+    subshell and the report still runs.  printf puts the marker together from
+    its parts, so the whole marker never appears in the command line, and
+    nothing that echoes commands can report a completion early.  The leading
+    newline puts the marker on a line of its own when the command's last
+    stderr line was unterminated; the reader drops the blank line it leaves
+    otherwise.
+    """
+    return f"(\n{remote_command}\n)\nprintf '\\n{_RC_MARKER}%s=%d\\n' {nonce} \"$?\" >&2"
+
+
+@dataclass
+class _Outcome:
+    """How a supervised process ended."""
+
+    rc: int
+    stdout: bytes = b""
+    stderr: bytes = b""
+    lingered: bool = False  # ssh had to be stopped after its command was done
+
+    def errtext(self) -> str:
+        return self.stderr.decode(errors="replace").strip()[:500]
+
+
+class _Watch:
+    """What the relay threads of one supervised process have seen."""
+
+    def __init__(self) -> None:
+        self.last_activity = time.monotonic()
+        self.rc: int | None = None  # the remote command's exit status, from its marker
+
+    def moved(self) -> None:
+        self.last_activity = time.monotonic()
+
+
+def _no_sigpipe(fd: int) -> None:
+    """Make a write to *fd* whose reader is gone fail with EPIPE, not SIGPIPE.
+
+    Called on the thread that writes.  The cvcpkg CLI restores SIGPIPE's
+    default action (cli._restore_default_sigpipe), and haikuhost runs inside
+    ``cvcpkg builder`` and ``cvcpkg pack``: a relay write to an ssh or a tar
+    that had already exited ended the whole process, every other job of the
+    builder with it.  Linux and the BSDs raise the signal on the writing
+    thread, so blocking it there leaves only EPIPE (the pending signal goes
+    away with the thread).  macOS raises it on the process, so there the
+    descriptor is marked F_SETNOSIGPIPE instead.  Windows has no SIGPIPE.
+    """
+    if sys.platform == "win32":
+        return
     try:
-        r = subprocess.run(
-            _ssh_cmd(remote_command),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=timeout,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise HaikuhostError(f"{what} failed on {ssh_target()}: {exc}") from exc
-    if r.returncode != 0:
+        if sys.platform == "darwin":
+            import fcntl
+
+            fcntl.fcntl(fd, getattr(fcntl, "F_SETNOSIGPIPE", 73), 1)
+        else:
+            signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGPIPE})
+    except (AttributeError, OSError, ValueError):
+        pass
+
+
+def _pump_lines(
+    pipe: IO[bytes],
+    emit: Callable[[bytes], object],
+    marker: bytes | None,
+    watch: _Watch,
+) -> None:
+    """Hand *pipe*'s lines to *emit*, all but the completion marker, which goes to *watch*."""
+    held: bytes | None = None  # a blank line, perhaps the marker's own leading newline
+    try:
+        for line in iter(pipe.readline, b""):
+            watch.moved()
+            if marker is not None and line.startswith(marker):
+                try:
+                    watch.rc = int(line[len(marker) :].strip())
+                    held = None
+                    continue
+                except ValueError:
+                    pass
+            if held is not None:
+                emit(held)
+                held = None
+            if line in (b"\n", b"\r\n"):
+                held = line
+            else:
+                emit(line)
+    except (OSError, ValueError):
+        pass  # the pipe went away with its process
+    if held is not None:
+        emit(held)
+
+
+def _pump_chunks(pipe: IO[bytes], dest: IO[bytes] | list[bytes], watch: _Watch) -> None:
+    """Copy *pipe* into *dest*: a list to collect into, or a binary file closed at EOF.
+
+    A file that stops taking data (a local tar that died) is not a reason to
+    stop reading: draining lets ssh finish, and the tar's own exit status
+    reports the failure.
+    """
+    broken = False
+    try:
+        if not isinstance(dest, list):
+            _no_sigpipe(dest.fileno())
+        while chunk := pipe.read1(_CHUNK):  # type: ignore[attr-defined]
+            watch.moved()
+            if isinstance(dest, list):
+                dest.append(chunk)
+            elif not broken:
+                try:
+                    dest.write(chunk)
+                except (OSError, ValueError):
+                    broken = True
+    except (OSError, ValueError):
+        pass
+    finally:
+        if not isinstance(dest, list):
+            try:
+                dest.close()
+            except (OSError, ValueError):
+                pass
+
+
+def _feed(src: bytes | IO[bytes], pipe: IO[bytes], watch: _Watch) -> None:
+    """Write *src* (bytes, or a binary file read to EOF) into *pipe*, then close it."""
+    try:
+        _no_sigpipe(pipe.fileno())
+        if isinstance(src, bytes):
+            view = memoryview(src)
+            for i in range(0, len(view), _CHUNK):
+                pipe.write(view[i : i + _CHUNK])
+                watch.moved()
+        else:
+            while chunk := src.read1(_CHUNK):  # type: ignore[attr-defined]
+                pipe.write(chunk)
+                watch.moved()
+    except (OSError, ValueError):
+        pass  # the process went away; its exit status says why
+    finally:
+        try:
+            pipe.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _start_process(argv: list[str], *, what: str, in_tree: bool, **kwargs) -> subprocess.Popen:
+    """Start a helper process that a timeout here can stop with all it started.
+
+    On POSIX it leads a process group of its own.  With *in_tree* it is also
+    in the job's process tree, so a job the builder stops (job.cancel, the
+    build timeout, the offline reaper) stops it too: see cvcpkg.proctree.
+    The short commands stay outside the tree, each bounded by its own
+    timeout, so that a stopped job can still clean up its remote dir.
+    """
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+    try:
+        if in_tree:
+            return proctree.popen(argv, **kwargs)
+        return subprocess.Popen(argv, **kwargs)  # noqa: S603 - our own fixed argv
+    except OSError as exc:
+        raise HaikuhostError(f"{what}: could not start {argv[0]}: {exc}") from exc
+
+
+def _supervise(
+    proc: subprocess.Popen,
+    *,
+    what: str,
+    marker: bytes | None,
+    stdin: bytes | IO[bytes] | None = None,
+    stdout: IO[bytes] | None = None,
+    on_output: Callable[[bytes], None] | None = None,
+    timeout: float | None = None,
+    idle_timeout: float | None = None,
+) -> _Outcome:
+    """Wait for *proc*, relaying its streams, and never without a bound.
+
+    *proc* was started with stdout piped and, unless *on_output* is given, a
+    separate stderr pipe.  *stdin* (bytes, or a binary file such as a local
+    tar's stdout) is fed into its stdin pipe; its stdout is copied into
+    *stdout* (a binary file such as a local tar's stdin) or collected; with
+    *on_output* stdout carries stderr too, and each line goes to *on_output*
+    on this thread.
+
+    The wait ends when the process exits, or when the remote command's
+    *marker* line has arrived, stdout is at EOF and the process still has not
+    exited after :data:`EXIT_GRACE_SECS` (the Haiku sshd hang), or when
+    *idle_timeout* passes with no byte moving or *timeout* passes overall.
+    The process is then stopped with everything it started
+    (:func:`cvcpkg.proctree.stop`).  A timeout raises :class:`HaikuhostError`;
+    otherwise the marker's status, or else the process's own, is the result.
+    """
+    watch = _Watch()
+    threads: list[threading.Thread] = []
+    out: list[bytes] = []
+    err: list[bytes] = []
+    lines: queue.SimpleQueue[bytes] = queue.SimpleQueue()
+
+    def _spawn(target: Callable[..., None], *args: object) -> threading.Thread:
+        t = threading.Thread(target=target, args=args, name=f"cvcpkg-haikuhost{target.__name__}")
+        t.daemon = True
+        t.start()
+        threads.append(t)
+        return t
+
+    assert proc.stdout is not None
+    data: threading.Thread | None = None
+    if on_output is not None:
+        _spawn(_pump_lines, proc.stdout, lines.put, marker, watch)
+    else:
+        assert proc.stderr is not None
+        data = _spawn(_pump_chunks, proc.stdout, out if stdout is None else stdout, watch)
+        _spawn(_pump_lines, proc.stderr, err.append, marker, watch)
+    if stdin is not None:
+        assert proc.stdin is not None
+        _spawn(_feed, stdin, proc.stdin, watch)
+
+    def _drain(wait: float) -> None:
+        if on_output is None:
+            try:
+                proc.wait(timeout=wait)
+            except subprocess.TimeoutExpired:
+                pass
+            return
+        try:
+            on_output(lines.get(timeout=wait) if wait else lines.get_nowait())
+            while True:
+                on_output(lines.get_nowait())
+        except queue.Empty:
+            pass
+
+    def _reap() -> None:
+        if proc.poll() is None:
+            proctree.stop(proc)
+        try:
+            proc.wait(timeout=_DRAIN_SECS)
+        except subprocess.TimeoutExpired:
+            pass
+        for t in threads:
+            t.join(timeout=_DRAIN_SECS)
+
+    started = time.monotonic()
+    done_since: float | None = None
+    lingered = False
+    gave_up = ""
+    try:
+        while True:
+            _drain(_POLL_SECS)
+            if proc.poll() is not None:
+                break
+            now = time.monotonic()
+            if watch.rc is not None and (data is None or not data.is_alive()):
+                # The command is done and all its output is here; only ssh's
+                # own exit is missing.
+                if done_since is None:
+                    done_since = now
+                elif now - done_since >= EXIT_GRACE_SECS:
+                    lingered = True
+                    break
+                continue
+            if idle_timeout is not None and now - watch.last_activity > idle_timeout:
+                gave_up = f"nothing moved for {idle_timeout:g}s"
+                break
+            if timeout is not None and now - started > timeout:
+                gave_up = f"still running after {timeout:g}s"
+                break
+    except BaseException:
+        _reap()
+        raise
+    _reap()
+    _drain(0)
+
+    rc = watch.rc if watch.rc is not None else proc.returncode
+    result = _Outcome(
+        rc=-1 if rc is None else rc,
+        stdout=b"".join(out),
+        stderr=b"".join(err),
+        lingered=lingered,
+    )
+    if gave_up:
+        detail = result.errtext()
         raise HaikuhostError(
-            f"{what} failed on {ssh_target()} (rc={r.returncode}): "
-            f"{r.stderr.decode(errors='replace').strip()[:500]}"
+            f"{what} on {ssh_target()}: {gave_up}, so it was stopped"
+            + (f": {detail}" if detail else "")
         )
+    if lingered:
+        _notice(
+            f"cvcpkg-haikuhost: {what}: ssh had not exited {EXIT_GRACE_SECS:g}s after the "
+            f"remote command finished (rc={result.rc}), so it was stopped"
+        )
+    return result
+
+
+def _ssh_exec(
+    remote_command: str,
+    *,
+    what: str,
+    stdin: bytes | IO[bytes] | None = None,
+    stdout: IO[bytes] | None = None,
+    on_output: Callable[[bytes], None] | None = None,
+    timeout: float | None = None,
+    idle_timeout: float | None = None,
+    in_tree: bool = False,
+) -> _Outcome:
+    """Run *remote_command* on the Haiku host behind a completion marker.
+
+    See :func:`_supervise` for the streams and the bounds, and
+    :func:`_start_process` for *in_tree*.
+    """
+    nonce = uuid.uuid4().hex
+    proc = _start_process(
+        _ssh_cmd(_with_rc_marker(remote_command, nonce)),
+        what=what,
+        in_tree=in_tree,
+        stdin=subprocess.DEVNULL if stdin is None else subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT if on_output is not None else subprocess.PIPE,
+    )
+    return _supervise(
+        proc,
+        what=what,
+        marker=f"{_RC_MARKER}{nonce}=".encode(),
+        stdin=stdin,
+        stdout=stdout,
+        on_output=on_output,
+        timeout=timeout,
+        idle_timeout=idle_timeout,
+    )
+
+
+def _run_ssh(remote_command: str, *, what: str, timeout: float = 300) -> str:
+    """Run a short *remote_command* on the Haiku host, return stripped stdout."""
+    r = _ssh_exec(remote_command, what=what, timeout=timeout)
+    if r.rc != 0:
+        raise HaikuhostError(f"{what} failed on {ssh_target()} (rc={r.rc}): {r.errtext()}")
     return r.stdout.decode(errors="replace").strip()
 
 
@@ -323,15 +761,9 @@ def haikuhost_available() -> bool:
     if not ssh_target():
         return False
     try:
-        r = subprocess.run(
-            _ssh_cmd("true"),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            timeout=60,
-        )
-    except (OSError, subprocess.TimeoutExpired, HaikuhostError):
+        return _ssh_exec("true", what="probing the Haiku host", timeout=60).rc == 0
+    except HaikuhostError:
         return False
-    return r.returncode == 0
 
 
 def _remote_has(tool: str) -> bool:
@@ -349,20 +781,17 @@ def _stream_ssh(
     remote_command: str,
     log_callback: Callable[[str], None] | None,
 ) -> int:
-    """Run a remote command, teeing its output to stdout and the log."""
-    from cvcpkg import proctree
+    """Run a remote command, teeing its output to stdout and the log.
 
-    proc = proctree.popen(
-        _ssh_cmd(remote_command),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    In the job's process tree, so a stopped job stops it, and bounded by
+    CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT.
+    """
     _flush_bytes = 8192
     buf: list[str] = []
     buf_size = 0
-    assert proc.stdout is not None
-    for raw_line in proc.stdout:
+
+    def _emit(raw_line: bytes) -> None:
+        nonlocal buf_size
         line = raw_line.decode("utf-8", errors="replace")
         sys.stdout.write(line)
         if log_callback:
@@ -372,9 +801,21 @@ def _stream_ssh(
                 log_callback("".join(buf))
                 buf.clear()
                 buf_size = 0
-    if log_callback and buf:
-        log_callback("".join(buf))
-    return proc.wait()
+
+    try:
+        r = _ssh_exec(
+            remote_command,
+            what="the remote job",
+            on_output=_emit,
+            idle_timeout=_seconds_knob(
+                "CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT", DEFAULT_BUILD_IDLE_TIMEOUT
+            ),
+            in_tree=True,
+        )
+    finally:
+        if log_callback and buf:
+            log_callback("".join(buf))
+    return r.rc
 
 
 # ── File exchange ───────────────────────────────────────────────
@@ -409,29 +850,126 @@ def _rsync_argv() -> list[str]:
     return ["rsync", "-a", "-s", "-e", ssh_e]
 
 
-def _run_pipeline(producer: list[str], consumer: list[str], *, what: str) -> None:
-    """Run ``producer | consumer``, raising on either side's failure."""
+def _rsync(src: str, dst: str, *, what: str) -> None:
+    """Run one rsync transfer, in the job's process tree and bounded.
+
+    rsync starts its own ssh and prints nothing while it works, so neither the
+    completion marker nor the idle watch can see into it.  Its own
+    ``--timeout`` bounds a stalled transfer; the hard transfer timeout bounds
+    the rest, which includes the Haiku sshd hang, since rsync waits for its ssh
+    to exit.  The Haiku VMs have no rsync, so ``auto`` picks tar there.
+    """
+    argv = _rsync_argv()
+    idle = _idle_timeout()
+    if idle is not None:
+        argv.append(f"--timeout={max(1, int(idle))}")
+    proc = _start_process(
+        [*argv, src, dst],
+        what=what,
+        in_tree=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    r = _supervise(proc, what=what, marker=None, timeout=_transfer_timeout())
+    if r.rc != 0:
+        raise HaikuhostError(f"{what} failed (rsync rc={r.rc}): {r.errtext()}")
+
+
+def _finish_local(proc: subprocess.Popen, *, wait: bool) -> int:
+    """Reap a transfer's local tar: let it finish if the transfer worked, else stop it.
+
+    A stopped tar has its pipes closed only after it is gone: a relay thread
+    may still be blocked on one of them, and only the tar's exit releases it.
+    """
+
+    def _close_pipes() -> None:
+        # EOF for a tar that reads, EPIPE for one that writes to a dead ssh.
+        for pipe in (proc.stdin, proc.stdout):
+            if pipe is not None:
+                try:
+                    pipe.close()
+                except (OSError, ValueError):
+                    pass
+
+    rc: int | None = None
+    if wait:
+        _close_pipes()
+        try:
+            rc = proc.wait(timeout=_DRAIN_SECS)
+        except subprocess.TimeoutExpired:
+            pass
+    if rc is None:
+        proctree.stop(proc)
+        try:
+            rc = proc.wait(timeout=_DRAIN_SECS)
+        except subprocess.TimeoutExpired:
+            rc = -1
+        _close_pipes()
+    return rc
+
+
+def _tar_push(local: Path, remote_dir: str, *, what: str) -> None:
+    """``tar -c`` here, piped through ssh into ``tar -x`` on the Haiku side."""
+    q = shlex.quote(remote_dir)
+    tar = _start_process(
+        ["tar", "-C", str(local), "-cf", "-", "."],
+        what=what,
+        in_tree=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+    )
+    assert tar.stdout is not None
+    finished = False
     try:
-        src = subprocess.Popen(producer, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
-    except OSError as exc:
-        raise HaikuhostError(f"{what} failed to start {producer[0]}: {exc}") from exc
-    assert src.stdout is not None
-    try:
-        dst = subprocess.Popen(consumer, stdin=src.stdout, stderr=subprocess.PIPE)
-    except OSError as exc:
-        src.kill()
-        raise HaikuhostError(f"{what} failed to start {consumer[0]}: {exc}") from exc
-    # Close our copy so the producer sees EPIPE if the consumer dies.
-    src.stdout.close()
-    _, dst_err = dst.communicate()
-    src_rc = src.wait()
-    if dst.returncode != 0:
-        raise HaikuhostError(
-            f"{what} failed (rc={dst.returncode}): "
-            f"{dst_err.decode(errors='replace').strip()[:500]}"
+        r = _ssh_exec(
+            f"mkdir -p {q} && tar -C {q} -xf -",
+            what=what,
+            stdin=tar.stdout,
+            timeout=_transfer_timeout(),
+            idle_timeout=_idle_timeout(),
+            in_tree=True,
         )
-    if src_rc != 0:
-        raise HaikuhostError(f"{what} failed: {producer[0]} exited with code {src_rc}")
+        finished = True
+    finally:
+        tar_rc = _finish_local(tar, wait=finished)
+    if r.rc != 0:
+        raise HaikuhostError(f"{what} failed (rc={r.rc}): {r.errtext()}")
+    if tar_rc != 0:
+        raise HaikuhostError(f"{what} failed: tar exited with code {tar_rc}")
+
+
+def _tar_pull(remote_dir: str, local: Path, *, what: str) -> None:
+    """``tar -c`` on the Haiku side, piped through ssh into ``tar -x`` here.
+
+    The marker goes to stderr, apart from the archive.  The server sends EOF
+    after the last byte even when it then hangs, so the local tar has the
+    whole archive by the time the stuck ssh is stopped.
+    """
+    tar = _start_process(
+        ["tar", "-C", str(local), "-xf", "-"],
+        what=what,
+        in_tree=True,
+        stdin=subprocess.PIPE,
+    )
+    assert tar.stdin is not None
+    finished = False
+    try:
+        r = _ssh_exec(
+            f"tar -C {shlex.quote(remote_dir)} -cf - .",
+            what=what,
+            stdout=tar.stdin,
+            timeout=_transfer_timeout(),
+            idle_timeout=_idle_timeout(),
+            in_tree=True,
+        )
+        finished = True
+    finally:
+        tar_rc = _finish_local(tar, wait=finished)
+    if r.rc != 0:
+        raise HaikuhostError(f"{what} failed (rc={r.rc}): {r.errtext()}")
+    if tar_rc != 0:
+        raise HaikuhostError(f"{what} failed: tar exited with code {tar_rc}")
 
 
 def _push_tree(local: Path, remote_dir: str, *, what: str) -> str:
@@ -441,19 +979,9 @@ def _push_tree(local: Path, remote_dir: str, *, what: str) -> str:
     """
     mode = _transfer_mode()
     if mode == "rsync":
-        argv = [*_rsync_argv(), f"{str(local).rstrip('/')}/", f"{ssh_target()}:{remote_dir}/"]
-        r = subprocess.run(argv, capture_output=True)
-        if r.returncode != 0:
-            raise HaikuhostError(
-                f"{what} failed (rsync rc={r.returncode}): "
-                f"{r.stderr.decode(errors='replace').strip()[:500]}"
-            )
-        return mode
-    _run_pipeline(
-        ["tar", "-C", str(local), "-cf", "-", "."],
-        _ssh_cmd(f"mkdir -p {shlex.quote(remote_dir)} && tar -C {shlex.quote(remote_dir)} -xf -"),
-        what=what,
-    )
+        _rsync(f"{str(local).rstrip('/')}/", f"{ssh_target()}:{remote_dir}/", what=what)
+    else:
+        _tar_push(local, remote_dir, what=what)
     return mode
 
 
@@ -462,38 +990,17 @@ def _pull_tree(remote_dir: str, local: Path, *, what: str) -> str:
     local.mkdir(parents=True, exist_ok=True)
     mode = _transfer_mode()
     if mode == "rsync":
-        argv = [*_rsync_argv(), f"{ssh_target()}:{remote_dir}/", f"{str(local).rstrip('/')}/"]
-        r = subprocess.run(argv, capture_output=True)
-        if r.returncode != 0:
-            raise HaikuhostError(
-                f"{what} failed (rsync rc={r.returncode}): "
-                f"{r.stderr.decode(errors='replace').strip()[:500]}"
-            )
-        return mode
-    _run_pipeline(
-        _ssh_cmd(f"tar -C {shlex.quote(remote_dir)} -cf - ."),
-        ["tar", "-C", str(local), "-xf", "-"],
-        what=what,
-    )
+        _rsync(f"{ssh_target()}:{remote_dir}/", f"{str(local).rstrip('/')}/", what=what)
+    else:
+        _tar_pull(remote_dir, local, what=what)
     return mode
 
 
 def _put_text(text: str, remote_path: str, *, what: str) -> None:
     """Write *text* to *remote_path* on the Haiku host."""
-    try:
-        r = subprocess.run(
-            _ssh_cmd(f"cat > {shlex.quote(remote_path)}"),
-            input=text.encode(),
-            capture_output=True,
-            timeout=120,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise HaikuhostError(f"{what} failed on {ssh_target()}: {exc}") from exc
-    if r.returncode != 0:
-        raise HaikuhostError(
-            f"{what} failed on {ssh_target()} (rc={r.returncode}): "
-            f"{r.stderr.decode(errors='replace').strip()[:500]}"
-        )
+    r = _ssh_exec(f"cat > {shlex.quote(remote_path)}", what=what, stdin=text.encode(), timeout=120)
+    if r.rc != 0:
+        raise HaikuhostError(f"{what} failed on {ssh_target()} (rc={r.rc}): {r.errtext()}")
 
 
 # ── Path fix-ups ────────────────────────────────────────────────
@@ -531,6 +1038,170 @@ def _stage_prefix_rewrites(root: Path, old_prefix: str, new_prefix: str, stage: 
         out.write_text(text.replace(old_prefix, new_prefix), encoding="utf-8")
         count += 1
     return count
+
+
+# ── Source timestamps ───────────────────────────────────────────
+
+# BFS keeps the sub-second part of a timestamp on a grid of about 262 µs (it
+# stores (((ns + 16383) >> 14) & 0xfff0) << 14, and uses the low bits to keep
+# its time index keys unique), and it does not store a ZERO part as zero: it
+# fills it in from the moment of the utime call.  Every tar member has a whole-second
+# time, so `tar -x` on Haiku leaves files that shared a time with different
+# ones, ordered by extraction.  make then sees shipped outputs as older than
+# their inputs and regenerates them with tools the box lacks: texi2html for
+# gperf, automake-1.15 for flex.  A nonzero part is stored the same way every
+# time (.5 always reads back as .499908608).  Measured on hrev57937,
+# 2026-10-30.
+#
+# The Haiku clock is also not the builder's.  phm's VM ran about 21 s behind
+# its host, so a tree stamped with the builder's "now" (_settle_mtimes, or a
+# recipe patch) was in the Haiku future, and automake's configure stopped
+# with "newly created file is older than distributed files!" (m4, iconv,
+# libtasn1).
+#
+# So after the source push, every entry is re-stamped on the Haiku side from
+# its local time: see _restamp_plan.
+
+# The newest re-stamped time stays at least this many seconds below the Haiku
+# clock.
+_RESTAMP_MARGIN_SECS = 2
+
+# Bytes of path arguments per remote touch.  Haiku's ARG_MAX is 128 KiB,
+# environment included.
+_RESTAMP_ARG_BYTES = 32 * 1024
+
+# Hard bound on the re-stamp of one tree, which prints nothing while it runs.
+_RESTAMP_TIMEOUT = 15 * 60
+
+
+@dataclass
+class _RestampPlan:
+    """The ``touch -d`` times that re-stamp a pushed tree on the Haiku side."""
+
+    shift: int  # seconds every time moved back, to stay below the Haiku clock
+    groups: list[tuple[str, list[str]]]  # (``@sec.frac``, relative paths), oldest first
+    entries: int
+
+
+def _tree_mtimes(root: Path) -> list[tuple[str, int]]:
+    """``(relative path, mtime in ns)`` of *root* and every entry under it.
+
+    Regular files, directories and symlinks (the link itself), which is what
+    the transfer carries.  Paths are POSIX-style, ``.`` for the root.
+    """
+    out = [(".", os.lstat(root).st_mtime_ns)]
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()  # in place, so the walk itself goes in name order
+        filenames.sort()
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        for name in dirnames + filenames:
+            st = os.lstat(os.path.join(dirpath, name))
+            mode = st.st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
+                continue
+            out.append((name if rel_dir == "." else f"{rel_dir}/{name}", st.st_mtime_ns))
+    return out
+
+
+def _restamp_plan(entries: Sequence[tuple[str, int]], remote_now: int) -> _RestampPlan:
+    """Plan the re-stamp of a pushed tree from its local times and the Haiku clock.
+
+    *entries* are ``(relative path, mtime in ns)`` as on the builder, and
+    *remote_now* is the Haiku clock in whole seconds.
+
+    Each entry keeps its own whole second, moved back by one shift for the
+    whole tree if its newest entry would otherwise be less than
+    :data:`_RESTAMP_MARGIN_SECS` older than the Haiku clock.  The shift is the
+    same for every entry, so the order between seconds is kept, and a tree
+    that is old enough keeps its times.
+
+    The sub-second part is never zero (see above).  A second that holds one
+    distinct local time gets .5; one that holds k gets (i+1)/(k+1), in their
+    local order.  Equal times stay equal, and a file that a recipe patch
+    changed in the same second as the tree was settled still comes out
+    newer.  Times closer than BFS's grid tie; their order never flips.
+    """
+    by_sec: dict[int, set[int]] = {}
+    for _, ns in entries:
+        sec, sub = divmod(ns, 1_000_000_000)
+        by_sec.setdefault(sec, set()).add(sub)
+    if not by_sec:
+        return _RestampPlan(shift=0, groups=[], entries=0)
+    shift = max(0, max(by_sec) + 1 + _RESTAMP_MARGIN_SECS - remote_now)
+    target: dict[tuple[int, int], tuple[int, int]] = {}
+    for sec, subs in by_sec.items():
+        ordered = sorted(subs)
+        for i, sub in enumerate(ordered):
+            target[(sec, sub)] = (sec - shift, (i + 1) * 1_000_000_000 // (len(ordered) + 1))
+    grouped: dict[tuple[int, int], list[str]] = {}
+    for path, ns in entries:
+        grouped.setdefault(target[divmod(ns, 1_000_000_000)], []).append(path)
+    groups = [(f"@{sec}.{frac:09d}", paths) for (sec, frac), paths in sorted(grouped.items())]
+    return _RestampPlan(shift=shift, groups=groups, entries=len(entries))
+
+
+def _restamp_script(plan: _RestampPlan) -> bytes:
+    """The ``sh`` script that applies *plan*, run in the tree's root.
+
+    One ``touch`` per distinct time, and another each time its paths pass
+    :data:`_RESTAMP_ARG_BYTES`, rather than one per file: process start-up is
+    the slow part on Haiku.  ``-h`` stamps a symlink itself, ``-c`` creates
+    nothing, and a failed touch fails the script after the rest have run.
+    """
+    lines = ["rc=0"]
+    for stamp, paths in plan.groups:
+        chunk: list[str] = []
+        size = 0
+        for path in paths:
+            quoted = shlex.quote(path)
+            if chunk and size + len(quoted) + 1 > _RESTAMP_ARG_BYTES:
+                lines.append(f"touch -c -h -d {stamp} -- {' '.join(chunk)} || rc=1")
+                chunk, size = [], 0
+            chunk.append(quoted)
+            size += len(quoted) + 1
+        if chunk:
+            lines.append(f"touch -c -h -d {stamp} -- {' '.join(chunk)} || rc=1")
+    lines.append('exit "$rc"')
+    return ("\n".join(lines) + "\n").encode("utf-8", "surrogateescape")
+
+
+def _restamp_source(local: Path, remote_dir: str, log: Callable[[str], None]) -> None:
+    """Re-stamp the pushed source tree on the Haiku side (see :func:`_restamp_plan`).
+
+    Best effort: a tree that cannot be re-stamped is built as it is, which
+    many builds survive; the log says so first.
+    """
+    try:
+        entries = _tree_mtimes(local)
+        before = time.time()
+        remote_now = int(_run_ssh("date -u +%s", what="reading the Haiku clock", timeout=60))
+        skew = remote_now - (before + time.time()) / 2
+        plan = _restamp_plan(entries, remote_now)
+        started = time.monotonic()
+        r = _ssh_exec(
+            f"cd {shlex.quote(remote_dir)} && sh",
+            what="re-stamping the source tree",
+            stdin=_restamp_script(plan),
+            timeout=_RESTAMP_TIMEOUT,
+            in_tree=True,
+        )
+    except (HaikuhostError, OSError, ValueError) as exc:
+        log(
+            "cvcpkg-haikuhost: could not re-stamp the source tree on the Haiku side "
+            f"({exc}); building it with the timestamps BFS gave it"
+        )
+        return
+    if r.rc != 0:
+        log(
+            f"cvcpkg-haikuhost: re-stamping the source tree failed (rc={r.rc}): "
+            f"{r.errtext()}; building it with what timestamps it has"
+        )
+        return
+    log(
+        f"cvcpkg-haikuhost: re-stamped {plan.entries} source entries "
+        f"({len(plan.groups)} distinct times) in {time.monotonic() - started:.1f}s; "
+        f"the Haiku clock is {skew:+.0f}s from this builder's, times moved back {plan.shift}s"
+    )
 
 
 # ── Remote housekeeping ─────────────────────────────────────────
@@ -1016,13 +1687,24 @@ def run_haiku_build(
     work dir is removed on success and KEPT on failure (the error names
     it) so the wreckage can be inspected.  Raises :class:`HaikuhostError`.
     """
+    _log = _logger(log_callback)
+    with _notices_to(_log):
+        _run_haiku_build(ctx, matrix, script, log_callback, _log)
+
+
+def _run_haiku_build(
+    ctx: BuildContext,
+    matrix: MatrixEntry,
+    script: Path,
+    log_callback: Callable[[str], None] | None,
+    _log: Callable[[str], None],
+) -> None:
     if script.suffix != ".sh":
         raise HaikuhostError(
             f"haiku delegation only supports .sh build scripts, got {script.name}. "
             "Add a 'platform: haiku' matrix entry with a shell script."
         )
 
-    _log = _logger(log_callback)
     ensure_delegatable(ctx.platform, ctx.host_platform)
     target = ssh_target()
     if not target:  # defensive: ensure_delegatable only speaks for haiku targets
@@ -1069,6 +1751,8 @@ def run_haiku_build(
     try:
         mode = _push_tree(ctx.source_dir, paths["source"], what="pushing the source tree")
         _log(f"cvcpkg-haikuhost: staging the job on {target} via {mode}")
+        # The push left BFS's timestamps on the tree, not the builder's.
+        _restamp_source(ctx.source_dir, paths["source"], _log)
 
         _push_recipe(ctx, job, paths["recipe"])
 
@@ -1142,6 +1826,17 @@ def run_haiku_test(
     Nothing is copied back: a test produces no deliverable.  Raises
     :class:`HaikuhostError` when the remote test fails.
     """
+    _log = _logger(log_callback)
+    with _notices_to(_log):
+        _run_haiku_test(ctx, test_path, log_callback, _log)
+
+
+def _run_haiku_test(
+    ctx: BuildContext,
+    test_path: Path,
+    log_callback: Callable[[str], None] | None,
+    _log: Callable[[str], None],
+) -> None:
     if test_path.suffix != ".sh":
         raise HaikuhostError(
             f"haiku delegation only supports .sh test scripts, got {test_path.name}"
@@ -1157,7 +1852,6 @@ def run_haiku_test(
             f"{ctx.recipe.recipe_dir}, so it cannot be staged on the Haiku host"
         ) from None
 
-    _log = _logger(log_callback)
     ensure_delegatable(ctx.platform, ctx.host_platform)
     target = ssh_target()
     if not target:  # defensive: ensure_delegatable only speaks for haiku targets

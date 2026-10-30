@@ -39,6 +39,8 @@ build:
   matrix:
     - platform: linux
       script: build.sh
+    - platform: haiku
+      script: build.sh
     - platform: macos
       script: build.sh
       env:

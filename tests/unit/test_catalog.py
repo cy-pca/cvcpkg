@@ -216,6 +216,71 @@ class TestCatalogEntries:
             # The concrete release/shared bundle still filters exactly.
             assert ("numpy-cp311" in names) == ((cfg, lnk) == ("release", "shared"))
 
+    # ...and a noarch bundle compiles nothing, so it serves every config and
+    # link mode: a static request (wasm is static-only) or a debug one must
+    # still find the one release/shared bundle a noarch recipe publishes.
+
+    def test_noarch_matches_a_static_request(self):
+        entries = catalog_entries(
+            self.NOARCH_CATALOG,
+            platform="linux",
+            arch="x86_64",
+            build_type="release",
+            link="static",
+        )
+        # numpy-cp311 is concrete and shared, so a static request still skips it.
+        assert {e.name for e in entries} == {"idna"}
+
+    def test_noarch_matches_a_wasm_request(self):
+        entries = catalog_entries(
+            self.NOARCH_CATALOG, platform="wasm", arch="wasm32", build_type="release", link="static"
+        )
+        assert [(e.name, e.link) for e in entries] == [("idna", "shared")]
+
+    def test_noarch_matches_a_debug_request(self):
+        entries = catalog_entries(
+            self.NOARCH_CATALOG, platform="linux", arch="x86_64", build_type="debug", link="shared"
+        )
+        assert {e.name for e in entries} == {"idna"}
+
+    def test_noarch_by_arch_alone_matches_any_link(self):
+        cat = {"bundles": [dict(self.NOARCH_CATALOG["bundles"][0], platform="linux")]}
+        entries = catalog_entries(cat, platform="linux", arch="x86_64", link="static")
+        assert [e.name for e in entries] == ["idna"]
+
+    def test_noarch_keeps_the_exact_variant_when_there_are_several(self):
+        idna = self.NOARCH_CATALOG["bundles"][0]
+        cat = {
+            "bundles": [
+                idna,
+                dict(idna, link="static", sha256="1" * 64, archive_url="https://e/s.tar.gz"),
+                dict(idna, build_type="debug", sha256="2" * 64, archive_url="https://e/d.tar.gz"),
+            ]
+        }
+        static = catalog_entries(
+            cat, platform="wasm", arch="wasm32", build_type="release", link="static"
+        )
+        assert [(e.build_type, e.link) for e in static] == [("release", "static")]
+        shared = catalog_entries(
+            cat, platform="linux", arch="x86_64", build_type="release", link="shared"
+        )
+        assert [(e.build_type, e.link) for e in shared] == [("release", "shared")]
+        # Debug/static matches no variant exactly: the nearest ones (one of the two) stay, the
+        # release/shared one (neither) goes.
+        near = catalog_entries(
+            cat, platform="linux", arch="x86_64", build_type="debug", link="static"
+        )
+        assert sorted((e.build_type, e.link) for e in near) == [
+            ("debug", "shared"),
+            ("release", "static"),
+        ]
+
+    def test_noarch_variants_of_different_versions_are_kept(self):
+        idna = self.NOARCH_CATALOG["bundles"][0]
+        cat = {"bundles": [idna, dict(idna, version="3.17+cvc.1", link="static", sha256="3" * 64)]}
+        entries = catalog_entries(cat, platform="linux", arch="x86_64", link="shared")
+        assert sorted(e.version for e in entries) == ["3.16+cvc.1", "3.17+cvc.1"]
+
 
 # ── generate_catalog ────────────────────────────────────────────
 

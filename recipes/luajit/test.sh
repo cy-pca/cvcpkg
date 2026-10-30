@@ -54,7 +54,17 @@ unset CMAKE_PREFIX_PATH PKG_CONFIG_PATH LUA_PATH LUA_CPATH || true
 # RUNPATH/@rpath can find libluajit. The build tools keep cvcpkg's environment:
 # on OpenBSD (no $ORIGIN) the cvcpkg-built cmake needs LD_LIBRARY_PATH for its
 # own libssl. A subshell, since OpenBSD's env(1) has no -u.
-noldp() { ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" ); }
+# Haiku's runtime_loader reads LIBRARY_PATH (which the haikuhost runner fills with
+# the cvcpkg prefixes) and ignores LD_LIBRARY_PATH, so there the loader path is
+# reset to the system's own default instead (unset, it would find nothing).
+noldp() {
+    if [[ "${PLAT}" == "haiku" ]]; then
+        ( LIBRARY_PATH="%A/lib:${HOME}/config/non-packaged/lib:${HOME}/config/lib:/boot/system/non-packaged/lib:/boot/system/lib" \
+            exec "$@" )
+        return
+    fi
+    ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" )
+}
 
 if [[ "${PLAT}" == "windows" ]]; then
     LJ="${R}/bin/luajit.exe"
@@ -152,6 +162,8 @@ liblj_of() {
     case "${PLAT}" in
         macos)   otool -L "$1" | awk '/libluajit/ {print $1}' ;;
         windows) : ;;
+        # Haiku has no ldd: the DT_NEEDED entry, from readelf.
+        haiku)   readelf -d "$1" | awk '/NEEDED/ && /libluajit/ { gsub(/[][]/, "", $NF); print $NF }' ;;
         # "name => path (addr)" on Linux/FreeBSD/NetBSD; a table with the
         # path in the last column on OpenBSD.
         *)       noldp ldd "$1" | awk '/libluajit/ { if (index($0, "=>")) print $3; else print $NF }' ;;
@@ -164,6 +176,12 @@ expect_in_reloc() {
         macos)   [[ "${got}" == "@rpath/libluajit-5.1.2.dylib" ]] \
                      || fail "$(basename "$1") records libluajit as '${got}'" ;;
         windows) ;;
+        # It already ran under noldp, so the loader found libluajit through the
+        # RUNPATH alone; check that the RUNPATH names the relocated prefix.
+        haiku)   [[ -n "${got}" ]] || fail "$(basename "$1") does not need libluajit"
+                 readelf -d "$1" | grep -E 'RUNPATH|RPATH' \
+                     | grep -qF -e "${R}/lib" -e "$(cd "${R}/lib" && pwd -P)" \
+                     || fail "$(basename "$1") has no RUNPATH into the relocated prefix: $(readelf -d "$1" | grep -E 'RUNPATH|RPATH')" ;;
         *)       [[ -n "${got}" ]] || fail "$(basename "$1") does not load libluajit"
                  [[ "$(cd "$(dirname "${got}")" && pwd -P)" == "$(cd "${R}/lib" && pwd -P)" ]] \
                      || fail "$(basename "$1") loads libluajit from ${got}, not the relocated prefix" ;;

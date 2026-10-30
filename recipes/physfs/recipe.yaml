@@ -20,7 +20,10 @@ source:
   sha256: "1991500eaeb8d5325e3a8361847ff3bf8e03ec89252b7915e1f25b3f8ab5d560"
   strip_components: 1
 
-patches: []
+patches:
+  # NetBSD's getmntinfo() fills struct statvfs, not statfs; without this the
+  # netbsd build fails in src/physfs_platform_unix.c. Guarded by __NetBSD__.
+  - netbsd-statvfs.patch
 
 depends:
   build:
@@ -48,6 +51,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

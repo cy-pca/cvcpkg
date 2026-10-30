@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# recipes/libxshmfence/build.sh — build libXrandr 1.5.5 with autotools.
+# recipes/libxshmfence/build.sh — build libxshmfence 1.3.3 with autotools.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -15,8 +15,21 @@ _link=(--enable-shared --disable-static)
 [[ "${CVC_LINK:-shared}" == "static" ]] && _link=(--disable-shared --enable-static)
 
 cd "${CVC_SOURCE_DIR}"
+
+# NetBSD has no futex and no process-shared pthread mutexes, so use the POSIX
+# semaphore backend NetBSD's own libxshmfence uses (see netbsd-semaphore.patch).
+# Its defines mirror NetBSD's lib/libxshmfence Makefile: 4 KiB pages (x86_64 and
+# aarch64), the /var/shm tmpfs for the shared-memory file, sem_* from librt.
+_extra=()
+if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
+    patch -p1 < "${SCRIPT_DIR}/netbsd-semaphore.patch"
+    export CPPFLAGS="${CPPFLAGS} -DHAVE_SEMAPHORE=1 -DLIBXSHM_PAGESIZE=4096"
+    export LIBS="-lrt${LIBS:+ ${LIBS}}"
+    _extra+=(--with-shared-memory-dir=/var/shm)
+fi
+
 ./configure --prefix="${CVC_INSTALL_DIR}" "${_link[@]}" \
-    --disable-selective-werror
+    --disable-selective-werror ${_extra[@]+"${_extra[@]}"}
 make -j "${CVC_JOBS}"
 make install
 

@@ -6,7 +6,11 @@ recipe:
   # pulled in as a runtime dependency of python-pptx (embedded chart data).  It
   # has NO native dependencies (standard library only), so this is a plain
   # from-source setuptools sdist build in the generated shape.
-  cvc_revision: 1
+  # cvc.2: republish from a cvcpkg 2.5.10 builder.  On Windows, Scripts/vba_extract.py
+  # carried pip's #!C:\cvb\...\python.exe shebang (the job's deps prefix,
+  # a path any local user can create), which the py launcher runs;
+  # cy-pca/cvcpkg#506 taught packing to rewrite it to /usr/bin/env python.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

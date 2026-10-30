@@ -44,6 +44,11 @@ package:
 
 build:
   matrix:
-    # Linux only: added as a build dependency of the hermetic `mesa` recipe.
+    # A dependency of the hermetic `mesa` recipe (software GL), on Linux, FreeBSD
+    # and NetBSD (OpenBSD's base X11 has its own Mesa).
     - platform: linux
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: netbsd
       script: build.sh

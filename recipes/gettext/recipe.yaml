@@ -13,7 +13,10 @@ recipe:
   # Windows build installs.  Other platforms unchanged.
   # cvc.5: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
   # instead of using the builder's; see depends.build.
-  cvc_revision: 5
+  # cvc.6: libiconv is linked only on OpenBSD and macOS, the platforms that
+  # declare it.  linux/arm64 cvc.5 picked it up from a shared populate prefix
+  # without declaring it, so its msgfmt could not start elsewhere (build.sh).
+  cvc_revision: 6
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"

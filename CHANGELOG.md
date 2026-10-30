@@ -61,6 +61,65 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     other variants are yanked. A yanked row keeps its archive downloadable
     for pinned lockfiles and keeps its org visibility; the yank-retention GC
     removes it later.
+- **Fix: a Haiku job could wait forever on an ssh session that never ended.**
+  Haiku's sshd sometimes keeps a session open after its command has exited
+  (about one run in three on phm's VM), and `cvcpkg.haikuhost` waited on ssh
+  with no timeout: a prod sevenzip job sat 70 minutes in its recipe push. Each
+  remote command now reports its own exit status on a marker line; once the
+  marker is in, ssh gets 5 s to exit and is then stopped, and the job goes on
+  with the reported status. Transfers, remote commands and the remote build
+  also stop when no data moves for too long (`CVCPKG_HAIKU_IDLE_TIMEOUT`,
+  `CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT`, `CVCPKG_HAIKU_TRANSFER_TIMEOUT`), and file
+  transfers now run in the job's process tree, so a cancelled job stops them.
+- **Fix: autotools builds broke on Haiku over source timestamps.** BFS replaces
+  a zero sub-second mtime with one taken from the moment of the call, so a tree
+  pushed with tar came out with its files ordered by extraction, and make
+  regenerated shipped files (gperf's manual, flex's Makefiles). The VM's clock
+  also runs behind the builder's, so a tree stamped with the builder's time was
+  in the future and automake's configure stopped with "newly created file is
+  older than distributed files!" (m4, iconv, libtasn1). After the push the
+  source tree is now re-stamped on the Haiku side: each file keeps its second
+  with a fixed nonzero fraction, and the whole tree moves back below the Haiku
+  clock when it has to. With it, gperf and m4 build for Haiku; their recipes
+  get haiku rows separately.
+
+## v2.5.10
+
+**A release so builders rewrite Windows script shebangs (#506), and so
+installs resolve noarch bundles for any config and link mode (#510). The server
+needs nothing for #506; packing runs on the builders, so they need this
+release.**
+
+- **Fix: Windows text scripts kept the build's interpreter as their shebang.**
+  pip writes a package's `scripts=` files (jmespath's `jp.py`, xlsxwriter's
+  `vba_extract.py`) into `Scripts\` as text, with a `#!C:\...\python.exe` line
+  naming the job's deps-prefix interpreter. Packing rewrote shebangs only in
+  `bin/`, `sbin/` and `libexec/`, and only forward-slash paths, so these shipped
+  as is. On the Windows builder that path is `C:\cvb\cvcpkg-job-...`, which any
+  local user can create on a machine with the package, and the `py` launcher
+  runs it. Now:
+  - `Scripts/` is scanned too (its `.exe` launchers are still left to the
+    launcher pass);
+  - a Windows interpreter path matches with either slash and in any case,
+    quoted or not;
+  - it becomes `#!/usr/bin/env python`, which the launcher resolves on PATH.
+    Versioned names such as `python3.13t` are kept, and a CRLF line stays CRLF.
+- **Fix: a noarch bundle never resolved for a static or debug install.** A
+  noarch recipe (`platform: any`: fonts, data sets, pure Python, JavaScript)
+  publishes one any/noarch/release/shared bundle. The catalog filter matched it
+  to every platform and arch but compared config and link exactly, so
+  `cvcpkg install xterm-js --platform wasm` (wasm, wasm-mt, wasi and cosmo are
+  static-only), `--link static` or `--config debug` failed with "no bundles
+  found in catalog for this platform tuple". No recipe for those targets could
+  list a noarch dep: libcvc's arigl-web had to install xterm-js separately.
+  - A noarch bundle now serves every config and link mode, in `install`,
+    `install-deps`, `sync` and `catalog`. A compiled bundle still needs its
+    exact tuple.
+  - A concrete bundle still beats a noarch one at the same version, as before.
+  - When a noarch package has published several variants of one version, the
+    one matching the request best is kept.
+  - Client-only: the server serves the whole catalog, and the client filters
+    it.
 
 ---
 

@@ -141,6 +141,16 @@ def served_by_any_entry(matrix_platforms: Sequence[str], target: str) -> bool:
     return norm_target not in plats
 
 
+def is_noarch_bundle(bundle_platform: str, bundle_arch: str) -> bool:
+    """True for a platform-independent bundle (``platform: any`` / ``arch: noarch``).
+
+    Nothing in it is compiled -- fonts, data sets, pure Python, JavaScript -- so
+    besides every platform and arch it serves every config and link mode: a
+    static (or debug) request must still resolve it.
+    """
+    return bundle_platform == "any" or bundle_arch == "noarch"
+
+
 def platform_matches(bundle_platform: str, requested: str) -> bool:
     """True when a bundle's ``platform`` satisfies a host's *requested* platform.
 

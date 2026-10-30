@@ -3770,12 +3770,14 @@ def _rewrite_script_prefixes(target_dir: Path) -> None:
 # prefix* (.../cvcpkg-job-x-y/bin/python3.11), which that regex misses.
 _TEMP_SHEBANG_RE = re.compile(r"/cvcpkg-[^/]+/")
 
-# Script dirs scanned for shebangs.  POSIX layouts only: a Windows console
-# script is a Scripts/*.exe launcher whose interpreter path is embedded
-# INSIDE the binary (pip/distlib append shebang + zip to a stub .exe);
-# those get their own binary-aware pass, :func:`_rewrite_exe_launchers`.
-# The ``#!`` sniff below skips them regardless (a PE starts ``MZ``).
-_SHEBANG_DIRS = ("bin", "sbin", "libexec")
+# Script dirs scanned for shebangs.  A Windows console script is a
+# Scripts/*.exe launcher whose interpreter path is embedded INSIDE the binary
+# (pip/distlib append shebang + zip to a stub .exe); those get their own
+# binary-aware pass, :func:`_rewrite_exe_launchers`, and the ``#!`` sniff below
+# skips them (a PE starts ``MZ``).  But a package's ``scripts=`` files
+# (jmespath's jp.py, xlsxwriter's vba_extract.py) land in Scripts/ as TEXT,
+# with pip's ``#!C:\...\python.exe`` first line, so Scripts/ is scanned too.
+_SHEBANG_DIRS = ("bin", "sbin", "libexec", "Scripts")
 
 # pip's /bin/sh POLYGLOT wrapper, emitted instead of a plain ``#!`` whenever the
 # interpreter path is too long for the kernel's shebang limit (~128 bytes on
@@ -3878,13 +3880,29 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
     *arguments* is left alone with a warning: Linux hands everything after
     the interpreter to it as ONE argument, so ``/usr/bin/env NAME ARG``
     would trade a broken path for a broken invocation.
+
+    Windows text scripts get the same treatment.  pip writes them a
+    ``#!C:\\...\\cvcpkg-prefix-x-y\\python.exe`` line, which the ``py``
+    launcher runs, and a job dir like ``C:\\cvb\\...`` is one any local user
+    can create on a consumer machine, so an unrewritten script ran whatever
+    ``python.exe`` was planted there.  Such a path is matched as
+    :func:`_rewrite_exe_launchers` matches it (either slash, any case), and
+    becomes ``#!/usr/bin/env python``, which the launcher resolves on PATH.
     """
     prefixes = tuple(str(p).rstrip("/") for p in temp_prefixes if p)
+    win_prefixes = tuple(_win_norm(p) for p in prefixes)
 
     def _is_temp(interp: str) -> bool:
         if any(interp.startswith(p + "/") for p in prefixes):
             return True
-        return _TEMP_SHEBANG_RE.search(interp) is not None
+        if _TEMP_SHEBANG_RE.search(interp) is not None:
+            return True
+        if "\\" not in interp and interp[1:2] != ":":
+            return False
+        n = _win_norm(interp)
+        if any(n.startswith(p + "/") for p in win_prefixes):
+            return True
+        return _TEMP_SHEBANG_RE.search(n) is not None
 
     count = 0
     for sub in _SHEBANG_DIRS:
@@ -3908,10 +3926,18 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
                 line = data[2:head_end].decode("utf-8").strip()
             except UnicodeDecodeError:
                 continue
-            fields = line.split(None, 1)
-            if not fields:
-                continue
-            interp = fields[0]
+            windows = line.startswith('"') or "\\" in line or line[1:2] == ":"
+            if windows:
+                # A Windows interpreter, possibly quoted, ends at ".exe".
+                parsed = _parse_launcher_shebang(f"#!{line}\n".encode())
+                if parsed is None:
+                    continue
+                interp, args = parsed
+            else:
+                fields = line.split(None, 1)
+                if not fields:
+                    continue
+                interp, args = fields[0], fields[1] if len(fields) > 1 else ""
             if not _is_temp(interp):
                 # Not a build-prefix interpreter on line one -- but pip may have
                 # hidden one on line two behind a /bin/sh polyglot (see
@@ -3921,13 +3947,19 @@ def _rewrite_shebangs(root: Path, temp_prefixes: Sequence[Path | str] = ()) -> N
                 if rewritten:
                     count += 1
                 continue
-            if len(fields) > 1:
+            if args:
                 print(
                     f"cvcpkg: WARNING: {path.relative_to(root)}: build-prefix shebang"
                     f" carries interpreter arguments, left unrewritten: #!{line}"
                 )
                 continue
-            new_head = f"#!/usr/bin/env {interp.rsplit('/', 1)[-1]}".encode()
+            name = re.split(r"[\\/]", interp)[-1]
+            if name.casefold().endswith(".exe"):
+                name = name[:-4]
+            new_head = f"#!/usr/bin/env {name}".encode()
+            # pip ends a Windows script's line with os.linesep; keep its CRLF.
+            if windows and data[head_end - 1 : head_end] == b"\r":
+                new_head += b"\r"
             rest = data[head_end:] if newline_at != -1 else b"\n"
             _write_bytes_preserving_mode(path, new_head + rest)
             count += 1

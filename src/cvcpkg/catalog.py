@@ -339,7 +339,13 @@ def catalog_entries(
     trust_mirror: bool | None = None,
 ) -> list[CatalogEntry]:
     """Extract CatalogEntry objects from a catalog dict, optionally filtered."""
-    from cvcpkg.platform import arch_matches, config_matches, link_matches, platform_matches
+    from cvcpkg.platform import (
+        arch_matches,
+        config_matches,
+        is_noarch_bundle,
+        link_matches,
+        platform_matches,
+    )
 
     _trust = trust_mirror_default() if trust_mirror is None else trust_mirror
     entries: list[CatalogEntry] = []
@@ -351,9 +357,17 @@ def catalog_entries(
             continue
         if arch and not arch_matches(b.get("arch", ""), arch):
             continue
-        if build_type and not config_matches(b.get("build_type", ""), build_type):
+        # ...and it compiles nothing, so it serves every config and link mode
+        # too: a none/none bundle by its label, and one a noarch recipe
+        # published as release/shared before neutral variants by its identity.
+        # A static request (wasm/wasm-mt/wasi/cosmo are static-only) or a debug
+        # one never matched the latter: no recipe for those could depend on a
+        # font, a data set or a JS library.  _prefer_exact_noarch_variant keeps
+        # the exact variant when a noarch package publishes more than one.
+        noarch = is_noarch_bundle(b.get("platform", ""), b.get("arch", ""))
+        if build_type and not config_matches(b.get("build_type", ""), build_type) and not noarch:
             continue
-        if link and not link_matches(b.get("link", ""), link):
+        if link and not link_matches(b.get("link", ""), link) and not noarch:
             continue
         # Upstream retired this bundle; the mirror serving it has overridden
         # that locally.  Upstream is authoritative unless told otherwise.
@@ -395,7 +409,40 @@ def catalog_entries(
                 requires_capabilities=b.get("requires_capabilities", []),
             )
         )
-    return entries
+    return _prefer_exact_noarch_variant(entries, build_type=build_type, link=link)
+
+
+def _prefer_exact_noarch_variant(
+    entries: list[CatalogEntry], *, build_type: str, link: str
+) -> list[CatalogEntry]:
+    """Of the noarch bundles of one (org, name, version), keep the nearest variant.
+
+    catalog_entries lets a noarch bundle through whatever config and link were
+    asked for.  When a noarch package published more than one variant of the
+    same version (release/shared and release/static, say), keep only those
+    matching the request best -- both config and link, else one of them -- so
+    the resolver never picks a mismatched one by catalog order.  Concrete
+    bundles are untouched.
+    """
+    from cvcpkg.platform import config_matches, is_noarch_bundle, link_matches
+
+    if not build_type and not link:
+        return entries
+
+    # A none/none bundle matches every request exactly.
+    def score(e: CatalogEntry) -> int:
+        return int(config_matches(e.build_type, build_type)) + int(link_matches(e.link, link))
+
+    best: dict[tuple[str, str, str], int] = {}
+    for e in entries:
+        if is_noarch_bundle(e.platform, e.arch):
+            key = (e.org, e.name, e.version)
+            best[key] = max(best.get(key, 0), score(e))
+    return [
+        e
+        for e in entries
+        if not is_noarch_bundle(e.platform, e.arch) or score(e) == best[(e.org, e.name, e.version)]
+    ]
 
 
 # ── Catalog generation ──────────────────────────────────────────

@@ -4,7 +4,12 @@ recipe:
   upstream_version: "18.4"
   # cvc.8: pass the deps prefix as extra_include_dirs/extra_lib_dirs so
   # meson finds cvcpkg's libintl on macOS and the BSDs.
-  cvc_revision: 8
+  # cvc.9: SYSCONFDIR (pg_service.conf) and LOCALEDIR (message catalogs) are
+  # compiled in, and were the job's install dir: /tmp/cvcpkg-builder/... or
+  # C:\cvb\..., paths any local user can create where this libpq runs.  Now
+  # /etc/postgresql and /usr/share/locale, or C:/Program Files/PostgreSQL/etc/
+  # postgresql on Windows, where only root or an administrator can write.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

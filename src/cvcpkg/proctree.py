@@ -169,6 +169,38 @@ class ProcessTree:
                 _kernel32().TerminateJobObject(self._job, 1)
 
 
+def stop(proc: subprocess.Popen, grace: float = KILL_GRACE_SECS) -> None:
+    """Stop one process the caller gave up on, and everything it started.
+
+    For a caller's own timeout, where the rest of the job goes on: haikuhost
+    stops an ssh that never exits after its remote command is done.  On POSIX a
+    process that leads its own process group (``start_new_session=True``,
+    which :func:`popen` passes inside a tree) has the whole group signalled the
+    way :meth:`ProcessTree.kill` does it: SIGTERM, then SIGKILL after *grace*.
+    Any other process, and on Windows every process, gets ``Popen.kill``.
+    Best effort, and never raises.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32" or os.getpgid(proc.pid) != proc.pid:
+            proc.kill()
+            return
+        import signal
+
+        _signal_group(proc.pid, signal.SIGTERM)
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            # Reap the leader as it goes: an unreaped zombie still answers for
+            # its group, and the wait would last the whole grace period.
+            if proc.poll() is not None and not _signal_group(proc.pid, 0):
+                return
+            time.sleep(0.05)
+        _signal_group(proc.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001 - best effort, see the module docstring
+        pass
+
+
 def _kill_groups(pgids: list[int], grace: float) -> None:
     """POSIX: SIGTERM each process group, SIGKILL what is left after *grace*."""
     import signal
