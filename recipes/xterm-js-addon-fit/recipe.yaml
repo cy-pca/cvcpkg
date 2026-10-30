@@ -1,0 +1,46 @@
+schema_version: 1
+recipe:
+  name: xterm-js-addon-fit
+  upstream_version: "0.10.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xtermjs.org
+  license: MIT
+  tags: [javascript, web, terminal, data]
+  description: >-
+    xterm.js's fit addon 0.10.0, which sizes a terminal to its element: its browser build (addon-
+    fit.js), from the npm package, installed into share/xterm.js/ with its licence in
+    share/doc/xterm-js-addon-fit/. A page that runs a terminal program in the browser serves it from
+    its own origin instead of a CDN, so the page needs no other origin in its Content-Security-
+    Policy; libcvc's ari pages (an Ariadne document in an FTXUI or tvision terminal) do. It loads on
+    an xterm.js Terminal (xterm-js).
+
+source:
+  # The npm registry's tarball (package/ inside, stripped). The sha256 pins the bytes; the file
+  # it installs matches the SRI hash jsDelivr serves for the same version.
+  type: tarball
+  url: https://registry.npmjs.org/@xterm/addon-fit/-/addon-fit-0.10.0.tgz
+  sha256: "917ac44972453d5eed52edc1e50260c76398ce48cf2290c2e60671102bba0b33"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: xterm-js
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: JavaScript (and CSS), identical on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/xterm.js/addon-fit.js
+    - share/doc/xterm-js-addon-fit/
