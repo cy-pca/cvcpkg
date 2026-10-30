@@ -58,6 +58,11 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
         CXXFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     - platform: wasm
@@ -82,7 +87,7 @@ package:
     - lib/geos*
     - lib/cmake/GEOS/
     # GEOS's CMake writes geos.pc everywhere but Windows.
-    - { glob: "lib/pkgconfig/geos.pc", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasi, cosmo] }
+    - { glob: "lib/pkgconfig/geos.pc", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo] }
     - include/geos.h
     - include/geos_c.h
     - include/geos/

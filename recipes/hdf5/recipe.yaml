@@ -55,6 +55,15 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    # HDF5 enables _Float16 (GCC 13 has it) and H5Tconv.c uses FLT16_MAX, which
+    # <float.h> defines only under __STDC_WANT_IEC_60559_TYPES_EXT__.
+    # src/H5private.h defines that just before its own #include <float.h>, but on
+    # Haiku <float.h> has already been included by then ("FLT16_MAX undeclared"),
+    # so request the macros for every translation unit.
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC -D__STDC_WANT_IEC_60559_TYPES_EXT__=1"
     - platform: windows
       script: build.ps1
       vcpkg_features: ["cpp"]

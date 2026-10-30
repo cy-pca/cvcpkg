@@ -13,6 +13,11 @@ if ! echo '_Float16 h5_probe;' | "${CXX:-c++}" -x c++ -c -o /dev/null - >/dev/nu
     echo "hdf5: ${CXX:-c++} has no _Float16 in C++; HDF5_ENABLE_NONSTANDARD_FEATURE_FLOAT16=OFF"
     _extra+=(-DHDF5_ENABLE_NONSTANDARD_FEATURE_FLOAT16=OFF)
 fi
+# HDF5 sets CMAKE_POSITION_INDEPENDENT_CODE, whose -fPIE breaks executable links
+# on Haiku (bin/h5dump: "relocation R_X86_64_PC32 ... recompile with -fPIC").
+if [[ "${CVC_PLATFORM}" == "haiku" ]]; then
+    _extra+=(-DCMAKE_PROJECT_INCLUDE="${SCRIPT_DIR}/../_common/haiku-pic.cmake")
+fi
 
 cvc_cmake_build \
     -DHDF5_BUILD_CPP_LIB=ON \

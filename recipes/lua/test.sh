@@ -128,7 +128,17 @@ unset CMAKE_PREFIX_PATH PKG_CONFIG_PATH || true
 # environment cvcpkg gave the test -- on OpenBSD, whose ld.so ignores $ORIGIN,
 # the cvcpkg-built cmake needs LD_LIBRARY_PATH to find its own libssl. A
 # subshell rather than `env -u`, which OpenBSD's env(1) does not have.
-noldp() { ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" ); }
+# Haiku's runtime_loader reads LIBRARY_PATH (which the haikuhost runner fills with
+# the cvcpkg prefixes) and ignores LD_LIBRARY_PATH, so there the loader path is
+# reset to the system's own default instead (unset, it would find nothing).
+HAIKU_SYS_LIBRARY_PATH="%A/lib:${HOME}/config/non-packaged/lib:${HOME}/config/lib:/boot/system/non-packaged/lib:/boot/system/lib"
+noldp() {
+    if [[ "${PLAT}" == "haiku" ]]; then
+        ( LIBRARY_PATH="${HAIKU_SYS_LIBRARY_PATH}" exec "$@" )
+        return
+    fi
+    ( unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH; exec "$@" )
+}
 
 # Where did EXE load liblua from? Prints nothing when it is linked statically.
 # ldd prints "name => path (addr)" on Linux/FreeBSD/NetBSD and a table whose
@@ -137,6 +147,8 @@ liblua_of() {
     case "${PLAT}" in
         macos)   otool -L "$1" | awk '/liblua/ {print $1}' ;;
         windows) : ;;
+        # Haiku has no ldd: the DT_NEEDED entry, from readelf.
+        haiku)   readelf -d "$1" | awk '/NEEDED/ && /liblua/ { gsub(/[][]/, "", $NF); print $NF }' ;;
         *)       noldp ldd "$1" | awk '/liblua/ { if (index($0, "=>")) print $3; else print $NF }' ;;
     esac
 }
@@ -149,6 +161,13 @@ expect_liblua_in_reloc() {
             [[ "${got}" == "@rpath/liblua.5.4.dylib" ]] \
                 || fail "$(basename "${exe}") records liblua as '${got}', not @rpath/liblua.5.4.dylib" ;;
         windows) ;;
+        # It already ran under noldp, so the loader found liblua through the
+        # RUNPATH alone; check that the RUNPATH names the relocated prefix.
+        haiku)
+            [[ -n "${got}" ]] || fail "$(basename "${exe}") does not need liblua"
+            readelf -d "${exe}" | grep -E 'RUNPATH|RPATH' \
+                | grep -qF -e "${R}/lib" -e "$(cd "${R}/lib" && pwd -P)" \
+                || fail "$(basename "${exe}") has no RUNPATH into the relocated prefix: $(readelf -d "${exe}" | grep -E 'RUNPATH|RPATH')" ;;
         *)
             [[ -n "${got}" ]] || fail "$(basename "${exe}") does not load liblua"
             [[ "$(cd "$(dirname "${got}")" && pwd -P)" == "$(cd "${R}/lib" && pwd -P)" ]] \
@@ -333,12 +352,20 @@ run_reloc_lua() {
         # OpenBSD's ld.so does not expand $ORIGIN (cvcpkg relocates OpenBSD
         # bundles at install time instead), so the bundle's lib/ is named here.
         openbsd) LD_LIBRARY_PATH="${R}/lib:${depsonly}" "$@" ;;
+        haiku)   LIBRARY_PATH="${depsonly}:${HAIKU_SYS_LIBRARY_PATH}" "$@" ;;
         *)       LD_LIBRARY_PATH="${depsonly}" "$@" ;;
     esac
 }
 run_reloc_lua "${R}/bin/lua" -e 'assert(_VERSION == "Lua 5.4"); print("relocated " .. _VERSION .. " interpreter OK")' \
     || fail "relocated bin/lua failed"
-if [[ "${PLAT}" != "openbsd" && "${PLAT}" != "macos" ]]; then
+if [[ "${PLAT}" == "haiku" ]]; then
+    # No ldd: bin/lua just ran with liblua off the loader path, so check what
+    # let it find liblua -- a DT_NEEDED entry and an $ORIGIN RUNPATH.
+    readelf -d "${R}/bin/lua" | grep -q 'NEEDED.*liblua' || fail "relocated bin/lua does not need liblua"
+    readelf -d "${R}/bin/lua" | grep -E 'RUNPATH|RPATH' | grep -qF '$ORIGIN' \
+        || fail "relocated bin/lua has no \$ORIGIN RUNPATH: $(readelf -d "${R}/bin/lua" | grep -E 'RUNPATH|RPATH')"
+    ok "relocated bin/lua resolves liblua via \$ORIGIN"
+elif [[ "${PLAT}" != "openbsd" && "${PLAT}" != "macos" ]]; then
     got="$(LD_LIBRARY_PATH="${depsonly}" ldd "${R}/bin/lua" | awk '/liblua/ { if (index($0, "=>")) print $3; else print $NF }')"
     [[ "$(cd "$(dirname "${got}")" && pwd -P)" == "$(cd "${R}/lib" && pwd -P)" ]] \
         || fail "relocated bin/lua loads liblua from '${got}'"

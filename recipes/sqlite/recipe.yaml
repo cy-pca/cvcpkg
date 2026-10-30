@@ -72,6 +72,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     - platform: wasm
@@ -102,7 +106,7 @@ package:
     - include/sqlite3ext.h
     # The cross targets build the library only, since the CLI is not runnable
     # on the build host.
-    - { glob: "bin/sqlite3*", platforms: [linux, macos, freebsd, openbsd, netbsd, windows] }
+    - { glob: "bin/sqlite3*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows] }
   cmake_packages: []
 
 abi:

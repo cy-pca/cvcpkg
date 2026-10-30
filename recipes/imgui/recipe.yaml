@@ -51,6 +51,8 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: haiku
+      script: build.sh
     # windows: MSVC (cl.exe) via build.ps1 — compiles the core .cpp and archives
     # a STATIC imgui.lib (ImGui exports no __declspec(dllexport) symbols, so a DLL
     # would export nothing). Consumers link the static lib directly.
@@ -74,9 +76,9 @@ package:
   files:
     # build.ps1 compiles a static imgui.lib by hand and writes no CMake
     # package (windows populate, 2026-10-19: the unscoped globs failed).
-    - { glob: "lib/libimgui*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
+    - { glob: "lib/libimgui*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt] }
     - { glob: "lib/imgui.lib", platforms: [windows] }
-    - { glob: "lib/cmake/imgui/", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt] }
+    - { glob: "lib/cmake/imgui/", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt] }
     - include/imgui/
 
 abi:

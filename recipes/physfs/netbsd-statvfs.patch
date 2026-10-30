@@ -1,0 +1,22 @@
+Use struct statvfs for getmntinfo() on NetBSD.
+
+NetBSD's getmntinfo() is declared as getmntinfo(struct statvfs **, int)
+(sys/statvfs.h); its struct statfs is incomplete, so physfs 3.2.0's BSD
+CD-ROM detection failed to compile there ("subscript of pointer to incomplete
+type 'struct statfs'"). statvfs has the f_fstypename and f_mntonname fields
+this loop reads. Other platforms compile exactly the code they did before.
+
+--- a/src/physfs_platform_unix.c
++++ b/src/physfs_platform_unix.c
+@@ -79,7 +79,11 @@
+ 
+ #elif (defined PHYSFS_HAVE_SYS_UCRED_H)
+     int i;
++#if defined(__NetBSD__)
++    struct statvfs *mntbufp = NULL;  /* NetBSD's getmntinfo() fills statvfs */
++#else
+     struct statfs *mntbufp = NULL;
++#endif
+     int mounts = getmntinfo(&mntbufp, MNT_NOWAIT);
+ 
+     for (i = 0; i < mounts; i++)
