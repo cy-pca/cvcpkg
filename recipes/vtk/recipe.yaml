@@ -107,15 +107,17 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
-    - platform: freebsd
-      script: build.sh
-      env:
-        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    # No freebsd or netbsd entries for now; they need to come back.  vtk has
+    # never been built for either: its qt6 dep stops at configure on those
+    # builders ("The OpenGL functionality tests failed!", dev jobs 23606 and
+    # 23609, 2026-10-29) because they have no OpenGL, and VTK's rendering needs
+    # it too.  qt6 is likewise unpublished there.  With the entries in place,
+    # every vtk change sent qt6 for those platforms to the dev cluster and
+    # failed the PR's build-on-dev check.  To restore them: give the FreeBSD
+    # and NetBSD builders OpenGL (Mesa) or port the hermetic GL recipes the
+    # Linux build uses, get qt6 publishing there, then re-add both entries
+    # with CXXFLAGS "-O2 -fPIC -std=c++17", as openbsd has.
     - platform: openbsd
-      script: build.sh
-      env:
-        CXXFLAGS: "-O2 -fPIC -std=c++17"
-    - platform: netbsd
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
