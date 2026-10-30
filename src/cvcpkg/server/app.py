@@ -2942,7 +2942,32 @@ def create_app(
         if not _RECIPE_NAME_RE.match(name):
             return HTMLResponse(status_code=404, content="not found")
         recipe = await _page_recipe_doc(name, "")
+        if recipe is None:
+            # A package only one org publishes (libcvc is cvc's) keeps its
+            # recipe under that org, which this unscoped page never asks for.
+            # Send the dependency, tag and recipe-list links that land here
+            # to the org's page.  Anonymous visibility, so a private org's
+            # package is never revealed by the redirect.
+            orgs = await _package_orgs(name)
+            if len(orgs) == 1 and "" not in orgs:
+                return RedirectResponse(url=f"/package/{orgs.pop()}/{name}", status_code=302)
         return HTMLResponse(package_detail_html(name, recipe=recipe))
+
+    async def _package_orgs(name: str) -> set[str]:
+        """The orgs ("" for unscoped) with a non-yanked bundle of *name* that an
+        anonymous visitor can see."""
+        if _use_db and not MIRROR_MODE:
+            if _db_packages is None:
+                return set()
+            packages, _ = await _db_packages.get_bundles(
+                name=name, caller_token_name="", order="published_at"
+            )
+            return {p.org for p in packages}
+        return {
+            b.get("org", "")
+            for b in _get_state().index.get("bundles", [])
+            if b.get("name") == name and not b.get("yanked", False)
+        }
 
     @app.get("/guide", response_class=HTMLResponse, include_in_schema=False)
     async def guide_page():

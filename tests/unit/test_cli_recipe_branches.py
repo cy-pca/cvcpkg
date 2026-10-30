@@ -22,8 +22,10 @@ from unittest import mock
 
 from click.testing import CliRunner
 
+from cvcpkg._archive import tar_has_unsafe_member
 from cvcpkg.cli._recipe import (
     _bundle_vendored_source,
+    _recipe_bundle,
     recipe_delete,
     recipe_list,
     recipe_publish,
@@ -159,6 +161,46 @@ class TestBundleVendoredSource:
         tar = mock.MagicMock()
         _bundle_vendored_source(tar, recipe, rdir)
         tar.add.assert_not_called()
+
+    def test_vendored_path_outside_repo_is_not_bundled(self, tmp_path, capsys):
+        """libcvc's layout: <repo>/cvcpkg/recipes/libcvc with ``path: ../../..``,
+        which resolves two levels above the repo.  Bundling it shipped the
+        whole parent tree under ``_vendored/../../..`` and the server rejected
+        every push with a 400."""
+        repo = tmp_path / "work" / "libcvc"
+        rdir = repo / "cvcpkg" / "recipes"
+        recipe = _make_recipe(
+            rdir, "libcvc", extra_yaml="source:\n  type: vendored\n  path: ../../..\n"
+        )
+        (tmp_path / "unrelated.txt").write_text("not libcvc's\n")
+        tar = mock.MagicMock()
+        _bundle_vendored_source(tar, recipe, rdir)
+        tar.add.assert_not_called()
+        assert "not bundling vendored source '../../..'" in capsys.readouterr().err
+
+    def test_vendored_path_holding_the_recipes_dir_is_not_bundled(self, tmp_path):
+        """``path: ..`` from <repo>/cvcpkg is the repo itself, recipes and all."""
+        rdir = tmp_path / "libcvc" / "cvcpkg" / "recipes"
+        recipe = _make_recipe(rdir, "libcvc", extra_yaml="source:\n  type: vendored\n  path: ..\n")
+        tar = mock.MagicMock()
+        _bundle_vendored_source(tar, recipe, rdir)
+        tar.add.assert_not_called()
+
+    def test_libcvc_layout_bundle_passes_the_server_check(self, tmp_path):
+        """The bundle push-all sends is the recipe plus _common, and nothing the
+        server's unsafe-member check (the 400) objects to."""
+        rdir = tmp_path / "work" / "libcvc" / "cvcpkg" / "recipes"
+        _make_recipe(rdir, "libcvc", extra_yaml="source:\n  type: vendored\n  path: ../../..\n")
+        (rdir / "_common").mkdir()
+        (rdir / "_common" / "env-linux.sh").write_text("shared\n")
+        buf = _recipe_bundle("libcvc", rdir / "libcvc", rdir)
+        with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+            assert tar_has_unsafe_member(tar) is None
+            assert sorted(tar.getnames()) == [
+                "_common/env-linux.sh",
+                "libcvc/build.sh",
+                "libcvc/recipe.yaml",
+            ]
 
 
 # ── recipe push ─────────────────────────────────────────────────
@@ -611,7 +653,7 @@ class TestRecipePushAll:
             )
         assert res.exit_code == 0, res.output
         assert "good (version=1)" in res.output
-        assert "bad: failed (500)" in res.output
+        assert "bad: failed (500): server hates bad" in res.output
         assert "boom: error (connection reset)" in res.output
         assert "pushed 1 recipes (2 failed)" in res.output
 
@@ -635,6 +677,28 @@ class TestRecipePushAll:
         # Only "keep" is pushed; ".hidden" and the loose file are skipped.
         assert "pushed 1 recipes (0 failed)" in res.output
         assert len(calls) == 1
+
+    def test_push_all_fails_when_every_push_fails(self, tmp_path):
+        """libcvc's publish job printed "pushed 0 recipes (17 failed)" and
+        passed; nothing pushed now fails the command, with the server's reason
+        per recipe."""
+        rdir = tmp_path / "recipes"
+        _make_recipe(rdir, "a")
+        _make_recipe(rdir, "b")
+        calls: list = []
+
+        def handler(method, url, **kw):
+            return FakeResp(400, {"detail": "unsafe recipe bundle member: '_vendored/../x'"})
+
+        with patch_httpx(handler, calls):
+            res = _run(
+                recipe_push_all,
+                [*_ARGS, "--recipes-dir", str(rdir), "--no-default-recipes"],
+            )
+        assert res.exit_code != 0
+        assert "a: failed (400): unsafe recipe bundle member" in res.output
+        assert "pushed 0 recipes (2 failed)" in res.output
+        assert "no recipe was pushed (2 failed)" in res.output
 
 
 # ── recipe sync-common ──────────────────────────────────────────

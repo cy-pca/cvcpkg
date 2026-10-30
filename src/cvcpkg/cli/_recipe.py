@@ -22,7 +22,16 @@ from cvcpkg.optional import require_httpx
 
 def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
     """If the recipe uses ``source.type: vendored``, bundle the vendored
-    source tree into the tarball under ``_vendored/<path>/``."""
+    source tree into the tarball under ``_vendored/<path>/``.
+
+    The path is relative to the repo root (the parent of the recipes dir), as
+    ``builder._resolve_vendored`` reads it.  A tree outside the repo, or one
+    that holds the recipes dir itself (a recipe living in its own source
+    tree), is not bundled: either would ship a whole checkout, and the server
+    rejects the ``..`` member names the first one produces.  libcvc's recipes
+    say ``path: ../../..``, which lands two levels above the libcvc repo, so
+    every push of them failed with a 400.  They push without it.
+    """
     recipe_yaml = recipe_path / "recipe.yaml"
     if not recipe_yaml.is_file():
         return
@@ -30,15 +39,57 @@ def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
     source = data.get("source", {})
     if source.get("type") != "vendored" or not source.get("path"):
         return
-    # Resolve the vendored path relative to the repo root (parent of recipes/)
-    repo_root = rdir.parent
+    repo_root = rdir.parent.resolve()
     vendored = (repo_root / source["path"]).resolve()
     if not vendored.is_dir():
         return
+    if not vendored.is_relative_to(repo_root) or rdir.resolve().is_relative_to(vendored):
+        click.echo(
+            f"cvcpkg: {recipe_path.name}: not bundling vendored source "
+            f"{source['path']!r} ({vendored}): it is outside {repo_root} or "
+            "contains the recipes directory",
+            err=True,
+        )
+        return
+    rel = vendored.relative_to(repo_root).as_posix()
     for f in sorted(vendored.rglob("*")):
         if f.is_file():
-            arcname = f"_vendored/{source['path']}/{f.relative_to(vendored)}"
+            arcname = f"_vendored/{rel}/{f.relative_to(vendored).as_posix()}"
             tar.add(f, arcname=arcname)
+
+
+def _recipe_bundle(name: str, recipe_path: Path, rdir: Path, *, vendored: bool = True):
+    """The tar.gz a recipe is pushed as: ``<name>/`` (recipe.yaml, scripts,
+    patches), the shared ``_common/`` sibling and, if *vendored*, the recipe's
+    vendored source.  Files sit under ``<name>/`` so build scripts' relative
+    ``${SCRIPT_DIR}/../_common/...`` references resolve after extraction."""
+    import io
+    import tarfile
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in sorted(recipe_path.rglob("*")):
+            if f.is_file():
+                tar.add(f, arcname=f"{name}/{f.relative_to(recipe_path).as_posix()}")
+        common_dir = rdir / "_common"
+        if common_dir.is_dir():
+            for f in sorted(common_dir.rglob("*")):
+                if f.is_file():
+                    tar.add(f, arcname=f"_common/{f.relative_to(common_dir).as_posix()}")
+        if vendored:
+            _bundle_vendored_source(tar, recipe_path, rdir)
+    buf.seek(0)
+    return buf
+
+
+def _error_detail(resp) -> str:
+    """The server's ``detail`` for a failed response, else its body."""
+    detail = resp.text
+    try:
+        detail = resp.json().get("detail", detail)
+    except Exception:
+        pass
+    return detail
 
 
 @cli.group("recipe")
@@ -156,9 +207,6 @@ def recipe_push(
     org_slug: str,
 ):
     """Bundle and push a recipe to the server."""
-    import io
-    import tarfile
-
     httpx = require_httpx("publish")
 
     rdirs = _resolve_recipes_dirs(recipes_dirs, no_default=no_default_recipes)
@@ -176,28 +224,7 @@ def recipe_push(
     if not recipe_path.is_dir():
         raise click.ClickException(f"recipe directory not found: {recipe_path}")
 
-    # Create tar.gz bundle
-    #
-    # Recipe files are stored under ``<name>/`` so that build scripts
-    # can reference ``${SCRIPT_DIR}/../_common/env-linux.sh`` and resolve
-    # correctly after extraction.  If a ``_common/`` sibling directory
-    # exists in the recipes root, it is included alongside.
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for f in sorted(recipe_path.rglob("*")):
-            if f.is_file():
-                arcname = f"{name}/{f.relative_to(recipe_path)}"
-                tar.add(f, arcname=arcname)
-        # Include _common/ sibling (shared build helpers)
-        common_dir = rdir / "_common"
-        if common_dir.is_dir():
-            for f in sorted(common_dir.rglob("*")):
-                if f.is_file():
-                    arcname = f"_common/{f.relative_to(common_dir)}"
-                    tar.add(f, arcname=arcname)
-        # Include vendored source directory if source.type == "vendored"
-        _bundle_vendored_source(tar, recipe_path, rdir)
-    buf.seek(0)
+    buf = _recipe_bundle(name, recipe_path, rdir)
 
     # Read recipe.yaml for version info
     recipe_yaml = recipe_path / "recipe.yaml"
@@ -367,9 +394,6 @@ def recipe_publish(
       cvcpkg recipe publish zlib
       cvcpkg recipe publish my-library --org my-org
     """
-    import io
-    import tarfile
-
     httpx = require_httpx("publish")
 
     base = server.rstrip("/")
@@ -411,19 +435,7 @@ def recipe_publish(
         full_version = ""
 
     # 1. Push the recipe bundle (reuse recipe push logic)
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for f in sorted(recipe_path.rglob("*")):
-            if f.is_file():
-                arcname = f"{name}/{f.relative_to(recipe_path)}"
-                tar.add(f, arcname=arcname)
-        common_dir = rdir / "_common"
-        if common_dir.is_dir():
-            for f in sorted(common_dir.rglob("*")):
-                if f.is_file():
-                    arcname = f"_common/{f.relative_to(common_dir)}"
-                    tar.add(f, arcname=arcname)
-    buf.seek(0)
+    buf = _recipe_bundle(name, recipe_path, rdir, vendored=False)
 
     url = f"{base}/v1/recipes/{name}"
     params = {"org_slug": org_slug, "version": version}
@@ -646,9 +658,6 @@ def recipe_push_all(
       cvcpkg recipe push-all
       cvcpkg recipe push-all --recipes-dir ./my-extra-recipes
     """
-    import io
-    import tarfile
-
     httpx = require_httpx("publish")
 
     base = server.rstrip("/")
@@ -679,21 +688,7 @@ def recipe_push_all(
         recipe_info = recipe_data.get("recipe", {})
         version = recipe_info.get("upstream_version", "")
 
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            for f in sorted(recipe_path.rglob("*")):
-                if f.is_file():
-                    arcname = f"{name}/{f.relative_to(recipe_path)}"
-                    tar.add(f, arcname=arcname)
-            common_dir = rdir / "_common"
-            if common_dir.is_dir():
-                for f in sorted(common_dir.rglob("*")):
-                    if f.is_file():
-                        arcname = f"_common/{f.relative_to(common_dir)}"
-                        tar.add(f, arcname=arcname)
-            # Include vendored source directory if source.type == "vendored"
-            _bundle_vendored_source(tar, recipe_path, rdir)
-        buf.seek(0)
+        buf = _recipe_bundle(name, recipe_path, rdir)
 
         url = f"{base}/v1/recipes/{name}"
         params = {"org_slug": org_slug, "version": version}
@@ -706,7 +701,9 @@ def recipe_push_all(
                     files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
                 )
             if resp.status_code >= 400:
-                click.echo(f"  {name}: failed ({resp.status_code})", err=True)
+                click.echo(
+                    f"  {name}: failed ({resp.status_code}): {_error_detail(resp)}", err=True
+                )
                 failed += 1
             else:
                 click.echo(f"  {name} (version={version})")
@@ -716,3 +713,9 @@ def recipe_push_all(
             failed += 1
 
     click.echo(f"cvcpkg: pushed {pushed} recipes ({failed} failed)")
+    # Every push failing is a broken setup, not one bad recipe: fail the step
+    # so CI shows it.  libcvc's publish job printed "pushed 0 recipes (17
+    # failed)" and passed.  A partial failure stays exit 0 so a
+    # populate run over the whole recipe set still goes on to build.
+    if failed and not pushed:
+        raise click.ClickException(f"no recipe was pushed ({failed} failed)")
