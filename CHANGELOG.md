@@ -28,6 +28,30 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **Fix: a Haiku job could wait forever on an ssh session that never ended.**
+  Haiku's sshd sometimes keeps a session open after its command has exited
+  (about one run in three on phm's VM), and `cvcpkg.haikuhost` waited on ssh
+  with no timeout: a prod sevenzip job sat 70 minutes in its recipe push. Each
+  remote command now reports its own exit status on a marker line; once the
+  marker is in, ssh gets 5 s to exit and is then stopped, and the job goes on
+  with the reported status. Transfers, remote commands and the remote build
+  also stop when no data moves for too long (`CVCPKG_HAIKU_IDLE_TIMEOUT`,
+  `CVCPKG_HAIKU_BUILD_IDLE_TIMEOUT`, `CVCPKG_HAIKU_TRANSFER_TIMEOUT`), and file
+  transfers now run in the job's process tree, so a cancelled job stops them.
+- **Fix: autotools builds broke on Haiku over source timestamps.** BFS replaces
+  a zero sub-second mtime with one taken from the moment of the call, so a tree
+  pushed with tar came out with its files ordered by extraction, and make
+  regenerated shipped files (gperf's manual, flex's Makefiles). The VM's clock
+  also runs behind the builder's, so a tree stamped with the builder's time was
+  in the future and automake's configure stopped with "newly created file is
+  older than distributed files!" (m4, iconv, libtasn1). After the push the
+  source tree is now re-stamped on the Haiku side: each file keeps its second
+  with a fixed nonzero fraction, and the whole tree moves back below the Haiku
+  clock when it has to. With it, gperf and m4 build for Haiku; their recipes
+  get haiku rows separately.
+
 ## v2.5.10
 
 **A release so builders rewrite Windows script shebangs (#506), and so
