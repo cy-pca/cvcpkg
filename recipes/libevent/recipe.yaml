@@ -1,0 +1,81 @@
+schema_version: 1
+recipe:
+  name: libevent
+  # Upstream tags it 2.1.13-stable; the "-stable" suffix would read as a
+  # pre-release here, so the version is the bare number.
+  upstream_version: "2.1.13"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libevent.org/
+  license: BSD-3-Clause
+  tags: [libraries, networking]
+  description: >-
+    libevent — an event notification library: callbacks on file descriptors,
+    signals and timeouts over epoll/kqueue/poll, plus buffered I/O, DNS and
+    HTTP.  tmux runs on it.  Shared libraries libevent, libevent_core,
+    libevent_extra and libevent_pthreads; built without OpenSSL or mbed TLS,
+    so there is no libevent_openssl.
+
+source:
+  type: tarball
+  url: https://github.com/libevent/libevent/releases/download/release-2.1.13-stable/libevent-2.1.13-stable.tar.gz
+  sha256: "f7e9383b8c0baa81b687e5b5eecc01beefaf1b19b64151d95ed61647fe7a315c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # A C compiler and make from the builder; the release tarball carries its
+  # generated configure script.
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - include/event2/
+    # The libevent 1.x compatibility headers.
+    - include/event.h
+    - include/evdns.h
+    - include/evhttp.h
+    - include/evrpc.h
+    - include/evutil.h
+    # Shared (libevent-2.1.so.7, libevent_core-2.1.so.7, ...) or, with
+    # --link static, the .a archives.
+    - lib/libevent*
+    - lib/libevent_core*
+    - lib/libevent_extra*
+    - lib/libevent_pthreads*
+    - lib/pkgconfig/libevent.pc
+    - lib/pkgconfig/libevent_core.pc
+    - lib/pkgconfig/libevent_extra.pc
+    - lib/pkgconfig/libevent_pthreads.pc
+  pkg_config:
+    - libevent
+    - libevent_core
+    - libevent_extra
+    - libevent_pthreads
+
+notes:
+  - title: "Linux only"
+    platforms: [linux]
+    description: >-
+      Built and tested on linux-x86_64 and linux-arm64, for tmux.  libevent's
+      autotools build also supports macOS and the BSDs; add them to the matrix
+      when a recipe there needs it.
+  - title: "No TLS, no event_rpcgen.py"
+    platforms: [linux]
+    description: >-
+      configure runs with --disable-openssl (2.1 has no mbed TLS support), so
+      bufferevent_openssl is not built and the package does not depend on
+      openssl.  bin/event_rpcgen.py, the code generator for libevent's evrpc
+      framework, is not shipped.

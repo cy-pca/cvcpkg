@@ -1,0 +1,85 @@
+schema_version: 1
+recipe:
+  name: tmux
+  upstream_version: "3.8"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/tmux/tmux
+  license: ISC
+  tags: [tools, terminal, tui]
+  description: >-
+    tmux — the terminal multiplexer: sessions, windows and panes on one
+    terminal, detached and reattached at will.  Also a headless terminal for
+    tests: `tmux new-session -d -x 100 -y 30 CMD` runs a TUI in a pane of a
+    known size and `tmux capture-pane -p` prints what it drew, which is how
+    libcvc's CI checks the ari terminal backends.  Linked against cvcpkg's
+    libevent and ncurses, and finds ncurses' terminfo database in the prefix.
+
+source:
+  type: tarball
+  url: https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz
+  sha256: "e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # tmux's configure finds both libraries through their .pc files
+    # (libevent_core.pc, ncursesw.pc); build.sh restricts pkg-config to the
+    # deps prefix.  The release tarball has the generated cmd-parse.c, so
+    # no yacc is needed.
+    - pkg-config
+    - libevent
+    - ncurses
+  runtime:
+    - libevent
+    # libncursesw, and share/terminfo, which bin/tmux puts on TERMINFO_DIRS.
+    - ncurses
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2"
+
+package:
+  files:
+    - bin/tmux
+    - libexec/tmux/tmux
+    - share/man/man1/tmux.1
+
+test:
+  script: test.sh
+
+notes:
+  - title: "bin/tmux is a wrapper"
+    platforms: [linux]
+    description: >-
+      cvcpkg's ncurses ships share/terminfo, but the search path compiled
+      into it is the directory it was built in, so on its own it would read
+      only the host's /usr/share/terminfo and /etc/terminfo.  bin/tmux is a
+      short sh script that puts <prefix>/share/terminfo first in
+      TERMINFO_DIRS and runs libexec/tmux/tmux.  Panes inherit the variable,
+      so the default terminal, tmux-256color, resolves inside them on any
+      host; the host's directories are still searched after it.  It follows
+      a symlink to itself, so bin/tmux can be linked onto PATH.
+  - title: "Default terminal"
+    platforms: [linux]
+    description: >-
+      default-terminal is tmux-256color (configured --with-TERM), not chosen
+      from the build host's database.  To ssh from a pane to a host whose
+      terminfo lacks tmux-256color, set default-terminal to screen-256color
+      in ~/.tmux.conf.
+  - title: "Linux only"
+    platforms: [linux]
+    description: >-
+      Built and tested on linux-x86_64 and linux-arm64.  tmux and libevent
+      also build on macOS and the BSDs; add them to the matrix when someone
+      needs them there.  Built without utf8proc, systemd, utempter or sixel:
+      character widths come from the C library's wcwidth in a UTF-8 locale.
