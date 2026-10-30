@@ -7,7 +7,15 @@ recipe:
   # the configure-time absolute <prefix>/{etc,share}/glvnd/egl_vendor.d, so an
   # EGL vendor ICD (cvcpkg `mesa`) installed in the same prefix is found from
   # any prefix location without __EGL_VENDOR_LIBRARY_* env vars.
-  cvc_revision: 2
+  # Bumped 2 -> 3: NetBSD builds with -mtls-dialect=gnu.  meson.build probes
+  # -mtls-dialect=gnu2 with a test *executable*, where the linker relaxes TLS
+  # descriptors away, so it passed on NetBSD; but NetBSD's x86_64 ld.elf_so
+  # does not resolve R_X86_64_TLSDESC, and libGLdispatch's u_current_get
+  # jumped to an unrelocated descriptor (SIGSEGV in eglGetProcAddress,
+  # netbsd-build-2, 2026-10-30).  Also pin the code generators to cvcpkg's
+  # python311 (a declared build dep) with a native file instead of meson's own
+  # interpreter: NetBSD's pkgsrc python3.13 broke on cvcpkg's libexpat.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
