@@ -20,6 +20,20 @@ for p in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
 done
 [ -n "${PFX}" ] || { echo "FAIL: no bin/blender in the dependency prefix"; exit 1; }
 
+# mitsuba-cp313 needs a Haswell or newer CPU on x86_64 (x86-64-v3); on an
+# older host importing it dies with SIGILL.  Say why instead.
+case "$(uname -m)" in
+    x86_64|amd64)
+        if [ -r /proc/cpuinfo ]; then
+            missing=""
+            for f in avx2 fma f16c; do grep -q -w "${f}" /proc/cpuinfo || missing="${missing} ${f}"; done
+            if [ -n "${missing}" ]; then
+                echo "FAIL: this x86_64 host lacks${missing}; mitsuba-cp313 needs a Haswell or newer CPU (x86-64-v3)"
+                exit 1
+            fi
+        fi ;;
+esac
+
 T="$(mktemp -d)"
 trap 'rm -rf "${T}"' EXIT
 export HOME="${T}/home" BLENDER_USER_RESOURCES="${T}/user"
