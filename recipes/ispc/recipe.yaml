@@ -1,0 +1,115 @@
+schema_version: 1
+recipe:
+  name: ispc
+  upstream_version: "1.30.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://ispc.github.io
+  license: BSD-3-Clause
+  tags: [compiler, tools, simd, llvm]
+  description: >-
+    ISPC, the Intel Implicit SPMD Program Compiler: an LLVM-based compiler for
+    a C dialect that maps SPMD programs onto the CPU's SIMD lanes (SSE4, AVX2,
+    AVX-512, NEON).  Ships the ispc compiler only, built from source against
+    cvcpkg's llvm/clang.  A build tool: Open Image Denoise compiles its CPU
+    kernels with it (OIDN 2.5 requires ISPC 1.30), and Embree/OpenPGL can use
+    it.  v1.30.0 is Blender 5.2's pin.  64-bit targets only (x86-64 on x86-64
+    hosts, AArch64 on arm64 hosts); no Xe, WebAssembly, RISC-V, ispcrt or
+    libispc.
+
+source:
+  type: tarball
+  url: https://github.com/ispc/ispc/archive/refs/tags/v1.30.0.tar.gz
+  sha256: "73b30c74fdfc56c3097015476df14d0a4bcb6705d9e286c6d51c1ed578d49e22"
+  strip_components: 1
+
+# Blender 5.2 builds ISPC against its own LLVM 20.1.8 without ISPC's
+# llvm_patches/ (those exist for ISPC's own release superbuild; ISPC 1.30 is
+# based on a patched 21.1.8 and documents building with LLVM 22 as supported).
+# The shared llvm recipe cannot carry ISPC's LLVM patches, so this builds
+# against stock LLVM 22, as Blender does against stock 20.
+patches:
+  # Blender's ispc.diff: the Xe builtin rule pipes through `cat`, which a
+  # Windows build (custom commands run by cmd.exe) does not have.
+  - ispc-cmake-e-cat.patch
+  # ISPC_64BIT_ONLY: no 32-bit x86/ARM targets.  Their C builtins need a
+  # 32-bit host libc (libc6-dev-i386 / armhf), which neither the fleet nor the
+  # recipe-check runners have, and their ARM stdlib needs LLVM's 32-bit ARM
+  # backend, which cvcpkg's llvm (X86;AArch64;WebAssembly) does not build --
+  # without this ISPC cannot be built for an arm64 host at all.  See the
+  # patch header.
+  - ispc-64bit-only.patch
+
+depends:
+  build:
+    # llvm, not llvm20: ISPC links clang's libraries (clangFrontend, clangLex,
+    # ...) and runs clang/clang++ and llvm-as to build its builtins, and only
+    # the llvm recipe builds clang (llvm20 is LLVM-only).  ISPC 1.30 accepts
+    # LLVM 18 and later.
+    - name: llvm
+      version: "^22.1"
+    # ISPC's parser and lexer (src/parse.yy, src/lex.ll), and m4 for the
+    # target builtins (builtins/*.ll).  bison runs m4 too.
+    - bison
+    - flex
+    - m4
+    # Python runs bitcode2cpp.py, which embeds every builtin/stdlib bitcode
+    # file in the binary.  Windows has no python3 meta; take the CPython
+    # cvcpkg publishes there.
+    - name: python3
+      platforms: [linux, macos]
+    - name: python313
+      platforms: [windows]
+  runtime:
+    # Unix: llvm-config hands ISPC the libLLVM shared library (the llvm recipe
+    # builds with LLVM_LINK_LLVM_DYLIB), so bin/ispc loads libLLVM at run time.
+    # Windows: MSVC builds no libLLVM DLL, so ISPC links LLVM's static
+    # component libraries and needs no llvm at run time -- only the zlib DLL
+    # LLVMSupport was built against.
+    - name: llvm
+      version: "^22.1"
+      platforms: [linux, macos]
+    - name: zlib
+      version: "^1.3"
+      platforms: [windows]
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    # The composite compiler: stdlib and builtins are embedded, so bin/ispc
+    # (ispc.exe on Windows) is self-contained apart from libLLVM.
+    - bin/ispc*
+    # ISPC headers for ISPC programs (short_vec.isph, amx.isph, intrinsics).
+    - include/stdlib/
+    - include/intrinsics/
+    # ispcConfig.cmake: executable-only (ISPC_LIBRARY is off); sets
+    # ISPC_EXECUTABLE for find_package(ispc).
+    - lib/cmake/ispc/
+  cmake_packages:
+    - { name: ispc, targets: [] }
+
+notes:
+  - title: "64-bit targets only"
+    description: >-
+      Built with ISPC_64BIT_ONLY (see ispc-64bit-only.patch): x86-64 hosts get
+      every SSE/AVX/AVX-512/AVX10 target, arm64 hosts every NEON target, both
+      for 64-bit code only.  --arch=x86 and --arch=arm are not available.
+  - title: "Host architecture only"
+    description: >-
+      An x86-64 build targets x86-64 and an arm64 build targets AArch64, as
+      Blender builds it; neither cross-compiles to the other architecture.

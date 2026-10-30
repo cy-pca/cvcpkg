@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: openpgl
+  upstream_version: "0.7.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.openpgl.org
+  license: Apache-2.0
+  tags: [libraries, rendering, raytracing, vfx]
+  description: >-
+    Intel Open Path Guiding Library (Open PGL) — learns the light
+    distribution of a scene while it renders and guides path-tracing
+    directional sampling with it (spatial-directional radiance and
+    importance models, surface and volume guiding).  v0.7.1 is Blender 5.2's
+    pin; Cycles path guiding builds on it.  Shared library, TBB tasking,
+    SSE4.2/AVX2 kernels on x86-64 and NEON on arm64; no tools.
+
+source:
+  type: tarball
+  url: https://github.com/OpenPathGuidingLibrary/openpgl/archive/refs/tags/v0.7.1.tar.gz
+  sha256: "d62d24241232a526491328f341df9add274fc84ae9818470d3edb5ae6141ac63"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: tbb
+      version: ">=2021"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/openpgl/
+    # libopenpgl.so.0.7.1 / libopenpgl.0.dylib (+ the namelinks).
+    - lib/libopenpgl*
+    # MSVC: openpgl.lib + bin/openpgl.dll.
+    - lib/openpgl*
+    - { glob: "bin/openpgl*", platforms: [windows] }
+    - lib/cmake/openpgl-0.7.1/
+  cmake_packages:
+    - { name: openpgl, targets: ["openpgl::openpgl"] }
+
+abi:
+  cxx_std: 17

@@ -1,0 +1,78 @@
+schema_version: 1
+recipe:
+  name: embree
+  upstream_version: "4.4.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.embree.org
+  license: Apache-2.0
+  tags: [libraries, rendering, raytracing, vfx]
+  description: >-
+    Intel Embree — high-performance CPU ray-tracing kernels: BVH build and
+    traversal for triangles, quads, curves, points, subdivision surfaces,
+    grids, instances and user geometry, with runtime ISA dispatch (SSE2 up to
+    AVX2 on x86-64, NEON on arm64).  v4.4.1 is Blender 5.2's pin, configured
+    the way Cycles needs it (ray masks, filter functions, back-face culling
+    for curves and spheres but not triangles).  TBB tasking; no SYCL GPU
+    support, no ISPC API, no tutorials.
+
+source:
+  type: tarball
+  url: https://github.com/RenderKit/embree/archive/refs/tags/v4.4.1.tar.gz
+  sha256: "dcf338cc61b636c871ccf370e673bfd380c5ecb71ce49ad50f28e1d4ec9995dc"
+  strip_components: 1
+
+# Blender's embree.diff is not carried: one hunk adds -nolibsycl to the SYCL
+# flags (SYCL is off here), the other folds the NEON2X kernels into the static
+# library on arm64 (this builds the shared library).
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: tbb
+      version: ">=2021"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/embree4/
+    # libembree4.so.4.4.1 / libembree4.4.dylib (+ the namelinks).
+    - lib/libembree4*
+    # MSVC: embree4.lib + bin/embree4.dll.
+    - lib/embree4*
+    - { glob: "bin/embree4*", platforms: [windows] }
+    - lib/cmake/embree-4.4.1/
+  cmake_packages:
+    - { name: embree, targets: ["embree"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "Blender's configuration is compiled in"
+    description: >-
+      EMBREE_RAY_MASK and EMBREE_FILTER_FUNCTION on, EMBREE_BACKFACE_CULLING
+      off, EMBREE_BACKFACE_CULLING_CURVES and _SPHERES on, as Blender 5.2
+      builds it for Cycles.  These are build-time switches of the library, so
+      every consumer of this bundle gets them.
+  - title: "ISA"
+    description: >-
+      x86-64 kernels for SSE2, SSE4.2, AVX and AVX2 (EMBREE_MAX_ISA=AVX2, as
+      Blender), dispatched at run time; no AVX-512 kernels.  arm64: NEON
+      (Linux) or double-pumped NEON2X (macOS), upstream's defaults.
