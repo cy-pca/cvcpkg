@@ -35,6 +35,9 @@ patches:
   # OpenBSD: QtNetwork's BSD interface code needs <netinet6/in6_var.h>, and OpenBSD
   # has no IFT_STF.
   - openbsd-network-in6-var.patch
+  # NetBSD: <net/if.h> defines ifr_ifindex as ifr_index, so QtNetwork's two
+  # ifreq_index() overloads collide; skip the Linux one there.
+  - netbsd-network-ifreq-index.patch
   # macOS 26 SDK: AGL.framework is gone, and qtbase 6.8.2 links it anyway.
   # Apple-only code path, and no macOS cvc.7 was ever published, so no bump.
   - macos-no-agl-framework.patch
