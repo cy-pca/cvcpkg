@@ -31,6 +31,9 @@ import os, sys
 import bpy, addon_utils
 
 osm, data = sys.argv[sys.argv.index("--") + 1:][:2]
+# Empty scene first: read_factory_settings also resets the preferences, which
+# would disable an add-on enabled before it.
+bpy.ops.wm.read_factory_settings(use_empty=True)
 mod = addon_utils.enable("blosm", default_set=True, handle_error=None)
 assert mod is not None, "addon_utils.enable('blosm') failed"
 app = sys.modules["blosm.app.blender"].app
@@ -39,7 +42,6 @@ assert app.isPro is False, "blosm reports the paid version"
 os.makedirs(data, exist_ok=True)
 bpy.context.preferences.addons["blosm"].preferences.dataDir = data
 
-bpy.ops.wm.read_factory_settings(use_empty=True)
 s = bpy.context.scene.blosm
 settings = dict(
     commandLineMode=True, dataType="osm", osmSource="file", osmFilepath=osm,
