@@ -30,6 +30,23 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Fix: a noarch bundle never resolved for a static or debug install.** A
+  noarch recipe (`platform: any`: fonts, data sets, pure Python, JavaScript)
+  publishes one any/noarch/release/shared bundle. The catalog filter matched it
+  to every platform and arch but compared config and link exactly, so
+  `cvcpkg install xterm-js --platform wasm` (wasm, wasm-mt, wasi and cosmo are
+  static-only), `--link static` or `--config debug` failed with "no bundles
+  found in catalog for this platform tuple". No recipe for those targets could
+  list a noarch dep: libcvc's arigl-web had to install xterm-js separately.
+  - A noarch bundle now serves every config and link mode, in `install`,
+    `install-deps`, `sync` and `catalog`. A compiled bundle still needs its
+    exact tuple.
+  - A concrete bundle still beats a noarch one at the same version, as before.
+  - When a noarch package has published several variants of one version, the
+    one matching the request best is kept.
+  - Client-only: the server serves the whole catalog, and the client filters
+    it.
+
 ---
 
 ## v2.5.9
