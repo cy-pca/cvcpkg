@@ -4,11 +4,11 @@ recipe:
   # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
-  upstream_version: "2.5.8"
-  # 2.5.8: the release that carries #487 (Windows recipes build on a host
-  # with no pwsh 7: pwsh is found in the build prefix, and the powershell
-  # recipe bootstraps itself under Windows PowerShell 5.1) to the fleet;
-  # the single-file builders self-update from this package.
+  upstream_version: "2.5.9"
+  # 2.5.9: the release that carries #484 (publish sends required_deps and
+  # provides in the request body when the query would be too long, so
+  # wezterm-crates' 645 deps no longer hit a 414) to the fleet; the
+  # single-file builders self-update from this package.
   cvc_revision: 1
 
   maintainer: "cvcpkg group"
@@ -30,8 +30,8 @@ recipe:
 # GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
 source:
   type: tarball
-  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.8.tar.gz
-  sha256: "69d6022064c1882d5d719db1f2af909b1a181afe22219e24da88d4e824f79030"
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.9.tar.gz
+  sha256: "0a6869db371ed994cb35ad448b090905775ef373dd286c2dd811541d9286ad04"
   strip_components: 1
 
 # Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and
