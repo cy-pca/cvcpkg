@@ -4,40 +4,9 @@ CPU only: the Mitsuba variant is fixed to llvm_ad_mono_polarized before
 sionna.rt is imported, so a GPU on the builder cannot change what is tested.
 """
 
-import platform
-import sys
-
 import numpy as np
 import drjit as dr
 import mitsuba as mi
-
-
-def cpu_has_fma():
-    """False only on an x86_64 Linux CPU without FMA, where Dr.Jit's LLVM
-    backend shuts itself down (see drjit-cp313's check.py)."""
-    if platform.machine().lower() not in ("x86_64", "amd64"):
-        return True
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("flags"):
-                    return "fma" in line.split()
-    except OSError:
-        pass
-    return True
-
-
-if not dr.has_backend(dr.JitBackend.LLVM) and not cpu_has_fma():
-    # Sionna RT's CPU path is that backend, so nothing here can run on this
-    # host: check what was installed without importing sionna.rt.
-    import importlib.metadata
-    import importlib.util
-
-    assert importlib.metadata.version("sionna-rt") == "2.2.0", importlib.metadata.version("sionna-rt")
-    assert importlib.util.find_spec("sionna.rt") is not None, "sionna.rt is not installed"
-    print("sionna-rt 2.2.0 installed; solvers not run: this x86_64 CPU has no FMA,",
-          "which Dr.Jit's LLVM backend (Sionna RT's CPU path) needs")
-    sys.exit(0)
 
 mi.set_variant("llvm_ad_mono_polarized")
 assert dr.has_backend(dr.JitBackend.LLVM), "LLVM backend inactive (libLLVM not found)"

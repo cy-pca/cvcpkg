@@ -7,25 +7,8 @@ argv[3]: "1" to also render with llvm_ad_mono_polarized (libLLVM in the closure)
 
 import math
 import os
-import platform
 import sys
 import tempfile
-
-
-def cpu_has_fma():
-    """False only on an x86_64 Linux CPU without FMA, where Dr.Jit's LLVM
-    backend shuts itself down (see drjit-cp313's check.py)."""
-    if platform.machine().lower() not in ("x86_64", "amd64"):
-        return True
-    try:
-        with open("/proc/cpuinfo") as f:
-            for line in f:
-                if line.startswith("flags"):
-                    return "fma" in line.split()
-    except OSError:
-        pass
-    return True
-
 
 want_variants = [v for v in sys.argv[1].split(",") if v]
 scene_xml = sys.argv[2]
@@ -100,9 +83,7 @@ with tempfile.TemporaryDirectory() as tmp:
         print("bitmap round trip:", ext, bmp.pixel_format(), bmp.component_format())
 
 # ── llvm_ad_mono_polarized: Sionna RT's CPU variant ─────────────────────────
-if check_llvm and not dr.has_backend(dr.JitBackend.LLVM) and not cpu_has_fma():
-    print("llvm variants not rendered: this x86_64 CPU has no FMA, which Dr.Jit's LLVM backend needs")
-elif check_llvm:
+if check_llvm:
     assert dr.has_backend(dr.JitBackend.LLVM), (
         "LLVM backend inactive; DRJIT_LIBLLVM_PATH=%r" % os.environ.get("DRJIT_LIBLLVM_PATH")
     )

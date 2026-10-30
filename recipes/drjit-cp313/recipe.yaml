@@ -125,11 +125,12 @@ notes:
   - title: "CPU baseline"
     platforms: [linux, macos]
     description: >-
-      x86_64 builds target x86-64-v2 (SSE4.2, Blender's minimum CPU) instead
-      of upstream's scikit-build default -march=haswell (AVX2 + FMA), which
-      dies with SIGILL on AVX-only hosts such as Sandy/Ivy Bridge Xeons.
-      The LLVM backend JIT-compiles for the host CPU but needs FMA, and
-      shuts itself down on a CPU without it; there only the scalar and CUDA
-      backends work, and test.sh skips its LLVM checks.  Upstream's defaults
-      are kept elsewhere: -march=armv8-a on linux arm64, -mcpu=apple-m1 on
-      macOS arm64.
+      Upstream's scikit-build defaults are kept: -march=haswell on x86_64,
+      -march=armv8-a on linux arm64, -mcpu=apple-m1 on macOS arm64, as in
+      the PyPI wheels.  So on x86_64 this package needs a Haswell or newer
+      CPU (x86-64-v3: AVX2, FMA, F16C) to build and to run, and Mitsuba
+      needs one in any case: its struct-jit conversion snippets use F16C and
+      FMA directly, and Dr.Jit's LLVM backend refuses a CPU without FMA.
+      build.sh stops with that message on an older build host (Sandy/Ivy
+      Bridge, e.g. catx-03's E5-2640) instead of dying with SIGILL when
+      nanobind's stubgen imports the module.

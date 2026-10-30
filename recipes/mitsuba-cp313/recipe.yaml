@@ -129,12 +129,11 @@ notes:
   - title: "CPU baseline"
     platforms: [linux, macos]
     description: >-
-      x86_64 builds target x86-64-v2 (SSE4.2, Blender's minimum CPU), as
-      drjit-cp313 does, instead of upstream's -march=haswell (AVX2 + FMA),
-      which dies with SIGILL on AVX-only hosts.  The bundled Embree still
-      selects its AVX/AVX2 kernels at run time.  The llvm_* variants need a
-      CPU with FMA (Dr.Jit's LLVM backend); on one without it the scalar_*
-      variants still work, and test.sh renders only those.
+      On x86_64 Mitsuba needs a Haswell or newer CPU (x86-64-v3: AVX2, FMA,
+      F16C), as upstream's wheels do: it is compiled with -march=haswell
+      (upstream's scikit-build default), and struct-jit's conversion
+      snippets use F16C and FMA directly.  build.sh stops with that message
+      on an older build host instead of dying with SIGILL mid-build.
   - title: "Not built on Windows"
     platforms: [linux, macos]
     description: >-

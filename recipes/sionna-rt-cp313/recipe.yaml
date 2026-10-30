@@ -93,12 +93,11 @@ notes:
       On import Sionna RT selects the first Mitsuba variant that starts:
       cuda_ad_mono_polarized, metal_ad_mono_polarized, then
       llvm_ad_mono_polarized.  mitsuba-cp313 compiles the CUDA pair on linux
-      and the Metal pair on macOS arm64; the LLVM pair runs on llvm20's
-      libLLVM on any CPU with FMA (x86_64 from Haswell on, every arm64).
-      Dr.Jit's LLVM backend shuts itself down without FMA, so on an older
-      x86_64 CPU only a GPU variant works; test.sh then checks the install
-      without running the solvers.  Call mi.set_variant() before importing
-      sionna.rt to choose one yourself.
+      and the Metal pair on macOS arm64; the LLVM pair runs everywhere on
+      llvm20's libLLVM.  Call mi.set_variant() before importing sionna.rt to
+      choose one yourself.  On x86_64 the stack needs a Haswell or newer CPU
+      (x86-64-v3: AVX2, FMA, F16C), as upstream's wheels do; see
+      mitsuba-cp313.
   - title: "No Windows column"
     platforms: [linux, macos]
     description: >-

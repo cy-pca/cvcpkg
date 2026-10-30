@@ -18,4 +18,18 @@ unset DRJIT_LIBLLVM_PATH
 export MPLBACKEND=Agg
 export MPLCONFIGDIR="${CVC_BUILD_DIR:-${TMPDIR:-/tmp}}/mplconfig"
 
+# mitsuba-cp313 and drjit-cp313 need a Haswell or newer CPU on x86_64
+# (x86-64-v3); on an older host importing them dies with SIGILL.  Say why.
+case "$(uname -m)" in
+    x86_64|amd64)
+        if [ -r /proc/cpuinfo ]; then
+            missing=""
+            for f in avx2 fma f16c; do grep -q -w "${f}" /proc/cpuinfo || missing="${missing} ${f}"; done
+            if [ -n "${missing}" ]; then
+                echo "sionna-rt-cp313: this x86_64 host lacks${missing}; Mitsuba and Dr.Jit need a Haswell or newer CPU (x86-64-v3)" >&2
+                exit 1
+            fi
+        fi ;;
+esac
+
 "${PY}" "${SCRIPT_DIR}/check.py"

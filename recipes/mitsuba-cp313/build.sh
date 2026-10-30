@@ -31,6 +31,22 @@ PYMM="$(cvc_interp_version "${CVC_PYTHON_INTERPRETER}")"
 VARIANTS="$(mi_variants)"
 echo "mitsuba-cp313: building with ${PY} (python${PYMM}); variants ${VARIANTS}"
 
+# On x86_64 Mitsuba needs a Haswell or newer CPU (x86-64-v3): it is compiled
+# for Haswell, as upstream's wheels are, and struct-jit's conversion snippets
+# use F16C and FMA directly.  The build imports what it built (stubgen), so
+# an older host dies with SIGILL mid-build; stop here and say why instead.
+case "$(uname -m)" in
+    x86_64|amd64)
+        if [ -r /proc/cpuinfo ]; then
+            missing=""
+            for f in avx2 fma f16c; do grep -q -w "${f}" /proc/cpuinfo || missing="${missing} ${f}"; done
+            if [ -n "${missing}" ]; then
+                echo "mitsuba-cp313: this x86_64 build host lacks${missing}; Mitsuba needs a Haswell or newer CPU (x86-64-v3) to build and run" >&2
+                exit 1
+            fi
+        fi ;;
+esac
+
 # ── 2. Bridge the build-only Python packages onto that interpreter ──────────
 # cmake, ninja and nasm (native recipes) come first on PATH; the backend and
 # nanobind columns live in the build prefix's site-packages.  drjit-cp313 is a
@@ -68,13 +84,6 @@ NASM_ARGS=()
 if [ -x "${BLD}/bin/nasm" ]; then
     NASM_ARGS+=( -C "cmake.define.CMAKE_ASM_NASM_COMPILER=${BLD}/bin/nasm" )
 fi
-# x86-64-v2 on x86_64, as drjit-cp313 (see there): upstream's -march=haswell
-# dies with SIGILL on AVX-only hosts.  Embree keeps its per-ISA kernels and
-# picks one at run time.
-ARCH_ARGS=()
-case "$(uname -m)" in
-    x86_64|amd64) ARCH_ARGS+=( -C "cmake.define.MI_NATIVE_FLAGS=-march=x86-64-v2" ) ;;
-esac
 
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
@@ -91,16 +100,7 @@ mkdir -p "${WHEELHOUSE}"
     -C cmake.define.MI_ENABLE_EMBREE=ON \
     ${ZLIB_ARGS[@]+"${ZLIB_ARGS[@]}"} \
     ${NASM_ARGS[@]+"${NASM_ARGS[@]}"} \
-    ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} \
     "${CVC_SOURCE_DIR}"
-case "$(uname -m)" in
-    x86_64|amd64)
-        NINJA_FILE="${CVC_BUILD_DIR}/skbuild/build.ninja"
-        if ! grep -q -- '-march=x86-64-v2' "${NINJA_FILE}" || grep -q -- '-march=haswell' "${NINJA_FILE}"; then
-            echo "mitsuba-cp313: the build did not take MI_NATIVE_FLAGS=-march=x86-64-v2 (see ${NINJA_FILE})" >&2
-            exit 1
-        fi ;;
-esac
 
 shopt -s nullglob
 _wheels=( "${WHEELHOUSE}"/[Mm]itsuba-*.whl )
