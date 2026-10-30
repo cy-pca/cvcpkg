@@ -38,12 +38,24 @@ fi
 # OpenBSD has no iconv in libc, and macOS has a non-GNU one: use cvcpkg's GNU
 # libiconv (staged into CVC_DEPS_PREFIX by the openbsd/macos iconv dep) so the
 # bundled libxml finds <iconv.h> and links libiconv, and gnulib's iconv test
-# passes.  A no-op where iconv isn't a dep (other platforms use libc's iconv).
-if [[ -n "${CVC_DEPS_PREFIX:-}" && -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
-    export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
-    export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
-    CONFIGURE_ARGS+=(--with-libiconv-prefix="${CVC_DEPS_PREFIX}")
-fi
+# passes.  Only there: elsewhere libc's iconv is used and libiconv is not
+# searched for.  Keying this on an iconv.h in the deps prefix also fired in a
+# shared populate prefix that held cvcpkg's iconv for another recipe, so
+# linux/arm64 cvc.5 linked libiconv.so.2 without declaring it, and its msgfmt
+# failed wherever iconv was not installed ("libiconv.so.2: cannot open shared
+# object file", libpq's arm64 recipe check, 2026-10-30).
+case "${CVC_PLATFORM:-}" in
+    openbsd|macos)
+        if [[ -n "${CVC_DEPS_PREFIX:-}" && -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
+            export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
+            export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+            CONFIGURE_ARGS+=(--with-libiconv-prefix="${CVC_DEPS_PREFIX}")
+        fi
+        ;;
+    *)
+        CONFIGURE_ARGS+=(--without-libiconv-prefix)
+        ;;
+esac
 
 # On BSDs, use gmake if available.
 if command -v gmake >/dev/null 2>&1; then
