@@ -75,6 +75,15 @@ case "${CVC_PLATFORM}" in
         # Meson keeps rpaths given in LDFLAGS on install; $ORIGIN/.. is for
         # lib/dri and lib/gbm, and is harmless on lib/*.so.
         LDFLAGS="${LDFLAGS:+${LDFLAGS} }-Wl,-rpath,\$ORIGIN:\$ORIGIN/.."
+        # NetBSD's x86_64 ld.elf_so does not resolve TLS descriptors
+        # (R_X86_64_TLSDESC).  meson.build's -mtls-dialect=gnu2 probe runs an
+        # executable, where they are relaxed away, so it passes and the
+        # libraries then crash; naming a dialect in c_args skips the probe.
+        # (FreeBSD is already excluded upstream.)
+        if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
+            CFLAGS="${CFLAGS:+${CFLAGS} }-mtls-dialect=gnu"
+            CXXFLAGS="${CXXFLAGS:+${CXXFLAGS} }-mtls-dialect=gnu"
+        fi
         export CFLAGS CXXFLAGS LDFLAGS
         ;;
 esac

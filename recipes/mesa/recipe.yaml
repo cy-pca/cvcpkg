@@ -120,9 +120,13 @@ notes:
       libglvnd, EGL, GLES2), for hosts with no system OpenGL in a cvcpkg
       prefix.  Headless use needs no X server: EGL with
       EGL_PLATFORM_SURFACELESS_MESA gives an llvmpipe GLES 3.2 context
-      (checked on FreeBSD 14.4 under `env -i`).  The libraries carry a
-      link-time $ORIGIN:$ORIGIN/.. RUNPATH instead of a patchelf pass, so on
-      NetBSD every object keeps the two PT_LOAD segments ld.elf_so requires.
+      (checked under `env -i` on FreeBSD 14.4 and on NetBSD 10.1 with PaX
+      MPROTECT on).  The libraries carry a link-time $ORIGIN:$ORIGIN/..
+      RUNPATH instead of a patchelf pass, so on NetBSD every object keeps the
+      two PT_LOAD segments ld.elf_so requires.  NetBSD needs cvcpkg libglvnd
+      >= 1.7.0+cvc.3 and this build's -mtls-dialect=gnu: its x86_64 ld.elf_so
+      does not resolve TLS descriptors, and +cvc.2's libGLdispatch crashes in
+      eglGetProcAddress.
       Mesa prints "The provided filesystem timestamp for the cache is bogus!"
       and runs without its on-disk shader cache: the cvcpkg libLLVM has no
       build-id and packaged files carry a 1970 mtime, so shaders are compiled
