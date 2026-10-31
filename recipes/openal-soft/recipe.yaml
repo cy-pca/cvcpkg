@@ -11,7 +11,12 @@ recipe:
   # 1.25.2 (it failed on every platform), so this is not a downgrade over an
   # existing bundle.
   upstream_version: "1.24.3"
-  cvc_revision: 1
+  # cvc.2: rebuild only, no recipe change.  The dev catalog's cvc.1 linux
+  # bundle predates the glibc-floor gate (838dded3, 2026-08-03) and needs
+  # GLIBC_2.38, so Blender (which links libopenal) cannot start on the dev
+  # cluster's glibc 2.35 noarch builder; --skip-existing never rebuilds a
+  # published variant.  The new revision is built under the 2.35 floor.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

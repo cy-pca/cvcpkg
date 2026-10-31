@@ -1,0 +1,13 @@
+--- a/wscript
++++ b/wscript
+@@ -256,7 +256,9 @@
+ 
+     if conf.env['IS_FREEBSD']:
+         conf.check(lib='execinfo', uselib='EXECINFO', define_name='EXECINFO')
+-        conf.check_cfg(package='libsysinfo', args='--cflags --libs')
++        # libsysinfo is only linked into jackdbus (dbus/wscript).
++        if Options.options.dbus:
++            conf.check_cfg(package='libsysinfo', args='--cflags --libs')
+ 
+     if not conf.env['IS_MACOSX']:
+         conf.env.append_unique('LDFLAGS', '-Wl,--no-undefined')
