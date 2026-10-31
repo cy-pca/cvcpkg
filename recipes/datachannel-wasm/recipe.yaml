@@ -1,0 +1,61 @@
+schema_version: 1
+recipe:
+  name: datachannel-wasm
+  upstream_version: "0.4.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/paullouisageneau/datachannel-wasm
+  license: MIT
+  tags: [libraries, networking, webrtc, wasm]
+  description: >-
+    datachannel-wasm -- libdatachannel's rtc:: API (PeerConnection,
+    DataChannel, WebSocket) for Emscripten, implemented over the browser's own
+    RTCPeerConnection and WebSocket through two JS libraries.  The same C++
+    builds natively against the libdatachannel recipe and in the browser
+    against this one.  Upstream has no install rules, so the build installs
+    the static library, the headers, the JS libraries (share/datachannel-wasm/)
+    and a CMake package, datachannel-wasm::datachannel-wasm, whose link options
+    pass both JS libraries to emcc.
+
+# Commit f9200eb942f6 (2026-09-27), v0.4.0 plus one fix: a missing
+# <functional> include that newer libc++ no longer pulls in transitively.
+source:
+  type: tarball
+  url: https://github.com/paullouisageneau/datachannel-wasm/archive/f9200eb942f66ddbfecf088ce7122d095aca1c3e.tar.gz
+  sha256: "3271291205c5b3ef06a7a6cbfe107cab93ecfd8b3a303afd94337e02b0343349"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+
+package:
+  files:
+    - lib/libdatachannel-wasm.a
+    - lib/cmake/datachannel-wasm/
+    - include/rtc/
+    - share/datachannel-wasm/
+  cmake_packages:
+    - { name: datachannel-wasm, targets: ["datachannel-wasm::datachannel-wasm"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
