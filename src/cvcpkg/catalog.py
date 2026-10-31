@@ -70,6 +70,7 @@ def _fetch_url(
     the result's status is then 304 when that ETag is still current.
     """
     from cvcpkg.config import authorize_request
+    from cvcpkg.platform import NEUTRAL_VARIANTS_HEADER
     from cvcpkg.storage import get_backend
 
     # Authenticate ONLY to our own server (origin-scoped): a private org's
@@ -80,6 +81,9 @@ def _fetch_url(
     headers = dict(auth)
     if url.startswith(("https://", "http://")):
         headers["Accept-Encoding"] = "gzip"
+        # List noarch bundles once, as none/none (catalog_entries matches
+        # them); without it the server expands them for older clients.
+        headers[NEUTRAL_VARIANTS_HEADER] = "1"
         if if_none_match:
             headers["If-None-Match"] = if_none_match
 
@@ -335,7 +339,13 @@ def catalog_entries(
     trust_mirror: bool | None = None,
 ) -> list[CatalogEntry]:
     """Extract CatalogEntry objects from a catalog dict, optionally filtered."""
-    from cvcpkg.platform import arch_matches, is_noarch_bundle, platform_matches
+    from cvcpkg.platform import (
+        arch_matches,
+        config_matches,
+        is_noarch_bundle,
+        link_matches,
+        platform_matches,
+    )
 
     _trust = trust_mirror_default() if trust_mirror is None else trust_mirror
     entries: list[CatalogEntry] = []
@@ -348,15 +358,16 @@ def catalog_entries(
         if arch and not arch_matches(b.get("arch", ""), arch):
             continue
         # ...and it compiles nothing, so it serves every config and link mode
-        # too.  A noarch recipe publishes one release/shared bundle, and a
-        # static request (wasm/wasm-mt/wasi/cosmo are static-only) or a debug
-        # one never matched it: no recipe for those could depend on a font, a
-        # data set or a JS library.  _prefer_exact_noarch_variant keeps the
-        # exact variant when a noarch package publishes more than one.
+        # too: a none/none bundle by its label, and one a noarch recipe
+        # published as release/shared before neutral variants by its identity.
+        # A static request (wasm/wasm-mt/wasi/cosmo are static-only) or a debug
+        # one never matched the latter: no recipe for those could depend on a
+        # font, a data set or a JS library.  _prefer_exact_noarch_variant keeps
+        # the exact variant when a noarch package publishes more than one.
         noarch = is_noarch_bundle(b.get("platform", ""), b.get("arch", ""))
-        if build_type and b.get("build_type", "") != build_type and not noarch:
+        if build_type and not config_matches(b.get("build_type", ""), build_type) and not noarch:
             continue
-        if link and b.get("link", "") != link and not noarch:
+        if link and not link_matches(b.get("link", ""), link) and not noarch:
             continue
         # Upstream retired this bundle; the mirror serving it has overridden
         # that locally.  Upstream is authoritative unless told otherwise.
@@ -413,13 +424,14 @@ def _prefer_exact_noarch_variant(
     the resolver never picks a mismatched one by catalog order.  Concrete
     bundles are untouched.
     """
-    from cvcpkg.platform import is_noarch_bundle
+    from cvcpkg.platform import config_matches, is_noarch_bundle, link_matches
 
     if not build_type and not link:
         return entries
 
+    # A none/none bundle matches every request exactly.
     def score(e: CatalogEntry) -> int:
-        return int(not build_type or e.build_type == build_type) + int(not link or e.link == link)
+        return int(config_matches(e.build_type, build_type)) + int(link_matches(e.link, link))
 
     best: dict[tuple[str, str, str], int] = {}
     for e in entries:

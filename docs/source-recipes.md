@@ -11,7 +11,9 @@ A source recipe is an ordinary recipe that **announces it is a file
 artifact**:
 
 - **`platform: any`** — source is valid everywhere, so it is built **once**
-  and served to every platform.  Its architecture is `noarch` automatically.
+  and served to every platform.  Its architecture is `noarch` automatically,
+  and its config and link are `none`: one bundle serves release and debug,
+  shared and static.
 - **No toolchain / no compilation** — the build script only *stages* the
   (patched) source tree; the output archive *is* the source.
 - The only processing allowed is **patches** (applied before staging) and
@@ -182,7 +184,8 @@ without re-fetching upstream for every platform.
   (already handled in the builder's build-order and matrix logic), vendored
   /`prebuilt` source staging, and the normal `depends` graph.  No new schema
   concepts.
-- **Built once** — an `any/noarch` package is not fanned out per platform.
+- **Built once** — an `any/noarch` package is not fanned out per platform,
+  nor per config/link: it is published once, as `none`/`none`.
 - **Deduplicated source of truth** — downstream recipes never each vendor
   their own copy of a shared source tree.
 

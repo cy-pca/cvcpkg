@@ -30,6 +30,37 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **noarch bundles are config/link-neutral: `none`/`none`.** A `platform: any`
+  bundle (source packages, pure-Python wheels, data) is the same in release
+  and debug, shared and static, but it was published under the build
+  matrix's config/link. Up to four copies per version were built and
+  published, each listed as "release"/"static" and so on. Now:
+  - `pack`, `pack-all`, `build-all` and the builders label an any/noarch
+    bundle `none`/`none` (`foo-1.0-any-noarch-none-none.tar.gz`) and build it
+    as release/shared;
+  - so is every other bundle of a recipe with an `any` entry: a pure-Python
+    column's `windows` bundle, which exists only for the Windows layout
+    (`Lib/site-packages`), is `windows`/`x86_64`/`none`/`none`;
+  - `builds submit-dag` stages each noarch job once, and a pure-Python
+    column's windows job once per target. With noarch jobs and more
+    than one concrete config/link the whole submission is one DAG,
+    `<dag-id>-all`, so the edges between them can still be expressed;
+  - install and the builders' dependency fetch treat `none` as matching
+    every config/link, as `any`/`noarch` already match every platform/arch;
+  - the server records any noarch upload as `none`/`none`, so an older
+    builder's release/shared, debug/static, ... uploads of one bundle land on
+    one row (the rest get 409, which publish skips). It accepts `none`/`none`
+    on a concrete platform and refuses `none` for only one of the two;
+  - `/v1/catalog` lists each `none`/`none` bundle once per concrete variant
+    for clients that do not send `X-Cvcpkg-Neutral-Variants` (cvcpkg 2.5.x
+    and older filter by exact config/link). This client, the mirror sync and
+    populate send it;
+  - migration 036 relabels published noarch bundles, and the concrete bundles
+    of each version that has one (the pure-Python windows bundles): one row per
+    bundle becomes `none`/`none` (a live row first, then release/shared) and the
+    other variants are yanked. A yanked row keeps its archive downloadable
+    for pinned lockfiles and keeps its org visibility; the yank-retention GC
+    removes it later.
 - **Fix: a Haiku job could wait forever on an ssh session that never ended.**
   Haiku's sshd sometimes keeps a session open after its command has exited
   (about one run in three on phm's VM), and `cvcpkg.haikuhost` waited on ssh

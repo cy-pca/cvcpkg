@@ -46,6 +46,8 @@ def fake_recipe(
     r.cvc_revision = cvc_revision
     r.full_version = f"{version}+cvc.{cvc_revision}"
     r.build_matrix = [_Matrix(p) for p in platforms]
+    # Recipe.variant_neutral: an `any` entry makes every bundle none/none.
+    r.variant_neutral = "any" in platforms
     r.tags = list(tags)
     r.raw = {"depends": {"build": list(deps or [])}}
     r.recipe_dir = Path(recipe_dir) if recipe_dir else Path(".")

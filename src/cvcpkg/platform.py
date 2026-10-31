@@ -173,6 +173,104 @@ def arch_matches(bundle_arch: str, requested: str) -> bool:
     return not requested or bundle_arch == requested or bundle_arch == "noarch"
 
 
+# The config ("build_type") and link of a platform-independent bundle.  A
+# noarch bundle (python sources, staged source trees, data, scripts) does not
+# differ between release and debug or between shared and static, so it is
+# packaged, published and scheduled ONCE as none/none -- the config/link
+# counterpart of any/noarch -- instead of once per release/debug x
+# shared/static.  manifest-schema.yaml has allowed "none" for both fields from
+# the start.
+NEUTRAL_CONFIG = "none"
+NEUTRAL_LINK = "none"
+
+# The variant a neutral (noarch) bundle is BUILT as.  The build environment
+# needs a real value (CMAKE_BUILD_TYPE, BUILD_SHARED_LIBS, the deps it installs),
+# so a noarch build always runs as release/shared and is labelled none/none.
+NEUTRAL_BUILD_VARIANT = ("release", "shared")
+
+
+def is_noarch(platform: str, arch: str = "") -> bool:
+    """True for the any/noarch identity of a platform-independent bundle."""
+    return platform == "any" or arch == "noarch"
+
+
+def variant_neutral_matrix(matrix_platforms: Sequence[str]) -> bool:
+    """True when every bundle of a recipe with this build matrix is config/link-neutral.
+
+    An ``any`` entry declares the recipe's contents platform-independent, so
+    they do not depend on release/debug or shared/static either.  That holds
+    for the targets with an entry of their own, too: a pure-Python column's
+    ``windows`` entry exists only because Windows installs to
+    ``Lib/site-packages`` with ``build.ps1``, so its bundle is
+    ``windows``/``x86_64``/``none``/``none``, not release/shared.
+    """
+    return any(PLATFORM_ALIASES.get(p, p) == "any" for p in matrix_platforms if p)
+
+
+def variant_for(
+    platform: str, arch: str, config: str, link: str, *, neutral: bool = False
+) -> tuple[str, str]:
+    """The ``(config, link)`` a bundle for *platform*/*arch* is published as.
+
+    A noarch bundle is always ``none``/``none``, and so is any bundle of a
+    *neutral* recipe (:func:`variant_neutral_matrix`); every other bundle keeps
+    the *config* and *link* it was built with.
+    """
+    if neutral or is_noarch(platform, arch):
+        return NEUTRAL_CONFIG, NEUTRAL_LINK
+    return config, link
+
+
+def config_matches(bundle_config: str, requested: str) -> bool:
+    """True when a bundle's config (``build_type``) satisfies a *requested* one.
+
+    The config counterpart of :func:`platform_matches`: a neutral bundle
+    (``none``) serves every config.  An empty *requested* means "no filter".
+    """
+    return not requested or bundle_config in (requested, NEUTRAL_CONFIG)
+
+
+def link_matches(bundle_link: str, requested: str) -> bool:
+    """True when a bundle's link satisfies a *requested* link.
+
+    The link counterpart of :func:`arch_matches`: a neutral bundle (``none``)
+    serves every link.  An empty *requested* means "no filter".
+    """
+    return not requested or bundle_link in (requested, NEUTRAL_LINK)
+
+
+# Request header by which a catalog client says it understands neutral
+# (none/none) bundles.  cvcpkg before this change filters the catalog by EXACT
+# config/link, so it would never see a none/none bundle; for a client that does
+# not send the header the server lists each neutral bundle once per concrete
+# variant (see expand_neutral_bundles).
+NEUTRAL_VARIANTS_HEADER = "X-Cvcpkg-Neutral-Variants"
+
+# The concrete variants a neutral bundle is listed under for such a client.
+LEGACY_VARIANTS = (
+    ("release", "shared"),
+    ("release", "static"),
+    ("debug", "shared"),
+    ("debug", "static"),
+)
+
+
+def expand_neutral_bundles(bundles: list[dict]) -> list[dict]:
+    """*bundles* with each none/none bundle listed once per concrete variant.
+
+    For catalog clients that predate neutral bundles: every copy points at the
+    same archive, so whichever release/debug x shared/static such a client asks
+    for, it resolves the one noarch bundle.  Other bundles pass through as is.
+    """
+    out: list[dict] = []
+    for b in bundles:
+        if b.get("build_type") == NEUTRAL_CONFIG and b.get("link") == NEUTRAL_LINK:
+            out.extend({**b, "build_type": cfg, "link": lnk} for cfg, lnk in LEGACY_VARIANTS)
+        else:
+            out.append(b)
+    return out
+
+
 def is_static_only_platform(platform: str) -> bool:
     """True for platforms that only ever ship static libraries.
 

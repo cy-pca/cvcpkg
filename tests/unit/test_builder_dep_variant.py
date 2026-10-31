@@ -68,3 +68,13 @@ def test_nothing_usable():
         )
         is None
     )
+
+
+def test_neutral_noarch_row_serves_every_job_variant():
+    # A none/none (config/link-neutral) noarch row matches any job's config/link
+    # in the preferred tier, ahead of a legacy row with the wrong labels.
+    legacy, neutral = (
+        _row("1.0", build_type="debug", link="static"),
+        _row("1.0", build_type="none", link="none"),
+    )
+    assert _pick_dep_variant([legacy, neutral], "linux", "x86_64", "release", "shared") is neutral

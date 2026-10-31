@@ -211,3 +211,60 @@ class TestDefaultTuple:
             "haiku",
         )
         assert t["arch"] in ("x86_64", "arm64")
+
+
+class TestNeutralVariant:
+    """any/noarch bundles are config/link-neutral: none/none serves every variant."""
+
+    def test_noarch_bundle_is_published_none_none(self):
+        from cvcpkg.platform import variant_for
+
+        assert variant_for("any", "noarch", "debug", "static") == ("none", "none")
+        assert variant_for("any", "any", "release", "shared") == ("none", "none")
+
+    def test_concrete_bundle_keeps_its_variant(self):
+        from cvcpkg.platform import variant_for
+
+        assert variant_for("linux", "x86_64", "debug", "static") == ("debug", "static")
+
+    def test_any_recipe_bundles_are_all_neutral(self):
+        """Every bundle of a recipe with an `any` entry -- a pure-Python column's
+        windows one too -- is none/none; a recipe without one keeps its variant."""
+        from cvcpkg.platform import variant_for, variant_neutral_matrix
+
+        assert variant_neutral_matrix(["any", "windows"]) is True
+        assert variant_neutral_matrix(["linux", "windows"]) is False
+        assert variant_for("windows", "x86_64", "release", "shared", neutral=True) == (
+            "none",
+            "none",
+        )
+
+    def test_none_matches_every_request(self):
+        from cvcpkg.platform import config_matches, link_matches
+
+        for cfg in ("release", "debug", ""):
+            assert config_matches("none", cfg) is True
+        for lnk in ("shared", "static", ""):
+            assert link_matches("none", lnk) is True
+
+    def test_concrete_variant_matches_only_itself(self):
+        from cvcpkg.platform import config_matches, link_matches
+
+        assert config_matches("release", "release") is True
+        assert config_matches("release", "debug") is False
+        assert link_matches("shared", "static") is False
+
+    def test_expand_lists_neutral_bundle_once_per_concrete_variant(self):
+        from cvcpkg.platform import expand_neutral_bundles
+
+        neutral = {"name": "certifi", "platform": "any", "build_type": "none", "link": "none"}
+        concrete = {"name": "zlib", "platform": "linux", "build_type": "release", "link": "shared"}
+        out = expand_neutral_bundles([neutral, concrete])
+        assert [(b["name"], b["build_type"], b["link"]) for b in out] == [
+            ("certifi", "release", "shared"),
+            ("certifi", "release", "static"),
+            ("certifi", "debug", "shared"),
+            ("certifi", "debug", "static"),
+            ("zlib", "release", "shared"),
+        ]
+        assert neutral["build_type"] == "none"  # input not mutated
