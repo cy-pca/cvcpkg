@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: mesa
   upstream_version: "25.3.6"
-  cvc_revision: 1
+  # Bumped 1 -> 2: netbsd-alloca-builtin.patch.  On NetBSD every alloca() in
+  # Mesa called libc's alloca() instead of the compiler builtin, and llvmpipe
+  # segfaulted compiling VTK's multisample-resolve shader (NIR out-of-SSA).
+  # glibc and FreeBSD already map alloca to the builtin, so the linux and
+  # freebsd builds compile the same code.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,7 +32,12 @@ source:
   type: package
   package: mesa-src
 
-patches: []
+patches:
+  # NetBSD's <stdlib.h> only declares alloca() for GCC/clang, and Mesa's strict
+  # -std=c11/c++17 turns the implicit builtin off, so the calls went to libc's
+  # alloca(), which moves the stack pointer under the compiler.  Map it to
+  # __builtin_alloca in include/c99_alloca.h, as glibc and FreeBSD do.
+  - netbsd-alloca-builtin.patch
 
 depends:
   build:
