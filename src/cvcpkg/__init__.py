@@ -12,7 +12,7 @@ from importlib.metadata import version as _pkg_version
 # for platforms with no pip or wheel of their own; without this fallback,
 # importing cvcpkg at all died with
 # PackageNotFoundError, one line into __init__.
-_FALLBACK_VERSION = "2.5.10"
+_FALLBACK_VERSION = "2.5.11"
 
 try:
     __version__ = _pkg_version("cvcpkg")

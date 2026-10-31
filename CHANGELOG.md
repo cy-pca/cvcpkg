@@ -28,7 +28,12 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.11
+
+**A release so builders carry the Haiku delegation fixes (#517) and label
+noarch bundles `none`/`none` (#508). #508 also changes the server (migration
+036 and the `X-Cvcpkg-Neutral-Variants` catalog header), so the prod promote
+must deploy before the builders update.**
 
 - **noarch bundles are config/link-neutral: `none`/`none`.** A `platform: any`
   bundle (source packages, pure-Python wheels, data) is the same in release
