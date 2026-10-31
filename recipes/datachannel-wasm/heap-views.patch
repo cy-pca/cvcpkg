@@ -1,0 +1,53 @@
+diff --git a/wasm/js/webrtc.js b/wasm/js/webrtc.js
+index 00348d4..9f5fc52 100644
+--- a/wasm/js/webrtc.js
++++ b/wasm/js/webrtc.js
+@@ -174,7 +174,7 @@
+ 			if(!window.RTCPeerConnection) return 0;
+ 			var iceServers = [];
+ 			for(var i = 0; i < nIceServers; ++i) {
+-				var heap = Module['HEAPU32'];
++				var heap = HEAPU32;
+ 				var pUrl = heap[pUrls/heap.BYTES_PER_ELEMENT + i];
+ 				var url = UTF8ToString(pUrl);
+ 				var pUsername = heap[pUsernames/heap.BYTES_PER_ELEMENT + i];
+@@ -425,7 +425,7 @@
+ 					var byteArray = new Uint8Array(evt.data);
+ 					var size = byteArray.length;
+ 					var pBuffer = _malloc(size);
+-					var heapBytes = new Uint8Array(Module['HEAPU8'].buffer, pBuffer, size);
++					var heapBytes = new Uint8Array(HEAPU8.buffer, pBuffer, size);
+ 					heapBytes.set(byteArray);
+ 					{{{ makeDynCall('viii', 'messageCallback') }}} (pBuffer, size, userPointer);
+ 					_free(pBuffer);
+@@ -466,7 +466,7 @@
+ 			var dataChannel = WEBRTC.dataChannelsMap[dc];
+ 			if(dataChannel.readyState != 'open') return -1;
+ 			if(size >= 0) {
+-				var heapBytes = new Uint8Array(Module['HEAPU8'].buffer, pBuffer, size);
++				var heapBytes = new Uint8Array(HEAPU8.buffer, pBuffer, size);
+ 				if(heapBytes.buffer instanceof ArrayBuffer) {
+ 					dataChannel.send(heapBytes);
+ 				} else {
+diff --git a/wasm/js/websocket.js b/wasm/js/websocket.js
+index 769933e..37b1145 100644
+--- a/wasm/js/websocket.js
++++ b/wasm/js/websocket.js
+@@ -93,7 +93,7 @@
+ 					var byteArray = new Uint8Array(evt.data);
+ 					var size = byteArray.byteLength;
+ 					var pBuffer = _malloc(size);
+-					var heapBytes = new Uint8Array(Module['HEAPU8'].buffer, pBuffer, size);
++					var heapBytes = new Uint8Array(HEAPU8.buffer, pBuffer, size);
+ 					heapBytes.set(byteArray);
+ 					var userPointer = webSocket.rtcUserPointer || 0;
+ 					{{{ makeDynCall('viii', 'messageCallback') }}} (pBuffer, size, userPointer);
+@@ -112,7 +112,7 @@
+ 			var webSocket = WEBSOCKET.map[ws];
+ 			if(webSocket.readyState != 1) return -1;
+ 			if(size >= 0) {
+-				var heapBytes = new Uint8Array(Module['HEAPU8'].buffer, pBuffer, size);
++				var heapBytes = new Uint8Array(HEAPU8.buffer, pBuffer, size);
+ 				if(heapBytes.buffer instanceof ArrayBuffer) {
+ 					webSocket.send(heapBytes);
+ 				} else {

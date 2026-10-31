@@ -13,7 +13,10 @@ if(NOT TARGET datachannel-wasm::datachannel-wasm)
                INTERFACE_INCLUDE_DIRECTORIES "${_dcw_prefix}/include"
                INTERFACE_COMPILE_FEATURES cxx_std_17
                INTERFACE_LINK_OPTIONS
-               "SHELL:--js-library \"${_dcw_prefix}/share/datachannel-wasm/webrtc.js\";SHELL:--js-library \"${_dcw_prefix}/share/datachannel-wasm/websocket.js\"")
+               "SHELL:--js-library \"${_dcw_prefix}/share/datachannel-wasm/webrtc.js\";SHELL:--js-library \"${_dcw_prefix}/share/datachannel-wasm/websocket.js\""
+               # The JS libraries are link inputs too: a consumer relinks when either changes.
+               INTERFACE_LINK_DEPENDS
+               "${_dcw_prefix}/share/datachannel-wasm/webrtc.js;${_dcw_prefix}/share/datachannel-wasm/websocket.js")
 endif()
 
 set(datachannel-wasm_VERSION 0.4.0)

@@ -27,7 +27,12 @@ source:
   sha256: "3271291205c5b3ef06a7a6cbfe107cab93ecfd8b3a303afd94337e02b0343349"
   strip_components: 1
 
-patches: []
+# Emscripten (3.1.5x on, and the 5.0.x cvcpkg ships) no longer puts the heap views on Module
+# unless the final link exports them, so upstream's JS libraries read Module['HEAPU8'].buffer as
+# undefined and every send, receive and ICE-server list throws. The bare HEAPU8 / HEAPU32 a JS
+# library sees in the module's own scope work on every version.
+patches:
+  - heap-views.patch
 
 depends:
   build:
