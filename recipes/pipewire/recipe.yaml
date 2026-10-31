@@ -16,6 +16,13 @@ recipe:
   # resolves the plugin, module and config data dirs next to the loaded
   # libpipewire (lib/spa-0.2, lib/pipewire-0.3, share/pipewire); build.sh sets
   # sysconfdir to the system's, so /etc/pipewire overrides still apply.
+  # cvc.4 also drops the freebsd row again: it never built. pipewire's
+  # meson.build requires epoll-shim and libinotify on FreeBSD; cvcpkg has an
+  # epoll-shim recipe but no libinotify, so meson stopped at "Dependency
+  # epoll-shim not found" (dev job 24265). No FreeBSD bundle was ever
+  # published, and every consumer (sdl2, sdl3, openal-soft, blender) depends
+  # on pipewire for linux only. Re-adding it needs epoll-shim and libinotify
+  # in depends for freebsd, and a libinotify recipe.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -59,10 +66,6 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
-    - platform: freebsd
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
 
 package:
   files:
@@ -93,5 +96,5 @@ notes:
       package works wherever cvcpkg unpacks it. SPA_PLUGIN_DIR,
       PIPEWIRE_MODULE_DIR and PIPEWIRE_CONFIG_DIR still override. The
       administrator's overrides are read from the system's /etc/pipewire
-      (/usr/local/etc/pipewire on FreeBSD) and ~/.config/pipewire, as for a
-      distribution build. Clients talk to the system's PipeWire daemon.
+      and ~/.config/pipewire, as for a distribution build. Clients talk to
+      the system's PipeWire daemon.
