@@ -51,6 +51,8 @@ depends:
   host_tools: []
 
 build:
+  min_cpu:
+    x86_64: x86-64-v3   # the test imports mitsuba-cp313 in Blender
   build_type_independent: true
   matrix:
     - platform: any
