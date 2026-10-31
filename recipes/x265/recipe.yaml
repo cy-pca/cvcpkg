@@ -28,7 +28,7 @@ depends:
     - name: x265-src
       version: "==4.1"
     - name: nasm
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - cmake
     - ninja
     - pkg-config
@@ -57,6 +57,11 @@ build:
         CFLAGS: "-O2 -fPIC"
         CXXFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
