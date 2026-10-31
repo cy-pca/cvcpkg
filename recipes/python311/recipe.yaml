@@ -76,7 +76,12 @@ recipe:
   # ... is missing" and left them out.  _common/python-externals.targets takes
   # them from the deps' share/licenses/ (bzip2 cvc.7, libffi cvc.7, openssl
   # cvc.10).  Other platforms rebuild unchanged.
-  cvc_revision: 13
+  # Bumped 13 -> 14: netbsd-ctypes-alloca.patch.  On NetBSD, _ctypes called
+  # libc's alloca() instead of the compiler builtin (NetBSD's <stdlib.h> leaves
+  # that to the compiler, and -std=c11 turns it off), and every ctypes foreign
+  # call segfaulted.  glibc, macOS, FreeBSD and OpenBSD already define the
+  # macro, so other platforms rebuild unchanged.
+  cvc_revision: 14
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -95,7 +100,9 @@ source:
   type: package
   package: python311-src
 
-patches: []
+patches:
+  # NetBSD: map alloca to __builtin_alloca in _ctypes (see cvc_revision).
+  - netbsd-ctypes-alloca.patch
 
 depends:
   build:

@@ -1,0 +1,30 @@
+ctypes: alloca() is the compiler builtin on NetBSD too.
+
+NetBSD's <stdlib.h> declares `void *alloca(size_t)` for GCC and clang and
+defines the __builtin_alloca macro only for PCC, relying on the compiler's
+implicit builtin.  Clang and GCC have that builtin only in GNU modes, and
+CPython compiles with -std=c11, so _ctypes called libc's alloca(), which moves
+the stack pointer under code that addresses its locals relative to it: every
+ctypes foreign call segfaulted, ctypes.CDLL(None).getpid() included
+(python311 on netbsd-build-2, 2026-10-31).  glibc, macOS, FreeBSD and OpenBSD
+headers already define the macro, so this changes nothing there.
+
+--- a/Modules/_ctypes/ctypes.h
++++ b/Modules/_ctypes/ctypes.h
+@@ -2,6 +2,16 @@
+ #   include <alloca.h>
+ #endif
+ 
++/* NetBSD's <stdlib.h> only declares alloca() for GCC and clang, counting on the
++   compiler's implicit builtin, which CPython's -std=c11 turns off.  The calls
++   then went to libc's alloca(), which moves the stack pointer under the caller,
++   and every ctypes foreign call crashed.  <stdlib.h> comes first so that its
++   declaration is not rewritten by the macro. */
++#if defined(__GNUC__) && !defined(alloca)
++#   include <stdlib.h>
++#   define alloca(size) __builtin_alloca(size)
++#endif
++
+ #ifndef MS_WIN32
+ #define max(a, b) ((a) > (b) ? (a) : (b))
+ #define min(a, b) ((a) < (b) ? (a) : (b))
