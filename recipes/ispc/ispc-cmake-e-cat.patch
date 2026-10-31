@@ -1,0 +1,18 @@
+Run llvm-as on builtins-cm-64.ll through `cmake -E cat`, not `cat`.
+
+builtin_xe_to_cpp() runs on every host (it is not gated on XE_ENABLED), and
+`cat` does not exist on a Windows build that runs its custom commands through
+cmd.exe.  Blender 5.2 carries the same change as
+build_files/build_environment/patches/ispc.diff.
+
+--- a/cmake/GenerateBuiltins.cmake
++++ b/cmake/GenerateBuiltins.cmake
+@@ -357,7 +357,7 @@
+ 
+     add_custom_command(
+         OUTPUT ${bc}
+-        COMMAND cat ${input} | \"${LLVM_AS_EXECUTABLE}\" -o ${bc}
++        COMMAND ${CMAKE_COMMAND} -E cat ${input} | \"${LLVM_AS_EXECUTABLE}\" -o ${bc}
+         DEPENDS ${input}
+         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+         )

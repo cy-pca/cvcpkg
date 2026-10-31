@@ -32,7 +32,7 @@ patches:
 depends:
   build:
     - name: nasm
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows]
     - pkg-config
     # GNU make: on PATH (build.sh prepends the deps prefix) so libvpx's
     # generated Makefile builds under OpenBSD, whose bmake cannot parse it and
@@ -66,6 +66,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

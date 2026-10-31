@@ -1,0 +1,176 @@
+Add ISPC_64BIT_ONLY: build the 64-bit x86-64/AArch64 targets only.
+
+Upstream always builds the 32-bit stdlib and builtins next to the 64-bit ones:
+  - the 32-bit C builtins (builtins-c-cpu.cpp compiled by clang for i686 or
+    armv8a) need a 32-bit libc for the host OS -- libc6-dev-i386 or armhf
+    headers on Linux -- which a plain 64-bit build host does not have;
+  - the 32-bit ARM stdlib and generic targets are compiled by ispc-slim for
+    --arch=arm, and ispc links and initialises LLVM's ARM backend whenever ARM
+    support is on, so an LLVM built with AArch64 but not ARM (cvcpkg's llvm:
+    X86;AArch64;WebAssembly) cannot build ISPC for an arm64 host at all.
+With -DISPC_64BIT_ONLY=ON those are skipped and only the AArch64 LLVM
+component is required for ARM support.  The resulting ispc rejects the 32-bit
+architectures (x86, arm); every 64-bit target is unchanged.  Default OFF keeps
+upstream's behaviour.
+
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -106,6 +106,16 @@
+ option(ISPC_PREPARE_PACKAGE "Generate build targets for ispc package" OFF)
+ option(ISPC_PACKAGE_EXAMPLES "Pack examples into the ISPC package" ON)
+ option(ISPC_SLIM_BINARY "Build ISPC as slim binary" OFF)
++# 64-bit targets only: no 32-bit x86/ARM stdlib or builtins. The 32-bit C
++# builtins need a 32-bit libc for the host OS (libc6-dev-i386, armhf) and the
++# 32-bit ARM stdlib needs LLVM's ARM backend, which an LLVM built for AArch64
++# alone does not have.
++option(ISPC_64BIT_ONLY "Support 64-bit targets only (no 32-bit x86 or ARM)" OFF)
++if (ISPC_64BIT_ONLY)
++    set(ISPC_TARGET_BITS 64)
++else()
++    set(ISPC_TARGET_BITS 32 64)
++endif()
+ 
+ # Ensure ISPC_LIBRARY is OFF when ISPC_SLIM_BINARY is ON
+ if (ISPC_SLIM_BINARY)
+@@ -145,7 +155,7 @@
+ run_llvm_config(LLVM_TARGETS_BUILT "--targets-built")
+ 
+ set(LLVM_SUPPORTS_ARM ON)
+-if (NOT LLVM_TARGETS_BUILT MATCHES "AArch64" OR NOT LLVM_TARGETS_BUILT MATCHES "ARM")
++if (NOT LLVM_TARGETS_BUILT MATCHES "AArch64" OR (NOT ISPC_64BIT_ONLY AND NOT LLVM_TARGETS_BUILT MATCHES "ARM"))
+     set(LLVM_SUPPORTS_ARM OFF)
+     message(WARNING "LLVM does not support Aarch64 and ARM targets. Disabling these targets.")
+ endif()
+@@ -446,7 +456,11 @@
+     list(APPEND LLVM_COMPONENTS x86)
+ endif()
+ if (ARM_ENABLED)
+-    list(APPEND LLVM_COMPONENTS arm aarch64)
++    if (ISPC_64BIT_ONLY)
++        list(APPEND LLVM_COMPONENTS aarch64)
++    else()
++        list(APPEND LLVM_COMPONENTS arm aarch64)
++    endif()
+ endif()
+ if (RISCV_ENABLED)
+     list(APPEND LLVM_COMPONENTS riscv)
+@@ -644,6 +658,10 @@
+     list(APPEND COMPILE_DEFINITIONS ISPC_ARM_ENABLED)
+ endif()
+ 
++if (ISPC_64BIT_ONLY)
++    list(APPEND COMPILE_DEFINITIONS ISPC_64BIT_ONLY)
++endif()
++
+ if (RISCV_ENABLED)
+     list(APPEND COMPILE_DEFINITIONS ISPC_RISCV_ENABLED)
+ endif()
+--- a/cmake/CommonStdlibBuiltins.cmake
++++ b/cmake/CommonStdlibBuiltins.cmake
+@@ -110,7 +110,7 @@
+         if (${func} STREQUAL "stdlib_to_cpp")
+             # Stdlib families are defined in cmake/StdlibFamilies.cmake
+             # Use pre-filtered x86 families for efficiency
+-            foreach (bit 32 64)
++            foreach (bit ${ISPC_TARGET_BITS})
+                 foreach (os ${os_list})
+                     foreach (family ${STDLIB_X86_FAMILIES})
+                         process_stdlib_family(${family} ${ispc_name} ${bit} ${os} ${CPP_LIST} ${BC_LIST})
+@@ -129,7 +129,7 @@
+         else()
+             # For target builtins, compile for each target individually
+             foreach (target ${X86_TARGETS})
+-                foreach (bit 32 64)
++                foreach (bit ${ISPC_TARGET_BITS})
+                     foreach (os ${os_list})
+                         disp_target_stdlib(${func} ${ispc_name} ${target} ${bit} ${os} ${CPP_LIST} ${BC_LIST})
+                     endforeach()
+@@ -166,7 +166,7 @@
+             # Stdlib families are defined in cmake/StdlibFamilies.cmake
+             # Use pre-filtered ARM families for efficiency
+             # Loop order matches x86 section for consistency
+-            foreach (bit 32 64)
++            foreach (bit ${ISPC_TARGET_BITS})
+                 foreach (os ${os_list})
+                     # On Windows only 64-bit neon targets are supported
+                     if (${os} STREQUAL "windows" AND ${bit} EQUAL 32)
+@@ -193,7 +193,7 @@
+                 foreach (target ${ARM_TARGETS})
+                     disp_target_stdlib(${func} ${ispc_name} ${target} 64 ${os} ${CPP_LIST} ${BC_LIST})
+                     # On Windows only 64-bit neon targets are supported
+-                    if (${os} STREQUAL "windows")
++                    if (${os} STREQUAL "windows" OR ISPC_64BIT_ONLY)
+                         continue()
+                     endif()
+                     disp_target_stdlib(${func} ${ispc_name} ${target} 32 ${os} ${CPP_LIST} ${BC_LIST})
+--- a/cmake/GenerateBuiltins.cmake
++++ b/cmake/GenerateBuiltins.cmake
+@@ -287,6 +287,9 @@
+ endfunction()
+ 
+ function(builtin_to_cpp bit os generic_arch)
++    if (ISPC_64BIT_ONLY AND "${bit}" STREQUAL "32")
++        return()
++    endif()
+     set(input builtins/builtins-c-cpu.cpp)
+     set(include "")
+ 
+--- a/cmake/GenericTargets.cmake
++++ b/cmake/GenericTargets.cmake
+@@ -64,7 +64,7 @@
+         # Generate 32-bit x86 generic stdlib/builtins when:
+         # - Not on Apple (native Linux/Windows), OR
+         # - On Apple with cross-compilation enabled (ISPC_LINUX_TARGET or ISPC_WINDOWS_TARGET)
+-        if (NOT APPLE OR ISPC_LINUX_TARGET OR ISPC_WINDOWS_TARGET)
++        if ((NOT APPLE OR ISPC_LINUX_TARGET OR ISPC_WINDOWS_TARGET) AND NOT ISPC_64BIT_ONLY)
+             list(APPEND ARCH_LIST
+                 "x86,32"
+             )
+@@ -74,8 +74,12 @@
+     if (ARM_ENABLED)
+         list(APPEND ARCH_LIST
+             "aarch64,64"
+-            "arm,32"
+         )
++        if (NOT ISPC_64BIT_ONLY)
++            list(APPEND ARCH_LIST
++                "arm,32"
++            )
++        endif()
+     endif()
+ 
+     if (RISCV_ENABLED AND ISPC_LINUX_TARGET)
+--- a/src/ispc_impl.cpp
++++ b/src/ispc_impl.cpp
+@@ -485,12 +485,14 @@
+ #endif
+ 
+ #ifdef ISPC_ARM_ENABLED
++#ifndef ISPC_64BIT_ONLY
+     LLVMInitializeARMTargetInfo();
+     LLVMInitializeARMTarget();
+     LLVMInitializeARMAsmPrinter();
+     LLVMInitializeARMAsmParser();
+     LLVMInitializeARMDisassembler();
+     LLVMInitializeARMTargetMC();
++#endif
+ 
+     LLVMInitializeAArch64TargetInfo();
+     LLVMInitializeAArch64Target();
+--- a/tools/ispc-opt.cpp
++++ b/tools/ispc-opt.cpp
+@@ -93,12 +93,14 @@
+ #endif
+ 
+ #ifdef ISPC_ARM_ENABLED
++#ifndef ISPC_64BIT_ONLY
+     LLVMInitializeARMTargetInfo();
+     LLVMInitializeARMTarget();
+     LLVMInitializeARMAsmPrinter();
+     LLVMInitializeARMAsmParser();
+     LLVMInitializeARMDisassembler();
+     LLVMInitializeARMTargetMC();
++#endif
+ 
+     LLVMInitializeAArch64TargetInfo();
+     LLVMInitializeAArch64Target();

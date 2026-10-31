@@ -37,11 +37,14 @@ from cvcpkg.errors import CvcpkgError
 from cvcpkg.heartbeat import unwatch, watch, watched
 from cvcpkg.platform import (
     _ARCHIVE_EXT,
+    NEUTRAL_BUILD_VARIANT,
+    NEUTRAL_CONFIG,
     default_archive_format,
     detect_arch,
     detect_platform,
     is_static_only_platform,
     lib_path_var,
+    variant_for,
 )
 
 # ── Errors ──────────────────────────────────────────────────────
@@ -318,6 +321,17 @@ class Recipe:
     @property
     def full_version(self) -> str:
         return f"{self.upstream_version}+cvc.{self.cvc_revision}"
+
+    @property
+    def variant_neutral(self) -> bool:
+        """True when every bundle of this recipe is published as none/none.
+
+        A recipe with an ``any`` entry -- including the ``windows`` bundle of a
+        pure-Python column -- see :func:`cvcpkg.platform.variant_neutral_matrix`.
+        """
+        from cvcpkg.platform import variant_neutral_matrix
+
+        return variant_neutral_matrix([m.platform for m in self.build_matrix])
 
     @property
     def not_redistributable_reason(self) -> str:
@@ -4333,6 +4347,17 @@ def pack_recipe(
     is_any = _serves_target_via_any(recipe, target_platform, host_platform)
     pkg_platform = "any" if is_any else build_platform
     pkg_arch = "noarch" if is_any else arch
+    # A noarch bundle is also config/link-neutral: published once as none/none
+    # whatever variant the caller asked for, and always built as release/shared
+    # so that one bundle comes from one deterministic build.  So is every other
+    # bundle of a recipe with an `any` entry (a pure-Python column's windows one).
+    if is_any or recipe.variant_neutral:
+        config, link = NEUTRAL_BUILD_VARIANT
+    elif NEUTRAL_CONFIG in (config, link):
+        raise BuildError(
+            f"{recipe.name}: config/link 'none' is only for platform-independent "
+            f"bundles (a recipe with an `any` entry), and {recipe.name} has none"
+        )
 
     if output_dir is None:
         output_dir = Path.cwd() / "dist"
@@ -4355,6 +4380,12 @@ def pack_recipe(
     # assignment flows into both the manifest and the archive filename below.
     if cvc_revision is not None:
         ctx.recipe.cvc_revision = cvc_revision
+
+    # From what the build ran as, not what was asked: build_recipe forces
+    # static on the static-only platforms (wasm/wasi/cosmo).
+    pkg_config, pkg_link = variant_for(
+        pkg_platform, pkg_arch, ctx.config, ctx.link, neutral=ctx.recipe.variant_neutral
+    )
 
     # ── glibc floor gate (linux) ────────────────────────────────────────
     # glibc is backward- but not forward-compatible, so a bundle built on a
@@ -4410,8 +4441,8 @@ def pack_recipe(
         ctx.install_dir,
         pkg_platform,
         pkg_arch,
-        ctx.config,
-        ctx.link,
+        pkg_config,
+        pkg_link,
         maintainer=maintainer,
     )
 
@@ -4438,8 +4469,8 @@ def pack_recipe(
         ctx.recipe.full_version,
         pkg_platform,
         pkg_arch,
-        ctx.config,
-        ctx.link,
+        pkg_config,
+        pkg_link,
         fmt=ctx.recipe.archive_format,  # None → per-platform default
     )
 
@@ -4568,6 +4599,9 @@ def pack_from_prefix(
     # wasm/wasi/cosmo never link shared; keep the invariant used by build_recipe.
     if is_static_only_platform(platform):
         link = "static"
+    # An any/noarch bundle is config/link-neutral (none/none), as in pack_recipe,
+    # and so is every bundle of a recipe with an `any` entry.
+    config, link = variant_for(platform, arch, config, link, neutral=recipe.variant_neutral)
 
     if output_dir is None:
         output_dir = Path.cwd() / "dist"
@@ -5698,6 +5732,14 @@ def build_all(
         # that entry covers.  A target with its own entry keeps its own key.
         eff_platform = "any" if _serves_target_via_any(recipe, platform) else platform
         eff_arch = _detect_arch_for_platform(eff_platform)
+        # ... and likewise none/none for its config/link, built as release/shared
+        # whatever variant this pass is for.
+        eff_config, eff_link = variant_for(
+            eff_platform, eff_arch, config, link, neutral=recipe.variant_neutral
+        )
+        build_config, build_link = (
+            NEUTRAL_BUILD_VARIANT if eff_config == NEUTRAL_CONFIG else (config, link)
+        )
 
         # Build cache lookup.
         recipe_chain_hash = ""
@@ -5706,7 +5748,7 @@ def build_all(
             recipe_chain_hash = chain_hash(recipe, all_recipe_map, eff_platform)
             if not force_clean:
                 cached_archive = cache.lookup(
-                    recipe_chain_hash, eff_platform, eff_arch, config, link
+                    recipe_chain_hash, eff_platform, eff_arch, eff_config, eff_link
                 )
 
         # Server cache lookup (when local cache misses).
@@ -5726,8 +5768,8 @@ def build_all(
                 recipe_chain_hash,
                 eff_platform,
                 eff_arch,
-                config,
-                link,
+                eff_config,
+                eff_link,
                 server_cache_org,
                 version=recipe.full_version,
             )
@@ -5757,8 +5799,8 @@ def build_all(
                         recipe_chain_hash,
                         eff_platform,
                         eff_arch,
-                        config,
-                        link,
+                        eff_config,
+                        eff_link,
                     ):
                         cached_archive = result
                         server_hit = True
@@ -5784,8 +5826,8 @@ def build_all(
                     ctx = BuildContext(
                         recipe=recipe,
                         platform=platform,
-                        config=config,
-                        link=link,
+                        config=build_config,
+                        link=build_link,
                         prefix=prefix,
                         source_dir=work_dir / "source",
                         build_dir=work_dir / "build",
@@ -5806,7 +5848,7 @@ def build_all(
                         # A server-cache bundle brought its manifest; a local
                         # cache entry is a raw install tree without one.
                         _record_manifest_in_prefix(
-                            recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                            recipe, install_dir, _dest, eff_platform, eff_arch, eff_config, eff_link
                         )
                 else:
                     cache.restore(cached_archive, _dest)
@@ -5815,8 +5857,8 @@ def build_all(
                     ctx = BuildContext(
                         recipe=recipe,
                         platform=platform,
-                        config=config,
-                        link=link,
+                        config=build_config,
+                        link=build_link,
                         prefix=prefix,
                         source_dir=prefix,
                         build_dir=prefix,
@@ -5836,8 +5878,8 @@ def build_all(
                 ctx = BuildContext(
                     recipe=recipe,
                     platform=platform,
-                    config=config,
-                    link=link,
+                    config=build_config,
+                    link=build_link,
                     prefix=prefix,
                     source_dir=source_dir,
                     build_dir=work_dir / "build",
@@ -5863,7 +5905,7 @@ def build_all(
                     _rewrite_pc_prefixes(_dest)
                     _rewrite_script_prefixes(_dest)
                     _record_manifest_in_prefix(
-                        recipe, install_dir, _dest, eff_platform, eff_arch, config, link
+                        recipe, install_dir, _dest, eff_platform, eff_arch, eff_config, eff_link
                     )
                 # Store in build cache.
                 if cache is not None and recipe_chain_hash and install_dir.is_dir():
@@ -5874,15 +5916,15 @@ def build_all(
                         recipe_chain_hash,
                         eff_platform,
                         eff_arch,
-                        config,
-                        link,
+                        eff_config,
+                        eff_link,
                     )
             else:
                 ctx = build_recipe(
                     recipe.recipe_dir,
                     platform=platform,
-                    config=config,
-                    link=link,
+                    config=build_config,
+                    link=build_link,
                     prefix=_dest,
                     keep_build_dir=keep_build_dir,
                     host_platform=host_platform,

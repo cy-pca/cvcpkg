@@ -114,8 +114,8 @@ the newest bundle of a package/platform/arch/config/link/org.
 Server cache entries are ordinary packages published (via
 `POST /v1/publish`) with the chain hash as `recipe_version` and an
 empty release tag. A recipe built through its `any` matrix entry is
-published and looked up as `any`/`noarch`, so one entry serves every
-platform that entry covers — so they never appear in releases and can be
+published and looked up as `any`/`noarch`, config/link `none`/`none`, so one
+entry serves every platform, config and link that entry covers — so they never appear in releases and can be
 garbage-collected independently. Endpoints:
 
 | Endpoint | Auth | Purpose |

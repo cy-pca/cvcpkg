@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: drjit-src
+  upstream_version: "1.5.0"
+  cvc_revision: 1
+  maintainer: cvcpkg group
+  maintainer_email: info@cvcpkg.org
+  maintainer_url: https://cvcpkg.org
+  homepage: https://github.com/mitsuba-renderer/drjit
+  # Dr.Jit, drjit-core, nanothread, cmake-defaults and nanobind are
+  # BSD-3-Clause; the two tsl::robin_map copies are MIT; drjit-core vendors lz4
+  # (BSD-2-Clause).
+  license: "BSD-3-Clause AND MIT AND BSD-2-Clause"
+  tags: [source]
+  description: >-
+    The unmodified upstream source of Dr.Jit 1.5.0 (tag v1.5.0, commit
+    671cbb25244b) together with every git submodule its build reads, staged at
+    src/drjit-src/.  PyPI publishes wheels only (no sdist) and a GitHub
+    archive leaves each submodule an empty directory, so the tree is the
+    commit's archive plus one archive per submodule, each pinned by commit and
+    sha256 in build.sh.  drjit-cp313 builds from it (source.type package), so
+    GitHub is contacted once, by whichever builder publishes this noarch
+    bundle.
+
+# The GitHub archive of the tag's commit, not `type: git`: builders cannot
+# fetch git sources (docs/rust-crates.md), and the archive URL names the commit
+# as exactly, with the sha256 pinning the bytes.  The submodules are fetched
+# and verified by build.sh, the way recipes/crate-git-xcb-imdkit--215ce4b0
+# fetches its one.
+source:
+  type: tarball
+  url: https://github.com/mitsuba-renderer/drjit/archive/671cbb25244be8a9731ac7b0e40e60ff122b8f8d.tar.gz
+  sha256: "b2bb35d8102e76d71374a5b8741ada7c5e803c68e0c4beddef02dcba8fb2059c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - src/drjit-src/
+    # The deepest submodule, which CMakeLists.txt checks for before anything
+    # else: present only if every level above it was unpacked.
+    - src/drjit-src/ext/drjit-core/ext/nanothread/ext/cmake-defaults/CMakeLists.txt
+    - src/drjit-src/ext/nanobind/ext/robin_map/include/
+    - src/drjit-src/cvcpkg-submodules.txt

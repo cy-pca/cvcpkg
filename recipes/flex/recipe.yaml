@@ -56,6 +56,10 @@ build:
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
 
@@ -64,9 +68,9 @@ package:
     - bin/flex*
     # The windows build ships the scanner generator only: no libfl, no man page
     # (windows populate, 2026-10-19).
-    - { glob: "lib/libfl*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "lib/libfl*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
     - include/FlexLexer.h
-    - { glob: "share/man/man1/flex*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "share/man/man1/flex*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku] }
 
 toolchain:
   cc:

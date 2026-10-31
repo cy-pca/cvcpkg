@@ -271,6 +271,7 @@ SCRIPT_PACKAGES = {
     "httpx": ["httpx"],
     "idna": ["idna"],
     "invoke": ["invoke", "inv"],
+    "ipython": ["ipython", "ipython3"],
     "jmespath": ["jp.py"],
     "mako": ["mako-render"],
     "pycodestyle": ["pycodestyle"],
@@ -733,6 +734,30 @@ SEED_PACKAGES = {
         "build_deps": ["setuptools-scm", "setuptools"],
         "files": ["scikit_build_core/", "scikit_build_core-*.dist-info/"],
         "check": "import scikit_build_core.build",
+    },
+    "nanobind": {
+        # drjit 1.5.0 and mitsuba 3.9.1 both pin nanobind==2.14.0 in their
+        # [build-system] requires: under scikit-build their CMake runs
+        # `python -m nanobind --cmake_dir` and find_package()s THIS copy, not
+        # the ext/nanobind submodule.  The wheel is header/source-only
+        # (py3-none-any), with tsl::robin_map vendored under ext/.
+        "version": "2.14.0",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        # scikit-build-core configures and installs nanobind's CMake project
+        # even though nothing compiles, so it needs cmake and ninja (which it
+        # asks for through get_requires_for_build_wheel, never consulted under
+        # --no-build-isolation), and it imports packaging and pathspec, its own
+        # runtime deps, which a backend build edge does not stage.
+        "build_deps": ["cmake", "ninja", "packaging", "pathspec"],
+        "files": ["nanobind/", "*.dist-info/"],
+        "check": (
+            "import os, nanobind; "
+            "assert os.path.isfile(os.path.join(nanobind.cmake_dir(), 'nanobind-config.cmake')); "
+            "assert os.path.isfile(os.path.join(nanobind.include_dir(), 'nanobind', 'nanobind.h')); "
+            "assert os.path.isdir(os.path.join(os.path.dirname(nanobind.__file__), "
+            "'ext', 'robin_map', 'include', 'tsl'))"
+        ),
     },
     # ── plotting / imaging / schema stack ───────────────────────────────────
     # pillow is the load-bearing one: the scene-buffer ingestion path reads
@@ -1787,6 +1812,200 @@ SEED_PACKAGES = {
         "deps": ["wcwidth"],
         "files": ["urwid/", "*.dist-info/"],
         "check": "import urwid; urwid.Text('x')",
+    },
+    # ── sionna-rt's runtime closure ─────────────────────────────────────────
+    # sionna-rt 2.2.0 (hand-written: no PyPI sdist, built from its GitHub tag)
+    # requires importlib_resources, ipywidgets and pythreejs.  The last two
+    # drive only its notebook previewer, but sionna/rt/__init__.py imports
+    # sionna.rt.preview eagerly, which imports ipywidgets, pythreejs and
+    # IPython.display at module load: without this stack `import sionna.rt`
+    # fails.  Deps are unconditional lists (seeds take no markers), so
+    # ipython's win32-only colorama and non-win32 pexpect ride along
+    # everywhere; both are pure Python and harmless where unused.
+    "coherent-licensed": {
+        # importlib_resources' (jaraco skeleton) setuptools plugin: a
+        # [build-system] requirement only, packaged so it builds from source.
+        "version": "0.5.2",
+        "license": "MIT",
+        "deps": [],
+        "files": ["coherent/licensed/", "*.dist-info/"],
+        "check": "import coherent.licensed",
+    },
+    "importlib-resources": {
+        "version": "7.1.0",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["importlib_resources/", "*.dist-info/"],
+        "check": "from importlib_resources import files; assert files('importlib_resources')",
+    },
+    "traitlets": {
+        "version": "5.16.1",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["traitlets/", "*.dist-info/"],
+        "check": (
+            "import traitlets; "
+            "A = type('A', (traitlets.HasTraits,), {'x': traitlets.Int(1)}); "
+            "assert A().x == 1"
+        ),
+    },
+    "comm": {
+        "version": "0.2.3",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["comm/", "*.dist-info/"],
+        "check": "import comm; comm.create_comm(target_name='cvcpkg')",
+    },
+    "traittypes": {
+        "version": "0.2.3",
+        "license": "BSD-3-Clause",
+        "deps": ["traitlets"],
+        "files": ["traittypes/", "*.dist-info/"],
+        "check": "import traittypes",
+    },
+    "matplotlib-inline": {
+        "version": "0.2.2",
+        "license": "BSD-3-Clause",
+        "deps": ["traitlets"],
+        "files": ["matplotlib_inline/", "*.dist-info/"],
+        # Importing it imports matplotlib (backend_inline), which it does not
+        # require: IPython loads it only for %matplotlib inline.  Check the
+        # installed package without importing it.
+        "check": (
+            "import importlib.util, importlib.metadata as md; "
+            "s = importlib.util.find_spec('matplotlib_inline'); "
+            "assert s is not None and s.submodule_search_locations, s; "
+            "assert md.version('matplotlib-inline') == '0.2.2'"
+        ),
+    },
+    "parso": {
+        "version": "0.8.7",
+        "license": "MIT",
+        "deps": [],
+        "files": ["parso/", "*.dist-info/"],
+        "check": "import parso; assert parso.parse('x = 1').children",
+    },
+    "jedi": {
+        "version": "0.20.1",
+        "license": "MIT",
+        "deps": ["parso"],
+        "files": ["jedi/", "*.dist-info/"],
+        "check": "import jedi; assert jedi.Script('import os\\nos.pa').complete()",
+    },
+    "ptyprocess": {
+        "version": "0.7.0",
+        "license": "ISC",
+        "deps": [],
+        "files": ["ptyprocess/", "*.dist-info/"],
+        "check": "import ptyprocess",
+    },
+    "pexpect": {
+        "version": "4.9.0",
+        "license": "ISC",
+        "deps": ["ptyprocess"],
+        "files": ["pexpect/", "*.dist-info/"],
+        "check": "import pexpect",
+    },
+    "prompt-toolkit": {
+        "version": "3.0.53",
+        "license": "BSD-3-Clause",
+        "deps": ["wcwidth"],
+        "files": ["prompt_toolkit/", "*.dist-info/"],
+        "check": "import prompt_toolkit",
+    },
+    "executing": {
+        "version": "2.3.0",
+        "license": "MIT",
+        "deps": [],
+        "files": ["executing/", "*.dist-info/"],
+        "check": "import executing",
+    },
+    "asttokens": {
+        "version": "3.0.2",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["asttokens/", "*.dist-info/"],
+        "check": "import asttokens; asttokens.ASTTokens('x = 1', parse=True)",
+    },
+    "pure-eval": {
+        "version": "0.2.4",
+        "license": "MIT",
+        "deps": [],
+        "files": ["pure_eval/", "*.dist-info/"],
+        "check": "import pure_eval",
+    },
+    "stack-data": {
+        "version": "0.6.3",
+        "license": "MIT",
+        "deps": ["asttokens", "executing", "pure-eval"],
+        "files": ["stack_data/", "*.dist-info/"],
+        "check": "import stack_data",
+    },
+    "ipython-pygments-lexers": {
+        "version": "1.1.1",
+        "license": "BSD-3-Clause",
+        "deps": ["pygments"],
+        "files": ["ipython_pygments_lexers.py", "*.dist-info/"],
+        "check": "import ipython_pygments_lexers",
+    },
+    "ipython": {
+        "version": "9.17.1",
+        "license": "BSD-3-Clause",
+        "deps": [
+            "colorama",
+            "ipython-pygments-lexers",
+            "jedi",
+            "matplotlib-inline",
+            "pexpect",
+            "prompt-toolkit",
+            "psutil",
+            "pygments",
+            "stack-data",
+            "traitlets",
+            "typing-extensions",
+        ],
+        "files": ["IPython/", "*.dist-info/"],
+        "check": "import IPython; from IPython.display import display",
+    },
+    "widgetsnbextension": {
+        "version": "4.0.16",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["widgetsnbextension/", "*.dist-info/"],
+        "check": "import widgetsnbextension",
+    },
+    "jupyterlab-widgets": {
+        "version": "3.0.17",
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["jupyterlab_widgets/", "*.dist-info/"],
+        "check": "import jupyterlab_widgets",
+    },
+    "ipywidgets": {
+        "version": "8.1.9",
+        "license": "BSD-3-Clause",
+        "deps": ["comm", "ipython", "jupyterlab-widgets", "traitlets", "widgetsnbextension"],
+        "files": ["ipywidgets/", "*.dist-info/"],
+        # A widget outside a kernel gets comm's dummy comm; sionna's viewer
+        # also needs ipywidgets.embed.
+        "check": (
+            "import ipywidgets; from ipywidgets.embed import embed_snippet; "
+            "assert ipywidgets.IntSlider(value=3).value == 3"
+        ),
+    },
+    "ipydatawidgets": {
+        "version": "4.3.5",
+        "license": "BSD-3-Clause",
+        "deps": ["ipywidgets", "numpy", "traittypes"],
+        "files": ["ipydatawidgets/", "*.dist-info/"],
+        "check": "import ipydatawidgets",
+    },
+    "pythreejs": {
+        "version": "2.4.2",
+        "license": "BSD-3-Clause",
+        "deps": ["ipydatawidgets", "ipywidgets", "numpy", "traitlets"],
+        "files": ["pythreejs/", "*.dist-info/"],
+        "check": "import pythreejs; pythreejs.BoxGeometry(width=1, height=1, depth=1)",
     },
 }
 
@@ -3287,6 +3506,8 @@ _TOPPKG = {
     "absl-py": "absl",
     # PEP-420 namespace: the wheel ships ruamel/yaml/ with no ruamel/__init__.py.
     "ruamel-yaml": "ruamel.yaml",
+    # PEP-420 namespace like ruamel-yaml: coherent/licensed/ only.
+    "coherent-licensed": "coherent.licensed",
 }
 
 

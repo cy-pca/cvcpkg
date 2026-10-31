@@ -399,6 +399,8 @@ a.pkg-link:hover { text-decoration: underline; }
 .recipe-viewer pre { white-space: pre; word-break: normal; overflow-x: auto; }
 .collapsible-header { cursor: pointer; user-select: none; }
 .collapsible-header:hover { color: #3273dc; }
+td.is-nowrap { white-space: nowrap; }
+#builds-table tr.older-revision td { font-size: 0.9em; opacity: 0.85; }
 .recipe-artifact { border-top: 1px solid #2a2a3e; }
 .recipe-artifact:last-child { border-bottom: 1px solid #2a2a3e; }
 .recipe-artifact-head {
@@ -1424,6 +1426,8 @@ let pkgName = '';
 let pkgOrg = '';
 let allBuilds = [];
 let currentSort = { key: 'platform', dir: 'asc' };
+// Variants (platform/arch/config/link) whose older revisions are shown.
+const expandedVariants = new Set();
 
 async function init(name, org) {
   pkgName = name;
@@ -1872,47 +1876,93 @@ function renderInfo() {
   document.getElementById('pkg-stat-size').textContent = fmtSizeLarge(totalSize);
 }
 
+function variantKey(b) {
+  return [b.org, b.platform, b.arch, b.build_type, b.link].map(v => v || '').join('/');
+}
+
+// One group per variant.  /v1/packages/{name} lists versions newest first
+// (semver.version_sort_key), so the first build of each variant is its latest
+// revision and the rest are older ones.  Yanked builds are not in the list,
+// and nuked ones no longer exist.
+function groupByVariant(builds) {
+  const groups = new Map();
+  for (const b of builds) {
+    const key = variantKey(b);
+    if (groups.has(key)) groups.get(key).older.push(b);
+    else groups.set(key, { key, latest: b, older: [] });
+  }
+  return [...groups.values()];
+}
+
+function compareBuilds(a, b) {
+  let va = a[currentSort.key] || '';
+  let vb = b[currentSort.key] || '';
+  if (currentSort.key === 'size_bytes') {
+    return currentSort.dir === 'asc' ? (va||0) - (vb||0) : (vb||0) - (va||0);
+  }
+  if (currentSort.key === 'published_at') {
+    return currentSort.dir === 'asc'
+      ? new Date(va) - new Date(vb) : new Date(vb) - new Date(va);
+  }
+  va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
+  if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
+  if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
+  return 0;
+}
+
+function buildRow(b, group) {
+  const older = !group;
+  const expanded = group && expandedVariants.has(group.key);
+  const n = group ? group.older.length : 0;
+  const toggle = n ? `
+        <button class="button is-small is-dark ml-1 revisions-toggle" type="button"
+                data-variant="${esc(group.key)}" aria-expanded="${expanded}"
+                title="${expanded ? 'Hide' : 'Show'} ${n} older revision${n === 1 ? '' : 's'}"
+                onclick="toggleRevisions(this.dataset.variant)">
+          <span class="icon is-small"><i class="fas fa-chevron-${expanded ? 'up' : 'down'}"></i></span>
+          <span>${n}</span>
+        </button>` : '';
+  return `
+    <tr${older ? ' class="older-revision"' : ''}>
+      <td>${older ? '' : platformTag(b.platform)}</td>
+      <td><span class="is-size-7">${older ? '' : esc(b.arch)}</span></td>
+      <td>${older ? '<span class="has-text-grey mr-1">&#8627;</span>' : ''}<code class="is-size-7">${esc(b.version || '')}</code>${b.diverges_upstream ? ' <span class="icon is-small has-text-warning" title="Diverges from upstream: this local build shadows a different package published upstream at these coordinates. An admin can nuke this bundle to let the upstream copy re-populate."><i class="fas fa-exclamation-triangle"></i></span>' : ''}</td>
+      <td><span class="is-size-7">${older ? '' : esc(b.build_type)}</span></td>
+      <td><span class="is-size-7">${older ? '' : esc(b.link)}</span></td>
+      <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(b.size_bytes)}</span></td>
+      <td>${releaseTag(b.release_tag)}</td>
+      <td><span class="is-size-7 has-text-grey-light">${fmtDate(b.published_at)}</span></td>
+      <td class="is-nowrap">
+        <a class="button is-small is-link is-outlined" href="${b.archive_url && b.archive_url.startsWith('/') ? esc(b.archive_url) : '#'}" title="Download ${esc(b.version || '')}">
+          <span class="icon is-small"><i class="fas fa-download"></i></span>
+        </a>${toggle}
+      </td>
+    </tr>`;
+}
+
+function toggleRevisions(key) {
+  if (expandedVariants.has(key)) expandedVariants.delete(key);
+  else expandedVariants.add(key);
+  renderBuilds();
+}
+
 function renderBuilds() {
-  let builds = [...allBuilds];
-  if (builds.length === 0) {
+  if (allBuilds.length === 0) {
     document.getElementById('builds-body').innerHTML =
       '<tr><td colspan="9" class="has-text-centered has-text-grey-light py-4">No builds available.</td></tr>';
     return;
   }
-  builds.sort((a, b) => {
-    let va = a[currentSort.key] || '';
-    let vb = b[currentSort.key] || '';
-    if (currentSort.key === 'size_bytes') {
-      return currentSort.dir === 'asc' ? (va||0) - (vb||0) : (vb||0) - (va||0);
-    }
-    if (currentSort.key === 'published_at') {
-      return currentSort.dir === 'asc'
-        ? new Date(va) - new Date(vb) : new Date(vb) - new Date(va);
-    }
-    va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
-    if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
-    if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
-    return 0;
-  });
+  // Only each variant's latest revision is listed; the chevron next to its
+  // download button lists the older ones under it.  Sorting orders the
+  // variants by their latest build.
+  const groups = groupByVariant(allBuilds);
+  groups.sort((a, b) => compareBuilds(a.latest, b.latest));
 
   const tbody = document.getElementById('builds-body');
-  tbody.innerHTML = builds.map(b => `
-    <tr>
-      <td>${platformTag(b.platform)}</td>
-      <td><span class="is-size-7">${esc(b.arch)}</span></td>
-      <td><code class="is-size-7">${esc(b.version || '')}</code>${b.diverges_upstream ? ' <span class="icon is-small has-text-warning" title="Diverges from upstream: this local build shadows a different package published upstream at these coordinates. An admin can nuke this bundle to let the upstream copy re-populate."><i class="fas fa-exclamation-triangle"></i></span>' : ''}</td>
-      <td><span class="is-size-7">${esc(b.build_type)}</span></td>
-      <td><span class="is-size-7">${esc(b.link)}</span></td>
-      <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(b.size_bytes)}</span></td>
-      <td>${releaseTag(b.release_tag)}</td>
-      <td><span class="is-size-7 has-text-grey-light">${fmtDate(b.published_at)}</span></td>
-      <td>
-        <a class="button is-small is-link is-outlined" href="${b.archive_url && b.archive_url.startsWith('/') ? esc(b.archive_url) : '#'}" title="Download">
-          <span class="icon is-small"><i class="fas fa-download"></i></span>
-        </a>
-      </td>
-    </tr>
-  `).join('');
+  tbody.innerHTML = groups.map(g =>
+    buildRow(g.latest, g) +
+    (expandedVariants.has(g.key) ? g.older.map(b => buildRow(b, null)).join('') : '')
+  ).join('');
 
   document.querySelectorAll('#builds-table th.is-sortable').forEach(th => {
     const arrow = th.querySelector('.sort-arrow');
@@ -4082,6 +4132,7 @@ def builds_html() -> str:
             <option value="">All</option>
             <option value="release">Release</option>
             <option value="debug">Debug</option>
+            <option value="none">None (noarch)</option>
           </select>
         </div></div></div>
       </div>
@@ -4092,6 +4143,7 @@ def builds_html() -> str:
             <option value="">All</option>
             <option value="shared">Shared</option>
             <option value="static">Static</option>
+            <option value="none">None (noarch)</option>
           </select>
         </div></div></div>
       </div>

@@ -1,0 +1,80 @@
+schema_version: 1
+recipe:
+  name: oidn
+  upstream_version: "2.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://www.openimagedenoise.org
+  license: Apache-2.0
+  tags: [libraries, rendering, denoising, vfx]
+  description: >-
+    Intel Open Image Denoise (OIDN) — the library of neural-network denoising
+    filters for ray-traced images (the RT filter, with albedo/normal
+    auxiliary features, and RTLightmap), with its trained weights built in.
+    v2.5.0 is Blender 5.2's pin; Cycles denoises with it.  This build has the
+    CPU device only (TBB tasking, kernels compiled by cvcpkg's ispc; on Apple
+    silicon also BNNS from the Accelerate framework); no SYCL, CUDA, HIP or
+    Metal GPU device, and no oidnDenoise/oidnTest apps.
+
+# The release *source* tarball, not GitHub's tag archive: the trained weights
+# (weights/*.tza) are a git submodule, which the tag archive leaves empty and
+# this tarball includes.  Nothing is downloaded at configure or build time --
+# only the SYCL device's Level Zero lookup can FetchContent, and SYCL is off.
+source:
+  type: tarball
+  url: https://github.com/RenderKit/oidn/releases/download/v2.5.0/oidn-2.5.0.src.tar.gz
+  sha256: "96c3a46122759803d5f6701ffba4bef6eac0981dced5279e66f2815e3ed3c2cc"
+  strip_components: 1
+
+# Blender's oidn.diff is not carried.  Its hunks are a Windows debug-postfix
+# for device module names (cvcpkg sets no CMAKE_DEBUG_POSTFIX), dropping the
+# version from the module file names on macOS (Blender strips it from the
+# dylibs it ships; cvcpkg keeps the versioned names upstream looks for), and
+# Python/postfix plumbing plus comments for the CUDA and HIP devices (off).
+patches: []
+
+depends:
+  build:
+    # Compiles the CPU kernels (*.ispc).  OIDN 2.5.0 refuses ISPC < 1.30.
+    - name: ispc
+      version: "^1.30"
+    # Python embeds the weights and kernels as C++ blobs at build time.
+    - name: python3
+      platforms: [linux, macos]
+    - name: python313
+      platforms: [windows]
+  runtime:
+    - name: tbb
+      version: ">=2021"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/OpenImageDenoise/
+    # libOpenImageDenoise (the API), _core and _device_cpu (loaded by the core
+    # at run time from its own directory).
+    - lib/libOpenImageDenoise*
+    # MSVC: OpenImageDenoise.lib / OpenImageDenoise_core.lib + the bin/ DLLs.
+    - lib/OpenImageDenoise*
+    - { glob: "bin/OpenImageDenoise*", platforms: [windows] }
+    - lib/cmake/OpenImageDenoise-2.5.0/
+  cmake_packages:
+    - { name: OpenImageDenoise, targets: ["OpenImageDenoise"] }
+
+abi:
+  cxx_std: 17

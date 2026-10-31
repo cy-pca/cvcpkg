@@ -545,7 +545,7 @@ class TestSubmitDagNoarch:
 
         return FakeClient
 
-    def _submit(self, tmp_path, monkeypatch, posted, *recipes):
+    def _submit(self, tmp_path, monkeypatch, posted, *recipes, extra=()):
         monkeypatch.setattr("httpx.Client", self._fake_client(posted))
         return main(
             [
@@ -562,6 +562,7 @@ class TestSubmitDagNoarch:
                 "--recipes-dir",
                 str(tmp_path / "recipes"),
                 "--no-default-recipes",
+                *extra,
                 *recipes,
             ]
         )
@@ -598,6 +599,80 @@ class TestSubmitDagNoarch:
             (j["platform"], j["arch"]) for j in all_jobs if j["recipe_name"] == "asyncpg-cp311"
         }
         assert concrete_targets == {("linux", "x86_64"), ("windows", "x86_64")}
+
+    def test_noarch_jobs_are_config_link_neutral(self, tmp_path, monkeypatch):
+        _write_any_recipe(tmp_path, "certifi")
+        posted: list = []
+        assert self._submit(tmp_path, monkeypatch, posted, "certifi") == 0
+        (job,) = [j for b in posted for j in b["jobs"]]
+        assert (job["config"], job["link"]) == ("none", "none")
+
+    def test_all_variants_schedule_noarch_once_in_one_dag(self, tmp_path, monkeypatch):
+        """--config all --link all: the noarch job is staged ONCE (none/none), and
+        every concrete variant that build-depends on it is in the same DAG so
+        the edge is expressible (it used to be scheduled four times)."""
+        _write_any_recipe(tmp_path, "cython")
+        _write_recipe(tmp_path, "h5py", deps=("cython",), platforms=("linux",))
+        posted: list = []
+        ret = self._submit(
+            tmp_path,
+            monkeypatch,
+            posted,
+            "cython",
+            "h5py",
+            extra=("--config", "all", "--link", "all", "--dag-id", "pop"),
+        )
+        assert ret == 0
+        (body,) = posted
+        assert body["dag_id"] == "pop-all"
+        jobs = body["jobs"]
+        noarch = [i for i, j in enumerate(jobs) if j["recipe_name"] == "cython"]
+        assert len(noarch) == 1
+        assert (jobs[noarch[0]]["config"], jobs[noarch[0]]["link"]) == ("none", "none")
+        h5py = [j for j in jobs if j["recipe_name"] == "h5py"]
+        assert sorted((j["config"], j["link"]) for j in h5py) == [
+            ("debug", "shared"),
+            ("debug", "static"),
+            ("release", "shared"),
+            ("release", "static"),
+        ]
+        assert all(j["depends_on"] == noarch for j in h5py)
+
+    def test_pure_python_windows_job_is_neutral_and_staged_once(self, tmp_path, monkeypatch):
+        """A pure-Python column (`any` + `windows`) gets ONE windows job, none/none,
+        whatever variants are asked for, and each windows variant of a dependent
+        orders after it."""
+        rdir = _write_any_recipe(tmp_path, "attrs-cp313")
+        (rdir / "recipe.yaml").write_text(
+            (rdir / "recipe.yaml").read_text()
+            + "    - platform: windows\n      script: build.ps1\n"
+        )
+        _write_recipe(tmp_path, "app", deps=("attrs-cp313",), platforms=("windows",))
+        posted: list = []
+        ret = self._submit(
+            tmp_path,
+            monkeypatch,
+            posted,
+            "attrs-cp313",
+            "app",
+            extra=("--config", "all", "--link", "all", "--dag-id", "pop"),
+        )
+        assert ret == 0
+        (body,) = posted
+        jobs = body["jobs"]
+        attrs = [
+            (i, j["platform"], j["config"], j["link"])
+            for i, j in enumerate(jobs)
+            if j["recipe_name"] == "attrs-cp313"
+        ]
+        assert sorted(a[1:] for a in attrs) == [
+            ("any", "none", "none"),
+            ("windows", "none", "none"),
+        ]
+        (win_attrs,) = [a[0] for a in attrs if a[1] == "windows"]
+        app = [j for j in jobs if j["recipe_name"] == "app"]
+        assert len(app) == 4
+        assert all(j["depends_on"] == [win_attrs] for j in app)
 
     def test_only_any_recipes_submits_just_the_noarch_dag(self, tmp_path, monkeypatch):
         _write_any_recipe(tmp_path, "certifi")

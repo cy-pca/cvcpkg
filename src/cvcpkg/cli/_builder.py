@@ -145,8 +145,13 @@ def _pick_dep_variant(
     hatchling-cp313 (2026-10-13).
     """
 
+    from cvcpkg.platform import config_matches, link_matches
+
     def same_cfg(p: dict) -> bool:
-        return p.get("build_type", "release") == config and p.get("link", "shared") == link
+        # A neutral (none/none) noarch row serves every config/link.
+        return config_matches(p.get("build_type", "release"), config) and link_matches(
+            p.get("link", "shared"), link
+        )
 
     here = [p for p in pkgs if p.get("platform") == platform and p.get("arch") == arch]
     noarch = [p for p in pkgs if p.get("platform") == "any" and p.get("arch") == "noarch"]
@@ -4071,6 +4076,15 @@ def builder_run(
         is_noarch = job_platform == "any" or job_arch == "noarch"
         build_platform = platform if is_noarch else job_platform
         build_arch = arch if is_noarch else job_arch
+        # It is config/link-neutral too (published none/none, see pack_recipe),
+        # as is a none/none job for a concrete target (a pure-Python column's
+        # windows bundle): its deps install, and it builds, as release/shared.
+        from cvcpkg.platform import NEUTRAL_BUILD_VARIANT, NEUTRAL_CONFIG
+
+        if is_noarch or NEUTRAL_CONFIG in (job_config, job_link):
+            dep_config, dep_link = NEUTRAL_BUILD_VARIANT
+        else:
+            dep_config, dep_link = job_config, job_link
         # Scope this thread's recipe fetches + publish to the job's namespace.
         # A multi-namespace builder must never fetch/publish a job under its
         # home --org instead of the job's own org.
@@ -4157,7 +4171,7 @@ def builder_run(
             if (
                 not host_plat
                 and build_platform in SELF_HOSTED_PATCHELF_PLATFORMS
-                and job_link == "shared"
+                and dep_link == "shared"
                 and recipe_name != "patchelf"
             ):
                 implicit = ("patchelf",)
@@ -4166,8 +4180,8 @@ def builder_run(
                 dep_prefix,
                 build_platform,
                 build_arch,
-                job_config,
-                job_link,
+                dep_config,
+                dep_link,
                 log_cb,
                 implicit=implicit,
             )

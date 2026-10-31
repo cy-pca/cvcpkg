@@ -1158,7 +1158,9 @@ def _pack_built(
     The same bundle ``cvcpkg pack`` makes -- the package.files declaration
     gate, a manifest with the recipe's runtime deps, shebangs rewritten off
     the build prefix, the relocatability check -- and never the build cache's
-    raw install tree.  Returns ``(archive, sha256, size)``.
+    raw install tree.  Returns ``(archive, sha256, size)``.  An any/noarch
+    bundle, or any bundle of a recipe with an ``any`` entry, is labelled
+    none/none whatever *config*/*link* the pass was for.
     """
     from cvcpkg.builder import (
         create_archive,
@@ -1167,6 +1169,9 @@ def _pack_built(
         generate_manifest,
         stage_bundle,
     )
+    from cvcpkg.platform import variant_for
+
+    config, link = variant_for(plat, arch, config, link, neutral=ctx.recipe.variant_neutral)
 
     # Inline staging rather than pack_recipe, so the declaration gate is
     # called explicitly -- a check placed only in pack_recipe would miss it.
@@ -1389,7 +1394,7 @@ def pack_all_cmd(
     import shutil
 
     from cvcpkg.builder import build_all, list_recipes
-    from cvcpkg.platform import detect_arch
+    from cvcpkg.platform import detect_arch, variant_for
 
     plat = _auto_platform(platform)
     arch = detect_arch()
@@ -1471,6 +1476,9 @@ def pack_all_cmd(
                 click.echo(f"cvcpkg: not packing -- {ctx.recipe.not_redistributable_reason}")
                 return
             ctx_plat, ctx_arch = _bundle_identity(ctx, arch)
+            ctx_cfg, ctx_lnk = variant_for(
+                ctx_plat, ctx_arch, config, link, neutral=ctx.recipe.variant_neutral
+            )
             # Stamp the caller-chosen revision (--bump / --cvc-revision).  Recipe is
             # mutable and full_version derives from it, so this flows into both the
             # manifest and the archive name below.
@@ -1484,8 +1492,8 @@ def pack_all_cmd(
                 token=token,
                 platform=ctx_plat,
                 arch=ctx_arch,
-                build_type=config,
-                link=link,
+                build_type=ctx_cfg,
+                link=ctx_lnk,
             )
             if override is not None:
                 if bump_write:
