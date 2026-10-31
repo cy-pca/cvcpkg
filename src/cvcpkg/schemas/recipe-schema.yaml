@@ -459,6 +459,25 @@ $defs:
           all — an agent older than this field, or one started with
           `cvcpkg builder run --no-free-disk` — counts as eligible, so the
           recipe's own preflight stays worth keeping.
+      min_cpu:
+        type: object
+        additionalProperties: false
+        properties:
+          x86_64:
+            type: string
+            enum: [x86-64-v2, x86-64-v3, x86-64-v4]
+        description: >
+          Minimum CPU the BUILD host needs, per arch, for a build that runs
+          code it compiled for a newer CPU than the baseline (an upstream's
+          -march=haswell, say, imported by nanobind's stubgen or by test.sh).
+          Builders on x86_64 advertise the psABI levels their CPU satisfies
+          (a v4 host advertises v2, v3 and v4), and submit-dag adds the level
+          to this recipe's x86_64 jobs, and to its noarch jobs when the noarch
+          build target is x86_64, so they are only dispatched to a capable
+          builder instead of dying with SIGILL on an older one.  Builder-only
+          (like the glibc floor): consumers never see it.  A builder whose
+          CPU is unknown advertises no level and never gets these jobs.  See
+          cvcpkg/cpu.py.
       matrix:
         type: array
         items:

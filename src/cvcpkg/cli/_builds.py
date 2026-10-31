@@ -1328,9 +1328,23 @@ def builds_submit_dag(
             caps.append(SOURCE_PACKAGES_CAPABILITY)
         return caps
 
-    def _job_caps(name: str, plat: str) -> list[str]:
-        """Every capability *name*'s job for *plat* carries (recipe's own + floor)."""
-        return sorted(set(_required_caps(name) + _platform_caps(name, plat)))
+    def _cpu_caps(name: str, arch: str) -> list[str]:
+        """The x86-64 level a job built on *arch* needs (``build.min_cpu``).
+
+        Builder-only, like the glibc floor: the scheduler routes the job to a
+        builder whose CPU advertises the level, so code the build itself runs
+        (stubgen, test.sh) cannot die with SIGILL there (see cvcpkg/cpu.py).
+        """
+        from cvcpkg.cpu import required_level
+
+        level = required_level(recipe_data.get(name, {}).get("build", {}).get("min_cpu"), arch)
+        return [level] if level else []
+
+    def _job_caps(name: str, plat: str, arch: str) -> list[str]:
+        """Every capability *name*'s job for *plat*/*arch* carries (recipe's own + floor + CPU)."""
+        return sorted(
+            set(_required_caps(name) + _platform_caps(name, plat) + _cpu_caps(name, arch))
+        )
 
     def _min_disk(name: str) -> int | None:
         """A recipe's ``build.min_disk_gb`` (e.g. 35 for haiku-image).
@@ -1804,14 +1818,15 @@ def builds_submit_dag(
                         _uncapable = [
                             n
                             for n in eligible
-                            if _job_caps(n, plat) and not _has_builder(plat, ar, _job_caps(n, plat))
+                            if _job_caps(n, plat, ar)
+                            and not _has_builder(plat, ar, _job_caps(n, plat, ar))
                         ]
                         if _uncapable:
                             click.echo(
                                 f"  Skipping {len(_uncapable)} recipe(s) for {plat}/{ar}: no "
                                 f"registered builder advertises every required capability: "
                                 + ", ".join(
-                                    f"{n} ({', '.join(_job_caps(n, plat))})"
+                                    f"{n} ({', '.join(_job_caps(n, plat, ar))})"
                                     for n in sorted(_uncapable)
                                 )
                             )
@@ -1828,7 +1843,7 @@ def builds_submit_dag(
                             n
                             for n in eligible
                             if _min_disk(n)
-                            and not _has_builder(plat, ar, _job_caps(n, plat), _min_disk(n))
+                            and not _has_builder(plat, ar, _job_caps(n, plat, ar), _min_disk(n))
                         ]
                         if _undersized:
                             click.echo(
@@ -1859,7 +1874,7 @@ def builds_submit_dag(
                             "org_slug": org_slug,
                             "depends_on": [],
                         }
-                        _rc = _job_caps(name, plat)
+                        _rc = _job_caps(name, plat, ar)
                         if _rc:
                             job["required_capabilities"] = _rc
                         _d = _min_disk(name)
@@ -1907,18 +1922,19 @@ def builds_submit_dag(
             # its disk requirement are checked against the builders
             # that cover that target, not against the fleet at large.
             if _builder_check and eligible:
-                _np = _noarch_target[0]
                 _uncapable = [
                     n
                     for n in eligible
-                    if _job_caps(n, _np) and not _has_builder(*_noarch_target, _job_caps(n, _np))
+                    if _job_caps(n, *_noarch_target)
+                    and not _has_builder(*_noarch_target, _job_caps(n, *_noarch_target))
                 ]
                 if _uncapable:
                     click.echo(
                         f"  Skipping {len(_uncapable)} noarch recipe(s): no registered "
                         f"builder advertises every required capability: "
                         + ", ".join(
-                            f"{n} ({', '.join(_job_caps(n, _np))})" for n in sorted(_uncapable)
+                            f"{n} ({', '.join(_job_caps(n, *_noarch_target))})"
+                            for n in sorted(_uncapable)
                         )
                     )
                     eligible = [n for n in eligible if n not in set(_uncapable)]
@@ -1926,7 +1942,9 @@ def builds_submit_dag(
                     n
                     for n in eligible
                     if _min_disk(n)
-                    and not _has_builder(*_noarch_target, _job_caps(n, _np), _min_disk(n))
+                    and not _has_builder(
+                        *_noarch_target, _job_caps(n, *_noarch_target), _min_disk(n)
+                    )
                 ]
                 if _undersized:
                     click.echo(
@@ -1952,7 +1970,7 @@ def builds_submit_dag(
                 # A noarch job is built on the reference target, so it
                 # inherits THAT platform's floor even though the bundle
                 # itself is platform-independent.
-                _rc = _job_caps(name, _noarch_target[0])
+                _rc = _job_caps(name, *_noarch_target)
                 if _rc:
                     job["required_capabilities"] = _rc
                 _d = _min_disk(name)
