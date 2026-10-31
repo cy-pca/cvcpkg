@@ -1,0 +1,24 @@
+--- a/ape/__init__.py	2026-08-05 06:54:16.000000000 -0500
++++ b/ape/__init__.py	2026-10-29 18:15:38.871021100 -0500
+@@ -4,7 +4,7 @@
+ 
+ import os, json
+ from copy import deepcopy
+-from distutils.dir_util import copy_tree
++import shutil
+ from shutil import copyfile
+ import bpy
+ import bpy.utils.previews
+@@ -736,9 +736,10 @@
+         return {'FINISHED'}
+     
+     def copyStyle(self, sourceDir, targetDir):
+-        copy_tree(
++        shutil.copytree(
+             os.path.join(sourceDir, "style"),
+-            os.path.join(targetDir, "style")
++            os.path.join(targetDir, "style"),
++            dirs_exist_ok=True
+         )
+     
+     def copyAssetInfos(self, sourceDir, targetDir, apDirName):

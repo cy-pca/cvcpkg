@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A hand-written OSM file for the blender-addon-blosm recipe test: one
+     three-storey building and one residential street, inside a ~100 m box. -->
+<osm version="0.6" generator="cvcpkg blender-addon-blosm test">
+  <bounds minlat="30.2800000" minlon="-97.7400000" maxlat="30.2810000" maxlon="-97.7390000"/>
+  <node id="1" version="1" lat="30.2802000" lon="-97.7398000"/>
+  <node id="2" version="1" lat="30.2802000" lon="-97.7394000"/>
+  <node id="3" version="1" lat="30.2806000" lon="-97.7394000"/>
+  <node id="4" version="1" lat="30.2806000" lon="-97.7398000"/>
+  <node id="5" version="1" lat="30.2801000" lon="-97.7399500"/>
+  <node id="6" version="1" lat="30.2801000" lon="-97.7390500"/>
+  <way id="10" version="1">
+    <nd ref="1"/>
+    <nd ref="2"/>
+    <nd ref="3"/>
+    <nd ref="4"/>
+    <nd ref="1"/>
+    <tag k="building" v="yes"/>
+    <tag k="building:levels" v="3"/>
+  </way>
+  <way id="20" version="1">
+    <nd ref="5"/>
+    <nd ref="6"/>
+    <tag k="highway" v="residential"/>
+    <tag k="name" v="Test Street"/>
+  </way>
+</osm>
