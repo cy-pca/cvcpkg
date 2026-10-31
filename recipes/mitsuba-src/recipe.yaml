@@ -1,0 +1,71 @@
+schema_version: 1
+recipe:
+  name: mitsuba-src
+  upstream_version: "3.9.1"
+  cvc_revision: 1
+  maintainer: cvcpkg group
+  maintainer_email: info@cvcpkg.org
+  maintainer_url: https://cvcpkg.org
+  homepage: https://www.mitsuba-renderer.org/
+  # Mitsuba 3 and its own submodules (drjit, nanothread, struct-jit, rgb2spec,
+  # nanogui, nanobind) are BSD-3-Clause; Embree is Apache-2.0; the OpenEXR 2
+  # fork BSD-3-Clause; libpng libpng-2.0; libjpeg-turbo IJG AND BSD-3-Clause
+  # AND Zlib; zlib Zlib; pugixml and tsl::robin_map MIT; tinyformat BSL-1.0;
+  # fast_float Apache-2.0 OR MIT OR BSL-1.0; lz4 (in drjit-core)
+  # BSD-2-Clause.
+  license: "BSD-3-Clause AND Apache-2.0 AND MIT AND BSL-1.0 AND BSD-2-Clause AND Zlib AND IJG AND libpng-2.0"
+  tags: [source]
+  description: >-
+    The unmodified upstream source of Mitsuba 3.9.1 (tag v3.9.1, commit
+    478e193a183c) together with the git submodules its scikit-build build
+    reads, staged at src/mitsuba-src/.  PyPI publishes wheels only (no sdist)
+    and a GitHub archive leaves each submodule an empty directory, so the tree
+    is the commit's archive plus one archive per submodule, each pinned by
+    commit and sha256 in build.sh.  mitsuba-cp313 builds from it (source.type
+    package), so GitHub is contacted once, by whichever builder publishes
+    this noarch bundle.
+
+# The GitHub archive of the tag's commit, not `type: git`: builders cannot
+# fetch git sources (docs/rust-crates.md).  The submodules are fetched and
+# verified by build.sh, as drjit-src does.
+source:
+  type: tarball
+  url: https://github.com/mitsuba-renderer/mitsuba3/archive/478e193a183c21723f4a8251afc3ad29a8da4c5e.tar.gz
+  sha256: "7d168180ca65f86dc733d871c57c68bba37cf8eebf3dea958381b2644238c75a"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - src/mitsuba-src/
+    # The deepest submodule, which CMakeLists.txt checks for first.
+    - src/mitsuba-src/ext/drjit/ext/drjit-core/ext/nanothread/ext/cmake-defaults/CMakeLists.txt
+    - src/mitsuba-src/ext/embree/CMakeLists.txt
+    - src/mitsuba-src/ext/struct-jit/ext/cmake-defaults/CMakeLists.txt
+    - src/mitsuba-src/resources/data/ior/
+    - src/mitsuba-src/resources/data/sunsky/output/
+    - src/mitsuba-src/cvcpkg-submodules.txt
+
+notes:
+  - title: "Submodules left out"
+    platforms: [any]
+    description: >-
+      Only what the scikit-build (Python wheel) build reads is staged.
+      ext/ittnotify (VTune events, MI_PROFILER_ITTNOTIFY=OFF) and tutorials/
+      are omitted, as are nanogui's own submodules (glfw, nanovg,
+      nanovg_metal, pybind11: the GUI is not built; Mitsuba reads only
+      nanogui's include/ and resources/bin2c.cmake).  Of the 250 MB
+      mitsuba-data submodule only ior/ and sunsky/output/ are kept, the two
+      directories the build installs into mitsuba/data.

@@ -1,0 +1,136 @@
+schema_version: 1
+recipe:
+  name: drjit-cp313
+  upstream_version: "1.5.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/mitsuba-renderer/drjit
+  # Dr.Jit, drjit-core, nanothread and nanobind are BSD-3-Clause; the compiled
+  # tsl::robin_map is MIT and drjit-core's vendored lz4 BSD-2-Clause.
+  license: "BSD-3-Clause AND MIT AND BSD-2-Clause"
+  tags: [python, graphics, jit, autodiff]
+  description: >-
+    Dr.Jit 1.5.0 for CPython 3.13 (cp313), BUILT FROM SOURCE with
+    scikit-build-core and nanobind 2.14.0: the just-in-time compiler and
+    differentiable array library under Mitsuba 3 and Sionna RT.  The LLVM
+    (CPU) backend dlopen()s libLLVM at run time; here that is the llvm20
+    package's lib/libLLVM in the same prefix, found relative to the drjit
+    package (no LD_LIBRARY_PATH, no DRJIT_LIBLLVM_PATH needed).  The CUDA
+    (linux) and Metal (macOS) backends are compiled in and load the GPU
+    driver at run time; no CUDA toolkit is involved.
+
+source:
+  # Built from the source package drjit-src: the v1.5.0 commit archive plus
+  # its submodule archives (PyPI has no drjit sdist).
+  type: package
+  package: drjit-src
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches:
+  # Point DRJIT_LIBLLVM_PATH at <prefix>/lib/libLLVM.{so,dylib} (relative to
+  # the installed drjit/__init__.py) unless the user already set it.
+  - drjit-libllvm-from-prefix.patch
+
+depends:
+  build:
+    - name: drjit-src
+      version: "==1.5.0"
+    - name: python313
+    - name: cmake
+    - name: ninja
+    # PEP-517 backend and the [build-system] requires, imported by the build
+    # interpreter under --no-build-isolation (bridged from the build prefix by
+    # build.sh).  Their own runtime deps are listed too: a build edge does not
+    # stage a backend's runtime closure.
+    - name: scikit-build-core-cp313
+    - name: packaging-cp313
+    - name: pathspec-cp313
+    - name: nanobind-cp313
+      version: "==2.14.0"
+    - name: typing-extensions-cp313
+    - name: hatch-fancy-pypi-readme-cp313
+    - name: hatchling-cp313
+    - name: pluggy-cp313
+    - name: trove-classifiers-cp313
+  runtime:
+    - name: python313
+    # libLLVM.so.20.1 / libLLVM.dylib for the LLVM backend (dlopen()ed, not
+    # linked).  The whole llvm20 package, as mesa takes it: no cvcpkg recipe
+    # ships libLLVM alone (see notes).  Windows has no LLVM-C.dll in any llvm
+    # recipe, and this recipe has no Windows column.
+    - name: llvm20
+      version: "^20.1"
+      platforms: [linux, macos]
+  host_tools:
+    - python313
+    - cmake
+    - ninja
+    - patchelf
+
+build:
+  # The extension ABI does not vary with cvcpkg's Release/Debug build type.
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"   # matches llvm20
+
+test:
+  script: test.sh
+
+package:
+  # DOCUMENTATION ONLY: stage_bundle ships the whole CVC_INSTALL_DIR, which
+  # build.sh keeps to exactly this package (pip install --prefix into an empty
+  # dir).  Headers and CMake config live inside the package (drjit/include,
+  # drjit/cmake/drjit), where mitsuba-cp313's build finds them.
+  files:
+    - lib/python3.13/site-packages/drjit/
+    - lib/python3.13/site-packages/drjit/cmake/drjit/drjitConfig.cmake
+    - lib/python3.13/site-packages/drjit-*.dist-info/
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "libLLVM comes from the llvm20 package"
+    platforms: [linux, macos]
+    description: >-
+      Dr.Jit loads libLLVM with dlopen() when its LLVM backend starts (it
+      needs LLVM >= 15).  drjit-libllvm-from-prefix.patch sets
+      DRJIT_LIBLLVM_PATH to <prefix>/lib/libLLVM.so (linux) or
+      libLLVM.dylib (macOS), computed from the installed drjit/__init__.py,
+      unless it is already set; set it yourself to use another LLVM.  The
+      runtime edge is the whole llvm20 package (about 125 MB compressed on
+      linux x86_64, 91 MB on macOS arm64) although Dr.Jit needs only
+      libLLVM (105 MB and 75 MB of that, unpacked): no recipe ships the
+      shared library on its own.  A runtime split of llvm20 (libLLVM plus
+      zlib/zstd) that llvm20 itself depends on would let drjit and mesa
+      share it at a fraction of the size.
+  - title: "Not built on Windows"
+    platforms: [linux, macos]
+    description: >-
+      On Windows Dr.Jit's LLVM backend loads LLVM-C.dll, which no cvcpkg
+      llvm recipe builds (their MSVC builds ship static component libraries
+      only; LLVM_BUILD_LLVM_C_DYLIB would add it).  Without it the llvm_*
+      Mitsuba variants Sionna RT needs on a CPU are inert, so the Windows
+      column waits for that DLL rather than shipping a CPU-less Dr.Jit.
+  - title: "CPU baseline"
+    platforms: [linux, macos]
+    description: >-
+      Upstream's scikit-build defaults are kept: -march=haswell on x86_64,
+      -march=armv8-a on linux arm64, -mcpu=apple-m1 on macOS arm64, as in
+      the PyPI wheels.  So on x86_64 this package needs a Haswell or newer
+      CPU (x86-64-v3: AVX2, FMA, F16C) to build and to run, and Mitsuba
+      needs one in any case: its struct-jit conversion snippets use F16C and
+      FMA directly, and Dr.Jit's LLVM backend refuses a CPU without FMA.
+      build.sh stops with that message on an older build host (Sandy/Ivy
+      Bridge, e.g. catx-03's E5-2640) instead of dying with SIGILL when
+      nanobind's stubgen imports the module.

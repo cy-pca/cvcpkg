@@ -1,0 +1,45 @@
+schema_version: 1
+recipe:
+  name: sionna-rt-src
+  upstream_version: "2.2.0"
+  cvc_revision: 1
+  maintainer: cvcpkg group
+  maintainer_email: info@cvcpkg.org
+  maintainer_url: https://cvcpkg.org
+  homepage: https://github.com/NVlabs/sionna-rt
+  license: Apache-2.0
+  tags: [source]
+  description: >-
+    The unmodified upstream source of Sionna RT 2.2.0 (tag v2.2.0, commit
+    15b5ee036917): its packaging files and src/, staged at src/sionna-rt-src/.
+    PyPI publishes a wheel only, no sdist; the repository has no submodules,
+    so the commit archive is the complete source.  sionna-rt-cp313 builds
+    from it (source.type package).
+
+# The GitHub archive of the tag's commit.  (The tag's own archive,
+# refs/tags/v2.2.0.tar.gz, has the same files under another top-level
+# directory name: sha256 5160693af672d21aa22b245de695bca430b0f41250c24bdfa0af29a6a72e792f.)
+source:
+  type: tarball
+  url: https://github.com/NVlabs/sionna-rt/archive/15b5ee036917a4c2a9b6420e05570b77717e2fcc.tar.gz
+  sha256: "4128bb9f9f45f608d3c51dabfb8f03f3ed79b02259ad2a02f8fe248c7b13b508"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - src/sionna-rt-src/pyproject.toml
+    - src/sionna-rt-src/src/sionna/rt/
+    - src/sionna-rt-src/LICENSE
