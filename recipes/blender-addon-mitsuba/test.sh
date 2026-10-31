@@ -36,12 +36,14 @@ esac
 
 T="$(mktemp -d)"
 trap 'rm -rf "${T}"' EXIT
-export HOME="${T}/home" BLENDER_USER_RESOURCES="${T}/user"
+# TMPDIR puts Blender's crash report in ${T}/blender.crash.txt, printed on failure.
+export HOME="${T}/home" BLENDER_USER_RESOURCES="${T}/user" TMPDIR="${T}"
 mkdir -p "${HOME}" "${BLENDER_USER_RESOURCES}"
 export BLENDER_SYSTEM_EXTENSIONS="${CVC_INSTALL_DIR}/share/blender/extensions"
 
 cat > "${T}/export.py" <<'EOF'
-import sys
+import faulthandler, sys
+faulthandler.enable()
 import bpy, addon_utils
 
 out = sys.argv[sys.argv.index("--") + 1]
@@ -60,7 +62,11 @@ print("mitsuba ok: exported", out, "loaded", len(scene.shapes()), "shape(s), ren
 EOF
 
 "${PFX}/bin/blender" -b --factory-startup --python-exit-code 1 --python "${T}/export.py" -- "${T}/scene/scene.xml" \
-    > "${T}/export.log" 2>&1 || { cat "${T}/export.log"; echo "FAIL: export / mitsuba.load_file in Blender"; exit 1; }
+    > "${T}/export.log" 2>&1 || {
+        cat "${T}/export.log"
+        if [ -f "${T}/blender.crash.txt" ]; then echo "-- blender.crash.txt --"; cat "${T}/blender.crash.txt"; fi
+        echo "FAIL: export / mitsuba.load_file in Blender"; exit 1
+    }
 grep '^mitsuba ok' "${T}/export.log" | sed 's/^/  OK: /'
 grep -q '<scene' "${T}/scene/scene.xml" || { echo "FAIL: ${T}/scene/scene.xml is not a Mitsuba scene"; exit 1; }
 
