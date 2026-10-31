@@ -13,7 +13,7 @@ recipe:
   upstream_version: "20240203-110809-5046fc22"
   # 1 -> 2: built from source, every crate a cvcpkg package (cvc.1 repackaged
   # upstream's release binaries); the linux build also covers arm64.
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -58,9 +58,18 @@ source:
 #        Xvfb), and no image appears -- wezterm/wezterm#5990 and #6005,
 #        the same breakage nixpkgs hit after its own Rust 1.80 lockfile fix.
 #        The WebGpu front end does not use glium and was unaffected.
+#
+# And one for macOS (a no-op elsewhere):
+#
+#  0003  The zlib 1.2.11 that WezTerm's freetype crate compiles takes
+#        TARGET_OS_MAC, which every macOS SDK defines, for classic Mac OS and
+#        defines fdopen() away, so the SDK's own stdio.h no longer parses
+#        ("expected identifier or '('" at fdopen). zlib 1.3.1 tests MACOS
+#        alone; so does this.
 patches:
   - patches/0001-cargo-lock-time-0.3.36.patch
   - patches/0002-deps-update-glium-36ff6d5.patch
+  - patches/0003-zlib-macos-target-os-mac.patch
 
 depends:
   build:
@@ -278,23 +287,25 @@ notes:
       libx11) unless they are already set, then exec lib/wezterm/<name>.
       Programs started inside the terminal inherit both variables. Run
       lib/wezterm/* directly only with both set.
-  - title: "macOS: binaries, not an app bundle; not built yet"
+  - title: "macOS: binaries, not an app bundle"
     platforms: [macos]
     description: >-
       build.sh builds macOS the way it builds linux: the binaries in
       lib/wezterm/ with bin/ launchers, OpenSSL from the prefix, everything
       else from the OS. There is no WezTerm.app (upstream assembles and signs
       one for its zip); wezterm-gui runs as a plain executable, without a Dock
-      icon of its own. cvcpkg's relocation pass re-signs what it rewrites.
-      There is no macOS host here, so it has not been built or run yet.
+      icon of its own, and finds the Info.plist installed beside it (as it does
+      in a cargo build). cvcpkg's relocation pass re-signs what it rewrites.
+      cvc.2's first macOS build failed twice in the build, on the Info.plist
+      copy and on the bundled zlib (patches/0003); cvc.3 fixes both.
   - title: "Built and tested"
     description: >-
       windows-x86_64 (Windows 11, MSVC 14.44) and linux-x86_64 (Ubuntu 22.04
-      under WSL, WSLg) are built from source -- offline, from wezterm-src's
-      vendored crates -- installed, packed and tested by this recipe, each
-      including the window test (Windows also the pixel check), and the
+      under WSL, WSLg) are built from source -- offline, from the
+      wezterm-crates packages -- installed, packed and tested by this recipe,
+      each including the window test (Windows also the pixel check), and the
       kitty/Sixel probe renders on both (on linux under cvcpkg's Xvfb). The
-      cargo build takes about 13 minutes on Windows (10 jobs) and 10 to 20 on
-      linux (8 jobs) on a 20-thread laptop. linux-arm64 and macOS run the
-      same build.sh but have not been built: there is no arm64 or macOS host
-      here.
+      cargo build takes about 12 minutes on Windows (10 jobs) and about 20 on
+      linux (8 jobs) on a 20-thread laptop. linux-arm64 was built and
+      published by the populate workflow (cvc.2). macOS has no host here and
+      is built only by the workflow.

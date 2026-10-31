@@ -95,6 +95,13 @@ export CARGO_HOME="${CVC_BUILD_DIR}/cargo-home"
 export RUSTUP_HOME="${CVC_BUILD_DIR}/rustup-home"
 unset RUSTUP_TOOLCHAIN
 export CARGO_TARGET_DIR="${CVC_BUILD_DIR}/cargo-target"
+# On macOS wezterm-gui's build.rs copies assets/macos/WezTerm.app's Info.plist
+# into <source>/target/<profile>/ without looking at CARGO_TARGET_DIR, so the
+# target dir must be there (build.ps1 does the same for Windows' DLLs).
+# CVC_SOURCE_DIR is this build's own copy.
+if [ "${OS}" = macos ]; then
+    CARGO_TARGET_DIR="${SRC}/target"
+fi
 export CARGO_NET_OFFLINE=true
 mkdir -p "${CARGO_HOME}" "${RUSTUP_HOME}"
 
@@ -138,6 +145,12 @@ export CARGO_PROFILE_RELEASE_STRIP=symbols
 for exe in ${EXES}; do
     cp -p "${CARGO_TARGET_DIR}/release/${exe}" "${LIBEXEC}/${exe}"
 done
+if [ "${OS}" = macos ]; then
+    # Beside the binaries, as build.rs puts it beside its own: without an app
+    # bundle, this is where wezterm-gui finds its bundle identifier, which
+    # UNUserNotificationCenter asserts on.
+    cp -p "${SRC}/assets/macos/WezTerm.app/Contents/Info.plist" "${LIBEXEC}/Info.plist"
+fi
 
 mkdir -p "${SHARE}/bash-completion/completions" "${SHARE}/zsh/site-functions" \
          "${SHARE}/fish/vendor_completions.d"
