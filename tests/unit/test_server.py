@@ -1647,6 +1647,34 @@ class TestPackageDetailUrls:
         resp = client.get("/package/cy-pca/bad$name", follow_redirects=False)
         assert resp.status_code == 404
 
+    def _publish(self, client, tok, name, org="", version="1.0"):
+        params = {"name": name, "version": version, "platform": "linux", "arch": "x86_64"}
+        if org:
+            params["org"] = org
+        resp = client.post(
+            "/v1/publish",
+            params=params,
+            files={"file": (f"{name}-{org}.tar.zst", io.BytesIO(f"{name}{org}".encode()))},
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_unscoped_path_redirects_to_the_only_org(self, server_env):
+        """libcvc is published only by cvc; its recipe lives under cvc, so the
+        unscoped page (where dependency/tag links land) goes to the org's."""
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok, "orgonly-lib", org="cvc-lab")
+        resp = client.get("/package/orgonly-lib", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/package/cvc-lab/orgonly-lib"
+
+    def test_unscoped_path_stays_when_an_unscoped_build_exists(self, server_env):
+        client, _, pub_tok, _ = server_env
+        self._publish(client, pub_tok, "mixed-lib")
+        self._publish(client, pub_tok, "mixed-lib", org="cvc-lab", version="1.1")
+        resp = client.get("/package/mixed-lib", follow_redirects=False)
+        assert resp.status_code == 200
+
 
 class TestOptionalToken:
     """Test that the optional_token dependency works correctly."""
