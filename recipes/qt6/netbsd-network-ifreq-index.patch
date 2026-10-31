@@ -1,0 +1,24 @@
+QtNetwork's ifreq_index() overloads on NetBSD.
+
+qnetworkinterface_unix.cpp has one ifreq_index() template for ifr_index (BSD)
+and one for ifr_ifindex (Linux), each enabled only where its member exists.
+NetBSD's <net/if.h> defines `ifr_ifindex` as `ifr_index`, so both are the same
+function: "redefinition of default argument" (netbsd-build-2, 2026-10-30).
+Skip the Linux one there, as pkgsrc's qt6-qtbase does.
+
+--- a/src/network/kernel/qnetworkinterface_unix.cpp
++++ b/src/network/kernel/qnetworkinterface_unix.cpp
+@@ -60,11 +60,13 @@
+     return req.ifr_index;
+ }
+ 
++#ifndef __NetBSD__ // NetBSD's <net/if.h> defines ifr_ifindex as ifr_index
+ template <typename Req> [[maybe_unused]]
+ static auto &ifreq_index(Req &req, std::enable_if_t<sizeof(std::declval<Req>().ifr_ifindex) != 0, int> = 0)
+ {
+     return req.ifr_ifindex;
+ }
++#endif
+ 
+ uint QNetworkInterfaceManager::interfaceIndexFromName(const QString &name)
+ {

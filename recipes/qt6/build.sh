@@ -6,14 +6,32 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
-# Linux: build the xcb QPA platform plugin against the hermetic X11/xcb recipes.
-# Qt finds them via pkg-config; the protocol .pc files (xproto, …) live in
-# share/pkgconfig. -DINPUT_xcb=yes makes a missing xcb a hard error (so we never
-# silently ship a Qt with no platform plugin). macOS uses cocoa — skip all this.
+# Linux, FreeBSD and NetBSD: build the xcb QPA platform plugin against the
+# hermetic X11/xcb recipes, and OpenGL against cvcpkg's libglvnd (mesa supplies
+# the driver on the two BSDs). Qt finds them via pkg-config; the protocol .pc
+# files (xproto, …) live in share/pkgconfig. -DINPUT_xcb=yes makes a missing xcb
+# a hard error (so we never silently ship a Qt with no platform plugin). macOS
+# uses cocoa and OpenBSD its base X11 — skip all this.
 CMAKE_EXTRA=()
-if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+if [[ "${CVC_PLATFORM}" == "linux" || "${CVC_PLATFORM}" == "freebsd" || "${CVC_PLATFORM}" == "netbsd" ]]; then
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     CMAKE_EXTRA+=(-DINPUT_xcb=yes)
+fi
+# NetBSD: keep the base system's X11 sets (/usr/X11R7, Mesa included) out of the
+# build.  CMake's FindX11 searches /usr/X11R7 by name, so it found libSM and
+# libICE there (the prefix has neither) and the xcb plugin's session management
+# linked them (netbsd-build-2, 2026-10-30), which ties it to hosts with the X sets.
+# Also preset Qt's dladdr test: it links -ldl, and NetBSD has no libdl (dladdr is
+# in libc), so it failed and qlogging.cpp took its non-dladdr backtrace path,
+# which clang rejects ("1st argument ('void *const') would lose const
+# qualifier", the error OpenBSD hit, see below).  This keeps the backtraces.
+# And no GSSAPI: NetBSD's base Heimdal libgssapi loads the base libcrypto.so.15,
+# whose symbols carry the same OPENSSL_3.0.0 versions as the cvcpkg libcrypto.so.3
+# Qt loads for TLS, so cvcpkg's libssl could bind into the base OpenSSL.  It only
+# drops Kerberos/Negotiate HTTP auth; FreeBSD's ports Qt turns it off too.
+if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
+    CMAKE_EXTRA+=("-DCMAKE_IGNORE_PATH=/usr/X11R7/include;/usr/X11R7/lib" -DTEST_dladdr=ON
+                  -DFEATURE_gssapi=OFF)
 fi
 # OpenBSD: no backtrace feature.  Qt 6.8.2's qlogging.cpp passes a const frame
 # pointer to a lambda taking `void *&` in its execinfo backtrace path, which

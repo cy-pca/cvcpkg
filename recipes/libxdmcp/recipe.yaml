@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: libxdmcp
   upstream_version: "1.1.5"
-  cvc_revision: 2
+  # Bumped 2 -> 3: xorgproto is a runtime dep, as for libx11 (#380). xdmcp.pc
+  # says `Requires: xproto`, so pkg-config cannot resolve it (nor xcb.pc above it)
+  # without xorgproto.  Builder jobs stopped installing deps' build deps on
+  # 2026-10-19, and a fresh xcb-util build then failed "Package 'xproto', required
+  # by 'xau', not found" (dev cluster, FreeBSD and NetBSD, cy-pca/cvcpkg#527).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -26,7 +31,9 @@ depends:
       version: "==1.1.5"
     - pkg-config
     - name: xorgproto
-  runtime: []
+  runtime:
+    # xdmcp.pc requires xproto.pc, which xorgproto ships.
+    - name: xorgproto
   host_tools: []
 
 package:
