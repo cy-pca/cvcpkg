@@ -1,0 +1,41 @@
+alloca() is the compiler builtin on NetBSD too.
+
+NetBSD's <stdlib.h> declares `void *alloca(size_t)` for GCC and clang and
+defines the __builtin_alloca macro only for PCC, relying on the compiler's
+implicit builtin.  Clang has that builtin only in GNU modes, and Mesa builds
+with -std=c11 / -std=c++17, so NIR_VLA and every other alloca() here called
+libc's alloca(), which moves the stack pointer under code that addresses its
+spills relative to it.  nir_from_ssa.c's merge_sets_interfere() (inlined into
+aggressive_coalesce_parallel_copy) then reloaded garbage merge-node pointers
+and llvmpipe segfaulted compiling VTK's multisample-resolve shader on NetBSD
+10.1 (netbsd-build-2, 2026-10-31).  glibc and FreeBSD already define the
+macro, so this changes nothing there.  dd_draw.c (the ddebug wrapper) called
+alloca() without including c99_alloca.h; it includes it now.
+
+--- a/include/c99_alloca.h
++++ b/include/c99_alloca.h
+@@ -43,6 +43,14 @@
+ 
+ #  include <stdlib.h>
+ 
++/* NetBSD's <stdlib.h> only declares alloca() for GCC and clang, counting on the
++ * compiler's implicit builtin, which strict ISO modes (-std=c11, -std=c++17)
++ * turn off.  The call then goes to libc's alloca(), which moves the caller's
++ * stack pointer behind the compiler's back and corrupts its stack slots. */
++#  if defined(__GNUC__) && !defined(alloca)
++#    define alloca(size) __builtin_alloca(size)
++#  endif
++
+ #endif /* !defined(_MSC_VER) */
+ 
+ 
+--- a/src/gallium/auxiliary/driver_ddebug/dd_draw.c
++++ b/src/gallium/auxiliary/driver_ddebug/dd_draw.c
+@@ -40,6 +40,7 @@
+ #include "util/os_time.h"
+ #include <inttypes.h>
+ #include "util/detect.h"
++#include "c99_alloca.h"
+ 
+ void
+ dd_get_debug_filename_and_mkdir(char *buf, size_t buflen, bool verbose)
