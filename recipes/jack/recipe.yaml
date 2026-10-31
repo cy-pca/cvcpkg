@@ -5,7 +5,9 @@ recipe:
   # Bumped 1 -> 2: scoped the alsa-lib runtime edge to linux. ALSA is a
   # Linux kernel sound API; on FreeBSD jack drives OSS instead. Unscoped, it made
   # this recipe advertise freebsd while depending on a Linux-only package.
-  cvc_revision: 2
+  # Bumped 2 -> 3: the FreeBSD configure no longer requires libsysinfo (see
+  # patches); no FreeBSD bundle had ever built.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -28,7 +30,12 @@ source:
   sha256: "1e42b9fc4ad7db7befd414d45ab2f8a159c0b30fcd6eee452be662298766a849"
   strip_components: 1
 
-patches: []
+patches:
+  # On FreeBSD the top-level configure requires libsysinfo (a sysinfo(2)
+  # emulation with no cvcpkg recipe), but only jackdbus links it
+  # (dbus/wscript), and build.sh never passes --dbus.  Check for it only when
+  # jackdbus is enabled.
+  - jack-freebsd-libsysinfo-only-for-dbus.patch
 
 depends:
   build:
