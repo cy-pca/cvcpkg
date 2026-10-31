@@ -4,11 +4,11 @@ recipe:
   # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
-  upstream_version: "2.5.10"
-  # 2.5.10: the release that carries #484 (publish sends required_deps and
-  # provides in the request body when the query would be too long, so
-  # wezterm-crates' 645 deps no longer hit a 414) to the fleet; the
-  # single-file builders self-update from this package.
+  upstream_version: "2.5.11"
+  # 2.5.11: the release that carries #517 (Haiku delegation: no unbounded ssh
+  # wait, Haiku-side source mtime re-stamping) and #508 (noarch bundles are
+  # none/none) to the fleet; the single-file builders self-update from this
+  # package.
   cvc_revision: 1
 
   maintainer: "cvcpkg group"
@@ -30,8 +30,8 @@ recipe:
 # GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
 source:
   type: tarball
-  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.10.tar.gz
-  sha256: "26e7e82bd5891989db7a69e2d020fbccbf8b7b02e00d7a8ab9879b1cc63a4f97"
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.11.tar.gz
+  sha256: "58ec85aaac022d74aa861f4409719493cfe79c15a7ab018f58f42be8539c5ebd"
   strip_components: 1
 
 # Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and
