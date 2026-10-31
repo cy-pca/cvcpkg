@@ -85,6 +85,8 @@ depends:
     - patchelf
 
 build:
+  min_cpu:
+    x86_64: x86-64-v3   # -march=haswell; struct-jit uses F16C and FMA directly
   # The extension ABI does not vary with cvcpkg's Release/Debug build type.
   build_type_independent: true
   # Six variants compile every plugin six times: allow more than the 2 h

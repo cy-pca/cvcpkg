@@ -71,6 +71,8 @@ depends:
     - python313
 
 build:
+  min_cpu:
+    x86_64: x86-64-v3   # the test imports mitsuba-cp313
   build_type_independent: true
   # A py3-none-any wheel, built once (as jax-cp313 over jaxlib).
   matrix:

@@ -73,6 +73,8 @@ depends:
     - patchelf
 
 build:
+  min_cpu:
+    x86_64: x86-64-v3   # built with -march=haswell; stubgen imports it mid-build
   # The extension ABI does not vary with cvcpkg's Release/Debug build type.
   build_type_independent: true
   matrix:
