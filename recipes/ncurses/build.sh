@@ -41,8 +41,13 @@ COMMON_ARGS=(
     --without-ada
     # Generate pkg-config files.
     --with-pkg-config
-    # The terminfo database goes inside the prefix.
-    --with-terminfo-dirs="${CVC_INSTALL_DIR}/share/terminfo:/usr/share/terminfo:/etc/terminfo"
+    # The terminfo database goes inside the prefix: make install compiles it
+    # into the default dir.  That path is this build's, which does not exist
+    # where the bundle is installed, so the search list names only the host's
+    # directories; terminfo-relative-to-library.patch puts
+    # <prefix>/share/terminfo, found from the loaded library, ahead of them
+    # (linux and macOS).
+    --with-terminfo-dirs="/usr/share/terminfo:/etc/terminfo"
     --with-default-terminfo-dir="${CVC_INSTALL_DIR}/share/terminfo"
 )
 
