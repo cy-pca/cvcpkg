@@ -17,6 +17,39 @@ if [[ "${CVC_PLATFORM}" == "linux" || "${CVC_PLATFORM}" == "freebsd" || "${CVC_P
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     CMAKE_EXTRA+=(-DINPUT_xcb=yes)
 fi
+# Linux: decide every optional library qtbase looks for, so the bundle links only
+# declared deps, whatever -dev packages the builder has.  6.8.2+cvc.7, built on
+# star-00, linked that host's libzstd, glib, libSM/libICE, fontconfig, freetype,
+# harfbuzz, libpng and libdrm, so its QtCore, QtGui and xcb plugin did not load
+# on a host without them.
+#  * From the declared recipes, required so a missing dep stops configure: zstd,
+#    fontconfig with the system FreeType and libpng, KMS (libdrm), and the xcb
+#    plugin's session management (libsm, libice).
+#  * Qt's bundled copies: harfbuzz (cvcpkg's harfbuzz needs glib), libjpeg,
+#    double-conversion, libb2 and md4c.
+#  * Off: glib (QEventDispatcherGlib and the GNetworkMonitor network-information
+#    plugin; Qt's own Unix event dispatcher and the NetworkManager plugin stay),
+#    and so the GTK3 platform theme.  libdbus-1 stays loaded at run time, not
+#    linked.  The rest have no cvcpkg recipe, or no Qt user here needs them, and
+#    cvc.7 had them off too: AT-SPI, CUPS, GSSAPI, brotli, GBM (eglfs_gbm checks
+#    for libgbm itself, not the gbm feature), udev, libinput, mtdev, tslib,
+#    Vulkan, and the ODBC, DB2, InterBase, Mimer and Oracle drivers.
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    CMAKE_EXTRA+=(
+        -DFEATURE_zstd=ON -DFEATURE_fontconfig=ON -DFEATURE_system_freetype=ON
+        -DFEATURE_system_png=ON -DFEATURE_kms=ON -DFEATURE_xcb_sm=ON
+        -DFEATURE_system_harfbuzz=OFF -DFEATURE_system_jpeg=OFF
+        -DFEATURE_system_doubleconversion=OFF -DFEATURE_system_libb2=OFF
+        -DFEATURE_system_textmarkdownreader=OFF
+        -DFEATURE_glib=OFF -DFEATURE_gtk3=OFF -DFEATURE_dbus_linked=OFF
+        -DFEATURE_accessibility_atspi_bridge=OFF -DFEATURE_cups=OFF
+        -DFEATURE_gssapi=OFF -DFEATURE_brotli=OFF
+        -DFEATURE_gbm=OFF -DFEATURE_eglfs_gbm=OFF -DFEATURE_libudev=OFF -DFEATURE_libinput=OFF -DFEATURE_mtdev=OFF
+        -DFEATURE_tslib=OFF -DFEATURE_vulkan=OFF
+        -DFEATURE_sql_odbc=OFF -DFEATURE_sql_db2=OFF -DFEATURE_sql_ibase=OFF
+        -DFEATURE_sql_mimer=OFF -DFEATURE_sql_oci=OFF
+    )
+fi
 # NetBSD: keep the base system's X11 sets (/usr/X11R7, Mesa included) out of the
 # build.  CMake's FindX11 searches /usr/X11R7 by name, so it found libSM and
 # libICE there (the prefix has neither) and the xcb plugin's session management

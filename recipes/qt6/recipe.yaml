@@ -12,7 +12,12 @@ recipe:
   # shiboken generator building PySide6). Header-only, so ABI-identical.
   # Bumped 6 -> 7: add xkbcommon-x11 (X keyboard handling for the xcb QPA plugin)
   # now that the recipe exists, and pick up libxcb +cvc.3 (pthread-stubs).
-  cvc_revision: 7
+  # Bumped 7 -> 8: the Linux bundle linked the builder's own libzstd, glib,
+  # libSM/libICE, fontconfig, freetype, harfbuzz, libpng and libdrm (star-00,
+  # 6.8.2+cvc.7), none of them declared. Linux now links the cvcpkg recipes
+  # declared below, Qt's bundled harfbuzz, and turns glib and the other
+  # host-only features off (build.sh).
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -103,12 +108,31 @@ depends:
     # installed separately.
     - name: mesa
       platforms: [freebsd, netbsd]
-    # FreeBSD and NetBSD: QtCore and QtNetwork link zstd when they find it
-    # (zstd-compressed resources and HTTP bodies).  Declared so it is cvcpkg's,
-    # not the ports libzstd in /usr/local the FreeBSD builder has
-    # (freebsd-build-2, 2026-10-30).
+    # QtCore and QtNetwork link zstd when they find it (zstd-compressed
+    # resources and HTTP bodies).  Declared so it is cvcpkg's, not the ports
+    # libzstd in /usr/local the FreeBSD builder has (freebsd-build-2,
+    # 2026-10-30) or the distro one Linux builders have (build.sh requires it
+    # on Linux).
     - name: zstd
-      platforms: [freebsd, netbsd]
+      platforms: [linux, freebsd, netbsd]
+    # Linux: what QtGui and the xcb plugin link beyond X11/xcb and GL.
+    # fontconfig finds the system fonts (without it Qt only looks in
+    # lib/fonts) and needs the system FreeType, which links libpng; QtGui
+    # links all three.  libdrm is for the KMS/EGLFS and linuxfb plugins, and
+    # libsm/libice for X session management in the xcb plugin.  build.sh
+    # requires each of them on Linux.
+    - name: fontconfig
+      platforms: [linux]
+    - name: freetype
+      platforms: [linux]
+    - name: libpng
+      platforms: [linux]
+    - name: libdrm
+      platforms: [linux]
+    - name: libsm
+      platforms: [linux]
+    - name: libice
+      platforms: [linux]
   host_tools: []
 
 build:
