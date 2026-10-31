@@ -7,7 +7,16 @@ recipe:
   # build.sh disables systemd, logind, selinux, udev, dbus, alsa and v4l2, which
   # is exactly the Linux-specific surface. OpenBSD has no port and NetBSD has
   # only a pkgsrc-wip one, so neither is claimed.
-  cvc_revision: 3
+  # cvc.4: libpipewire baked the build sandbox into its SPA plugin, module and
+  # config dirs (/tmp/cvcpkg-builder/.../install/{lib/spa-0.2,lib/pipewire-0.3,
+  # share/pipewire,etc/pipewire}), so once relocated every client failed in
+  # pw_init(): "can't make support.system handle: No such file or directory",
+  # and without client.conf the context could not be created (SDL3's PipeWire
+  # backend: "Failed to create hotplug detection loop"). relocatable-dirs.patch
+  # resolves the plugin, module and config data dirs next to the loaded
+  # libpipewire (lib/spa-0.2, lib/pipewire-0.3, share/pipewire); build.sh sets
+  # sysconfdir to the system's, so /etc/pipewire overrides still apply.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,7 +36,8 @@ source:
   type: package
   package: pipewire-src
 
-patches: []
+patches:
+  - relocatable-dirs.patch
 
 depends:
   build:
@@ -62,6 +72,9 @@ package:
     - lib/spa-0.2/
     - lib/pkgconfig/libpipewire*
     - lib/pkgconfig/libspa*
+    # client.conf and the other default configs; libpipewire can't create a
+    # context without client.conf.
+    - share/pipewire/
     - include/pipewire-0.3/
     - include/spa-0.2/
   pkg_config:
@@ -70,3 +83,15 @@ package:
 
 abi:
   cxx_std: 17
+
+notes:
+  - title: "Relocatable plugin, module and config directories"
+    description: >-
+      libpipewire finds its SPA plugins in <prefix>/lib/spa-0.2, its modules
+      in <prefix>/lib/pipewire-0.3 and its default configs (client.conf) in
+      <prefix>/share/pipewire, relative to the installed library, so the
+      package works wherever cvcpkg unpacks it. SPA_PLUGIN_DIR,
+      PIPEWIRE_MODULE_DIR and PIPEWIRE_CONFIG_DIR still override. The
+      administrator's overrides are read from the system's /etc/pipewire
+      (/usr/local/etc/pipewire on FreeBSD) and ~/.config/pipewire, as for a
+      distribution build. Clients talk to the system's PipeWire daemon.

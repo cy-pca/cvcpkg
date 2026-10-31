@@ -1,0 +1,165 @@
+diff --git a/src/modules/module-filter-chain.c b/src/modules/module-filter-chain.c
+index f2f6ad9..1c5e816 100644
+--- a/src/modules/module-filter-chain.c
++++ b/src/modules/module-filter-chain.c
+@@ -27,6 +27,7 @@
+ 
+ #include <pipewire/utils.h>
+ #include <pipewire/impl.h>
++#include <pipewire/cvc-relocate.h>
+ #include <pipewire/extensions/profiler.h>
+ 
+ #define NAME "filter-chain"
+@@ -1663,8 +1664,11 @@ static fc_plugin_load_func *find_plugin_func(struct impl *impl, const char *type
+ 			return pl->func;
+ 	}
+ 	module_dir = getenv("PIPEWIRE_MODULE_DIR");
+-	if (module_dir == NULL)
+-		module_dir = MODULEDIR;
++	if (module_dir == NULL) {
++		/* cvcpkg: this module's own directory (cvc-relocate.h) */
++		static char *relocated;
++		module_dir = pw_cvc_relocated_dir(".", MODULEDIR, &relocated);
++	}
+ 	pw_log_debug("moduledir set to: %s", module_dir);
+ 
+ 	while ((p = pw_split_walk(module_dir, ":", &len, &state))) {
+diff --git a/src/pipewire/conf.c b/src/pipewire/conf.c
+index ee8e24a..53c9bac 100644
+--- a/src/pipewire/conf.c
++++ b/src/pipewire/conf.c
+@@ -32,6 +32,7 @@
+ 
+ #include <pipewire/impl.h>
+ #include <pipewire/private.h>
++#include <pipewire/cvc-relocate.h>
+ 
+ PW_LOG_TOPIC_EXTERN(log_conf);
+ #define PW_LOG_TOPIC_DEFAULT log_conf
+@@ -121,8 +122,10 @@ static int get_configdir_path(char *path, size_t size, const char *prefix, const
+ 
+ static int get_confdata_path(char *path, size_t size, const char *prefix, const char *name)
+ {
++	/* cvcpkg: <libdir>/../share/pipewire next to this library (cvc-relocate.h) */
++	static char *relocated;
+ 	const char *dir;
+-	dir = PIPEWIRE_CONFDATADIR;
++	dir = pw_cvc_relocated_dir("../share/pipewire", PIPEWIRE_CONFDATADIR, &relocated);
+ 	if (dir != NULL) {
+ 		const char *paths[] = { dir, prefix, name, NULL };
+ 		if (make_path(path, size, paths) == 0 &&
+diff --git a/src/pipewire/cvc-relocate.h b/src/pipewire/cvc-relocate.h
+new file mode 100644
+index 0000000..2df87df
+--- /dev/null
++++ b/src/pipewire/cvc-relocate.h
+@@ -0,0 +1,60 @@
++/* PipeWire */
++/* SPDX-License-Identifier: MIT */
++
++/*
++ * cvcpkg: relocatable install directories.
++ *
++ * cvcpkg builds PipeWire under an ephemeral sandbox prefix and relocates the
++ * package into each consumer's prefix, so the compiled-in PLUGINDIR,
++ * MODULEDIR and PIPEWIRE_CONFDATADIR are dead paths there: pw_init() found no
++ * SPA support plugin ("can't make support.system handle") and no client.conf.
++ * This resolves those directories relative to the shared object the calling
++ * code is compiled into instead, the way alsa-lib's dlmisc.c finds its
++ * plugins.  (PIPEWIRE_CONFIG_DIR, the administrator's overrides, is the
++ * system's /etc/pipewire: the recipe passes an absolute --sysconfdir.)
++ *
++ * Not installed; private to libpipewire and its modules.
++ */
++
++#ifndef PIPEWIRE_CVC_RELOCATE_H
++#define PIPEWIRE_CVC_RELOCATE_H
++
++#include <dlfcn.h>
++#include <limits.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++/*
++ * Returns <dir>/<rel>, where <dir> is the directory of the shared object this
++ * function is compiled into (it is static, so taking its address names the
++ * copy in the caller's object: libpipewire-0.3.so for the library, the module
++ * .so for a module), when that directory exists.  Otherwise returns
++ * fallback, normally the compiled-in path.  The result is cached in *cache
++ * for the process lifetime, like the getenv() strings it stands in for.
++ */
++static inline const char *pw_cvc_relocated_dir(const char *rel,
++		const char *fallback, char **cache)
++{
++	Dl_info info;
++	char object[PATH_MAX], path[PATH_MAX];
++	const char *result = fallback;
++	char *slash;
++
++	if (*cache != NULL)
++		return *cache;
++	if (dladdr((void *)pw_cvc_relocated_dir, &info) != 0 &&
++	    info.dli_fname != NULL &&
++	    realpath(info.dli_fname, object) != NULL &&
++	    (slash = strrchr(object, '/')) != NULL) {
++		*slash = '\0';
++		if ((size_t)snprintf(path, sizeof(path), "%s/%s", object, rel) < sizeof(path) &&
++		    access(path, X_OK) == 0)
++			result = path;
++	}
++	*cache = strdup(result);
++	return *cache != NULL ? *cache : fallback;
++}
++
++#endif /* PIPEWIRE_CVC_RELOCATE_H */
+diff --git a/src/pipewire/impl-module.c b/src/pipewire/impl-module.c
+index 2388760..f83a440 100644
+--- a/src/pipewire/impl-module.c
++++ b/src/pipewire/impl-module.c
+@@ -18,6 +18,7 @@
+ 
+ #include "pipewire/impl.h"
+ #include "pipewire/private.h"
++#include "pipewire/cvc-relocate.h"
+ 
+ PW_LOG_TOPIC_EXTERN(log_module);
+ #define PW_LOG_TOPIC_DEFAULT log_module
+@@ -157,7 +158,9 @@ pw_context_load_module(struct pw_context *context,
+ 
+ 	module_dir = getenv("PIPEWIRE_MODULE_DIR");
+ 	if (module_dir == NULL) {
+-		module_dir = MODULEDIR;
++		/* cvcpkg: <libdir>/pipewire-0.3 next to this library (cvc-relocate.h) */
++		static char *relocated;
++		module_dir = pw_cvc_relocated_dir("pipewire-0.3", MODULEDIR, &relocated);
+ 		pw_log_debug("moduledir set to: %s", module_dir);
+ 	}
+ 	else {
+diff --git a/src/pipewire/pipewire.c b/src/pipewire/pipewire.c
+index 74545d6..c684544 100644
+--- a/src/pipewire/pipewire.c
++++ b/src/pipewire/pipewire.c
+@@ -28,6 +28,7 @@
+ #include "pipewire.h"
+ #include "private.h"
+ #include "i18n.h"
++#include "cvc-relocate.h"
+ 
+ #define MAX_SUPPORT	32
+ 
+@@ -515,8 +516,11 @@ void pw_init(int *argc, char **argv[])
+ 
+ 	init_i18n(support);
+ 
+-	if ((str = getenv("SPA_PLUGIN_DIR")) == NULL)
+-		str = PLUGINDIR;
++	if ((str = getenv("SPA_PLUGIN_DIR")) == NULL) {
++		/* cvcpkg: <libdir>/spa-0.2 next to this library (cvc-relocate.h) */
++		static char *plugin_dir;
++		str = pw_cvc_relocated_dir("spa-0.2", PLUGINDIR, &plugin_dir);
++	}
+ 	support->plugin_dir = str;
+ 
+ 	if ((str = getenv("SPA_SUPPORT_LIB")) == NULL)

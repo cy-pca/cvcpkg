@@ -17,11 +17,26 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# The prefix is an ephemeral build sandbox that cvcpkg relocates, so the
+# directories meson compiles in are dead paths at the consumer.
+# relocatable-dirs.patch finds the SPA plugins, modules and config data next
+# to the installed libpipewire instead.  The administrator's config dir
+# (PIPEWIRE_CONFIG_DIR, for client.conf.d overrides) is the system's, so
+# sysconfdir is the system's absolute path; nothing else installs there once
+# the PAM limits.d files are off (a daemon-only setting a bundle can't apply).
+case "${CVC_PLATFORM}" in
+    freebsd) _sysconfdir=/usr/local/etc ;;
+    *)       _sysconfdir=/etc ;;
+esac
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \
+    --sysconfdir="${_sysconfdir}" \
+    -Drlimits-install=false \
+    -Dpam-defaults-install=false \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
     -Dc_link_args="-Wl,-rpath,\$ORIGIN" \
     -Dspa-plugins=enabled \
