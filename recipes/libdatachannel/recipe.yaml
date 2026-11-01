@@ -1,0 +1,70 @@
+schema_version: 1
+recipe:
+  name: libdatachannel
+  upstream_version: "0.24.6"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libdatachannel.org/
+  # libdatachannel and libjuice are MPL-2.0; usrsctp, libSRTP and plog (MIT)
+  # are linked in statically, as upstream's own build links them.
+  license: "MPL-2.0 AND BSD-3-Clause AND MIT"
+  tags: [libraries, networking, webrtc]
+  description: >-
+    libdatachannel -- a standalone C++17 implementation of WebRTC Data
+    Channels, WebRTC media transport and WebSockets (paullouisageneau).  Data
+    channels are SCTP over DTLS over ICE (libjuice), so a channel can be
+    unordered and unreliable (maxRetransmits 0): a lost message is dropped,
+    never waited for.  libcvc's conference uses it for its unreliable pose and
+    media lane.  The browser side is the datachannel-wasm recipe, which has the
+    same rtc:: API.
+
+# The tag's archive.  It has no submodules (a GitHub archive never does), so
+# build.sh / build.ps1 fetch the four the library build reads -- each pinned
+# by the commit v0.24.6's gitlink names and by sha256 -- the way
+# recipes/drjit-src fetches its own.  deps/json is used only by the examples,
+# which are off.
+source:
+  type: tarball
+  url: https://github.com/paullouisageneau/libdatachannel/archive/refs/tags/v0.24.6.tar.gz
+  sha256: "22a66aebebd8dae561d8e5181da96f2fcc203e067c5b2186c07b39af913464c0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  # DTLS (and libSRTP's crypto) comes from cvcpkg's OpenSSL.
+  runtime:
+    - openssl
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - lib/libdatachannel*
+    - { glob: "lib/datachannel*", platforms: [windows] }
+    - { glob: "bin/datachannel*", platforms: [windows] }
+    - lib/cmake/LibDataChannel/
+    - include/rtc/
+  cmake_packages:
+    - { name: LibDataChannel, targets: ["LibDataChannel::LibDataChannel"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
