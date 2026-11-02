@@ -28,6 +28,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **`cvcpkg install --no-deps`: the named bundles without their runtime deps.**
+  install always resolved a bundle's whole `required_deps` closure, so a bundle
+  whose deps are wrong could not be installed at all, and none could be tried on
+  its own. libcvc-examples-web 3.7.8+cvc.1 lists its 23 build deps as required,
+  two of them data bundles published for x86_64 only, so
+  `cvcpkg install libcvc-examples-web --platform wasm-mt` failed although the
+  gallery needs none of them.
+  - `--with-deps/--no-deps` (default `--with-deps`, as before) names the switch
+    as `cvcpkg build` does. `--no-deps` installs only the requested prebuilt
+    bundles, from the command line or `--from`, and prints each one's left-out
+    deps. A dep that is requested too, or provided by a pick, is installed.
+  - The picks must still accept one another's versions.
+  - It builds nothing from source: `--local` and `--fallback-to-source` are
+    refused with it, and a never-published recipe (the CUDA toolkit) stays
+    unresolved, since a source build needs its deps.
+  - The resolver takes `follow_deps=False` for it.
+
 ## v2.5.11
 
 **A release so builders carry the Haiku delegation fixes (#517) and label
