@@ -36,6 +36,7 @@ def resolve(
     recommended: dict[str, str] | None = None,
     capabilities: set[str] | None = None,
     local_only: Callable[[str], list[str] | None] | None = None,
+    follow_deps: bool = True,
 ) -> ResolveResult:
     """Resolve *requirements* against *candidates*.
 
@@ -60,6 +61,10 @@ def resolve(
         never in the catalog -- or ``None`` when it cannot.  Such a name
         lands in ``ResolveResult.local`` and its dependencies are resolved
         like any other, so a catalog bundle may depend on one.
+    follow_deps:
+        ``False`` resolves the requested names alone (``install --no-deps``):
+        a pick's ``required_deps`` do not join the search, though the picks
+        must still accept one another's versions.
 
     Returns
     -------
@@ -151,6 +156,7 @@ def resolve(
         capability_blocked,
         local_only=lookup,
         local=local,
+        follow_deps=follow_deps,
     )
     if failure is not None:
         raise ResolveError("cannot satisfy requirements:\n  " + "\n  ".join(trail.report()))
@@ -309,6 +315,7 @@ def _backtrack(
     local_only: Callable[[str], list[str] | None] | None = None,
     local: dict[str, list[str]] | None = None,
     required_by: dict[str, frozenset[str]] | None = None,
+    follow_deps: bool = True,
 ) -> frozenset[str] | None:
     """Recursive resolver with conflict-directed backjumping.
 
@@ -356,6 +363,7 @@ def _backtrack(
                 local_only=local_only,
                 local=local,
                 required_by=_add_requirer(required_by, name, deps),
+                follow_deps=follow_deps,
             )
             if sub is None:
                 return None
@@ -391,7 +399,7 @@ def _backtrack(
         new_needed = set(needed)
         new_constraints = dict(constraints)
         dep_names = []
-        for dep in entry.required_deps:
+        for dep in entry.required_deps if follow_deps else ():
             new_needed.add(dep.name)
             dep_names.append(dep.name)
             if dep.version:
@@ -413,6 +421,7 @@ def _backtrack(
             local_only=local_only,
             local=local,
             required_by=_add_requirer(required_by, name, dep_names),
+            follow_deps=follow_deps,
         )
         if sub is None:
             return None

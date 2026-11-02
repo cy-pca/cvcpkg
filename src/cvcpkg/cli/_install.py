@@ -133,6 +133,18 @@ _accept_license_opt = click.option(
     default=False,
     help="Build from source recipe when no prebuilt binary is available.",
 )
+@click.option(
+    "--with-deps/--no-deps",
+    default=True,
+    help=(
+        "The default --with-deps also installs each component's runtime "
+        "dependencies, resolved from the catalog.  --no-deps installs only the "
+        "named prebuilt bundle(s), from the command line or --from, and lists the "
+        "dependencies it leaves out: for deps already in --prefix, provided some "
+        "other way, or not needed where the bundle runs.  It cannot build from "
+        "source (--local, --fallback-to-source): a source build needs its deps."
+    ),
+)
 @_accept_license_opt
 @_recipes_dir_opt
 @_no_default_recipes_opt
@@ -201,6 +213,7 @@ def install(
     trust_mirror: bool | None,
     accept_licenses: tuple[str, ...] = (),
     build_tools: tuple[str, ...] = (),
+    with_deps: bool = True,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -228,6 +241,9 @@ def install(
 
       # Pin a specific component version
       cvcpkg install zlib==1.3.1+cvc.1 --prefix ./deps
+
+      # Just this bundle, without its runtime deps
+      cvcpkg install arigl-web --platform wasm --no-deps --prefix ./site
 
     When using --from, the CLI flags --platform, --arch, --config,
     and --link override the corresponding values in the requirements
@@ -296,6 +312,14 @@ def install(
         skip_catalog = True
     else:
         skip_catalog = False
+
+    # --no-deps installs prebuilt bundles only.  A source build needs its build
+    # and runtime deps in the prefix, which is what --no-deps leaves out.
+    if not with_deps and fallback_to_source:
+        raise click.UsageError(
+            "--no-deps installs prebuilt bundles only; it cannot be combined with "
+            "--local or --fallback-to-source (a source build needs its deps)."
+        )
 
     # ── Load or build the Requirements object ──
     #
@@ -432,6 +456,9 @@ def install(
         return _local_memo[name]
 
     local_built: list[str] = []
+    # --no-deps builds nothing locally, a never-published recipe included (it
+    # downloads under the vendor's license and builds against its deps).
+    local_lookup = _local_only if with_deps else None
 
     # Component requests qualified with an org (e.g. "cvc/libcvc") scope
     # candidate selection to that org for that name — see the org-qualified
@@ -501,6 +528,7 @@ def install(
                 link=reqs.link,
                 trust_mirror=trust_mirror,
                 requested_org=requested_org,
+                follow_deps=with_deps,
             )
             for name, (cfg, lnk) in sorted(tool_variants.items()):
                 click.echo(
@@ -516,11 +544,13 @@ def install(
                 for c in reqs.components
                 if c.name in candidates
                 or c.name in virtual_names
-                or _local_only(c.name) is not None
+                or (local_lookup is not None and local_lookup(c.name) is not None)
             ]
             if resolvable:
                 try:
-                    result = resolve(resolvable, candidates, local_only=_local_only)
+                    result = resolve(
+                        resolvable, candidates, local_only=local_lookup, follow_deps=with_deps
+                    )
                 except ResolveError as exc:
                     if not root_hint:
                         raise
@@ -623,6 +653,20 @@ def install(
                         f"cache and report BOTH versions plus the catalog source below.",
                         err=True,
                     )
+    if not with_deps:
+        # Say what --no-deps left out, so a missing library is not a mystery
+        # later.  A dep this install picks anyway (requested too, or provided by
+        # a pick) is not left out.
+        provided = set(picked)
+        for entry in picked.values():
+            provided.update(entry.provides)
+        for name in sorted(picked):
+            left_out = sorted({d.name for d in picked[name].required_deps} - provided)
+            if left_out:
+                click.echo(
+                    f"cvcpkg: --no-deps: not installing {name}'s runtime deps: "
+                    + ", ".join(left_out)
+                )
     if source_only:
         click.echo(
             f"cvcpkg: {len(source_only)} component(s) will be built from source: "
@@ -649,11 +693,12 @@ def install(
         and c.name not in skipped_build_tools
     ]
     if unresolved:
-        hint = (
-            ""
-            if fallback_to_source
-            else " (pass --fallback-to-source to build it from source instead)"
-        )
+        if fallback_to_source:
+            hint = ""
+        elif not with_deps:
+            hint = " (--no-deps installs prebuilt bundles only)"
+        else:
+            hint = " (pass --fallback-to-source to build it from source instead)"
         raise click.ClickException(
             "requested component(s) not found in the catalog for this platform tuple: "
             + ", ".join(unresolved)
@@ -1091,6 +1136,7 @@ def _resolve_build_tool_fallbacks(
     link: str,
     trust_mirror: bool | None,
     requested_org: dict[str, str],
+    follow_deps: bool = True,
 ) -> tuple[dict[str, CatalogEntry], dict[str, tuple[str, str]]]:
     """Resolve build tools that have no bundle for this config/link from another.
 
@@ -1100,9 +1146,10 @@ def _resolve_build_tool_fallbacks(
     release/shared bundles, so a static or debug install-deps used to fail with
     "not found in the catalog for this platform tuple".
 
-    Each tool resolves, with its own runtime closure, in the nearest variant that
-    has it (see _build_tool_variants).  Returns the picked entries and, per tool,
-    the (config, link) it came from.
+    Each tool resolves, with its own runtime closure (alone under --no-deps:
+    *follow_deps* False), in the nearest variant that has it (see
+    _build_tool_variants).  Returns the picked entries and, per tool, the
+    (config, link) it came from.
     """
     from cvcpkg.catalog import catalog_entries
     from cvcpkg.resolver import resolve
@@ -1124,7 +1171,7 @@ def _resolve_build_tool_fallbacks(
         here = [c for c in remaining if c.name in candidates]
         if not here:
             continue
-        for name, entry in resolve(here, candidates).picked.items():
+        for name, entry in resolve(here, candidates, follow_deps=follow_deps).picked.items():
             prev = picked.get(name)
             if prev is not None and not _same_bundle(prev, entry):
                 raise click.ClickException(
