@@ -66,22 +66,37 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    # wasm-mt: the threaded browser target, the same cross scripts with -pthread, against abseil's
+    # and zlib's wasm-mt bundles. A separate platform, not a flag: wasm-ld refuses to mix pthread
+    # and non-pthread objects.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
+    - platform: wasm-mt
+      host_platform: windows
+      script: build-wasm.ps1
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   files:
     - lib/libprotobuf*
-    - lib/libprotoc*
     - lib/protobuf*
-    - lib/protoc*
     - lib/cmake/protobuf/
     - lib/pkgconfig/protobuf*
     - include/google/protobuf/
-    - bin/protoc*
+    # protoc and libprotoc: native only. The wasm scripts build neither (a consumer generates with
+    # a native protoc), and the builder's strict globs fail a pack on entries that match nothing.
+    - { glob: "lib/libprotoc*", platforms: [linux, macos, windows, freebsd, openbsd, netbsd] }
+    - { glob: "lib/protoc*", platforms: [linux, macos, windows, freebsd, openbsd, netbsd] }
+    - { glob: "bin/protoc*", platforms: [linux, macos, windows, freebsd, openbsd, netbsd] }
     # utf8_range, which protobuf's CMake config requires (find_dependency).
-    - { glob: "lib/libutf8_*", platforms: [wasm] }
-    - { glob: "lib/cmake/utf8_range/", platforms: [wasm] }
-    - { glob: "include/utf8_range.h", platforms: [wasm] }
-    - { glob: "include/utf8_validity.h", platforms: [wasm] }
+    - { glob: "lib/libutf8_*", platforms: [wasm, wasm-mt] }
+    - { glob: "lib/cmake/utf8_range/", platforms: [wasm, wasm-mt] }
+    - { glob: "include/utf8_range.h", platforms: [wasm, wasm-mt] }
+    - { glob: "include/utf8_validity.h", platforms: [wasm, wasm-mt] }
   cmake_packages:
     - { name: Protobuf, targets: ["protobuf::libprotobuf", "protobuf::libprotoc"] }
 
