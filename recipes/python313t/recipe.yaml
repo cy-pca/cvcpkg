@@ -64,7 +64,13 @@ recipe:
   # <stdlib.h> leaves that to the compiler, and -std=c11 turns it off), and every
   # ctypes foreign call segfaulted.  glibc, macOS, FreeBSD and OpenBSD already
   # define the macro, so other platforms rebuild unchanged.
-  cvc_revision: 13
+  # Bumped 13 -> 14: Windows ships python313t.dll and python3t.dll in bin\ too
+  # (_common/build-python.ps1 step 3b).  The layout keeps them at the prefix root beside
+  # python.exe, where an executable in bin\ that embeds Python (libcvc's arix and
+  # ariglx, volrover3) could not load python313t.dll and would not start, and where its
+  # abi3 extension modules did not find python3t.dll.  Other platforms rebuild
+  # unchanged.
+  cvc_revision: 14
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -193,6 +199,11 @@ package:
     - { glob: "pythonw3.13t.exe", platforms: [windows] }
     - { glob: "python313t.dll", platforms: [windows] }
     - { glob: "python3t.dll", platforms: [windows] }
+    # Copies of the interpreter's DLLs in bin\, where cvcpkg keeps a prefix's shared
+    # libraries and an executable that embeds Python finds them
+    # (_common/build-python.ps1 step 3b).
+    - { glob: "bin/python313t.dll", platforms: [windows] }
+    - { glob: "bin/python3t.dll", platforms: [windows] }
     - { glob: "vcruntime140*.dll", platforms: [windows] }
     - { glob: "DLLs/", platforms: [windows] }
     - { glob: "Lib/", platforms: [windows] }
