@@ -59,6 +59,19 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    # wasm-mt: the threaded browser target, the same cross scripts with -pthread (protobuf's
+    # wasm-mt bundle links it). A separate platform, not a flag: wasm-ld refuses to mix pthread
+    # and non-pthread objects.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
+    - platform: wasm-mt
+      host_platform: windows
+      script: build-wasm.ps1
+      env:
+        CVC_WASM_THREADS: "1"
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh
