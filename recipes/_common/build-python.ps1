@@ -12,7 +12,9 @@
 # python.org-style tree at the prefix root: python.exe, python3XX.dll, Lib\,
 # DLLs\, include\, libs\python3XX.lib (what find_package(Python3
 # Development.Embed) expects).  There is no python3.exe/pip3; the command is
-# `python` (python3.13t.exe for the free-threaded build).
+# `python` (python3.13t.exe for the free-threaded build).  python3XX.dll and
+# python3.dll are also copied into bin\, where an executable that embeds
+# Python finds them (step 3b).
 #
 # Nothing is downloaded.  PCbuild\build.bat would run get_externals.bat, which
 # fetches bzip2, sqlite, xz and zlib sources and PREBUILT libffi and openssl
@@ -325,6 +327,28 @@ function Invoke-CvcPythonBuild {
         }
     }
 
+    # ── 3b. The interpreter's DLLs in bin\ too ──────────────────────────────
+    # cvcpkg keeps a prefix's shared libraries in bin\, and an executable that
+    # embeds Python lives there too (libcvc's arix and ariglx, volrover3).
+    # It links python3XX.dll, which Windows resolves from the executable's own
+    # directory, System32 or PATH, never <prefix>: from bin\ alone it would not
+    # start.  And an abi3 extension module it imports names python3.dll, which
+    # the loader looks for beside that executable.  So bin\ carries copies of
+    # python3XX.dll and python3.dll (python313t.dll and python3t.dll for the
+    # free-threaded build).  python.exe keeps loading the ones beside it at the
+    # root; two copies of one build are the same module to the loader, which
+    # matches a loaded DLL by name.
+    $binDir = Join-Path $env:CVC_INSTALL_DIR 'bin'
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+    $pyDlls = @(Get-ChildItem -LiteralPath $env:CVC_INSTALL_DIR -Filter 'python3*.dll' -File)
+    if ($pyDlls.Count -lt 2) {
+        throw "PC\layout staged $($pyDlls.Count) python3*.dll at the root (expected python3XX.dll and python3.dll)"
+    }
+    foreach ($dll in $pyDlls) {
+        Copy-Item -LiteralPath $dll.FullName -Destination $binDir -Force
+    }
+    Write-Host "bin\ carries $(($pyDlls | ForEach-Object { $_.Name }) -join ', ')"
+
     # ── 4. Teach the interpreter where the prefix's DLLs live ───────────────
     # Windows has no RPATH, and since Python 3.8 the loader no longer searches
     # PATH for an extension module's dependencies — only the DLL search
@@ -386,5 +410,12 @@ print("cvcpkg: python %s%s ok; %s, sqlite %s, zlib %s" % (
     if ($FreeThreaded) {
         & $staged -I -c 'import sys; assert not sys._is_gil_enabled(), "GIL is enabled"'
         if ($LASTEXITCODE -ne 0) { throw 'staged python is not free-threaded' }
+    }
+    # bin\'s copies are the root's (3b).
+    foreach ($dll in $pyDlls) {
+        $copy = Join-Path $binDir $dll.Name
+        if ((Get-FileHash -LiteralPath $copy).Hash -ne (Get-FileHash -LiteralPath $dll.FullName).Hash) {
+            throw "bin\$($dll.Name) differs from the root's"
+        }
     }
 }
