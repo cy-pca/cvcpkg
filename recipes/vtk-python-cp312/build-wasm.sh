@@ -280,5 +280,7 @@ find "${CVC_INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 cp -a "${_KEEP}/." "${CVC_INSTALL_DIR}/"
 rm -rf "${_KEEP}"
 echo "vtk-python(wasm): pruned to python-only artifacts:"
+# sed, not head: head exits after 20 lines, and under pipefail the SIGPIPE that gives sort (141)
+# became this script's exit status, failing a build that had finished (cvc.8's wasm-mt leg).
 find "${CVC_INSTALL_DIR}" \( -name 'libvtk*Python*.a' -o -name '_vtkmodules_static.a' \
-     -o -name '_vtk.zip' -o -name 'vtkPythonUtil.h' \) -print | sort | head -20
+     -o -name '_vtk.zip' -o -name 'vtkPythonUtil.h' \) -print | sort | sed -n '1,20p'

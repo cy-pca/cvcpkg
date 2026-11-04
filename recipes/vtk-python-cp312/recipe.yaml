@@ -32,6 +32,12 @@ recipe:
   # defined it, and vtkPythonUtil::AddModule went on through the NULLs: wild reads, writes
   # to address 0, and a TypeError left set ("Exception ignored in garbage collection" in
   # any host that imports vtkmodules). The checks change nothing on native.
+  #   Before cvc.8's wasm/wasm-mt variants were first published (linux and windows were
+  #   already out), its wasm packaging was fixed without a bump; linux/windows are
+  #   unaffected. package.files no longer declares, for wasm, the bin/ wrap tools and the
+  #   unpacked vtkmodules/ + vtk.py that the prune drops (the strict glob check failed the
+  #   pack; no wasm revision after cvc.6 had published). The prune's listing no longer
+  #   ends in `| head`, whose SIGPIPE under pipefail failed the wasm-mt build (exit 141).
   cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -169,15 +175,17 @@ package:
     # Unix name; MSVC names them vtk*Python*.lib (the .lib entry below).
     - { glob: "lib/libvtk*Python*", platforms: [linux, wasm, wasm-mt] }
     - lib/vtk*Python*.lib
-    - bin/vtk*Python*
+    # The wrap tools and DLLs. build-wasm.sh's prune keeps none of bin/, so not on wasm.
+    - { glob: "bin/vtk*Python*", platforms: [linux, windows] }
     # wasm STATIC build: the compiled modules aggregate into _vtkmodules_static.a
     # (registered via PyImport_AppendInittab), and the pure-Python stubs ship as
     # VTK's _vtk.zip rather than an unpacked vtkmodules/ tree.
     - { glob: "lib/_vtkmodules_static.a", platforms: [wasm, wasm-mt] }
     - { glob: "lib/python*/site-packages/_vtk.zip", platforms: [wasm, wasm-mt] }
-    # The importable Python package (site-packages layout differs per platform).
-    - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux, wasm, wasm-mt] }
-    - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux, wasm, wasm-mt] }
+    # The importable Python package (site-packages layout differs per platform). wasm ships
+    # it as _vtk.zip above, and the prune drops the unpacked tree.
+    - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux] }
+    - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux] }
     - { glob: "Lib/site-packages/vtkmodules/", platforms: [windows] }
     - { glob: "Lib/site-packages/vtk.py", platforms: [windows] }
     # C++↔Python bridge headers (only emitted with VTK_WRAP_PYTHON=ON) — they land
