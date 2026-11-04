@@ -27,7 +27,12 @@ recipe:
   # VTK_INSTALL_PYTHON_EXES=OFF (wasm/wasm-mt) — see vtk-no-python-interpreter-exe.patch.
   # Unblocks the wasm-mt build (the fat exe link fails there and was tipping the job
   # over); the wrapper artifacts we actually ship are unchanged. No-op on native.
-  cvc_revision: 7
+  # cvc.8: vtk-python-static-module-init.patch. In the static (wasm/wasm-mt) build every
+  # module's init called the vtkmodules.on_vtk_module_init hook before __init__.py had
+  # defined it, and vtkPythonUtil::AddModule went on through the NULLs: wild reads, writes
+  # to address 0, and a TypeError left set ("Exception ignored in garbage collection" in
+  # any host that imports vtkmodules). The checks change nothing on native.
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -73,6 +78,9 @@ patches:
   # fails on the static wasm CPython anyway (mpd_isspecial + HACL SHA2 undefs; on
   # wasm-mt also the threaded 16 MiB initial-memory cap). No-op on native (EXES ON).
   - vtk-no-python-interpreter-exe.patch
+  # vtkPythonUtil::AddModule checks its calls and clears a failure, and a static
+  # build loads its components after the hooks they call (see the patch header).
+  - vtk-python-static-module-init.patch
 
 depends:
   build:
