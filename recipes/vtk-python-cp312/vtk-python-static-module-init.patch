@@ -1,0 +1,94 @@
+Make vtkPythonUtil::AddModule safe in a static build, and give it its hook.
+
+Every wrapped module's init calls vtkPythonUtil::AddModule, which calls
+vtkmodules.on_vtk_module_init(name), the pending list behind the @override
+helpers. AddModule checks nothing: PyImport_ImportModule, PyObject_GetAttrString
+and PyObject_CallObject may each return NULL, and it calls through and
+Py_DECREFs them all regardless.
+
+In a static build that is what happens. `import vtkmodules` runs
+_load_vtkmodules_static() near the top of __init__.py, which imports
+_vtkmodules_static and so runs every module's init, while __init__.py has not
+yet reached its definition of on_vtk_module_init further down. Each AddModule
+then gets a NULL hook, and:
+  * PyObject_CallObject(NULL, ...) formats "'%s' object is not callable" from
+    the type of NULL, reading wild memory (the garbage type names);
+  * Py_DECREF(execVal) and Py_DECREF(pFunc) on NULL decrement the word at
+    address 0;
+  * the TypeError is left set, and CPython reports it later from wherever the
+    collector runs ("Exception ignored in garbage collection ... in
+    _lock_unlock_module").
+Seen in libcvc's CPython-wasm host (pycvc_host), which embeds the static wasm
+vtk-python: a -sSAFE_HEAP=1 link segfaults in AddModule under
+PyInit__vtkmodules_static -> PyInit_vtkCommonCore, and an -sASSERTIONS link
+aborts at exit on the overwritten address 0. Upstream VTK master (9.7.2) still
+has both the ordering and the unchecked calls.
+
+Two changes, each enough on its own (verified both ways in that host):
+  * vtkPythonUtil.cxx: AddModule checks each step, uses Py_XDECREF, and clears
+    a failure: the hook is advisory, and an error left set by a module's init
+    surfaces somewhere unrelated.
+  * vtkmodules/__init__.py.in: the static components load at the end of the
+    file, after the hooks they call are defined.
+
+No change for shared builds beyond the checks: there the placeholder expands to
+a comment, wherever it sits.
+--- a/Wrapping/Python/vtkmodules/__init__.py.in
++++ b/Wrapping/Python/vtkmodules/__init__.py.in
+@@ -103,7 +103,7 @@ def _load_vtkmodules_static():
+     if 'vtkmodules_vtkCommonCore' not in sys.builtin_module_names:
+         import _vtkmodules_static
+ 
+-@_vtkmodules_static_import@
++# cvcpkg: called at the end of this file, once the hooks below exist.
+ 
+ 
+ #------------------------------------------------------------------------------
+@@ -154,3 +154,9 @@ def on_vtk_module_init_completed():
+         LOADED_MODULES.add(module_name)
+         for import_name in MODULE_MAPPER.get(module_name, []):
+             importlib.import_module(import_name)
++
++
++#------------------------------------------------------------------------------
++# cvcpkg: load the static components last. Loading them runs every wrapped module's
++# init, and each calls on_vtk_module_init (vtkPythonUtil::AddModule), so it must exist.
++@_vtkmodules_static_import@
+--- a/Wrapping/PythonCore/vtkPythonUtil.cxx
++++ b/Wrapping/PythonCore/vtkPythonUtil.cxx
+@@ -1043,15 +1043,27 @@ void vtkPythonUtil::AddModule(const char* name)
+   vtkPythonMap->ModuleList->push_back(name);
+ 
+   // Register module name into pending list for deferred side module loading
++  // cvcpkg: check each step. A static build runs every module's init while vtkmodules is still
++  // executing (_load_vtkmodules_static), and the hook may not exist yet; a NULL pFunc then reached
++  // PyObject_CallObject and the Py_DECREFs (writes through address 0) and left the error set.
++  // The hook is advisory, so a failure is cleared rather than reported from the module's init.
+   PyObject* pModule = PyImport_ImportModule("vtkmodules");
+-  PyObject* pFunc = PyObject_GetAttrString(pModule, "on_vtk_module_init");
+-  PyObject* pArgs = PyTuple_New(1);
+-  PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(name));
+-  PyObject* execVal = PyObject_CallObject(pFunc, pArgs);
+-  Py_DECREF(execVal);
+-  Py_DECREF(pArgs);
+-  Py_DECREF(pFunc);
+-  Py_DECREF(pModule);
++  PyObject* pFunc = pModule ? PyObject_GetAttrString(pModule, "on_vtk_module_init") : nullptr;
++  PyObject* execVal = nullptr;
++  if (pFunc)
++  {
++    PyObject* pArgs = PyTuple_New(1);
++    PyTuple_SetItem(pArgs, 0, PyUnicode_FromString(name));
++    execVal = PyObject_CallObject(pFunc, pArgs);
++    Py_DECREF(pArgs);
++  }
++  if (!execVal)
++  {
++    PyErr_Clear();
++  }
++  Py_XDECREF(execVal);
++  Py_XDECREF(pFunc);
++  Py_XDECREF(pModule);
+ }
+ 
+ //------------------------------------------------------------------------------
