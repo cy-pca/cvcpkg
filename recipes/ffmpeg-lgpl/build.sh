@@ -166,7 +166,12 @@ _iconv_libs="$(grep -a -h -o -E 'libiconv\.(so\.[0-9.]+|[0-9]+\.dylib)' \
     "${CVC_INSTALL_DIR}"/lib/lib{av,sw}* | sort -u || true)"
 for _lib in ${_iconv_libs}; do
     case "${CVC_PLATFORM}" in
-        openbsd|macos) [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]] && continue ;;
+        openbsd|macos)
+            if [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "cvcpkg: FFmpeg links ${_lib} from the declared iconv"
+                continue
+            fi
+            ;;
     esac
     echo "cvcpkg: FFmpeg linked ${_lib}, which is not the declared iconv" >&2
     exit 1
