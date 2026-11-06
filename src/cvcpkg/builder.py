@@ -287,8 +287,9 @@ class Recipe:
     # NOTE: "image" is not just a hint -- pack_recipe enforces the
     # share/<name>/ layout and a schema-valid image.yaml for it.
     archive_format: str | None = None  # tar.gz|tar.xz|tar.bz2|zip; None = per-platform default
-    # package.linkage_allow: absolute path prefixes the relocatability gate
-    # accepts in this bundle's binaries (see check_relocatable).
+    # package.linkage_allow: absolute path prefixes, and @rpath/ or bare library
+    # name prefixes, the relocatability gate accepts in this bundle's binaries
+    # (see check_relocatable).
     linkage_allow: list[str] = field(default_factory=list)
     cross_toolchain_targets: list[str] = field(default_factory=list)
     cross_toolchain_env: dict[str, str] = field(default_factory=dict)
@@ -1910,6 +1911,16 @@ def _scrub_elf_rpaths(
             print(f"cvcpkg: WARNING: could not rewrite {rel} RPATH {old_s} -> {new_s}")
 
 
+def _load_manifest(path: Path) -> dict[str, Any] | None:
+    """The installed manifest at *path*, or ``None`` if it is missing or unreadable."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+    except (OSError, yaml.YAMLError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _dep_manifest(prefixes: Sequence[Path], name: str) -> dict[str, Any] | None:
     """The manifest dependency *name* installed into one of *prefixes*.
 
@@ -1919,23 +1930,13 @@ def _dep_manifest(prefixes: Sequence[Path], name: str) -> dict[str, Any] | None:
     older bundles is clobbered by whichever extracted last, so it names
     nothing reliably.
     """
-    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-
-    def load(path: Path) -> dict[str, Any] | None:
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = yaml.load(f, Loader=loader)
-        except (OSError, yaml.YAMLError):
-            return None
-        return data if isinstance(data, dict) else None
-
     for prefix in prefixes:
-        data = load(prefix / "share" / "libcvc-deps" / name / "manifest.yaml")
+        data = _load_manifest(prefix / "share" / "libcvc-deps" / name / "manifest.yaml")
         if data is not None:
             return data
     for prefix in prefixes:
         for path in sorted((prefix / "share" / "libcvc-deps").glob("*/manifest.yaml")):
-            data = load(path)
+            data = _load_manifest(path)
             if data is None:
                 continue
             provides = data.get("provides") or (data.get("contents") or {}).get("provides") or []
@@ -1956,7 +1957,9 @@ def _required_names(entries: Iterable[Any]) -> list[str]:
 
 
 def _runtime_dep_libraries(
-    dep_prefixes: Sequence[Path | None], required: Sequence[str] | None
+    dep_prefixes: Sequence[Path | None],
+    required: Sequence[str] | None,
+    unlisted: list[str] | None = None,
 ) -> dict[str, set[str]]:
     """The shared libraries a bundle's runtime dependencies install, by name.
 
@@ -1976,6 +1979,10 @@ def _runtime_dep_libraries(
     ``None``, or a dependency in it has no manifest in *dep_prefixes* (a bundle
     from before per-bundle manifests, or one ``build-all`` merged in without
     one) -- every library in *dep_prefixes* counts, as it did before.
+
+    A dependency whose manifest lists no files at all -- the one ``cvcpkg
+    install`` writes for a bundle that carried none (``meta.synthesized``) --
+    adds nothing; *unlisted*, when given, collects the names of those.
     """
     prefixes = [Path(p) for p in dep_prefixes if p]
     if not prefixes:
@@ -1997,9 +2004,54 @@ def _runtime_dep_libraries(
                 "library in the deps prefix counts as shipped"
             )
             return _linkage.library_index(prefixes)
-        files.extend(str(f) for f in (manifest.get("contents") or {}).get("files") or [])
+        listed = (manifest.get("contents") or {}).get("files")
+        if listed is None and unlisted is not None:
+            unlisted.append(name)
+        files.extend(str(f) for f in listed or [])
         queue.extend(_required_names((manifest.get("dependencies") or {}).get("required") or []))
     return _linkage.index_files(files)
+
+
+def _listed_files(dep_prefixes: Sequence[Path | None]) -> dict[str, list[str]]:
+    """Each package's files, by name, as its installed manifest in
+    *dep_prefixes* lists them; a manifest that lists none is left out."""
+    out: dict[str, list[str]] = {}
+    for prefix in (Path(p) for p in dep_prefixes if p):
+        for path in sorted((prefix / "share" / "libcvc-deps").glob("*/manifest.yaml")):
+            data = _load_manifest(path) or {}
+            files = (data.get("contents") or {}).get("files")
+            if files is not None:
+                pkg = str((data.get("bundle") or {}).get("name") or path.parent.name)
+                out.setdefault(pkg, []).extend(str(f) for f in files)
+    return out
+
+
+def _unlisted_libraries(
+    prefix_libs: Mapping[str, Iterable[str]], listed: Mapping[str, Iterable[str]]
+) -> dict[str, set[str]]:
+    """The libraries of *prefix_libs* (a deps prefix's :func:`cvcpkg.linkage.
+    library_index`) that no package in *listed* (:func:`_listed_files`) lists."""
+    owned = {f for files in listed.values() for f in files}
+    out: dict[str, set[str]] = {}
+    for name, dirs in prefix_libs.items():
+        left = {d for d in dirs if posixpath.join(d, name).removeprefix("./") not in owned}
+        if left:
+            out[name] = left
+    return out
+
+
+def _library_owners(
+    listed: Mapping[str, Iterable[str]], names: Iterable[str]
+) -> dict[str, list[str]]:
+    """The packages in *listed* (:func:`_listed_files`) that list a file named
+    one of *names* -- who put an undeclared library in the build prefix."""
+    wanted = set(names)
+    owners: dict[str, set[str]] = {}
+    for pkg, files in listed.items():
+        for f in files:
+            if (name := f.rpartition("/")[2]) in wanted:
+                owners.setdefault(name, set()).add(pkg)
+    return {name: sorted(pkgs) for name, pkgs in owners.items()}
 
 
 def _complete_elf_rpaths(
@@ -3349,20 +3401,67 @@ def check_relocatable(
     ``$ORIGIN`` RUNPATH, or the host's copy is loaded instead.  Those
     dependencies are *runtime_deps* and everything they require, as installed
     in *dep_prefixes* (:func:`_runtime_dep_libraries`); ``None`` counts every
-    library in *dep_prefixes*.  Runs on the staged tree, after the relocation
+    library in *dep_prefixes*.
+
+    With *dep_prefixes*, a library loaded by name that neither the bundle nor
+    that closure ships fails the pack too, on every platform: a Mach-O
+    ``@rpath/`` load, or an ELF NEEDED that only some other package in
+    *dep_prefixes* ships -- ffmpeg-lgpl 7.1.2+cvc.1 linked
+    ``@rpath/libiconv.2.dylib`` from the shared pack-all prefix on macOS and
+    never declared iconv (:func:`cvcpkg.linkage.undeclared_libs`).  Packing
+    natively, the names in the OS's own library directories count as the OS's.
+    A runtime dependency whose installed manifest lists no files may own any
+    library in *dep_prefixes* that no other manifest lists, so those count as
+    shipped for this check.  Runs on the staged tree, after the relocation
     pass (:func:`_make_relocatable`) has rewritten everything it can.
     """
     platform = str(bundle.get("platform", ""))
-    dep_libs = (
-        _runtime_dep_libraries(dep_prefixes, runtime_deps)
-        if platform in _linkage.REACH_PLATFORMS
-        else None
+    prefixes = [p for p in dep_prefixes if p]
+    dep_libs: dict[str, set[str]] | None = None
+    prefix_libs: dict[str, set[str]] | None = None
+    unlisted_libs: dict[str, set[str]] | None = None
+    system_libs: frozenset[str] = frozenset()
+    listed: dict[str, list[str]] | None = None
+    if platform not in _linkage.NO_LOADER_PATHS and prefixes:
+        unlisted: list[str] = []
+        dep_libs = _runtime_dep_libraries(prefixes, runtime_deps, unlisted)
+        prefix_libs = _linkage.library_index(prefixes)
+        if unlisted:
+            listed = _listed_files(prefixes)
+            unlisted_libs = _unlisted_libraries(prefix_libs, listed)
+            print(
+                f"cvcpkg: runtime dependencies {', '.join(sorted(unlisted))} list no installed "
+                "files; a deps-prefix library no manifest lists counts as theirs"
+            )
+        if detect_platform() == platform:
+            system_libs = _linkage.system_libraries(platform)
+    result = _linkage.audit_tree(
+        root,
+        platform,
+        temp_prefixes,
+        allow,
+        dep_libs=dep_libs,
+        prefix_libs=prefix_libs,
+        unlisted_libs=unlisted_libs,
+        system_libs=system_libs,
     )
-    result = _linkage.audit_tree(root, platform, temp_prefixes, allow, dep_libs=dep_libs)
     if result.ok:
         if result.objects:
             print(f"cvcpkg: relocatable OK — {result.objects} binary object(s) checked")
         return
+    undeclared = ""
+    if result.undeclared:
+        owners = _library_owners(listed or _listed_files(prefixes), result.undeclared)
+        shipped_by = "; ".join(f"{n} is {', '.join(owners[n])}'s" for n in sorted(owners))
+        undeclared = (
+            "\nA library that neither the bundle nor a runtime dependency ships was "
+            "linked from whatever the build prefix held (a shared one holds unrelated "
+            "packages): declare the package that ships it in depends.runtime, or keep "
+            "the build from finding it. "
+            + (f"In the build prefix, {shipped_by}. " if shipped_by else "")
+            + "A library the consumer must supply goes in package.linkage_allow, as "
+            "reported (@rpath/libX.dylib, libX.so.N) or a prefix of it."
+        )
     raise PackError(
         f"{bundle.get('name', '?')} ({platform}/{bundle.get('arch', '?')}): "
         f"{len(result.findings)} loader path(s) will not exist where the bundle is "
@@ -3374,7 +3473,7 @@ def check_relocatable(
         "prefixes and adds the $ORIGIN entries shipped libraries need, so anything "
         "left is either another build's directory or a library the build host "
         "provides (patchelf / install_name_tool missing also leaves them). See "
-        "src/cvcpkg/linkage.py."
+        "src/cvcpkg/linkage.py." + undeclared
     )
 
 

@@ -208,12 +208,22 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   counts — `depends.runtime` and what those packages require in turn, read
   from their installed manifests. Build dependencies share the job's prefix but
   are not installed beside the bundle, so their libraries (the gfortran
-  toolchain's `lib64/libgcc_s.so.1`) are never reached for. The fix is almost
-  always in the recipe: link the dependency from `$CVC_DEPS_PREFIX`, declare it in
-  `depends.runtime`, and do not let an optional feature pick up whatever the
-  build host has installed (see `recipes/boost/build.sh`). For a library at a
-  fixed system location the bundle cannot carry, list its prefix under
-  **`package.linkage_allow`**; that never excuses a build-machine path.
+  toolchain's `lib64/libgcc_s.so.1`) are never reached for. On every platform,
+  a library an object loads by name must be shipped by the bundle or that
+  closure, or belong to the OS: a Mach-O `@rpath/` load neither carries fails
+  the pack, and so does an ELF NEEDED name that only some other package in the
+  build prefix ships (`libc.so.6`, `libgcc_s.so.1` and the rest of what the OS
+  provides are never reported). That is a dependency the build found in a
+  shared prefix, pack-all's, and never declared: ffmpeg-lgpl 7.1.2+cvc.1 linked
+  `@rpath/libiconv.2.dylib` on macOS, gettext `libiconv.so.2` on linux/arm64.
+  The fix is almost always in the recipe: link the dependency from
+  `$CVC_DEPS_PREFIX`, declare it in `depends.runtime`, and do not let an
+  optional feature pick up whatever the build host or prefix has installed
+  (see `recipes/boost/build.sh`). For a library at a fixed system location the
+  bundle cannot carry, list its prefix under **`package.linkage_allow`**; for
+  one the consumer supplies, list the value the gate reports
+  (`@rpath/libvulkan.1.dylib`, `libX11.so.6`) or a prefix of it. Neither ever
+  excuses a build-machine path.
 - **`redistributable: false`** — for a vendor payload whose license forbids
   publishing the built tree. The NVIDIA CUDA toolkit is the example
   (`recipes/cuda-toolkit`): its EULA lets a developer ship a few runtime

@@ -11,12 +11,14 @@ from cvcpkg.linkage import (
     audit_tree,
     builder_path_reason,
     index_files,
+    is_system_soname,
     library_index,
     origin_dirs,
     read_linkage,
     relative_to_prefixes,
     relativize_elf_needed,
     rewrite_elf_rpath,
+    system_libraries,
 )
 from tests.unit._binfixtures import elf, macho, macho_slice
 
@@ -358,3 +360,166 @@ def test_audit_reachability_is_linux_only(tmp_path):
     _openssl_cvc6(tmp_path)
     for plat in ("freebsd", "netbsd", "openbsd", "haiku"):
         assert audit_tree(tmp_path, plat).ok, plat
+
+
+# ── libraries nothing declares ──────────────────────────────────
+
+
+def _ffmpeg_lgpl_cvc1(root):
+    """ffmpeg-lgpl 7.1.2+cvc.1 on macOS: libavcodec loaded the shared pack-all
+    prefix's iconv through @rpath, and the recipe never declared iconv."""
+    macho(
+        root / "lib" / "libavcodec.61.dylib",
+        filetype="dylib",
+        install_id="@rpath/libavcodec.61.dylib",
+        loads=[
+            "@rpath/libavutil.59.dylib",
+            "@rpath/libiconv.2.dylib",
+            "/usr/lib/libSystem.B.dylib",
+            "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox",
+        ],
+        rpaths=["@loader_path"],
+    )
+    macho(
+        root / "lib" / "libavutil.59.dylib",
+        filetype="dylib",
+        install_id="@rpath/libavutil.59.dylib",
+    )
+
+
+def test_audit_macos_ffmpeg_lgpl_cvc1_undeclared_iconv(tmp_path):
+    root, deps = tmp_path / "bundle", tmp_path / "deps"
+    _ffmpeg_lgpl_cvc1(root)
+    macho(deps / "lib" / "libiconv.2.dylib", filetype="dylib")
+    prefix = library_index([deps])
+    # Runtime closure unknown: not checked -- which is how cvc.1 packed.
+    assert audit_tree(root, "macos", prefix_libs=prefix).ok
+    res = audit_tree(root, "macos", dep_libs={}, prefix_libs=prefix)
+    (f,) = res.findings
+    assert (f.path, f.field, f.value) == (
+        "lib/libavcodec.61.dylib",
+        "LC_LOAD_DYLIB",
+        "@rpath/libiconv.2.dylib",
+    )
+    assert "only the build prefix has it, in lib/" in f.reason
+    assert res.undeclared == {"libiconv.2.dylib"}
+    # cvc.2 declares iconv: its dylib is in the closure.
+    assert audit_tree(root, "macos", dep_libs=index_files(["lib/libiconv.2.dylib"])).ok
+    # A deps-prefix library no manifest lists may be an unlisted dependency's.
+    assert audit_tree(root, "macos", dep_libs={}, prefix_libs=prefix, unlisted_libs=prefix).ok
+    # In no prefix at all: still missing on a clean Mac.
+    (f,) = audit_tree(root, "macos", dep_libs={}).findings
+    assert f.reason == "neither this bundle nor a runtime dependency ships it"
+    # A library the consumer supplies is vouched for by the value the gate reports.
+    assert audit_tree(root, "macos", dep_libs={}, allow=["@rpath/libiconv."]).ok
+    assert not audit_tree(root, "macos", dep_libs={}, allow=["/usr/local/lib/"]).ok
+
+
+def test_audit_macos_rpath_frameworks_and_os_search_paths(tmp_path):
+    root = tmp_path / "bundle"
+    macho(
+        root / "bin" / "viewer",
+        loads=["@rpath/QtCore.framework/Versions/A/QtCore", "@rpath/libcvc.dylib"],
+        rpaths=["@executable_path/../lib"],
+    )
+    macho(root / "lib" / "libcvc.dylib", filetype="dylib", install_id="@rpath/libcvc.dylib")
+    qt = index_files(
+        [
+            "lib/QtCore.framework/Versions/A/QtCore",
+            "lib/QtCore.framework/Versions/A/Resources/Info.plist",
+        ]
+    )
+    assert qt == {"QtCore": {"lib/QtCore.framework/Versions/A"}}
+    assert audit_tree(root, "macos", dep_libs=qt).ok
+    # The framework binary's name alone, at another path, is not the one loaded.
+    other = index_files(["lib/QtCore.framework/Versions/5/QtCore"])
+    (f,) = audit_tree(root, "macos", dep_libs=other).findings
+    assert f.value == "@rpath/QtCore.framework/Versions/A/QtCore"
+    # swiftc's -rpath /usr/lib/swift: the OS's Swift runtime is found there.
+    macho(root / "bin" / "tool", loads=["@rpath/libswiftCore.dylib"], rpaths=["/usr/lib/swift"])
+    assert audit_tree(root, "macos", dep_libs=qt).ok
+
+
+def test_audit_elf_gettext_arm64_undeclared_iconv(tmp_path):
+    root, deps = tmp_path / "bundle", tmp_path / "deps"
+    so = root / "lib" / "libgettextlib-0.22.so"
+    elf(
+        so,
+        kind="dyn",
+        needed=["libiconv.so.2", "libgcc_s.so.1", "libc.so.6", "libfoo.so.3"],
+        runpath="$ORIGIN",
+    )
+    elf(deps / "lib" / "libiconv.so.2", kind="dyn")
+    # A build-only toolchain in the same prefix ships OS libraries too.
+    elf(deps / "lib64" / "libgcc_s.so.1", kind="dyn")
+    elf(deps / "sysroot" / "lib" / "libc.so.6", kind="dyn")
+    prefix = library_index([deps])
+    for plat in ("linux", "freebsd", "openbsd", "netbsd", "haiku"):
+        res = audit_tree(root, plat, dep_libs={}, prefix_libs=prefix)
+        assert _fields(res) == {("lib/libgettextlib-0.22.so", "NEEDED", "libiconv.so.2")}, plat
+        assert res.undeclared == {"libiconv.so.2"}
+    # libfoo.so.3 is in no prefix: the host's to provide, as before.
+    assert audit_tree(root, "linux", dep_libs={}).ok
+    # Declared, it is shipped beside the bundle -- and must be reachable on linux.
+    elf(so, kind="dyn", needed=["libiconv.so.2"])
+    declared = index_files(["lib/libiconv.so.2"])
+    (f,) = audit_tree(root, "linux", dep_libs=declared, prefix_libs=prefix).findings
+    assert "no RUNPATH entry reaches it" in f.reason
+    assert audit_tree(root, "openbsd", dep_libs=declared, prefix_libs=prefix).ok
+    # What the build host's own library directories hold is the OS's.
+    assert audit_tree(
+        root, "netbsd", dep_libs={}, prefix_libs=prefix, system_libs={"libiconv.so.2"}
+    ).ok
+    assert audit_tree(root, "netbsd", dep_libs={}, prefix_libs=prefix, allow=["libiconv.so"]).ok
+
+
+def test_is_system_soname():
+    for name in (
+        "libc.so.6",
+        "libc.so.100.3",
+        "libm.so.6",
+        "libpthread.so.0",
+        "ld-linux-x86-64.so.2",
+        "ld-linux-aarch64.so.1",
+        "ld-musl-x86_64.so.1",
+        "ld64.so.2",
+        "libnss_files.so.2",
+        "libgcc_s.so.1",
+        "libstdc++.so.6",
+        "libc++.so.1",
+        "libGL.so.1",
+        "libroot.so",
+    ):
+        assert is_system_soname(name), name
+    for name in ("libiconv.so.2", "libz.so.1", "libcrypto.so.3", "libgfortran.so.5", "libcurl.so"):
+        assert not is_system_soname(name), name
+
+
+def test_system_libraries_reads_only_the_os_dirs(tmp_path):
+    for f in (
+        "lib/x86_64-linux-gnu/libz.so.1",
+        "usr/lib/libbz2.so.1.0",
+        "usr/lib/python3/dist-packages/_x.so",
+        "usr/local/lib/libiconv.so.2",
+        "usr/lib/README",
+        "usr/X11R6/lib/libX11.so.18.0",
+    ):
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).write_bytes(b"")
+    assert system_libraries("linux", tmp_path) == {"libz.so.1", "libbz2.so.1.0"}
+    assert system_libraries("openbsd", tmp_path) == {"libbz2.so.1.0", "libX11.so.18.0"}
+    assert system_libraries("macos", tmp_path) == set()
+
+
+def test_library_index_includes_dylibs_and_framework_binaries(tmp_path):
+    macho(tmp_path / "lib" / "libz.1.dylib", filetype="dylib")
+    framework = tmp_path / "lib" / "QtGui.framework" / "Versions" / "A"
+    macho(framework / "QtGui", filetype="dylib")
+    (framework / "Headers").mkdir()
+    (framework / "Headers" / "qgui.h").write_text("")
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "zlib.h").write_text("")
+    assert library_index([tmp_path]) == {
+        "libz.1.dylib": {"lib"},
+        "QtGui": {"lib/QtGui.framework/Versions/A"},
+    }

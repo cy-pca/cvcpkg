@@ -30,6 +30,27 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Pack gate: a library nothing declares fails the pack.** The relocatability
+  gate never checked an `@rpath/` load or a bare NEEDED name against anything.
+  So ffmpeg-lgpl 7.1.2+cvc.1 printed `relocatable OK` on macOS while it linked
+  `@rpath/libiconv.2.dylib`, which the shared pack-all prefix held and the
+  recipe never declared (#545). gettext linked `libiconv.so.2` on linux/arm64
+  the same way. Such a bundle fails to load on a clean machine.
+  - On every platform, once the job's deps prefix is known, a library an
+    object loads by name must be shipped by the bundle or its runtime closure,
+    or belong to the OS.
+  - Mach-O: every `@rpath/` load is checked, frameworks included. An object
+    that also searches an OS directory (`LC_RPATH /usr/lib/swift`) is not.
+  - ELF: a bare NEEDED name fails only when some other package in the build
+    prefix ships it. These are never reported: the C library and its loader,
+    the compiler runtimes (gfortran's `lib64/libgcc_s.so.1`), the GPU
+    driver's GL/Vulkan libraries, Haiku's base libraries, and, when packing
+    natively, whatever the OS's own library directories hold.
+  - The error names the package that ships the library in the build prefix.
+  - `package.linkage_allow` now also takes the value the gate reports, or a
+    prefix of it (`@rpath/libvulkan.`, `libX11.so`), for a library the
+    consumer supplies. It still never excuses a builder path.
+  - Builders run the check only after a cvcpkg release.
 - **`cvcpkg install --no-deps`: the named bundles without their runtime deps.**
   install always resolved a bundle's whole `required_deps` closure, so a bundle
   whose deps are wrong could not be installed at all, and none could be tried on

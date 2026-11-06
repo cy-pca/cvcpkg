@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
 
+from cvcpkg.haikuports import BASE_SYSTEM_LIBS
+
 # ── ELF ─────────────────────────────────────────────────────────
 
 _ELF_MAGIC = b"\x7fELF"
@@ -511,6 +513,15 @@ def builder_path_reason(
 # time yet and checking for it would only fail the pack.
 REACH_PLATFORMS = frozenset({"linux"})
 
+# Platforms whose bundles have no loader paths to check.
+NO_LOADER_PATHS = frozenset({"windows", "wasm", "wasm-mt", "wasi", "cosmo", "any"})
+
+
+def _is_library(rel_dir: str, name: str) -> bool:
+    """Whether a file *name* in *rel_dir* can be a shared library: an ELF
+    ``.so``, a ``.dylib``, or a framework's binary (``Foo.framework/Foo``)."""
+    return ".so" in name or name.endswith(".dylib") or (".framework" in rel_dir and "." not in name)
+
 
 def library_index(
     roots: Sequence[Path | str], extra: Mapping[str, Iterable[str]] | None = None
@@ -530,13 +541,10 @@ def library_index(
         if not root.is_dir():
             continue
         for dirpath, _dirs, names in os.walk(root):
-            rel: str | None = None
+            rel = Path(os.path.relpath(dirpath, root)).as_posix()
             for name in names:
-                if ".so" not in name:
-                    continue
-                if rel is None:
-                    rel = Path(os.path.relpath(dirpath, root)).as_posix()
-                index.setdefault(name, set()).add(rel)
+                if _is_library(rel, name):
+                    index.setdefault(name, set()).add(rel)
     return index
 
 
@@ -546,7 +554,7 @@ def index_files(paths: Iterable[str]) -> dict[str, set[str]]:
     index: dict[str, set[str]] = {}
     for p in paths:
         rel, _, name = p.rpartition("/")
-        if ".so" in name:
+        if _is_library(rel, name):
             index.setdefault(name, set()).add(rel or ".")
     return index
 
@@ -580,7 +588,121 @@ def unreachable_libs(
     for name in link.needed:
         homes = index.get(name) if "/" not in name else None
         if homes and not homes & reached:
-            out.append((name, sorted(homes, key=lambda h: (h != "lib", len(h), h))))
+            out.append((name, _by_preference(homes)))
+    return out
+
+
+def _by_preference(homes: Iterable[str]) -> list[str]:
+    return sorted(homes, key=lambda h: (h != "lib", len(h), h))
+
+
+# ── Libraries nothing declares ──────────────────────────────────
+
+# ELF sonames, by stem (the name up to ".so"), that every system of their kind
+# has, Haiku's base package among them.  A package in the build prefix can ship
+# one too -- the gfortran toolchain keeps lib64/libgcc_s.so.1 -- and a bundle
+# linking it still needs nothing declared.
+_ELF_SYSTEM_STEMS = BASE_SYSTEM_LIBS | frozenset(
+    # The C library and what glibc splits out of it; FreeBSD's libthr and libkvm.
+    "libc libm libpthread libdl librt libutil libresolv libcrypt libnsl libanl libmvec "
+    "libthread_db libthr libexecinfo libkvm "
+    # Compiler runtimes.
+    "libgcc_s libstdc++ libsupc++ libc++ libc++abi libcxxrt "
+    # The GL and Vulkan entry points, which the GPU driver installs.
+    "libGL libEGL libGLX libOpenGL libGLESv1_CM libGLESv2 libGLdispatch libvulkan".split()
+)
+# ld-linux-x86-64.so.2, ld-musl-aarch64.so.1, ld64.so.2; glibc's NSS modules.
+_ELF_SYSTEM_STEM_PREFIXES = ("ld-", "ld64", "libnss_", "libc.musl-")
+
+# The OS's own library directories, per platform -- never where ports,
+# pkgsrc or an administrator install (/usr/local, /usr/pkg).  On linux the
+# multiarch subdirectories (lib/x86_64-linux-gnu) are read too.
+_SYSTEM_LIB_DIRS = {
+    "linux": ("/lib", "/lib64", "/usr/lib", "/usr/lib64"),
+    "freebsd": ("/lib", "/usr/lib"),
+    "openbsd": ("/usr/lib", "/usr/X11R6/lib"),
+    "netbsd": ("/lib", "/usr/lib", "/usr/X11R7/lib"),
+    "haiku": ("/boot/system/lib",),
+}
+
+
+def is_system_soname(name: str) -> bool:
+    """Whether the bare ELF soname *name* is one every system of its kind has
+    (``libc.so.6``, ``libgcc_s.so.1``, ``ld-linux-x86-64.so.2``, ``libroot.so``)."""
+    stem = name.split(".so", 1)[0]
+    return stem in _ELF_SYSTEM_STEMS or stem.startswith(_ELF_SYSTEM_STEM_PREFIXES)
+
+
+def system_libraries(platform: str, sysroot: Path | str = "/") -> frozenset[str]:
+    """Shared-library names in *platform*'s own library directories under *sysroot*.
+
+    Only meaningful on a host running *platform*: the builder calls it when it
+    packs natively, so a library the OS provides -- FreeBSD's base
+    ``liblzma.so.5``, NetBSD's ``libz.so.1`` -- is not reported as undeclared
+    just because a cvcpkg package in the build prefix ships the same name.
+    """
+    names: set[str] = set()
+    for d in _SYSTEM_LIB_DIRS.get(platform, ()):
+        top = Path(sysroot) / d.lstrip("/")
+        dirs = [top]
+        if platform == "linux" and top.is_dir():
+            dirs += sorted(p for p in top.iterdir() if "-linux-" in p.name and p.is_dir())
+        for sub in dirs:
+            try:
+                names.update(e.name for e in os.scandir(sub) if _is_library("", e.name))
+            except OSError:
+                continue
+    return frozenset(names)
+
+
+def _ships(index: Mapping[str, Iterable[str]], ref: str) -> bool:
+    """Whether *index* holds the file *ref* names: ``libz.1.dylib``, or a tail
+    with directories (``QtCore.framework/Versions/A/QtCore``)."""
+    d, _, name = ref.rpartition("/")
+    homes = index.get(name) or ()
+    return any(not d or h == d or h.endswith("/" + d) for h in homes)
+
+
+def undeclared_libs(
+    link: Linkage,
+    shipped: Mapping[str, Iterable[str]],
+    prefix_libs: Mapping[str, Iterable[str]] | None = None,
+    system_libs: Iterable[str] = (),
+) -> list[tuple[str, list[str]]]:
+    """``(value, homes)`` for each library *link* loads by name that neither
+    *shipped* (the bundle and its runtime closure, indexed like
+    :func:`library_index`) nor the OS provides; *homes* are where
+    *prefix_libs*, the build's deps prefix, has it, possibly none.
+
+    Mach-O: every ``@rpath/`` load.  The OS's own dylibs are loaded by absolute
+    path (``/usr/lib``, ``/System``), so an ``@rpath`` library the bundle does
+    not carry is missing on a clean Mac -- unless the object also searches an
+    OS directory (``LC_RPATH /usr/lib/swift``), where it may be found.
+
+    ELF: a bare NEEDED name only when *prefix_libs* has it.  ``libc.so.6`` is a
+    bare name too, and an absent library may be the host's to provide; the
+    leak this catches is a library that is in the build prefix only because
+    the prefix is shared (pack-all's populate prefix), never declared.  Names
+    of :func:`is_system_soname` and those in *system_libs* (see
+    :func:`system_libraries`) are never reported.
+    """
+    prefix_libs = prefix_libs or {}
+    out: list[tuple[str, list[str]]] = []
+    if link.format == "macho":
+        if any(r.startswith(MACOS_SYSTEM_ROOTS) for r in link.rpaths):
+            return out
+        for n in link.needed:
+            tail = n[len("@rpath/") :] if n.startswith("@rpath/") else ""
+            if tail and not _ships(shipped, tail):
+                out.append((n, _by_preference(prefix_libs.get(tail.rpartition("/")[2]) or ())))
+        return out
+    system = set(system_libs)
+    for n in link.needed:
+        if "/" in n or n in shipped or is_system_soname(n) or n in system:
+            continue
+        homes = prefix_libs.get(n)
+        if homes:
+            out.append((n, _by_preference(homes)))
     return out
 
 
@@ -602,6 +724,8 @@ class Finding:
 class AuditResult:
     objects: int = 0
     findings: list[Finding] = field(default_factory=list)
+    # Library names the undeclared-library check reported (see undeclared_libs).
+    undeclared: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
@@ -626,6 +750,9 @@ def audit_tree(
     temp_prefixes: Sequence[Path | str] = (),
     allow: Sequence[str] = (),
     dep_libs: Mapping[str, Iterable[str]] | None = None,
+    prefix_libs: Mapping[str, Iterable[str]] | None = None,
+    unlisted_libs: Mapping[str, Iterable[str]] | None = None,
+    system_libs: Iterable[str] = (),
 ) -> AuditResult:
     """Every loader path under *root* that will not exist once it is installed.
 
@@ -644,17 +771,36 @@ def audit_tree(
     ``$ORIGIN`` RUNPATH -- otherwise the loader takes the host's copy (see
     :func:`unreachable_libs`).
 
-    *allow* lists path prefixes a recipe vouches for (``package.linkage_allow``)
-    — e.g. a vendor framework installed at a fixed location.  It never excuses a
-    builder path.  Windows and wasm bundles have nothing to check and return an
-    empty result.
+    Every platform, when *dep_libs* is given: a library an object loads by name
+    -- a Mach-O ``@rpath/`` load, an ELF bare NEEDED that *prefix_libs* (the
+    build's deps prefix, indexed like :func:`library_index`) has -- must be
+    shipped by the bundle or a runtime dependency, or belong to the OS (see
+    :func:`undeclared_libs`; *system_libs* are names the OS is known to
+    provide).  Otherwise it was linked from a package in the build prefix that
+    nothing declares, and a clean install lacks it.  ``None`` means the runtime
+    closure is not known, so this is not checked.  *unlisted_libs* count as
+    shipped here too: the deps-prefix libraries no installed manifest lists,
+    which may belong to a runtime dependency whose manifest lists no files.
+
+    *allow* lists prefixes a recipe vouches for (``package.linkage_allow``):
+    absolute ones for paths -- e.g. a vendor framework installed at a fixed
+    location -- and ``@rpath/...`` or bare-name ones for libraries the bundle
+    loads from outside its closure.  It never excuses a builder path.  Windows
+    and wasm bundles have nothing to check and return an empty result.
     """
     result = AuditResult()
-    if platform in ("windows", "wasm", "wasm-mt", "wasi", "cosmo", "any"):
+    if platform in NO_LOADER_PATHS:
         return result
     roots = _ephemeral_roots()
     allowed = tuple(a for a in allow if a)
-    index = library_index([root], dep_libs) if platform in REACH_PLATFORMS else None
+    reach = platform in REACH_PLATFORMS
+    # What the bundle and its runtime closure ship, beside each other once installed.
+    index = library_index([root], dep_libs) if reach or dep_libs is not None else None
+    declared: dict[str, set[str]] | None = None
+    if index is not None and dep_libs is not None:
+        declared = {name: set(dirs) for name, dirs in index.items()}
+        for name, dirs in (unlisted_libs or {}).items():
+            declared.setdefault(name, set()).update(dirs)
 
     def check(rel: str, fld: str, value: str, macho: bool) -> None:
         if not value or is_relative_entry(value):
@@ -678,7 +824,7 @@ def audit_tree(
                 check(rel, "LC_LOAD_DYLIB" if macho else "NEEDED", n, macho)
         if link.soname and (macho or "/" in link.soname):
             check(rel, "LC_ID_DYLIB" if macho else "SONAME", link.soname, macho)
-        if index is not None and not macho:
+        if reach and index is not None and not macho:
             rel_dir = posixpath.dirname(rel) or "."
             for name, homes in unreachable_libs(rel_dir, link, index):
                 result.findings.append(
@@ -690,6 +836,20 @@ def audit_tree(
                         "loader would take the host's copy",
                     )
                 )
+        if declared is not None:
+            for value, homes in undeclared_libs(link, declared, prefix_libs, system_libs):
+                if allowed and value.startswith(allowed):
+                    continue
+                where = f"only the build prefix has it, in {homes[0]}/; " if homes else ""
+                result.findings.append(
+                    Finding(
+                        rel,
+                        "LC_LOAD_DYLIB" if macho else "NEEDED",
+                        value,
+                        f"{where}neither this bundle nor a runtime dependency ships it",
+                    )
+                )
+                result.undeclared.add(value.rpartition("/")[2])
     return result
 
 
