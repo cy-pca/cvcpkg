@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: pixman
   upstream_version: "0.44.2"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -64,7 +64,11 @@ build:
 
 package:
   files:
-    - lib/libpixman-1*
+    - { glob: "lib/libpixman-1*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC (build.ps1, meson): pixman-1.lib, with the DLL in bin/ (the cvc.1
+    # windows bundle ships bin/pixman-1-0.dll and no lib/libpixman-1*).
+    - { glob: "lib/pixman-1.lib", platforms: [windows] }
+    - { glob: "bin/pixman-1*.dll", platforms: [windows] }
     - lib/pkgconfig/pixman-1*
     - include/pixman-1/
   pkg_config:
