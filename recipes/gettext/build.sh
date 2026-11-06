@@ -73,6 +73,26 @@ case "${CVC_PLATFORM:-}" in
         ;;
 esac
 
+# OpenBSD's libtool resolves each -liconv itself, and the ports libiconv.la in
+# /usr/local/lib beats the deps prefix's plain libiconv.so.8.1 even with
+# -L<deps> first.  configure found the declared copy, but every libtool link
+# (libintl, the programs) still took libiconv.so.7.1 with an -rpath into
+# /usr/local/lib (dev job 24595, cvc.7).  So hand libtool the declared library
+# by path, as lib-link would without the -liconv; make passes command-line
+# variables to every sub-make, and `make install` relinks with them too.
+_make_iconv=()
+if [[ "${CVC_PLATFORM:-}" == openbsd ]]; then
+    _iconv_so=""
+    for _f in "${CVC_DEPS_PREFIX}"/lib/libiconv.so.[0-9]*.[0-9]*; do
+        [[ -f "${_f}" ]] && _iconv_so="${_f}"
+    done
+    if [[ -z "${_iconv_so}" ]]; then
+        echo "cvcpkg: gettext: no libiconv.so.X.Y in ${CVC_DEPS_PREFIX}/lib" >&2
+        exit 1
+    fi
+    _make_iconv=(LTLIBICONV="${_iconv_so} -R${CVC_DEPS_PREFIX}/lib")
+fi
+
 # Not on linux, where glibc has gettext: the tools link gettext's own libintl,
 # the one this bundle ships, rather than an external one found on the link path
 # (a BSD host's ports or pkgsrc libintl), which brings that host's libiconv.
@@ -90,8 +110,8 @@ fi
 export MAKE
 
 ./configure "${CONFIGURE_ARGS[@]}"
-$MAKE -j "${CVC_JOBS}"
-$MAKE install
+$MAKE -j "${CVC_JOBS}" ${_make_iconv[@]+"${_make_iconv[@]}"}
+$MAKE install ${_make_iconv[@]+"${_make_iconv[@]}"}
 
 # What the installed objects link must be declared: libintl only as this
 # bundle's own, a libiconv only from the deps prefix on OpenBSD/macOS (none
