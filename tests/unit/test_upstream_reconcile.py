@@ -47,17 +47,29 @@ class TestReconcileFromUpstream:
     def _run(self, coro):
         return asyncio.run(coro)
 
-    async def _add(self, store, name, *, origin, yanked=False, version="1.0.0+cvc.1"):
+    async def _add(
+        self,
+        store,
+        name,
+        *,
+        origin,
+        yanked=False,
+        version="1.0.0+cvc.1",
+        platform="linux",
+        sha256="0" * 64,
+        org="",
+    ):
         await store.add_package(
             name=name,
             version=version,
-            platform="linux",
+            platform=platform,
             arch="x86_64",
             build_type="release",
             link="shared",
-            sha256="0" * 64,
+            sha256=sha256,
             size_bytes=1,
-            archive_url=f"/v1/download/{name}.tar.zst",
+            archive_url=f"/v1/download/{name}-{platform}{org}.tar.zst",
+            org_slug=org,
             origin_upstream=origin,
         )
         if yanked:
@@ -175,8 +187,9 @@ class TestReconcileFromUpstream:
     def test_vanished_without_a_tombstone_is_yanked_not_tombstoned(self):
         """A truncated catalogue must not read as a deletion.
 
-        Yank is recoverable (`cvcpkg unyank`); a tombstone claims upstream
-        deliberately destroyed the bundle, which we have no evidence of here.
+        A yank is recoverable (it is lifted when upstream lists the bundle
+        again); a tombstone claims upstream deliberately destroyed the bundle,
+        which we have no evidence of here.
         """
 
         async def _t():
@@ -197,6 +210,221 @@ class TestReconcileFromUpstream:
             rows, _ = await store.get_bundles(include_yanked=True, limit=100, offset=0)
             assert next(r for r in rows if r.name == "mystery").yanked is True
             assert await store.get_tombstones("mystery") == []
+
+        self._run(_t())
+
+    async def _walk(self, store, name, steps, *, listed="0" * 64):
+        """Run *steps* against one mirrored bundle; return its row and the last counts.
+
+        ``P``/``Y``/``T``/``V``: a sync where upstream lists the bundle (with
+        sha256 *listed*), yanks it, has nuked it (tombstone), or dropped it with
+        no tombstone; ``P*`` lists it with other bytes.  ``yank``/``unyank``: an
+        operator here.
+        """
+        k, counts = key(name), None
+        for step in steps:
+            if step in ("yank", "unyank"):
+                await getattr(store, step)(name, "1.0.0+cvc.1", actor="joe")
+                continue
+            present = step in ("P", "P*")
+            counts = await store.reconcile_from_upstream(
+                UPSTREAM,
+                upstream_yanked={k} if step == "Y" else set(),
+                upstream_present={k} if present else set(),
+                upstream_tombstoned={k} if step == "T" else set(),
+                upstream_sha256={k: listed if step == "P" else "f" * 64} if present else {},
+            )
+        rows, _ = await store.get_bundles(include_yanked=True, limit=100, offset=0)
+        return next(r for r in rows if r.name == name), counts
+
+    def test_a_vanished_bundle_is_unyanked_when_upstream_lists_it_again(self):
+        """The ambiguous yank is recoverable, so the next sync must recover it.
+
+        It did not: only a yank that recorded upstream's verdict was lifted, and
+        this one records none.  On 2026-10-31 dev ran migration 036 before
+        cvcpkg.org did; its relabelled none/none rows looked missing upstream,
+        were yanked, and 1,024 of them stayed yanked after cvcpkg.org caught up.
+        """
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            await self._add(store, "flit-core", origin=UPSTREAM)
+
+            row, gone = await self._walk(store, "flit-core", ["V"])
+            assert gone["ambiguous"] == 1
+            assert row.yanked is True
+            assert row.upstream_yanked is False, "an absence is not upstream's ruling"
+
+            row, back = await self._walk(store, "flit-core", ["P"])
+            assert back["unyanked"] == 1
+            assert row.yanked is False, "upstream serves it again, so must we"
+            assert row.yanked_at is None
+
+        self._run(_t())
+
+    def test_a_yank_made_here_is_not_lifted_when_upstream_returns(self):
+        """Only the reconciler's own yank follows upstream back.
+
+        Whether an operator yanked before the bundle vanished or after the
+        reconciler's yank, theirs is the newest yank and it stays.
+        """
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            for name, steps in (
+                ("bad-build", ["yank", "V", "P"]),
+                ("bad-later", ["V", "unyank", "yank", "P"]),
+            ):
+                await self._add(store, name, origin=UPSTREAM)
+                row, counts = await self._walk(store, name, steps)
+                assert row.yanked is True, f"{name}: upstream's catalog lifted a local yank"
+                assert counts["unyanked"] == 0, name
+
+        self._run(_t())
+
+    def test_whose_yank_it_is_is_decided_per_variant_and_org(self):
+        """Events of another variant, or of another org's row at the same
+        coordinates, must not decide whose yank a row carries."""
+
+        async def _t():
+            from cvcpkg.server.db import PackageEventRow, get_session
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            lin, win = key("pair"), key("pair", platform="windows")
+            await self._add(store, "pair", origin=UPSTREAM)
+            await self._add(store, "pair", origin=UPSTREAM, platform="windows")
+            # The operator yanks linux only; then both vanish and come back.
+            await store.yank("pair", "1.0.0+cvc.1", platform="linux", actor="joe")
+            for present in (set(), {lin, win}):
+                await store.reconcile_from_upstream(
+                    UPSTREAM,
+                    upstream_yanked=set(),
+                    upstream_present=present,
+                    upstream_tombstoned=set(),
+                    upstream_sha256={k: "0" * 64 for k in present},
+                )
+            rows, _ = await store.get_bundles(include_yanked=True, limit=100, offset=0)
+            assert {r.platform: r.yanked for r in rows if r.name == "pair"} == {
+                "linux": True,
+                "windows": False,
+            }
+
+            # A newer yank event of an org row with the same coordinates.
+            await self._add(store, "shared", origin=UPSTREAM)
+            await self._walk(store, "shared", ["V"])
+            async with get_session() as s:
+                s.add(
+                    PackageEventRow(
+                        kind="yank",
+                        name="shared",
+                        version="1.0.0+cvc.1",
+                        platform="linux",
+                        arch="x86_64",
+                        build_type="release",
+                        link="shared",
+                        org_slug="acme",
+                        actor="joe",
+                    )
+                )
+            row, counts = await self._walk(store, "shared", ["P"])
+            assert row.yanked is False, "another org's event decided the public row"
+            assert counts["unyanked"] == 1
+
+        self._run(_t())
+
+    def test_a_bundle_relisted_with_other_bytes_stays_yanked(self):
+        """A coordinate upstream nuked and republished holds other bytes now.
+
+        Populate never re-imports a key it already holds, so lifting the yank
+        would serve the old bytes as live.  It does not matter how the
+        reconciler saw the bundle go: nuked, yanked then nuked, or merely
+        vanished because the tombstone lookup failed.
+        """
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            for name, steps in (
+                ("vanished-nuked", ["V", "T", "P*"]),
+                ("yanked-nuked", ["Y", "T", "P*"]),
+                ("lookup-failed", ["V", "P*"]),
+            ):
+                await self._add(store, name, origin=UPSTREAM)
+                row, counts = await self._walk(store, name, steps)
+                assert row.yanked is True, f"{name}: a relisting with other bytes lifted it"
+                assert counts["mismatched"] == 1, name
+                assert counts["unyanked"] == 0, name
+
+        self._run(_t())
+
+    def test_a_reimported_bundle_follows_upstream_again(self):
+        """A coordinate's old tombstone must not pin its next incarnation.
+
+        Upstream nukes the bundle; the mirror drops its copy; upstream
+        republishes and populate imports the new bytes.  An upstream yank and
+        unyank of that new row must still be followed.
+        """
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            await self._add(store, "reborn", origin=UPSTREAM, sha256="1" * 64)
+            await self._walk(store, "reborn", ["T"])
+            await store.delete("reborn", "1.0.0+cvc.1", storage_uri="", tombstone=False)
+            await self._add(store, "reborn", origin=UPSTREAM, sha256="2" * 64)
+
+            row, counts = await self._walk(store, "reborn", ["Y", "P"], listed="2" * 64)
+            assert row.yanked is False, "the old incarnation's tombstone pinned the new one"
+            assert counts["unyanked"] == 1
+
+        self._run(_t())
+
+    def test_an_upstream_yank_after_a_vanish_is_enforced(self):
+        """An unyank here while the bundle is missing upstream is not a dissent.
+
+        It answers no ruling of upstream's, so it neither survives the next
+        sync that still finds the bundle missing nor absorbs a later upstream
+        yank as an override.
+        """
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            await self._add(store, "stale", origin=UPSTREAM)
+            row, counts = await self._walk(store, "stale", ["V", "unyank", "V"])
+            assert row.yanked is True
+            assert counts["ambiguous"] == 1
+
+            await self._add(store, "cve", origin=UPSTREAM)
+            row, counts = await self._walk(store, "cve", ["V", "unyank", "Y"])
+            assert row.yanked is True, "an upstream yank was taken for an override"
+            assert row.upstream_yanked is True
+            assert counts["yanked"] == 1
+            assert counts["overridden"] == 0
+
+        self._run(_t())
+
+    def test_a_relisting_clears_an_overridden_verdict(self):
+        """Upstream unyanking ends the dissent: the flag that hides the bundle
+        from default clients must clear even though there is no yank to lift."""
+
+        async def _t():
+            from cvcpkg.server.db_stores import DbPackageIndex
+
+            store = DbPackageIndex()
+            await self._add(store, "dissent", origin=UPSTREAM)
+            row, counts = await self._walk(store, "dissent", ["Y", "unyank", "P"])
+            assert row.yanked is False
+            assert row.upstream_yanked is False
+            assert counts["unyanked"] == 0
 
         self._run(_t())
 
