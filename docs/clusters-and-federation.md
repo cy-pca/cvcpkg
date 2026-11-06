@@ -225,7 +225,18 @@ confidence:
 |----------------|-------------|
 | Listed but **yanked** | Yank locally (reversible — an upstream unyank propagates back on the next sync). |
 | **Gone, with a tombstone** (`GET /v1/packages/{name}/tombstones`) | Upstream nuked it: yank + write a local tombstone, so downloads answer **410 Gone** (with the reason and date) exactly as upstream does. The archive bytes are deliberately left to the ordinary yank-retention GC. |
-| **Gone, no tombstone** | Ambiguous — a partial catalog, a truncated response, or a transient upstream fault all look like this. Yank only (recoverable), logged loudly; `cvcpkg unyank` is the recovery if upstream was merely unavailable. |
+| **Gone, no tombstone** | Ambiguous — a partial catalog, a truncated response, or a transient upstream fault all look like this. Yank only (recoverable), logged loudly; the first sync that finds the bundle listed again lifts the yank. |
+
+When upstream lists a bundle again, the edge lifts a yank that followed
+upstream: one that recorded upstream's yank, or its own yank of a bundle that
+had vanished. It recognises the latter by the bundle's newest yank or unyank
+event being its own, so a bundle someone yanked on the edge after that stays
+yanked (re-yanking a bundle that is already yanked records no event and does
+not count). Either way the yank is lifted only if upstream lists the bytes the
+edge holds (sha256). Populate never re-imports a coordinate it already holds,
+so a bundle upstream nuked and republished with other bytes stays yanked, and
+every sync logs it until it is nuked on the edge; populate then imports
+upstream's bytes.
 
 Tombstone lookups are fetched only for the packages that actually went missing,
 not the whole catalog. The 410 is enforced even while the bytes are still on
@@ -250,7 +261,8 @@ The divergence stays visible instead of disappearing: the bundle is served with
 `yanked: false` but `upstream_yanked: true` in `/v1/catalog` and on
 `GET /v1/packages`, so *clients* decide whose ruling to follow. The flag clears
 automatically once upstream serves the bundle again (and a yank the edge merely
-inherited is lifted at the same time).
+inherited is lifted at the same time, if upstream lists the bytes the edge
+holds).
 
 ### Client side — `--trust-mirror`
 
