@@ -19,7 +19,12 @@ recipe:
   # package) there; cvc.3's FreeBSD jobs stopped at one, then the other (dev
   # jobs 24590, 24623).  Restore the column with both declared once libinotify
   # has a recipe.
-  cvc_revision: 4
+  #
+  # Bumped 4 -> 5: the FreeBSD column again, now that cvcpkg packages
+  # libinotify (recipes/libinotify).  epoll-shim and libinotify are runtime
+  # dependencies there: meson.build requires both, and what links them
+  # needs them installed beside it.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -52,12 +57,22 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-  runtime: []
+  runtime:
+    # FreeBSD has neither epoll nor inotify, and meson.build requires the shims
+    # for both there (dependency('epoll-shim'), dependency('libinotify')).
+    - name: epoll-shim
+      platforms: [freebsd]
+    - name: libinotify
+      platforms: [freebsd]
   host_tools: []
 
 build:
   matrix:
     - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
