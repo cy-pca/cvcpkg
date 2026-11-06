@@ -642,6 +642,7 @@ _READS = {
         "get_archive_org",
         "get_archive_coords",
         "get_archive_is_yanked",
+        "archive_is_referenced",
         "get_bundles",
         "get_search_facets",
         "catalog_scope",
