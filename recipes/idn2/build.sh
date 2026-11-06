@@ -36,8 +36,25 @@ fi
 
 # Ensure pkg-config and the linker find bundle-supplied deps.
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX:-}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-export CPPFLAGS="${CPPFLAGS:-} -I${CVC_DEPS_PREFIX:-/nonexistent}/include"
-export LDFLAGS="${LDFLAGS:-} -L${CVC_DEPS_PREFIX:-/nonexistent}/lib"
+case "${CVC_PLATFORM:-}" in
+    freebsd|netbsd|openbsd)
+        # The build tree's lib/.libs first, then the deps prefix.  libtool
+        # links bin/idn2 against ../lib/libidn2.la as -L<that dir> -lidn2, and
+        # an -L/usr/local/lib got ahead of it: cvc.4's OpenBSD bin/idn2 NEEDed
+        # the builder's ports libidn2.so.1.1 (RUNPATH /usr/local/lib), not the
+        # bundle's libidn2.so.4.0.  This script sources no env-<platform>.sh,
+        # so libtool added that -L itself, most likely on finding a ports .la
+        # for -lunistring or -liconv: the deps prefix has those only as
+        # libfoo.so.X.Y, which libtool's search skips.  LDFLAGS' -L dirs lead
+        # the link line, so these win.  Checked after `make install`.
+        export CPPFLAGS="-I${CVC_DEPS_PREFIX:-/nonexistent}/include${CPPFLAGS:+ ${CPPFLAGS}}"
+        export LDFLAGS="-L${CVC_SOURCE_DIR}/lib/.libs -L${CVC_DEPS_PREFIX:-/nonexistent}/lib${LDFLAGS:+ ${LDFLAGS}}"
+        ;;
+    *)
+        export CPPFLAGS="${CPPFLAGS:-} -I${CVC_DEPS_PREFIX:-/nonexistent}/include"
+        export LDFLAGS="${LDFLAGS:-} -L${CVC_DEPS_PREFIX:-/nonexistent}/lib"
+        ;;
+esac
 
 MAKE=make
 command -v gmake >/dev/null 2>&1 && MAKE=gmake
@@ -45,6 +62,24 @@ command -v gmake >/dev/null 2>&1 && MAKE=gmake
 ./configure "${CONFIGURE_ARGS[@]}"
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
+
+# bin/idn2 must load the libidn2 this build installs, not a host copy (see the
+# LDFLAGS comment above).
+case "${CVC_PLATFORM:-}" in
+    freebsd|netbsd|openbsd)
+        if [[ -f "${CVC_INSTALL_DIR}/bin/idn2" ]]; then
+            _idn2_libs="$(grep -a -h -o -E 'libidn2\.so(\.[0-9]+)*' \
+                "${CVC_INSTALL_DIR}/bin/idn2" | sort -u || true)"
+            for _lib in ${_idn2_libs}; do
+                if [[ ! -e "${CVC_INSTALL_DIR}/lib/${_lib}" ]]; then
+                    echo "idn2: bin/idn2 links ${_lib}, which this build did not install" >&2
+                    exit 1
+                fi
+                echo "idn2: bin/idn2 links its own ${_lib}"
+            done
+        fi
+        ;;
+esac
 
 # Relocate installed .pc/.cmake files and bin/*-config scripts.  This script
 # does not source env-*.sh, so the old `command -v` guard was always false

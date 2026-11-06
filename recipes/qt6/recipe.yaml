@@ -17,7 +17,10 @@ recipe:
   # 6.8.2+cvc.7), none of them declared. Linux now links the cvcpkg recipes
   # declared below, Qt's bundled harfbuzz, and turns glib and the other
   # host-only features off (build.sh).
-  cvc_revision: 8
+  # Bumped 8 -> 9: the BSDs use Qt's bundled libb2, as Linux does. The OpenBSD
+  # libQt6Core.so.6.8.2 (+cvc.7) linked the builder's ports libb2.so.0.0,
+  # which nothing declares (build.sh).
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

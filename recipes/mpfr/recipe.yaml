@@ -12,7 +12,10 @@ recipe:
   # gmp.h's __GMP_CFLAGS, which through gmp +cvc.10 carried the macOS
   # builder's -march=<cpu>. linux and the BSDs already set CFLAGS and only
   # rebuild against the new gmp.
-  cvc_revision: 7
+  # 8: FreeBSD/OpenBSD build without the ports dirs env-<bsd>.sh adds. The
+  # +cvc.7 OpenBSD libmpfr.so.8.1 linked the builder's ports libgmp.so.11.1,
+  # not the declared gmp's libgmp.so.15.0 (see build.sh).
+  cvc_revision: 8
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

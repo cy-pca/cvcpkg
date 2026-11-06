@@ -8,6 +8,31 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# FreeBSD/OpenBSD: nothing from the ports tree.  env-<bsd>.sh appends
+# -I/usr/local/include and -L/usr/local/lib, and libtool puts LDFLAGS ahead of
+# the build tree's .libs when it links libgmpxx against libgmp.la, so +cvc.12's
+# OpenBSD libgmpxx.so.11.0 NEEDed the builder's ports libgmp.so.11.1 instead of
+# its own libgmp.so.15.0.  GMP needs nothing from /usr/local, so drop those
+# dirs, as recipes/mesa does.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd)
+        _drop_host_dirs() {
+            local _w _out=""
+            for _w in $1; do
+                case "${_w}" in
+                    -I/usr/local/include|-L/usr/local/lib) ;;
+                    *) _out="${_out:+${_out} }${_w}" ;;
+                esac
+            done
+            printf '%s' "${_out}"
+        }
+        # Still exported: env-<bsd>.sh exported them.
+        CFLAGS="$(_drop_host_dirs "${CFLAGS:-}")"
+        CXXFLAGS="$(_drop_host_dirs "${CXXFLAGS:-}")"
+        LDFLAGS="$(_drop_host_dirs "${LDFLAGS:-}")"
+        ;;
+esac
+
 shared_flags=()
 if [[ "${CVC_LINK}" == "static" ]]; then
     shared_flags+=(--disable-shared --enable-static)

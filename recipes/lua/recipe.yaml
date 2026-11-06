@@ -5,7 +5,10 @@ recipe:
   # (lua.org, 2026-08-10). Same minor series, so the C API/ABI is unchanged.
   # Lua 5.5 is out too but is a new ABI and a new dialect; it is not this recipe.
   upstream_version: "5.4.9"
-  cvc_revision: 1
+  # cvc.2: FreeBSD's bin/lua and bin/luac link the declared readline instead of
+  # -ledit, which cvc.1 resolved to the builder's ports libedit.so.0 (see
+  # build.sh).  The other platforms rebuild unchanged.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -45,8 +48,10 @@ depends:
     - name: pkg-config
       platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
   runtime:
-    # lua's line editing (linux-readline / macosx targets). liblua itself does
-    # not link it — only bin/lua does — so embedders never pull readline in.
+    # lua's line editing (linux-readline / macosx targets, and FreeBSD's bsd
+    # target since cvc.2). liblua itself does not link it; only bin/lua (and
+    # bin/luac, through the upstream Makefile's LIBS) does, so embedders never
+    # pull readline in.
     - name: readline
       version: ">=8.0"
       platforms: [linux, macos, freebsd, netbsd, openbsd]

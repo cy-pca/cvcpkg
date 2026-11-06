@@ -66,6 +66,13 @@ if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
     CMAKE_EXTRA+=("-DCMAKE_IGNORE_PATH=/usr/X11R7/include;/usr/X11R7/lib" -DTEST_dladdr=ON
                   -DFEATURE_gssapi=OFF)
 fi
+# The BSDs: Qt's bundled libb2 (BLAKE2, for QCryptographicHash), as on Linux.
+# CMake searches /usr/local on OpenBSD and FreeBSD, so QtCore linked any ports
+# libb2 the builder has: 6.8.2+cvc.7's OpenBSD libQt6Core.so.6.8.2 NEEDed the
+# ports libb2.so.0.0, which nothing declares.  NetBSD is the same with pkgsrc.
+if [[ "${CVC_PLATFORM}" == "freebsd" || "${CVC_PLATFORM}" == "netbsd" || "${CVC_PLATFORM}" == "openbsd" ]]; then
+    CMAKE_EXTRA+=(-DFEATURE_system_libb2=OFF)
+fi
 # OpenBSD: no backtrace feature.  Qt 6.8.2's qlogging.cpp passes a const frame
 # pointer to a lambda taking `void *&` in its execinfo backtrace path, which
 # clang rejects there ("1st argument ('void *const') would lose const

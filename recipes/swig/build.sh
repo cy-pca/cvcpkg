@@ -38,6 +38,47 @@ if [[ ! -x "${PCRE2_CONFIG}" ]]; then
     exit 1
 fi
 
+# FreeBSD/OpenBSD: link the declared pcre2.  configure appends pcre2-config's
+# -L${CVC_DEPS_PREFIX}/lib -lpcre2-8 to LIBS, behind the -L/usr/local/lib that
+# env-<bsd>.sh put in LDFLAGS, so +cvc.5's OpenBSD bin/swig-bin NEEDed the
+# builder's ports libpcre2-8.so.0.7.  SWIG needs nothing else from /usr/local
+# (bison and the autotools come from the prefix), so drop those dirs, as
+# recipes/mesa does.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd)
+        _drop_host_dirs() {
+            local _w _out=""
+            for _w in $1; do
+                case "${_w}" in
+                    -I/usr/local/include|-L/usr/local/lib) ;;
+                    *) _out="${_out:+${_out} }${_w}" ;;
+                esac
+            done
+            printf '%s' "${_out}"
+        }
+        # Still exported: env-<bsd>.sh exported them.
+        CFLAGS="$(_drop_host_dirs "${CFLAGS:-}")"
+        CXXFLAGS="$(_drop_host_dirs "${CXXFLAGS:-}")"
+        LDFLAGS="$(_drop_host_dirs "${LDFLAGS:-}")"
+        ;;
+esac
+# OpenBSD's linker takes -lpcre2-8 only as libpcre2-8.so or
+# libpcre2-8.so.MAJOR.MINOR, and a pcre2 bundle built before env-openbsd.sh's
+# cvc_openbsd_lib_names ships just CMake's libpcre2-8.so.0.13.0 and .so.0, so
+# -lpcre2-8 could not find the prefix's library even ahead of /usr/local.  Give
+# the link a libpcre2-8.so.X.Y name for it; the result NEEDs its SONAME,
+# libpcre2-8.so.0, which pcre2 ships.
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    _libnames="${CVC_BUILD_DIR}/cvc-libnames"
+    mkdir -p "${_libnames}"
+    for _f in "${CVC_DEPS_PREFIX}"/lib/libpcre2-8.so.[0-9]*.[0-9]*.[0-9]*; do
+        [[ -f "${_f}" ]] || continue
+        _base="${_f##*/}"
+        ln -sf "${_f}" "${_libnames}/${_base%.*}"
+    done
+    LDFLAGS="-L${_libnames}${LDFLAGS:+ ${LDFLAGS}}"
+fi
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --with-pcre2-prefix="${CVC_DEPS_PREFIX}"
@@ -53,6 +94,21 @@ esac
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
+
+# The pcre2 swig links must be the declared one (see above).
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd)
+        _pcre_libs="$(grep -a -h -o -E 'libpcre2-8\.so(\.[0-9]+)*' \
+            "${CVC_INSTALL_DIR}/bin/swig" | sort -u || true)"
+        for _lib in ${_pcre_libs}; do
+            if [[ ! -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "swig: bin/swig links ${_lib}, which the declared pcre2 does not ship" >&2
+                exit 1
+            fi
+            echo "swig: bin/swig links ${_lib} from the declared pcre2"
+        done
+        ;;
+esac
 
 # Generate a CMake config file so find_package(SWIG) works inside bundles.
 SWIG_VER=$("${CVC_INSTALL_DIR}/bin/swig" -version | sed -n 's/.*SWIG Version \([0-9.]*\).*/\1/p')

@@ -11,7 +11,10 @@ recipe:
   # as the swiglib path, so an installed bundle reported a path that no longer
   # exists and every invocation failed with "Unable to find 'swig.swg'". bin/swig
   # is now a wrapper that exports SWIG_LIB relative to its own prefix.
-  cvc_revision: 5
+  # Bumped 5 -> 6: FreeBSD/OpenBSD link the declared pcre2. The +cvc.5 OpenBSD
+  # bin/swig-bin linked the builder's ports libpcre2-8.so.0.7 from /usr/local
+  # (see build.sh).
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

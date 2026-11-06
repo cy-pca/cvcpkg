@@ -14,5 +14,16 @@ if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     export CFLAGS="${CFLAGS:-} -include sys/types.h"
 fi
 
+# FreeBSD/OpenBSD: no NLS.  Their libc has no gettext, so xz's
+# find_package(Intl) took whatever libintl CMake found, and +cvc.5's xz and
+# lzmainfo NEEDed an undeclared one: the builder's ports libintl.so.8.1 on
+# OpenBSD, libintl.so.8 (ports' or cvcpkg gettext's) on FreeBSD.  Only those
+# two tools use it (translated messages); liblzma never links libintl.
+_extra=()
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd) _extra+=(-DENABLE_NLS=OFF) ;;
+esac
+
 cvc_cmake_build \
+    ${_extra[@]+"${_extra[@]}"} \
     -DBUILD_TESTING=OFF
