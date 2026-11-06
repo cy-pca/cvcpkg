@@ -62,10 +62,15 @@ build:
 
 package:
   files:
-    - lib/libfribidi*
+    - { glob: "lib/libfribidi*", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    # MSVC (build.ps1, meson): fribidi.lib, with fribidi-0.dll and fribidi.exe
+    # in bin/ (dev build of cvc.2: "bin/fribidi, lib/libfribidi* match nothing").
+    - { glob: "lib/fribidi.lib", platforms: [windows] }
+    - { glob: "bin/fribidi*.dll", platforms: [windows] }
     - lib/pkgconfig/fribidi.pc
     - include/fribidi/
-    - bin/fribidi
+    - { glob: "bin/fribidi", platforms: [linux, macos, freebsd, openbsd, netbsd] }
+    - { glob: "bin/fribidi.exe", platforms: [windows] }
   pkg_config:
     - fribidi
 
