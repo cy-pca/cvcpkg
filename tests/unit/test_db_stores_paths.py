@@ -783,6 +783,7 @@ class TestUpstreamReconcile:
                 "ambiguous": 0,
                 "overridden": 0,
                 "unyanked": 0,
+                "mismatched": 0,
             }
 
         run(_t())

@@ -1174,6 +1174,44 @@ def _record_events(session, rows, kind: str, *, actor: str = "", detail: str = "
     )
 
 
+async def _yanked_last_by(session, rows: list[PackageRow], actor: str) -> set[int]:
+    """Ids of the *rows* whose newest yank or unyank event is a yank by *actor*.
+
+    Event ids follow time, and the store writes one with every yank and unyank,
+    in the same transaction.  A re-yank of a row that is already yanked writes
+    none (see ``yank``), so it does not change whose yank the row carries.
+    """
+
+    def variant(x) -> tuple[str, ...]:
+        return (x.name, x.version, x.platform, x.arch, x.build_type, x.link, x.org_slug or "")
+
+    newest: dict[tuple[str, ...], tuple[int, str, str]] = {}
+    names = sorted({r.name for r in rows})
+    for i in range(0, len(names), 500):
+        events = await session.execute(
+            select(
+                PackageEventRow.id,
+                PackageEventRow.kind,
+                PackageEventRow.actor,
+                PackageEventRow.name,
+                PackageEventRow.version,
+                PackageEventRow.platform,
+                PackageEventRow.arch,
+                PackageEventRow.build_type,
+                PackageEventRow.link,
+                PackageEventRow.org_slug,
+            ).where(
+                PackageEventRow.kind.in_(("yank", "unyank")),
+                PackageEventRow.name.in_(names[i : i + 500]),
+            )
+        )
+        for ev in events:
+            k = variant(ev)
+            if k not in newest or ev.id > newest[k][0]:
+                newest[k] = (ev.id, ev.kind, ev.actor)
+    return {r.id for r in rows if newest.get(variant(r), (0, "", ""))[1:] == ("yank", actor)}
+
+
 def _variant_select(
     name: str,
     version: str,
@@ -1901,6 +1939,7 @@ class DbPackageIndex:
         upstream_yanked: set[tuple[str, str, str, str, str, str]],
         upstream_present: set[tuple[str, str, str, str, str, str]],
         upstream_tombstoned: set[tuple[str, str, str, str, str, str]],
+        upstream_sha256: dict[tuple[str, str, str, str, str, str], str] | None = None,
         nuked_by: str = "populate-reconcile",
     ) -> dict[str, int]:
         """Make bundles imported from *upstream* agree with what upstream now says.
@@ -1927,6 +1966,17 @@ class DbPackageIndex:
           catalog, a truncated response or a transient upstream fault all look
           like this, so only yank (recoverable) and let the caller log it.
 
+        When upstream lists a bundle again, a yank that followed upstream is
+        lifted: one that recorded upstream's yank, or our own yank of a bundle
+        that had vanished.  That one records no verdict, so it is recognised by
+        its newest yank or unyank event being ours; anyone who yanked the row
+        after us keeps it yanked (a re-yank of a yanked row writes no event, so
+        it does not count).  Either way the yank is lifted only if upstream's
+        sha256 for the bundle (*upstream_sha256*, when given) is the one held
+        here: populate never re-imports a coordinate it holds, so after a nuke
+        and a republish the lift would serve bytes upstream no longer does.
+        Those are counted as ``mismatched`` and stay yanked.
+
         A mirror operator may deliberately unyank a bundle upstream still
         considers retired.  Because ``upstream_yanked`` records that we already
         enforced the verdict once, a later local unyank is recognisable as an
@@ -1935,10 +1985,17 @@ class DbPackageIndex:
         so clients can decide whose ruling to follow.
 
         Returns counts keyed ``yanked`` / ``tombstoned`` / ``ambiguous`` /
-        ``overridden`` / ``unyanked``.
+        ``overridden`` / ``unyanked`` / ``mismatched``.
         """
         now = datetime.datetime.now(datetime.timezone.utc)
-        counts = {"yanked": 0, "tombstoned": 0, "ambiguous": 0, "overridden": 0, "unyanked": 0}
+        counts = {
+            "yanked": 0,
+            "tombstoned": 0,
+            "ambiguous": 0,
+            "overridden": 0,
+            "unyanked": 0,
+            "mismatched": 0,
+        }
         if not upstream:
             return counts
 
@@ -1970,6 +2027,22 @@ class DbPackageIndex:
                 .all()
             }
 
+            # A vanished bundle's yank records no verdict (an absence is not
+            # upstream's ruling), so when upstream lists it again only the
+            # events can tell our yank from an operator's.
+            own_yanks = await _yanked_last_by(
+                session,
+                [
+                    r
+                    for r in rows
+                    if r.yanked
+                    and not r.upstream_yanked
+                    and (r.name, r.version, r.platform, r.arch, r.build_type, r.link)
+                    in upstream_present
+                ],
+                nuked_by,
+            )
+
             to_tombstone = []
             # For the activity feed: what this pass yanked and unyanked here.
             yanked_now: list[PackageRow] = []
@@ -1999,14 +2072,21 @@ class DbPackageIndex:
                 if key in upstream_present:
                     # Upstream serves it again.  Clear the recorded verdict so a
                     # later re-yank is treated as new information rather than as
-                    # an override, and lift a yank we ourselves inherited.
-                    if r.upstream_yanked:
-                        r.upstream_yanked = False
-                        if r.yanked:
-                            r.yanked = False
-                            r.yanked_at = None
-                            unyanked_now.append(r)
-                            counts["unyanked"] += 1
+                    # an override, and lift a yank that followed upstream: one
+                    # that recorded upstream's yank, or our own yank of a bundle
+                    # that had vanished -- if upstream still lists our bytes.
+                    followed = r.upstream_yanked or r.id in own_yanks
+                    r.upstream_yanked = False
+                    if not (followed and r.yanked):
+                        continue
+                    listed = (upstream_sha256 or {}).get(key, "")
+                    if listed and listed != r.sha256:
+                        counts["mismatched"] += 1
+                        continue
+                    r.yanked = False
+                    r.yanked_at = None
+                    unyanked_now.append(r)
+                    counts["unyanked"] += 1
                     continue
                 # Gone from upstream's catalog.
                 if key in upstream_tombstoned:

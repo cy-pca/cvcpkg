@@ -64,6 +64,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - The mirror budget's eviction no longer unlinks an archive a surviving row
     still stores.
 
+- **A mirror lifts its yank when upstream lists a vanished bundle again.**
+  Populate reconciliation yanks a mirrored bundle that upstream stops listing
+  without a tombstone, a yank meant to be recoverable. But a sync only lifted
+  yanks that recorded upstream's verdict (`upstream_yanked`), and this one
+  records none, so it stayed. On the dev cluster, migration 036 ran before
+  cvcpkg.org's: dev's relabelled none/none rows looked missing upstream, and
+  1,024 bundles cvcpkg.org serves stayed yanked there, numpy's build backends
+  flit-core, packaging, meson-python and pyproject-metadata among them.
+  - When upstream lists a bundle again, the reconciler now also lifts its own
+    yank: one whose newest yank or unyank event is the reconciler's. A yank
+    someone made after it stays (re-yanking a bundle that is already yanked
+    records no event and does not count). The first sync after the upgrade
+    lifts the stuck rows; there is no migration.
+  - A yank is lifted only if upstream lists the bytes the mirror holds
+    (sha256). Populate never re-imports a coordinate it holds, so after a nuke
+    and a republish a lift served the old bytes as live. Such a bundle now
+    stays yanked, and every sync logs it until it is nuked on the mirror.
+
 - **`cvcpkg install --no-deps`: the named bundles without their runtime deps.**
   install always resolved a bundle's whole `required_deps` closure, so a bundle
   whose deps are wrong could not be installed at all, and none could be tried on
