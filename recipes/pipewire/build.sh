@@ -28,13 +28,27 @@ sed -i.orig "s/dependency('ncursesw', required : false)/dependency('', required 
 rm -f meson.build.orig
 grep -q "ncurses_dep = dependency('', required : false)" meson.build
 
+# FreeBSD: libpipewire calls dgettext/bindtextdomain (src/pipewire/pipewire.c,
+# unconditionally), and FreeBSD's libc has no libintl, so meson.build looks for
+# cc.find_library('intl'): the declared gettext's.  It searches only the link
+# args, and -Dc_link_args below makes meson ignore LDFLAGS, so the deps
+# prefix's lib/ goes there; its include/ goes first in CFLAGS, ahead of the
+# /usr/local/include env-freebsd.sh adds.  The first FreeBSD build found a
+# libintl.h but no library and failed with "unable to find library -lintl"
+# (dev job 24666).  Linux has gettext in glibc.
+_link_args="-Wl,-rpath,\$ORIGIN"
+if [[ "${CVC_PLATFORM:-}" == freebsd ]]; then
+    export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+    _link_args="-L${CVC_DEPS_PREFIX}/lib ${_link_args}"
+fi
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
-    -Dc_link_args="-Wl,-rpath,\$ORIGIN" \
+    -Dc_link_args="${_link_args}" \
     -Dspa-plugins=enabled \
     -Dsession-managers="[]" \
     -Ddocs=disabled \

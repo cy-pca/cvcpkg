@@ -23,7 +23,8 @@ recipe:
   # Bumped 4 -> 5: the FreeBSD column again, now that cvcpkg packages
   # libinotify (recipes/libinotify).  epoll-shim and libinotify are runtime
   # dependencies there: meson.build requires both, and what links them
-  # needs them installed beside it.
+  # needs them installed beside it.  So is gettext, for libintl, which
+  # libpipewire links on FreeBSD.
   cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -63,6 +64,10 @@ depends:
     - name: epoll-shim
       platforms: [freebsd]
     - name: libinotify
+      platforms: [freebsd]
+    # libintl, for libpipewire's message translations: FreeBSD's libc has
+    # none (build.sh).
+    - name: gettext
       platforms: [freebsd]
   host_tools: []
 
