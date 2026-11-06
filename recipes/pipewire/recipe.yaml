@@ -13,8 +13,12 @@ recipe:
   # prefix and never declared; FreeBSD could do the same.  pipewire has no
   # option for it, so build.sh hands meson a not-found ncursesw dependency.
   # pw-top is a diagnostics TUI; declaring ncurses would add it to every
-  # libpipewire consumer's runtime closure (SDL2, SDL3, OpenAL Soft).  Also
-  # declares epoll-shim on FreeBSD, which the cvc.3 FreeBSD build lacked.
+  # libpipewire consumer's runtime closure (SDL2, SDL3, OpenAL Soft).
+  # Also no FreeBSD column: it never built.  meson.build requires epoll-shim
+  # (cvcpkg has it) and libinotify (libinotify-kqueue, which cvcpkg does not
+  # package) there; cvc.3's FreeBSD jobs stopped at one, then the other (dev
+  # jobs 24590, 24623).  Restore the column with both declared once libinotify
+  # has a recipe.
   cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -48,21 +52,12 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-  runtime:
-    # FreeBSD has no epoll: meson.build requires epoll-shim there, and cvc.3's
-    # FreeBSD build stopped at 'Dependency "epoll-shim" not found' (never
-    # published).  As wayland declares it.
-    - name: epoll-shim
-      platforms: [freebsd]
+  runtime: []
   host_tools: []
 
 build:
   matrix:
     - platform: linux
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
-    - platform: freebsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"

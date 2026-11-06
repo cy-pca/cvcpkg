@@ -17,6 +17,12 @@ _shared=ON; [ "${CVC_LINK:-shared}" = "static" ] && _shared=OFF
 # name an HDF5 filter id, which needs an HDF5 filter plugin at run time, and
 # without the library found they return NC_NOERR without setting the filter.
 # Only hdf5 and zlib are declared, so keep CMake from finding the rest.
+#
+# NetBSD: no mmap I/O (the NC_MMAP mode).  libsrc/mmapio.c declares Linux's
+# four-argument mremap, which conflicts with NetBSD's five-argument one in
+# <sys/mman.h> (dev job 24638; netcdf had never built on NetBSD).
+_netcdf_extra=()
+[[ "${CVC_PLATFORM:-}" != netbsd ]] || _netcdf_extra=(-DENABLE_MMAP=OFF)
 cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_BUILD_TYPE="${BT}" \
@@ -30,7 +36,8 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DENABLE_EXAMPLES=OFF -DENABLE_FILTER_TESTING=OFF \
     -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON -DCMAKE_DISABLE_FIND_PACKAGE_Szip=ON \
     -DCMAKE_DISABLE_FIND_PACKAGE_Bz2=ON -DCMAKE_DISABLE_FIND_PACKAGE_Blosc=ON \
-    -DCMAKE_DISABLE_FIND_PACKAGE_Zstd=ON
+    -DCMAKE_DISABLE_FIND_PACKAGE_Zstd=ON \
+    ${_netcdf_extra[@]+"${_netcdf_extra[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"

@@ -27,9 +27,15 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # (pid.cpp: kp_pid); upstream has never built it there. Every other library
 # builds. (bsd-process-backports.patch still carries the cmd/exe/close_handles/
 # environ fixes NetBSD needs.)
+# NetBSD: no Boost.Wave.  With pkgsrc clang and NetBSD's libstdc++, Boost.Config
+# reports one of the C++11 features wave_config.hpp requires as missing, so its
+# "C++03 support ... was removed" guard fires; Wave was the only library that
+# failed (dev job 24636).  boost had never built on NetBSD.
 _boost_extra=()
 if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=process)
+elif [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
+    _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=wave)
 fi
 # GCC builds libquadmath (and <quadmath.h>) only for x86, so linux/arm64 is OFF
 # too: forcing it ON there failed ("quadmath.h: No such file or directory"),

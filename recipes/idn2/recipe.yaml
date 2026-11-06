@@ -30,6 +30,15 @@ depends:
   build:
     # Windows builds with MinGW-w64 under MSYS2 (Invoke-CvcMsysAutotoolsBuild).
     # Declared, as aspell does, now that a dep's build edge no longer brings it.
+    # The autotools too (autoconf brings m4): without them a builder with no
+    # MSYS2 of its own stopped at "MSYS2 autotools not found on PATH" (dev job
+    # 24645, cvc.5).
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
     - name: msys2
       platforms: [windows]
     - name: make
