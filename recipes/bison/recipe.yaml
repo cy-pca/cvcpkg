@@ -13,7 +13,9 @@ recipe:
   # (bin/bison.exe, bin/flex.exe, share/bison/), which has no yacc, liby,
   # aclocal macro or man page, so the strict pack check failed every Windows
   # build (dev #17905).
-  cvc_revision: 5
+  # cvc.6: OpenBSD builds without iconv.  cvc.5's bin/bison NEEDed the build
+  # host's ports libiconv.so.7.1 from /usr/local, undeclared; see build.sh.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

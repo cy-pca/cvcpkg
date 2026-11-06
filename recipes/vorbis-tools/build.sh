@@ -18,6 +18,17 @@ export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
 
 cd "${CVC_SOURCE_DIR}"
 
+# OpenBSD: no iconv.  Its libc has none, so configure linked the build host's
+# ports libiconv.so.7.1 from /usr/local/lib (env-openbsd.sh), and cvc.5's
+# oggdec, oggenc, ogginfo and vorbiscomment NEEDed it undeclared.  Without
+# HAVE_ICONV the tools use their own converter (share/charset.c), which knows
+# UTF-8, US-ASCII, ISO-8859-1 and -2: enough for OpenBSD's only locales, C and
+# UTF-8.
+CONFIGURE_EXTRA=()
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    CONFIGURE_EXTRA+=(am_cv_func_iconv=no)
+fi
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --disable-dependency-tracking \
@@ -25,7 +36,8 @@ cd "${CVC_SOURCE_DIR}"
     --without-ao \
     --without-speex \
     --without-flac \
-    --without-curl
+    --without-curl \
+    ${CONFIGURE_EXTRA[@]+"${CONFIGURE_EXTRA[@]}"}
 
 make -j "${CVC_JOBS}"
 make install-exec

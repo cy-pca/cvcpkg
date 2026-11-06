@@ -13,7 +13,9 @@ recipe:
   # cvc.5: libpicture.a takes base64.o instead of nesting libbase64.a, which the
   # macOS x86_64 runner's ld64 rejected ("archive member 'libbase64.a' not a
   # mach-o file").  Patch applies on every platform; the build output is the same.
-  cvc_revision: 5
+  # cvc.6: OpenBSD builds without iconv.  cvc.5's tools NEEDed the build host's
+  # ports libiconv.so.7.1 from /usr/local, undeclared; see build.sh.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

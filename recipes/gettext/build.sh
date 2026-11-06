@@ -18,6 +18,13 @@ cd "${CVC_SOURCE_DIR}"
 # macOS now builds against cvcpkg's GNU libiconv (the iconv dependency, as on
 # OpenBSD; picked up below), which passes that test.
 
+# --with-included-libxml, --with-included-libunistring: gettext's own copies, on
+# every platform.  configure otherwise links whatever libxml2 or libunistring it
+# can find: linux cvc.6's libgettextsrc and cldr-plurals NEEDed libxml2.so.2,
+# undeclared, from a shared populate prefix.
+# --disable-openmp: msgmerge and msginit NEEDed GCC's libgomp.so.1 (linux
+# cvc.6), which nothing declares.  OpenMP only parallelises the fuzzy matching
+# those two do while merging.
 CONFIGURE_ARGS=(
     --prefix="${CVC_INSTALL_DIR}"
     --disable-java
@@ -26,6 +33,9 @@ CONFIGURE_ARGS=(
     --without-git
     --without-bzip2
     --without-xz
+    --with-included-libxml
+    --with-included-libunistring
+    --disable-openmp
 )
 
 # Respect static/shared link mode.
@@ -44,17 +54,31 @@ fi
 # linux/arm64 cvc.5 linked libiconv.so.2 without declaring it, and its msgfmt
 # failed wherever iconv was not installed ("libiconv.so.2: cannot open shared
 # object file", libpq's arm64 recipe check, 2026-10-30).
+# Fail, not skip, when the declared copy is missing: configure would then link
+# any libiconv it could find.  OpenBSD cvc.6's objects NEEDed the build host's
+# ports libiconv.so.7.1 (RUNPATH /usr/local/lib), some beside cvcpkg's
+# libiconv.so.8.1; the check after `make install` now refuses that.
 case "${CVC_PLATFORM:-}" in
     openbsd|macos)
-        if [[ -n "${CVC_DEPS_PREFIX:-}" && -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
-            export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
-            export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
-            CONFIGURE_ARGS+=(--with-libiconv-prefix="${CVC_DEPS_PREFIX}")
+        if [[ -z "${CVC_DEPS_PREFIX:-}" || ! -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
+            echo "cvcpkg: gettext: the declared iconv is missing from ${CVC_DEPS_PREFIX:-the deps prefix}" >&2
+            exit 1
         fi
+        export CPPFLAGS="-I${CVC_DEPS_PREFIX}/include ${CPPFLAGS:-}"
+        export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+        CONFIGURE_ARGS+=(--with-libiconv-prefix="${CVC_DEPS_PREFIX}")
         ;;
     *)
         CONFIGURE_ARGS+=(--without-libiconv-prefix)
         ;;
+esac
+
+# Not on linux, where glibc has gettext: the tools link gettext's own libintl,
+# the one this bundle ships, rather than an external one found on the link path
+# (a BSD host's ports or pkgsrc libintl), which brings that host's libiconv.
+case "${CVC_PLATFORM:-}" in
+    linux) ;;
+    *) CONFIGURE_ARGS+=(--with-included-libintl) ;;
 esac
 
 # On BSDs, use gmake if available.
@@ -68,3 +92,25 @@ export MAKE
 ./configure "${CONFIGURE_ARGS[@]}"
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
+
+# What the installed objects link must be declared: libintl only as this
+# bundle's own, a libiconv only from the deps prefix on OpenBSD/macOS (none
+# elsewhere: libc's iconv), and no libxml2, libunistring or libgomp at all.
+_linked="$(grep -r -a -h -o -E 'lib(intl|iconv|xml2|unistring|gomp)\.(so\.[0-9.]+|[0-9.]+\.dylib)' \
+    "${CVC_INSTALL_DIR}/bin" "${CVC_INSTALL_DIR}/lib" "${CVC_INSTALL_DIR}/libexec" \
+    2>/dev/null | sort -u || true)"
+for _lib in ${_linked}; do
+    if [[ "${_lib}" == libintl.* && -e "${CVC_INSTALL_DIR}/lib/${_lib}" ]]; then
+        continue
+    fi
+    case "${CVC_PLATFORM:-}:${_lib}" in
+        openbsd:libiconv.*|macos:libiconv.*)
+            if [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "cvcpkg: gettext links ${_lib} from the declared iconv"
+                continue
+            fi
+            ;;
+    esac
+    echo "cvcpkg: gettext linked ${_lib}, which is not a declared dependency" >&2
+    exit 1
+done

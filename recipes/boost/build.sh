@@ -43,6 +43,33 @@ if [[ "${CVC_PLATFORM}" == "linux" ]] && [[ "$(uname -m)" == x86_64 ]]; then
 else
     _boost_extra+=(-DBOOST_CHARCONV_QUADMATH_FOUND=OFF)
 fi
+# Boost.Locale's iconv backend (its charset conversion, with ICU off) on OpenBSD
+# and macOS links cvcpkg's GNU libiconv, the declared iconv dependency, named
+# here so FindIconv cannot pick another.  +cvc.8 linked whatever it found:
+# OpenBSD's libboost_locale NEEDed the build host's ports libiconv.so.7.1 from
+# /usr/local, macOS's loaded @rpath/libiconv.2.dylib from a shared prefix, and
+# neither declared it.  Linux and the other BSDs keep libc's iconv.
+case "${CVC_PLATFORM}" in
+    openbsd|macos)
+        _iconv_lib=""
+        for _f in "${CVC_DEPS_PREFIX}"/lib/libiconv.dylib "${CVC_DEPS_PREFIX}"/lib/libiconv.so.[0-9]*; do
+            if [[ -f "${_f}" ]]; then
+                _iconv_lib="${_f}"
+                break
+            fi
+        done
+        if [[ -z "${_iconv_lib}" || ! -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
+            echo "cvcpkg: boost: the declared iconv is missing from ${CVC_DEPS_PREFIX}" >&2
+            exit 1
+        fi
+        _boost_extra+=(
+            -DBOOST_LOCALE_ENABLE_ICONV=ON
+            -DIconv_IS_BUILT_IN=FALSE
+            "-DIconv_INCLUDE_DIR=${CVC_DEPS_PREFIX}/include"
+            "-DIconv_LIBRARY=${_iconv_lib}"
+        )
+        ;;
+esac
 
 cvc_cmake_build \
     ${_boost_extra[@]+"${_boost_extra[@]}"} \
@@ -54,3 +81,20 @@ cvc_cmake_build \
     -DBOOST_IOSTREAMS_ENABLE_BZIP2=OFF \
     -DBOOST_IOSTREAMS_ENABLE_LZMA=OFF \
     -DBOOST_IOSTREAMS_ENABLE_ZSTD=OFF
+
+# A libiconv the libraries link must be the declared one: the deps prefix's on
+# OpenBSD/macOS, and none elsewhere (libc's iconv).
+_iconv_linked="$(grep -a -h -o -E 'libiconv\.(so\.[0-9.]+|[0-9]+\.dylib)' \
+    "${CVC_INSTALL_DIR}"/lib/libboost_* 2>/dev/null | sort -u || true)"
+for _lib in ${_iconv_linked}; do
+    case "${CVC_PLATFORM}" in
+        openbsd|macos)
+            if [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "cvcpkg: Boost links ${_lib} from the declared iconv"
+                continue
+            fi
+            ;;
+    esac
+    echo "cvcpkg: Boost linked ${_lib}, which is not the declared iconv" >&2
+    exit 1
+done
