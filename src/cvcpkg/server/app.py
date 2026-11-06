@@ -2463,6 +2463,9 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
     """
     present: set[tuple[str, str, str, str, str, str]] = set()
     yanked_up: set[tuple[str, str, str, str, str, str]] = set()
+    # The bytes upstream lists for each present bundle: a yank here is lifted
+    # only if they are the ones held here.
+    listed_sha256: dict[tuple[str, str, str, str, str, str], str] = {}
     for b in upstream_bundles:
         key = _bundle_key(b)
         if not all(key) or b.get("org"):
@@ -2472,6 +2475,8 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
         # upstream_yanked=true; reading only ``yanked`` here would let that hop
         # launder the origin's ruling into a clean unyank for everyone below it.
         (yanked_up if (b.get("yanked") or b.get("upstream_yanked")) else present).add(key)
+        if key in present:
+            listed_sha256[key] = b.get("sha256") or ""
 
     mirrored = await _db_packages.mirrored_keys(upstream)
     if not mirrored:
@@ -2510,6 +2515,7 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
         upstream_yanked=yanked_up,
         upstream_present=present,
         upstream_tombstoned=tombstoned,
+        upstream_sha256=listed_sha256,
     )
     # Guard on exactly what is printed.  ``overridden`` re-counts a standing
     # dissent on every single sync, so including it here logged a line whose
@@ -2528,12 +2534,28 @@ async def _reconcile_with_upstream(client, upstream: str, upstream_bundles: list
     if counts["ambiguous"]:
         # Loud on purpose: upstream dropped a bundle without a tombstone, so we
         # yanked rather than tombstoned.  A transient upstream fault looks
-        # exactly like this, and `cvcpkg unyank` is the recovery.
+        # exactly like this; the first sync that finds the bundle listed again
+        # lifts the yank.
         logger.warning(
             "populate: %d bundle(s) vanished from %s with no tombstone; yanked "
-            "locally but NOT tombstoned — unyank them if upstream was merely "
-            "unavailable",
+            "locally but NOT tombstoned — lifted when upstream lists them again",
             counts["ambiguous"],
+            upstream,
+        )
+    if counts["unyanked"]:
+        logger.info(
+            "populate: %s serves %d bundle(s) again; lifted their yank here",
+            upstream,
+            counts["unyanked"],
+        )
+    if counts.get("mismatched"):
+        # Upstream lists the coordinate again with other bytes (a nuke and a
+        # republish), and populate never re-imports a coordinate it holds.
+        # Re-counted every sync until resolved, like ``overridden``.
+        logger.warning(
+            "populate: %d bundle(s) %s lists again hold other bytes here; left "
+            "yanked — nuke them here so populate imports upstream's",
+            counts["mismatched"],
             upstream,
         )
 
