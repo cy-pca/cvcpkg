@@ -28,7 +28,9 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Put the cvcpkg prefix bin on PATH so FFmpeg's configure finds nasm
 # (built as a build dependency) and pkg-config finds external libs.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
-export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# libdata/pkgconfig is where meson puts .pc files on FreeBSD (dav1d, fribidi);
+# without it configure stops at "dav1d >= 0.5.0 not found using pkg-config".
+export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/libdata/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 # Point the compiler/linker at the deps prefix.  Several codecs FFmpeg links
 # have no pkg-config file (e.g. libmp3lame), so FFmpeg's configure link-tests
