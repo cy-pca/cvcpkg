@@ -30,6 +30,22 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Server: `/v1/publish` no longer overwrites an archive another row stores.**
+  Publish named each archive after its coordinates and stored it over whatever
+  was there, but its duplicate check is per coordinate. A row at other
+  coordinates can have that name (dev's migration 036 relabelled rows
+  `none/none` and kept their `...-release-shared.tar.zst` names), and so can an
+  org's twin of a public package. On 2026-10-31 dev-builder-01b published six
+  relabelled traitlets/traittypes windows bundles again as `release/shared`,
+  and the relabelled rows were left serving the new bytes.
+  - Both publish paths, `/v1/publish` and the chunked
+    `/v1/upload/{id}/complete`, store such an archive under the sha-qualified
+    name populate uses (`<name>.<sha256[:16]>.tar.zst`). The name is chosen
+    before the row is inserted, so the row's `archive_url` names the file. A
+    free name is unchanged.
+  - When that name is another row's archive as well, the publish is refused
+    with a 409.
+
 - **Server: populate no longer overwrites an archive another row stores.**
   Populate named each import's file after its coordinates and replaced
   whatever was there. A row at other coordinates can have that name: dev's
