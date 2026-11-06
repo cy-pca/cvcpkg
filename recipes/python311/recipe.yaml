@@ -86,7 +86,15 @@ recipe:
   # python.exe, where an executable in bin\ that embeds Python (libcvc's arix and
   # ariglx, volrover3) could not load python311.dll and would not start, and where its
   # abi3 extension modules did not find python3.dll.  Other platforms rebuild unchanged.
-  cvc_revision: 15
+  #
+  # Bumped 15 -> 16: Windows ships its own python3.dll again.  +cvc.15's, at the
+  # root and in bin\, was python313's: step 2's DLL walk copied it from the deps
+  # prefix (the python313 PCbuild runs with) because PCbuild's abi3 test modules
+  # import python3.dll.  It forwarded the limited API to python313.dll, so no abi3
+  # extension module imported (cryptography's _rust: "DLL load failed").  The walk
+  # now skips python3*.dll, and the layout checks the forwarder's target.  Other
+  # platforms rebuild unchanged.
+  cvc_revision: 16
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
