@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: fribidi
   upstream_version: "1.0.16"
-  cvc_revision: 2
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -20,7 +20,10 @@ source:
   sha256: "1b1cde5b235d40479e91be2f0e88a309e3214c8ab470ec8a2744d82a5a9ea05c"
   strip_components: 1
 
-patches: []
+# bin/fribidi's $ORIGIN/../lib as an install_rpath, which meson keeps (see
+# build.sh).
+patches:
+  - bin-install-rpath.patch
 
 depends:
   build:
@@ -73,6 +76,9 @@ package:
     - { glob: "bin/fribidi.exe", platforms: [windows] }
   pkg_config:
     - fribidi
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17

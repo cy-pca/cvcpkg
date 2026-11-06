@@ -1,0 +1,15 @@
+--- a/bin/meson.build
++++ b/bin/meson.build
+@@ -5,6 +5,12 @@ fribidi = executable('fribidi',
+   c_args: ['-DHAVE_CONFIG_H'] + fribidi_static_cargs,
+   include_directories: incs,
+   link_with: libfribidi,
++  # cvcpkg: bin/fribidi finds lib/libfribidi.so.0 once installed.  Meson's
++  # install step drops every run-path entry equal to one it used in the build
++  # tree, and $ORIGIN/../lib is exactly that one here (bin/ -> lib/), so a
++  # -Wl,-rpath from c_link_args never survives; install_rpath does.  macOS:
++  # cvcpkg's packager adds @loader_path/../lib.
++  install_rpath: host_machine.system() == 'darwin' ? '' : '$ORIGIN/../lib',
+   install: get_option('bin'))
+ 
+ if not get_option('bin')
