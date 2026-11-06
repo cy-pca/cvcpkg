@@ -30,6 +30,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **Server: populate no longer overwrites an archive another row stores.**
+  Populate named each import's file after its coordinates and replaced
+  whatever was there. A row at other coordinates can have that name: dev's
+  migration 036 relabelled noarch rows `none/none` and kept their
+  `...-release-shared.tar.zst` names, and an org's package is named like a
+  public one. On 2026-10-31 populate re-imported cvcpkg.org's
+  `release/shared` rows under those names, so 1,443 live dev rows now serve
+  another build's bytes and fail `cvcpkg install`'s sha256 check.
+  - An import whose conventional name another row's archive has takes a name
+    qualified by its sha256 (`<name>.<sha256[:16]>.tar.zst`) and logs it.
+    Refusing would leave the coordinate unmirrored for good, over a row the
+    import cannot resolve.
+  - Populate moves the file in only after its row commits, as `/v1/publish`
+    does. Moving it first let an import that lost a race with a local publish
+    overwrite the winner's archive and then delete it.
+  - The mirror budget's eviction no longer unlinks an archive a surviving row
+    still stores.
+
 - **`cvcpkg install --no-deps`: the named bundles without their runtime deps.**
   install always resolved a bundle's whole `required_deps` closure, so a bundle
   whose deps are wrong could not be installed at all, and none could be tried on
