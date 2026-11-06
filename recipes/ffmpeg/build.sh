@@ -16,7 +16,9 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Put the cvcpkg prefix bin on PATH so FFmpeg's configure finds nasm
 # (built as a build dependency) and pkg-config finds external libs.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
-export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# libdata/pkgconfig is where meson puts .pc files on FreeBSD (dav1d, fribidi);
+# without it configure stops at "dav1d >= 0.5.0 not found using pkg-config".
+export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/libdata/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 cd "${CVC_SOURCE_DIR}"
 
@@ -103,6 +105,26 @@ if [[ "${CVC_PLATFORM}" == "linux" ]]; then
     CONFIGURE_ARGS+=(--enable-libpulse)
 fi
 
+# iconv (subtitle charset conversion).  configure enables it when <iconv.h>'s
+# iconv links as is, or else with -liconv.  OpenBSD and macOS link cvcpkg's GNU
+# libiconv, a declared dependency.  Linux, FreeBSD and NetBSD have iconv in
+# libc, but a GNU <iconv.h> on the search path (cvcpkg's in a shared populate
+# prefix, or a host package under /usr/local) renames iconv to libiconv, so the
+# libc probe fails and configure links that -liconv instead, undeclared.
+# LIBICONV_PLUG makes a GNU header declare plain iconv, so libc's is used
+# whichever header is found.  The check after `make install` enforces this.
+case "${CVC_PLATFORM}" in
+    linux|freebsd|netbsd) CONFIGURE_ARGS+=(--extra-cflags=-DLIBICONV_PLUG) ;;
+    # configure starts from the environment's CFLAGS and LDFLAGS and appends the
+    # --extra-* flags above to them.  env-openbsd.sh puts /usr/local on both, so
+    # -liconv would still find the ports libiconv.so.7.1 before the deps
+    # prefix's.  Search the deps prefix first.
+    openbsd)
+        export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+        export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+        ;;
+esac
+
 # FFmpeg's configure hard-defaults its C compiler to "gcc" and does not
 # reliably honour $CC.  On the BSDs (and macOS) the system compiler is
 # clang exposed as cc, so pass the platform-selected compiler explicitly.
@@ -155,6 +177,26 @@ esac
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install
+
+# A libiconv the libraries link must be the declared one: the copy in the deps
+# prefix on OpenBSD/macOS, and none elsewhere (libc's iconv, see above).
+# cvc.2 shipped @rpath/libiconv.2.dylib on macOS and the host's
+# libiconv.so.7.1 on OpenBSD without declaring either, and dyld/ld.so failed
+# wherever iconv was not installed.
+_iconv_libs="$(grep -a -h -o -E 'libiconv\.(so\.[0-9.]+|[0-9]+\.dylib)' \
+    "${CVC_INSTALL_DIR}"/lib/lib{av,sw}* | sort -u || true)"
+for _lib in ${_iconv_libs}; do
+    case "${CVC_PLATFORM}" in
+        openbsd|macos)
+            if [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "cvcpkg: FFmpeg links ${_lib} from the declared iconv"
+                continue
+            fi
+            ;;
+    esac
+    echo "cvcpkg: FFmpeg linked ${_lib}, which is not the declared iconv" >&2
+    exit 1
+done
 
 # ELF platforms: stamp $ORIGIN into each installed libav*/libsw* so they
 # find their siblings in the same lib dir regardless of the final prefix.
