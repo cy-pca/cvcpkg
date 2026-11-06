@@ -2,7 +2,13 @@ schema_version: 1
 recipe:
   name: ffmpeg-lgpl
   upstream_version: "7.1.2"
-  cvc_revision: 1
+  # cvc.2: declare iconv on macOS and OpenBSD.  FFmpeg's configure enables iconv
+  # whenever it finds one, and cvc.1 linked an undeclared GNU libiconv there:
+  # macOS took cvcpkg's from the shared populate prefix (dyld: "Library not
+  # loaded: @rpath/libiconv.2.dylib"), OpenBSD the build host's ports
+  # libiconv.so.7.1 from /usr/local.  Linux and the other BSDs keep libc's
+  # iconv, now pinned against a GNU <iconv.h> on the search path; see build.sh.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -102,6 +108,12 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: zlib
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # cvcpkg's GNU libiconv on OpenBSD, whose libc has no iconv, and on macOS,
+    # where gettext and glib link it too.  Linux and the other BSDs use libc's.
+    # See build.sh.
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
     - pkg-config
   runtime:
     - name: libopus
@@ -134,6 +146,9 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: zlib
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
   host_tools: []
 
 build:

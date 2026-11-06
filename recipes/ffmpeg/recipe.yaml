@@ -7,7 +7,13 @@ recipe:
   # Homebrew's libX11/libxcb from /opt/homebrew/opt, so it fails to load on any Mac
   # without them.  build.sh now turns X11 autodetection off on macOS.  Every platform
   # rebuilds.
-  cvc_revision: 2
+  # cvc.3: declare iconv on macOS and OpenBSD.  FFmpeg's configure enables iconv
+  # whenever it finds one, and cvc.2 linked an undeclared GNU libiconv there:
+  # macOS took cvcpkg's from the shared populate prefix (@rpath/libiconv.2.dylib),
+  # OpenBSD the build host's ports libiconv.so.7.1 from /usr/local.  Linux and the
+  # other BSDs keep libc's iconv, now pinned against a GNU <iconv.h> on the search
+  # path; see build.sh.  ffmpeg-lgpl had the same leak (cy-pca/cvcpkg#545).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -87,6 +93,12 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: libpulse
       platforms: [linux]
+    # cvcpkg's GNU libiconv on OpenBSD, whose libc has no iconv, and on macOS,
+    # where gettext and glib link it too.  Linux and the other BSDs use libc's.
+    # See build.sh.
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
     - pkg-config
   runtime:
     - name: x264
@@ -128,6 +140,9 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: libpulse
       platforms: [linux]
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
   host_tools: []
 
 build:
