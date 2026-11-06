@@ -146,6 +146,31 @@ export OPENSSL_NO_VENDOR=1
     ls -la "${OPENSSL_DIR}/include" 2>&1 | head -20 >&2 || true
     exit 1
 }
+# macOS: give openssl-sys a lib dir holding ONLY OpenSSL.  From OPENSSL_DIR it
+# emits `-L ${DEPS}/lib` for the whole Rust link, and the libc crate links
+# -liconv on Apple targets.  In a shared populate prefix that also holds
+# cvcpkg's GNU iconv, the linker took that copy, and +cvc.4's _rust.abi3.so
+# loaded @rpath/libiconv.2.dylib, which nothing here declares.  cryptography
+# never calls iconv (the load is the libc crate's blanket link), so it should be
+# the OS's /usr/lib/libiconv.2.dylib, as for any Rust binary and upstream's own
+# macOS wheels.  OPENSSL_LIB_DIR + OPENSSL_INCLUDE_DIR win over OPENSSL_DIR.
+# Linux and the BSDs have iconv in libc and need no such fence (NetBSD puts the
+# deps prefix first on purpose: cvc_netbsd_prefix_first).
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+    _OSSL_LIB="${CVC_BUILD_DIR}/openssl-lib"
+    rm -rf "${_OSSL_LIB}"
+    mkdir -p "${_OSSL_LIB}"
+    for _l in "${DEPS}"/lib/libssl*.dylib "${DEPS}"/lib/libcrypto*.dylib; do
+        if [ -e "${_l}" ]; then ln -s "${_l}" "${_OSSL_LIB}/"; fi
+    done
+    [ -e "${_OSSL_LIB}/libssl.dylib" ] && [ -e "${_OSSL_LIB}/libcrypto.dylib" ] || {
+        echo "cryptography-cp312: no libssl.dylib/libcrypto.dylib in ${DEPS}/lib" >&2
+        exit 1
+    }
+    export OPENSSL_LIB_DIR="${_OSSL_LIB}"
+    export OPENSSL_INCLUDE_DIR="${DEPS}/include"
+    echo "cryptography-cp312: OPENSSL_LIB_DIR=${OPENSSL_LIB_DIR} (OpenSSL only)"
+fi
 # Read the prefix OpenSSL's own version so the verification step can compare the
 # linked library against it WITHOUT this script hardcoding recipes/openssl's
 # upstream_version (which would then rot on every openssl bump).
@@ -258,6 +283,25 @@ else
 fi
 
 command -v cvc_rewrite_install_paths >/dev/null 2>&1 && cvc_rewrite_install_paths || true
+
+# macOS: every @rpath load must be a library a declared dependency ships, which
+# here means openssl.  This is what +cvc.4 got wrong (@rpath/libiconv.2.dylib,
+# see step 4); the pack-time linkage check would refuse it too, but only after
+# the whole build.
+if [ "${CVC_PLATFORM}" = "macos" ]; then
+    while IFS= read -r -d '' _so; do
+        _self="$(otool -D "${_so}" | awk 'NR>1 {print $1}')"
+        while IFS= read -r _dep; do
+            case "${_dep}" in
+                "${_self}"|@rpath/libssl.*|@rpath/libcrypto.*) ;;
+                @rpath/*)
+                    echo "cryptography-cp312: $(basename "${_so}") loads ${_dep}, which no declared dependency ships" >&2
+                    exit 1
+                    ;;
+            esac
+        done < <(otool -L "${_so}" | awk 'NR>1 {print $1}')
+    done < <(find "${SITE_PACKAGES}" -name '*.so' -print0)
+fi
 
 # ── 8. Verification ────────────────────────────────────────────────────────
 # Prove the extension loads AND drives OpenSSL end to end. An import alone would

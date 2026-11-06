@@ -12,7 +12,12 @@ recipe:
   # edges: libffi (build+runtime, non-Windows), pkg-config (cffi's setup.py
   # discovers libffi by shelling out to it), and the setuptools-cp311 PEP-517
   # backend that --no-build-isolation requires to already be in the prefix.
-  cvc_revision: 3
+  # cvc.4: link the declared libffi on OpenBSD and FreeBSD.  The ports dirs
+  # env-<bsd>.sh appends, and the -L/usr/local/lib in the interpreter's
+  # sysconfig LDSHARED, came ahead of libffi's pkg-config flags, so cvc.3 on
+  # OpenBSD needed the ports libffi.so.2.2.  build.sh now drops them and puts
+  # the deps prefix first, as NetBSD already did (cvc_netbsd_prefix_first).
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

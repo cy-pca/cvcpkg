@@ -88,9 +88,42 @@ echo "pyyaml-cp312: pyyaml_build_config=${PYYAML_CFG}"
 # downloading its own.
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
-# NetBSD: build against our prefix ahead of pkgsrc, with a long RPATH that the
-# patchelf --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
-[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_prefix_first
+# The BSDs: build against our prefix ahead of the host's packages.
+#  * NetBSD: cvc_netbsd_prefix_first, with a long RPATH that the patchelf
+#    --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
+#  * OpenBSD/FreeBSD: env-<bsd>.sh appends the ports dirs (-I/usr/local/include,
+#    -L/usr/local/lib) to CFLAGS/LDFLAGS, and the interpreter's sysconfig LDSHARED
+#    carries -L/usr/local/lib from its own build.  setuptools puts both ahead of
+#    the pyyaml_build_config dirs, so the published builds compiled against the
+#    ports yaml.h and linked the ports libyaml (libyaml-0.so.0.0 on OpenBSD,
+#    libyaml-0.so.2 on FreeBSD) instead of the declared yaml.  Drop the ports
+#    dirs and put ours first; LDSHARED from the environment replaces sysconfig's.
+_drop_ports() {
+    local _w _out="" _ws=()
+    read -r -a _ws <<< "$1"
+    for _w in ${_ws[@]+"${_ws[@]}"}; do
+        case "${_w}" in
+            -I/usr/local/include|-L/usr/local/lib) ;;
+            *) _out="${_out:+${_out} }${_w}" ;;
+        esac
+    done
+    printf '%s' "${_out}"
+}
+case "${CVC_PLATFORM}" in
+    netbsd) cvc_netbsd_prefix_first ;;
+    openbsd|freebsd)
+        _ldshared="$("${PY}" -c 'import sysconfig; print(sysconfig.get_config_var("LDSHARED") or "")')"
+        if [ -n "${_ldshared}" ]; then
+            LDSHARED="$(_drop_ports "${_ldshared}")"
+            export LDSHARED
+        fi
+        CFLAGS="-I${DEPS}/include $(_drop_ports "${CFLAGS:-}")"
+        CXXFLAGS="-I${DEPS}/include $(_drop_ports "${CXXFLAGS:-}")"
+        LDFLAGS="-L${DEPS}/lib $(_drop_ports "${LDFLAGS:-}")"
+        export CFLAGS CXXFLAGS LDFLAGS
+        echo "pyyaml-cp312: LDSHARED=${LDSHARED:-<sysconfig>} LDFLAGS=${LDFLAGS}"
+        ;;
+esac
 "${PY}" -m pip wheel \
     --no-deps \
     --no-build-isolation \
@@ -185,6 +218,17 @@ else
     command -v patchelf >/dev/null 2>&1 || {
         echo "pyyaml-cp312: patchelf required on ${CVC_PLATFORM} but not on PATH" >&2; exit 1; }
     while IFS= read -r -d '' _so; do
+        # The libyaml it needs must be the declared one in the deps prefix, not a
+        # host package's (the published OpenBSD and FreeBSD builds: the ports
+        # libyaml-0.so.*; see step 4).
+        for _need in $(patchelf --print-needed "${_so}"); do
+            case "${_need}" in
+                libyaml*)
+                    [ -e "${DEPS}/lib/${_need}" ] || {
+                        echo "pyyaml-cp312: $(basename "${_so}") needs ${_need}, which is not the declared yaml in ${DEPS}/lib" >&2
+                        exit 1; } ;;
+            esac
+        done
         _rel="$(_relpath_to_lib "${_so}")"
         patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${_rel}" "${_so}"
     done < <(find "${SITE_PACKAGES}/yaml" -name '*.so' -print0)
