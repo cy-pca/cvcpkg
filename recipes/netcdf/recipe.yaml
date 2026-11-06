@@ -6,7 +6,12 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 2
+  # cvc.3: libnetcdf links only the declared hdf5 and zlib.  netCDF's CMake
+  # finds libcurl and the compressors whatever the options, and cvc.2's
+  # libnetcdf needed undeclared libcurl (OpenBSD's from ports, FreeBSD, macOS),
+  # libzstd (FreeBSD, macOS) and libbz2 (macOS), none of which it calls with
+  # DAP, byte-range and plugins off.  build.sh keeps CMake from finding them.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

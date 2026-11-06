@@ -56,7 +56,15 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 24
+  # cvc.25: declare what the Unix builds link.  configure auto-detects freetype
+  # and fontconfig, and they came from the shared populate prefix undeclared:
+  # cvc.24's macOS magick and libMagick* loaded @rpath/libfreetype.6.dylib, and
+  # linux NEEDed libfreetype.so.6 and libfontconfig.so.1.  Both are now declared
+  # on the five Unix platforms, as is gcc-runtime on linux for the libgomp.so.1
+  # that ImageMagick's OpenMP threading NEEDs.  build.sh also turns off every
+  # optional delegate this recipe does not declare, so the next one a populate
+  # prefix happens to hold cannot leak in the same way.
+  cvc_revision: 25
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -107,10 +115,29 @@ depends:
     - name: zstd
       version: "^1.5"
     - name: lerc
-    # (freetype/fontconfig are auto-detected from the builder as in +cvc.8; not
-    # declared here to avoid dragging in their heavy build closure — python3 via
-    # meson, expat, brotli — for a text-rendering delegate the image pipeline
-    # does not need. Enable them hermetically in a later revision if wanted.)
+    # Text rendering (label:, caption:, -annotate, -draw text, Wand's
+    # Drawing.text) needs freetype; fontconfig resolves font names to files.
+    # The Unix bundles have had them since +cvc.8, found undeclared in the
+    # builder's prefix (cvc.24: freetype on macOS, both on linux), so they are
+    # declared rather than switched off: the
+    # Windows bundle (the official build) has text too, and only their runtime
+    # closures install with this package (freetype -> brotli, fontconfig ->
+    # expat; the rest is already here), not their meson/python build closure.
+    # build.sh requires both delegates.  Not on windows (prebuilt installer) or
+    # wasm/wasi (built --without-freetype).
+    - name: freetype
+      version: "^2.13"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: fontconfig
+      version: "^2.15"
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    # libgomp.so.1: configure enables OpenMP wherever the compiler supports it,
+    # and on linux that is GCC, whose runtime minimal hosts lack (as openblas
+    # declares it).  macOS builds --disable-openmp (Apple clang has none); the
+    # BSDs link their base system's runtime where their compiler has one.
+    - name: gcc-runtime
+      version: "^11.4"
+      platforms: [linux]
     # ImageMagick links libxml2 (config-file parsing) and ships referencing it.
     # Pinned to the cvcpkg 2.12.x bundle, which has the FTP client removed — so
     # MagickCore never references xmlNanoFTP*. build.sh forces configure to use

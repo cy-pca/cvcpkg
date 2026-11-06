@@ -51,6 +51,13 @@ cd "${CVC_SOURCE_DIR}"
 # again; use the path a /usr build of GStreamer has, which only root can
 # create.  The GST_INSTALL_PLUGINS_HELPER environment variable still overrides
 # it.
+#
+# The aes, dtls and hls plugins (gst-plugins-bad) link OpenSSL, now a declared
+# dependency; cvc.4 found cvcpkg's in a shared prefix on linux, macOS, OpenBSD
+# and FreeBSD and shipped them undeclared.  HLS decryption picks the first of
+# nettle, libgcrypt and OpenSSL it finds (hls-crypto=auto, in bad's hls and
+# good's adaptivedemux2), and cvcpkg's nettle can sit in a shared prefix too:
+# name OpenSSL.
 meson setup "${CVC_BUILD_DIR}" \
     ${_extra[@]+"${_extra[@]}"} \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -65,6 +72,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dugly=disabled \
     -Dbad=enabled \
     -Dgst-plugins-bad:frei0r=disabled \
+    -Dgst-plugins-bad:hls-crypto=openssl \
+    -Dgst-plugins-good:hls-crypto=openssl \
     -Dgst-plugins-base:install_plugins_helper=/usr/libexec/gst-install-plugins-helper \
     -Dlibav=disabled \
     -Ddevtools=disabled \

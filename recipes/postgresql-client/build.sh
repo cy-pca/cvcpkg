@@ -55,6 +55,32 @@ ln -s "${CVC_INSTALL_DIR}" "${_PGPREFIX}"
 # whatever python3.pc the shared populate prefix held (python313t's on
 # linux/arm64: "The limited API is not currently supported in the
 # free-threaded build").
+#
+# Optional libraries this recipe does not declare are off, not auto-detected:
+# meson took whatever the builder or the shared populate prefix had, and cvc.2
+# needed it wherever it ran.  Every platform's lib/libpq-oauth-18.so needed
+# cvcpkg's libcurl, and NetBSD's libpq.so pkgsrc's libldap_r.so.6.
+#   libcurl: libpq-oauth (the OAuth device flow), which the libpq recipe has
+#     never had either.
+#   LDAP: cvcpkg packages no OpenLDAP; macOS keeps its own (part of the OS).
+#   PL/Perl, PL/Tcl, libxml, libxslt: only the server code pruned below uses
+#     them (postgresql-server declares libxml2).
+_optional=(-Dlibcurl=disabled -Dplperl=disabled -Dpltcl=disabled -Dlibxml=disabled
+           -Dlibxslt=disabled)
+[ "${CVC_PLATFORM}" = macos ] || _optional+=(-Dldap=disabled)
+
+# The BSDs: env-<bsd>.sh appends the ports/pkgsrc include and lib dirs to
+# CFLAGS/LDFLAGS, and meson puts LDFLAGS ahead of every dependency's own -L, so
+# where the host has a library this recipe declares (openssl, readline, zstd,
+# lz4, krb5, gettext) the build could link the host's copy.  Search the deps
+# prefix first.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd|netbsd)
+        export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+        export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+        ;;
+esac
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${_PGPREFIX}" \
@@ -70,7 +96,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dzstd=enabled \
     -Dlz4=enabled \
     -Dnls=enabled \
-    -Dgssapi=enabled
+    -Dgssapi=enabled \
+    "${_optional[@]}"
 
 cd "${CVC_BUILD_DIR}"
 ninja -j "${CVC_JOBS}"

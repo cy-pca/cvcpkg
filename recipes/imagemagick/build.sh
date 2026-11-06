@@ -78,6 +78,23 @@ else
          "configure auto-detect libxml2 (may pick the host's FTP-enabled one)"
 fi
 
+# Every optional delegate configure enables by default and this recipe does not
+# declare is switched off.  configure links whatever it can find, and a builder's
+# shared populate prefix holds unrelated cvcpkg packages (cvc.24 picked up
+# freetype and fontconfig that way, undeclared), so leaving these to
+# auto-detection makes the bundle depend on what else happened to be built.
+_im_undeclared_delegates=(
+    --without-djvu --without-dmr --without-gvc --without-heic --without-jxl
+    --without-lcms --without-lqr --without-openexr --without-pango
+    --without-raqm --without-zip
+)
+# OpenMP: linux links GCC's libgomp, declared through gcc-runtime.  macOS stays
+# without it, as it always built: Apple clang has no OpenMP, and any other clang
+# would take cvcpkg's libomp (the openmp package) out of a shared populate
+# prefix, undeclared.
+_im_openmp=()
+[ "${CVC_PLATFORM}" != "macos" ] || _im_openmp=(--disable-openmp)
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
@@ -93,14 +110,30 @@ fi
     --with-zstd=yes \
     --with-lzma=yes \
     --with-bzlib=yes \
+    --with-freetype=yes \
+    --with-fontconfig=yes \
     --without-perl \
     --without-x \
     --without-jbig \
     --without-raw \
     --without-openjp2 \
+    "${_im_undeclared_delegates[@]}" \
+    ${_im_openmp[@]+"${_im_openmp[@]}"} \
     --disable-docs \
     CFLAGS="${CFLAGS:-"-O2 -fPIC"}" \
     CXXFLAGS="${CXXFLAGS:-"-O2 -fPIC -std=c++17"}"
+
+# freetype and fontconfig are declared (recipe.yaml), so their delegates must be
+# on: --with-freetype=yes does not make configure fail when the library is not
+# found, it just builds without text rendering.
+for _delegate in FREETYPE FONTCONFIG; do
+    if ! grep -Eq "^[[:space:]]*#[[:space:]]*define[[:space:]]+MAGICKCORE_${_delegate}_DELEGATE([[:space:]]|$)" \
+            MagickCore/magick-baseconfig.h; then
+        echo "imagemagick build.sh: configure did not enable the declared ${_delegate} delegate" >&2
+        exit 1
+    fi
+done
+
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
 

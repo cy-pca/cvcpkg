@@ -4,7 +4,14 @@ recipe:
   upstream_version: "18.4"
   # cvc.2: pass the deps prefix as extra_include_dirs/extra_lib_dirs so
   # meson finds cvcpkg's libintl on macOS and the BSDs.
-  cvc_revision: 2
+  # cvc.3: declare libxml2, and build without what nothing declares.  cvc.2
+  # linked whatever meson found: cvcpkg's libcurl (libpq-oauth-18, every
+  # platform), libxml2 and libxslt (linux, macOS), and NetBSD's pkgsrc
+  # libldap and libxml2.  XML support stays, on the declared libxml2; OAuth and
+  # libxslt are off; LDAP stays only on macOS (the OS's own); PL/Perl stays on
+  # macOS and OpenBSD and PL/Tcl on macOS, against the OS's /usr/bin/perl and
+  # Tcl.  The BSDs search the deps prefix ahead of ports/pkgsrc.  See build.sh.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -43,6 +50,9 @@ depends:
       version: "^1.0"
     - name: krb5
       version: "^1.21"
+    # The xml type, XMLTABLE and xpath() in postgres, and contrib/xml2's pgxml.
+    - name: libxml2
+      version: "^2.12"
   host_tools:
     - meson
     - ninja

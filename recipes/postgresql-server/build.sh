@@ -55,6 +55,46 @@ ln -s "${CVC_INSTALL_DIR}" "${_PGPREFIX}"
 # whatever python3.pc the shared populate prefix held (python313t's on
 # linux/arm64: "The limited API is not currently supported in the
 # free-threaded build").
+#
+# Optional libraries are declared, the OS's own or off, never whatever meson
+# finds: it took what the builder or the shared populate prefix had, and cvc.2
+# needed it wherever it ran.  Every platform's lib/libpq-oauth-18.so needed
+# cvcpkg's libcurl; linux's and macOS's postgres and pgxml cvcpkg's libxml2,
+# and pgxml its libxslt; NetBSD's postgres, dblink and libpqwalreceiver
+# pkgsrc's libldap.so.6 and libxml2.so.16, and its libpq.so libldap_r.so.6.
+#   libxml: the xml type, XMLTABLE and xpath(); libxml2 is a declared
+#     dependency on every platform, so required.
+#   libxslt: only contrib/xml2's deprecated xslt_process() uses it, and
+#     cvcpkg's libxslt has no BSD build; off everywhere.
+#   libcurl: libpq-oauth (the OAuth device flow), which the libpq recipe has
+#     never had either.
+#   LDAP: cvcpkg packages no OpenLDAP; macOS keeps its own (part of the OS).
+#   PL/Perl, PL/Tcl: they link the interpreter's library, so built only where
+#     the OS ships it: macOS both (/System's libperl and Tcl.framework),
+#     OpenBSD PL/Perl (base libperl; its Tcl is a port).  PERL names the OS's
+#     /usr/bin/perl: a shared prefix can put cvcpkg's perl first on PATH, and
+#     PL/Perl would then link its libperl, undeclared.  cvcpkg packages no Tcl,
+#     so only the OS's is found.  Off elsewhere: FreeBSD's and NetBSD's linked
+#     the ports and pkgsrc libperl (libpq cvc.9).
+_optional=(-Dlibxml=enabled -Dlibxslt=disabled -Dlibcurl=disabled)
+case "${CVC_PLATFORM}" in
+    macos)   _optional+=(-DPERL=/usr/bin/perl) ;;
+    openbsd) _optional+=(-DPERL=/usr/bin/perl -Dpltcl=disabled -Dldap=disabled) ;;
+    *)       _optional+=(-Dplperl=disabled -Dpltcl=disabled -Dldap=disabled) ;;
+esac
+
+# The BSDs: env-<bsd>.sh appends the ports/pkgsrc include and lib dirs to
+# CFLAGS/LDFLAGS, and meson puts LDFLAGS ahead of every dependency's own -L, so
+# where the host has a library this recipe declares (libxml2, openssl,
+# readline, zstd, lz4, krb5, gettext) the build could link the host's copy.
+# Search the deps prefix first.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd|netbsd)
+        export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+        export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+        ;;
+esac
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${_PGPREFIX}" \
@@ -70,7 +110,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dzstd=enabled \
     -Dlz4=enabled \
     -Dnls=enabled \
-    -Dgssapi=enabled
+    -Dgssapi=enabled \
+    "${_optional[@]}"
 
 cd "${CVC_BUILD_DIR}"
 ninja -j "${CVC_JOBS}"

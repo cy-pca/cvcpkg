@@ -4,7 +4,11 @@ recipe:
   upstream_version: "18.4"
   # cvc.2: pass the deps prefix as extra_include_dirs/extra_lib_dirs so
   # meson finds cvcpkg's libintl on macOS and the BSDs.
-  cvc_revision: 2
+  # cvc.3: build without what nothing declares.  cvc.2's libpq-oauth-18
+  # linked cvcpkg's libcurl on every platform, and NetBSD's libpq pkgsrc's
+  # libldap_r; OAuth and LDAP (but macOS's own) are off, and the BSDs search
+  # the deps prefix ahead of ports/pkgsrc.  See build.sh.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
