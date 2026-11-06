@@ -100,6 +100,32 @@ else
     CONFIGURE_ARGS+=(--enable-gnutls)
 fi
 
+# iconv on macOS is the system one, /usr/lib/libiconv.2.dylib, which every Mac
+# has; the bundle declares no iconv dependency.  configure autodetects iconv
+# with the first <iconv.h> on the include path and the first libiconv on the
+# library path, and the deps prefix comes ahead of the SDK on both (CPATH and
+# every dependency's pkg-config -I; LDFLAGS and LIBRARY_PATH).  A pack-all
+# shard's shared prefix can hold cvcpkg's GNU libiconv, built there for another
+# recipe.  7.1.2+cvc.1 for macOS was built that way: it compiled against GNU
+# <iconv.h>, which renames iconv_open to libiconv_open, and loaded
+# @rpath/libiconv.2.dylib, which nothing it depends on ships.  dyld aborted
+# wherever that bundle was installed (libcvc v3.7.11's ari-media smoke test,
+# 2026-11-06).  So the SDK's <iconv.h> and libiconv.tbd go first, from a
+# directory that holds only those two.  configure starts from CFLAGS and LDFLAGS
+# in the environment and appends its own flags after them.  --enable-iconv makes
+# a failed probe stop configure, so the build cannot silently drop iconv.  The
+# check after install proves the result.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    : "${SDKROOT:?SDKROOT must be set (env-macos.sh exports it)}"
+    _sdk_iconv="${CVC_BUILD_DIR}/sdk-iconv"
+    mkdir -p "${_sdk_iconv}/include" "${_sdk_iconv}/lib"
+    ln -sf "${SDKROOT}/usr/include/iconv.h" "${_sdk_iconv}/include/iconv.h"
+    ln -sf "${SDKROOT}/usr/lib/libiconv.tbd" "${_sdk_iconv}/lib/libiconv.tbd"
+    export CFLAGS="-I${_sdk_iconv}/include ${CFLAGS:-}"
+    export LDFLAGS="-L${_sdk_iconv}/lib ${LDFLAGS}"
+    CONFIGURE_ARGS+=(--enable-iconv)
+fi
+
 # FFmpeg's configure hard-defaults its C compiler to "gcc" and does not
 # reliably honour $CC.  On the BSDs (and macOS) the system compiler is
 # clang exposed as cc, so pass the platform-selected compiler explicitly.
@@ -181,6 +207,33 @@ if [[ "${CVC_PLATFORM}" == "macos" ]]; then
         install_name_tool -add_rpath "@loader_path" "${dylib}" 2>/dev/null || true
     done
     shopt -u nullglob
+fi
+
+# macOS: every libav*/libsw* that loads an iconv must load the system one, and
+# libavcodec must load it (see "iconv on macOS" above).  The otool -L lines
+# go to the build log.
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    shopt -s nullglob
+    _iconv_ok=1
+    for dylib in "${CVC_INSTALL_DIR}"/lib/lib{av,sw}*.dylib; do
+        [[ -L "${dylib}" ]] && continue
+        while IFS= read -r line; do
+            echo "cvcpkg: otool -L $(basename "${dylib}"):${line}"
+            dep="$(echo "${line}" | awk '{print $1}')"
+            if [[ "${dep}" != /usr/lib/libiconv.2.dylib ]]; then
+                echo "cvcpkg: ERROR: $(basename "${dylib}") loads ${dep}, not /usr/lib/libiconv.2.dylib" >&2
+                _iconv_ok=0
+            fi
+        done < <(otool -L "${dylib}" | awk 'NR>1' | grep -i iconv || true)
+    done
+    _avcodec=( "${CVC_INSTALL_DIR}"/lib/libavcodec.*.*.*.dylib )
+    if [[ ${#_avcodec[@]} -ne 1 ]] ||
+       ! otool -L "${_avcodec[0]}" | awk 'NR>1 {print $1}' | grep -x /usr/lib/libiconv.2.dylib >/dev/null; then
+        echo "cvcpkg: ERROR: libavcodec does not load /usr/lib/libiconv.2.dylib" >&2
+        _iconv_ok=0
+    fi
+    shopt -u nullglob
+    [[ "${_iconv_ok}" == 1 ]] || exit 1
 fi
 
 # Make installed .pc files relocatable.

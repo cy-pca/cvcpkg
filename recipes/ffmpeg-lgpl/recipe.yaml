@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: ffmpeg-lgpl
   upstream_version: "7.1.2"
-  cvc_revision: 1
+  # cvc.2: macOS links the system iconv (/usr/lib/libiconv.2.dylib).  cvc.1 for
+  # macOS (x86_64 and arm64) was built in a pack-all shard whose shared prefix
+  # held cvcpkg's GNU libiconv, so it loaded @rpath/libiconv.2.dylib, which no
+  # dependency ships, and dyld aborted.  See build.sh.  Every platform rebuilds.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
