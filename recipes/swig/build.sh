@@ -38,19 +38,22 @@ if [[ ! -x "${PCRE2_CONFIG}" ]]; then
     exit 1
 fi
 
-# FreeBSD/OpenBSD: link the declared pcre2.  configure appends pcre2-config's
-# -L${CVC_DEPS_PREFIX}/lib -lpcre2-8 to LIBS, behind the -L/usr/local/lib that
-# env-<bsd>.sh put in LDFLAGS, so +cvc.5's OpenBSD bin/swig-bin NEEDed the
-# builder's ports libpcre2-8.so.0.7.  SWIG needs nothing else from /usr/local
-# (bison and the autotools come from the prefix), so drop those dirs, as
-# recipes/mesa does.
+# The BSDs: link the declared pcre2.  configure appends pcre2-config's
+# -L${CVC_DEPS_PREFIX}/lib -lpcre2-8 to LIBS, behind the -L/usr/local/lib (or
+# NetBSD's -L/usr/pkg/lib) that env-<bsd>.sh put in LDFLAGS, so +cvc.5's
+# OpenBSD bin/swig-bin NEEDed the builder's ports libpcre2-8.so.0.7, and the
+# first NetBSD build compiled against pkgsrc's pcre2 10.47 and then failed to
+# run on the declared one ("version PCRE2_10.47 ... not defined", dev job
+# 24660).  SWIG needs nothing else from there (bison and the autotools come
+# from the prefix), so drop those dirs, as recipes/mesa does.
 case "${CVC_PLATFORM}" in
-    freebsd|openbsd)
+    freebsd|openbsd|netbsd)
         _drop_host_dirs() {
             local _w _out=""
             for _w in $1; do
                 case "${_w}" in
                     -I/usr/local/include|-L/usr/local/lib) ;;
+                    -I/usr/pkg/include|-L/usr/pkg/lib|-Wl,-R/usr/pkg/lib) ;;
                     *) _out="${_out:+${_out} }${_w}" ;;
                 esac
             done
@@ -97,7 +100,7 @@ esac
 
 # The pcre2 swig links must be the declared one (see above).
 case "${CVC_PLATFORM}" in
-    freebsd|openbsd)
+    freebsd|openbsd|netbsd)
         _pcre_libs="$(grep -a -h -o -E 'libpcre2-8\.so(\.[0-9]+)*' \
             "${CVC_INSTALL_DIR}/bin/swig" | sort -u || true)"
         for _lib in ${_pcre_libs}; do

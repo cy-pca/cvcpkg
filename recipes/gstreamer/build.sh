@@ -35,8 +35,13 @@ fi
 # gst-plugins-good's v4l2 plugin, but its errno.h has no ENODATA, which
 # gstv4l2object.c uses ("use of undeclared identifier 'ENODATA'", populate
 # 2026-10-19).  FreeBSD and NetBSD define it.
+# NetBSD: no gst-plugins-good oss plugin.  NetBSD's <soundcard.h> turns ioctl
+# into _oss_ioctl, which lives in libossaudio, and the plugin's meson never
+# links it ("undefined reference to `_oss_ioctl'", dev job 24658; gstreamer had
+# never built on NetBSD).  The oss4 plugin links and stays.
 _extra=()
 if [ "$(uname -s)" = OpenBSD ]; then _extra+=(-Dgst-plugins-good:v4l2=disabled); fi
+if [ "$(uname -s)" = NetBSD ]; then _extra+=(-Dgst-plugins-good:oss=disabled); fi
 
 cd "${CVC_SOURCE_DIR}"
 
