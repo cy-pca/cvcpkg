@@ -8,8 +8,10 @@ import struct
 import pytest
 
 from cvcpkg.linkage import (
+    _Sonames,
     audit_tree,
     builder_path_reason,
+    host_package_libraries,
     index_files,
     is_system_soname,
     library_index,
@@ -71,6 +73,10 @@ def test_reads_macho_loads_rpaths_id(tmp_path):
         "/usr/lib/libz.1.dylib",
     )
     assert link.rpaths == ("/Users/runner/work/x/prefix/lib",)
+    assert link.weak == ("/usr/lib/libz.1.dylib",)
+    # Loaded strongly as well as weakly: dyld needs it.
+    both = macho(tmp_path / "both", loads=["@rpath/libq.dylib"], weak=["@rpath/libq.dylib"])
+    assert read_linkage(both).weak == ()
     lib = read_linkage(
         macho(tmp_path / "libc.dylib", filetype="dylib", install_id="@rpath/libc.dylib")
     )
@@ -84,13 +90,20 @@ def test_reads_universal_macho_as_union_of_slices(tmp_path):
         tmp_path / "libu.dylib",
         fat=[
             macho_slice(filetype="dylib", install_id="@rpath/libu.dylib", loads=["/a/libx.dylib"]),
-            macho_slice(filetype="dylib", loads=["/b/liby.dylib"], rpaths=["@loader_path"]),
+            macho_slice(
+                filetype="dylib",
+                loads=["/b/liby.dylib"],
+                weak=["/a/libx.dylib", "@rpath/libw.dylib"],
+                rpaths=["@loader_path"],
+            ),
         ],
     )
     link = read_linkage(fat)
-    assert link.needed == ("/a/libx.dylib", "/b/liby.dylib")
+    assert link.needed == ("/a/libx.dylib", "/b/liby.dylib", "@rpath/libw.dylib")
     assert link.rpaths == ("@loader_path",)
     assert link.soname == "@rpath/libu.dylib"
+    # Strong in one slice is strong: only libw is weak in every slice that loads it.
+    assert link.weak == ("@rpath/libw.dylib",)
 
 
 def test_non_objects_are_none(tmp_path):
@@ -440,6 +453,26 @@ def test_audit_macos_rpath_frameworks_and_os_search_paths(tmp_path):
     assert audit_tree(root, "macos", dep_libs=qt).ok
 
 
+def test_audit_macos_weak_rpath_loads_follow_the_build_prefix(tmp_path):
+    root, deps = tmp_path / "bundle", tmp_path / "deps"
+    macho(
+        root / "bin" / "app",
+        weak=["@rpath/libswift_Concurrency.dylib", "@rpath/libiconv.2.dylib"],
+        rpaths=["@executable_path/../lib"],
+    )
+    # Optional by design: dyld starts the program without either.
+    assert audit_tree(root, "macos", dep_libs={}).ok
+    # But one the build linked from the prefix is still a leak.
+    macho(deps / "lib" / "libiconv.2.dylib", filetype="dylib")
+    (f,) = audit_tree(root, "macos", dep_libs={}, prefix_libs=library_index([deps])).findings
+    assert (f.path, f.field, f.value) == (
+        "bin/app",
+        "LC_LOAD_WEAK_DYLIB",
+        "@rpath/libiconv.2.dylib",
+    )
+    assert "only the build prefix has it, in lib/" in f.reason
+
+
 def test_audit_elf_gettext_arm64_undeclared_iconv(tmp_path):
     root, deps = tmp_path / "bundle", tmp_path / "deps"
     so = root / "lib" / "libgettextlib-0.22.so"
@@ -523,3 +556,83 @@ def test_library_index_includes_dylibs_and_framework_binaries(tmp_path):
         "libz.1.dylib": {"lib"},
         "QtGui": {"lib/QtGui.framework/Versions/A"},
     }
+
+
+# ── the BSD host's packages ─────────────────────────────────────
+
+
+def test_sonames_match_as_openbsd_ld_so_does():
+    shipped = {"libavcodec.so.61.19": {"lib"}, "libz.so.7.2": {"lib"}, "libgmp.so.15.0": {"lib"}}
+    obsd = _Sonames({**shipped, "libpcre2-8.so.0.13.0": {"lib"}}, "openbsd")
+    # Unversioned: the highest of any version (ffmpeg's NEEDED libavcodec.so).
+    assert obsd.match("libavcodec.so") == "libavcodec.so.61.19"
+    # Same major, minor at least the one linked against.
+    assert obsd.match("libz.so.7.1") == "libz.so.7.2"
+    assert obsd.match("libz.so.7.3") is None
+    assert obsd.match("libgmp.so.11.1") is None
+    # Not an OpenBSD-style name: only that exact name.
+    assert obsd.match("libpcre2-8.so.0.7") is None
+    assert obsd.get("libz.so.7") == {"lib"}
+    # Everywhere else a NEEDED name is the file name.
+    assert _Sonames(shipped, "freebsd").match("libz.so.7.1") is None
+    assert _Sonames(shipped, "linux").match("libavcodec.so") is None
+
+
+def test_host_package_libraries(tmp_path):
+    for f in (
+        "usr/local/lib/libiconv.so.7.1",
+        "usr/local/lib/libiconv.la",
+        "usr/local/lib/perl5/5.42/mach/CORE/libperl.so.5.42",
+        "usr/local/lib/python3.11/lib-dynload/_ssl.so",
+        "usr/pkg/lib/libldap.so.6",
+        "opt/vendor/lib/libv.so.1",
+    ):
+        (tmp_path / f).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / f).write_bytes(b"")
+    assert host_package_libraries("openbsd", tmp_path) == {"libiconv.so.7.1": {"/usr/local/lib"}}
+    # An object's absolute RUNPATH into the package tree is read too; others are not.
+    core = "/usr/local/lib/perl5/5.42/mach/CORE"
+    assert host_package_libraries("freebsd", tmp_path, [core, "/opt/vendor/lib"]) == {
+        "libiconv.so.7.1": {"/usr/local/lib"},
+        "libperl.so.5.42": {core},
+    }
+    assert host_package_libraries("netbsd", tmp_path) == {"libldap.so.6": {"/usr/pkg/lib"}}
+    assert host_package_libraries("linux", tmp_path) == {}
+
+
+def test_audit_openbsd_host_ports_libraries(tmp_path):
+    # ffmpeg-lgpl 7.1.2+cvc.1 and gmp 6.3.0+cvc.12 on OpenBSD, as published.
+    root = tmp_path / "bundle"
+    elf(
+        root / "lib" / "libavcodec.so.61.19",
+        kind="dyn",
+        needed=["libavutil.so", "libiconv.so.7.1", "libz.so.7.1", "libc.so.100.3"],
+        runpath="$ORIGIN",
+    )
+    elf(root / "lib" / "libavutil.so.59.39", kind="dyn")
+    elf(root / "lib" / "libgmp.so.15.0", kind="dyn")
+    elf(root / "lib" / "libgmpxx.so.11.0", kind="dyn", needed=["libgmp.so.11.1"])
+    host = {
+        "libiconv.so.7.1": {"/usr/local/lib"},
+        "libgmp.so.11.1": {"/usr/local/lib"},
+        "libz.so.7.1": {"/usr/local/lib"},
+    }
+    system = {"libz.so.7.1", "libc.so.100.3"}  # base wins over a package's copy
+    # cvcpkg's own iconv is declared, but it is libiconv.so.8.1.
+    declared = index_files(["lib/libiconv.so.8.1"])
+    res = audit_tree(root, "openbsd", dep_libs=declared, system_libs=system, host_libs=host)
+    assert _fields(res) == {
+        ("lib/libavcodec.so.61.19", "NEEDED", "libiconv.so.7.1"),
+        ("lib/libgmpxx.so.11.0", "NEEDED", "libgmp.so.11.1"),
+    }
+    assert {f.reason for f in res.findings} == {
+        "only the build host's packages have it, in /usr/local/lib/; "
+        "neither this bundle nor a runtime dependency ships it"
+    }
+    assert res.host_packages == {"libiconv.so.7.1", "libgmp.so.11.1"} and not res.undeclared
+    allow = ["libiconv.so.7", "libgmp.so.11"]
+    assert audit_tree(
+        root, "openbsd", allow=allow, dep_libs=declared, system_libs=system, host_libs=host
+    ).ok
+    # The closure unknown: not checked.
+    assert audit_tree(root, "openbsd", system_libs=system, host_libs=host).ok

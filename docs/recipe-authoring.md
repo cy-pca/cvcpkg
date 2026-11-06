@@ -216,6 +216,11 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   provides are never reported). That is a dependency the build found in a
   shared prefix, pack-all's, and never declared: ffmpeg-lgpl 7.1.2+cvc.1 linked
   `@rpath/libiconv.2.dylib` on macOS, gettext `libiconv.so.2` on linux/arm64.
+  On a BSD, the build environment also puts the host's ports or pkgsrc on the
+  search path (`/usr/local`, `/usr/pkg`). So a NEEDED name that only the host's
+  packages have fails a native pack too, as OpenBSD ffmpeg-lgpl's ports
+  `libiconv.so.7.1` would have; the base system's libraries are fine. A weak
+  Mach-O load fails only when the build prefix has the library.
   The fix is almost always in the recipe: link the dependency from
   `$CVC_DEPS_PREFIX`, declare it in `depends.runtime`, and do not let an
   optional feature pick up whatever the build host or prefix has installed

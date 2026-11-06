@@ -3409,7 +3409,10 @@ def check_relocatable(
     *dep_prefixes* ships -- ffmpeg-lgpl 7.1.2+cvc.1 linked
     ``@rpath/libiconv.2.dylib`` from the shared pack-all prefix on macOS and
     never declared iconv (:func:`cvcpkg.linkage.undeclared_libs`).  Packing
-    natively, the names in the OS's own library directories count as the OS's.
+    natively, the names in the OS's own library directories count as the OS's;
+    on a BSD, an ELF NEEDED that only the host's ports or pkgsrc have
+    (``/usr/local/lib``, ``/usr/pkg/lib``) fails the pack as well -- OpenBSD's
+    ffmpeg-lgpl linked the ports ``libiconv.so.7.1``.
     A runtime dependency whose installed manifest lists no files may own any
     library in *dep_prefixes* that no other manifest lists, so those count as
     shipped for this check.  Runs on the staged tree, after the relocation
@@ -3421,6 +3424,7 @@ def check_relocatable(
     prefix_libs: dict[str, set[str]] | None = None
     unlisted_libs: dict[str, set[str]] | None = None
     system_libs: frozenset[str] = frozenset()
+    host_libs: dict[str, set[str]] | None = None
     listed: dict[str, list[str]] | None = None
     if platform not in _linkage.NO_LOADER_PATHS and prefixes:
         unlisted: list[str] = []
@@ -3435,6 +3439,10 @@ def check_relocatable(
             )
         if detect_platform() == platform:
             system_libs = _linkage.system_libraries(platform)
+            if platform in _linkage.HOST_PACKAGE_ROOTS:
+                # Absolute RUNPATH dirs too: ports' libperl is in perl5/.../CORE.
+                rpaths = {e for _o, link in _linkage.iter_objects(root) for e in link.rpaths}
+                host_libs = _linkage.host_package_libraries(platform, extra_dirs=rpaths)
     result = _linkage.audit_tree(
         root,
         platform,
@@ -3444,6 +3452,7 @@ def check_relocatable(
         prefix_libs=prefix_libs,
         unlisted_libs=unlisted_libs,
         system_libs=system_libs,
+        host_libs=host_libs,
     )
     if result.ok:
         if result.objects:
@@ -3459,7 +3468,17 @@ def check_relocatable(
             "packages): declare the package that ships it in depends.runtime, or keep "
             "the build from finding it. "
             + (f"In the build prefix, {shipped_by}. " if shipped_by else "")
-            + "A library the consumer must supply goes in package.linkage_allow, as "
+        )
+    if result.host_packages:
+        undeclared += (
+            "\nA library only the build host's packages have "
+            f"({', '.join(sorted(result.host_packages))}) is missing wherever that "
+            "package is not installed: build against cvcpkg's package and declare it, "
+            "or without the feature that needs it. "
+        )
+    if undeclared:
+        undeclared += (
+            "A library the consumer must supply goes in package.linkage_allow, as "
             "reported (@rpath/libX.dylib, libX.so.N) or a prefix of it."
         )
     raise PackError(

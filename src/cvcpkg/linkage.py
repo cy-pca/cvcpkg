@@ -85,7 +85,10 @@ class Linkage:
     the DT_RUNPATH/DT_RPATH entries or LC_RPATHs, ``soname`` the DT_SONAME or
     LC_ID_DYLIB.  ``dt_rpath`` is set when an ELF search path is a legacy
     DT_RPATH with no DT_RUNPATH, so an editor can keep it one (patchelf
-    ``--force-rpath``).  For a universal Mach-O the slices are merged.
+    ``--force-rpath``).  ``weak`` are the Mach-O loads (also in ``needed``)
+    that are LC_LOAD_WEAK_DYLIB only: dyld starts the object without them.
+    For a universal Mach-O the slices are merged; a load strong in any slice
+    is strong.
     """
 
     format: str  # "elf" | "macho"
@@ -94,6 +97,7 @@ class Linkage:
     rpaths: tuple[str, ...] = ()
     soname: str | None = None
     dt_rpath: bool = False
+    weak: tuple[str, ...] = ()
 
 
 def read_linkage(path: Path | str) -> Linkage | None:
@@ -314,12 +318,14 @@ def _read_macho_any(f: BinaryIO, head: bytes) -> Linkage | None:
                 slices.append(sl)
         if not slices:
             return None
+        strong = {e for s in slices for e in s.needed if e not in s.weak}
         return Linkage(
             "macho",
             slices[0].kind,
             _dedupe(e for s in slices for e in s.needed),
             _dedupe(e for s in slices for e in s.rpaths),
             next((s.soname for s in slices if s.soname), None),
+            weak=_dedupe(e for s in slices for e in s.weak if e not in strong),
         )
     return _read_macho(f, 0)
 
@@ -344,6 +350,8 @@ def _read_macho(f: BinaryIO, base: int) -> Linkage | None:
     f.seek(base + (32 if is64 else 28))
     cmds = f.read(sizeofcmds)
     needed: list[str] = []
+    weak: list[str] = []
+    strong: set[str] = set()
     rpaths: list[str] = []
     soname: str | None = None
     off = 0
@@ -364,8 +372,19 @@ def _read_macho(f: BinaryIO, base: int) -> Linkage | None:
                 soname = name
             else:
                 needed.append(name)
+                if cmd == _LC_LOAD_WEAK_DYLIB:
+                    weak.append(name)
+                else:
+                    strong.add(name)
         off += cmdsize
-    return Linkage("macho", kind, tuple(needed), tuple(rpaths), soname)
+    return Linkage(
+        "macho",
+        kind,
+        tuple(needed),
+        tuple(rpaths),
+        soname,
+        weak=tuple(n for n in dict.fromkeys(weak) if n not in strong),
+    )
 
 
 def _dedupe(items: Iterable[str]) -> tuple[str, ...]:
@@ -655,7 +674,86 @@ def system_libraries(platform: str, sysroot: Path | str = "/") -> frozenset[str]
     return frozenset(names)
 
 
-def _ships(index: Mapping[str, Iterable[str]], ref: str) -> bool:
+# Where each BSD's third-party packages install (ports, pkgsrc), as opposed to
+# the base system.  The BSD environments put these on every build's -I/-L, so
+# configure finds a package the builder happens to have; a consumer without
+# that package cannot load what links it.
+HOST_PACKAGE_ROOTS = {"freebsd": "/usr/local", "openbsd": "/usr/local", "netbsd": "/usr/pkg"}
+
+
+def host_package_libraries(
+    platform: str, sysroot: Path | str = "/", extra_dirs: Iterable[str] = ()
+) -> dict[str, set[str]]:
+    """Shared-library names in *platform*'s package tree under *sysroot*, with
+    the absolute directories that hold them.
+
+    Read are ``<root>/lib`` (:data:`HOST_PACKAGE_ROOTS`) and those of
+    *extra_dirs* inside the root -- an object's absolute RUNPATH, such as
+    ``/usr/local/lib/perl5/5.42/mach/CORE`` for libperl.  Like
+    :func:`system_libraries`, only meaningful on a host running *platform*.
+    """
+    root = HOST_PACKAGE_ROOTS.get(platform)
+    if root is None:
+        return {}
+    dirs = [f"{root}/lib", *(d for d in extra_dirs if d.startswith(f"{root}/"))]
+    out: dict[str, set[str]] = {}
+    for d in dict.fromkeys(posixpath.normpath(d) for d in dirs):
+        try:
+            with os.scandir(Path(sysroot) / d.lstrip("/")) as entries:
+                for e in entries:
+                    if _is_library("", e.name):
+                        out.setdefault(e.name, set()).add(d)
+        except OSError:
+            continue
+    return out
+
+
+_OPENBSD_SONAME = re.compile(r"^(.+\.so)(?:\.(\d+)(?:\.(\d+))?)?$")
+
+
+class _Sonames:
+    """Library names looked up as *platform*'s loader matches a NEEDED name.
+
+    Exact everywhere but OpenBSD, whose ld.so satisfies ``libfoo.so.X.Y`` with
+    the highest ``libfoo.so.X.Z``, Z >= Y, and an unversioned ``libfoo.so``
+    (ffmpeg's NEEDED ``libavcodec.so``) with the highest version of any.
+    """
+
+    def __init__(self, index: Mapping[str, Iterable[str]] | Iterable[str], platform: str):
+        self.index: Mapping[str, Iterable[str]] = (
+            index if isinstance(index, Mapping) else {n: () for n in index}
+        )
+        self.by_stem: dict[str, list[tuple[int, int, str]]] | None = None
+        if platform == "openbsd":
+            self.by_stem = {}
+            for name in self.index:
+                m = _OPENBSD_SONAME.match(name)
+                if m and m.group(2) is not None:
+                    version = (int(m.group(2)), int(m.group(3) or 0), name)
+                    self.by_stem.setdefault(m.group(1), []).append(version)
+
+    def match(self, name: str) -> str | None:
+        if name in self.index:
+            return name
+        m = _OPENBSD_SONAME.match(name) if self.by_stem is not None else None
+        if m is None:
+            return None
+        found = self.by_stem.get(m.group(1), []) if self.by_stem is not None else []
+        if m.group(2) is not None:
+            major, minor = int(m.group(2)), int(m.group(3) or 0)
+            found = [v for v in found if v[0] == major and v[1] >= minor]
+        return max(found)[2] if found else None
+
+    def get(self, name: str) -> Iterable[str] | None:
+        found = self.match(name)
+        return None if found is None else self.index[found]
+
+
+def _sonames(index: Mapping[str, Iterable[str]] | Iterable[str] | None, platform: str) -> _Sonames:
+    return index if isinstance(index, _Sonames) else _Sonames(index or {}, platform)
+
+
+def _ships(index: Mapping[str, Iterable[str]] | _Sonames, ref: str) -> bool:
     """Whether *index* holds the file *ref* names: ``libz.1.dylib``, or a tail
     with directories (``QtCore.framework/Versions/A/QtCore``)."""
     d, _, name = ref.rpartition("/")
@@ -668,41 +766,59 @@ def undeclared_libs(
     shipped: Mapping[str, Iterable[str]],
     prefix_libs: Mapping[str, Iterable[str]] | None = None,
     system_libs: Iterable[str] = (),
-) -> list[tuple[str, list[str]]]:
-    """``(value, homes)`` for each library *link* loads by name that neither
-    *shipped* (the bundle and its runtime closure, indexed like
-    :func:`library_index`) nor the OS provides; *homes* are where
-    *prefix_libs*, the build's deps prefix, has it, possibly none.
+    host_libs: Mapping[str, Iterable[str]] | None = None,
+    platform: str = "",
+) -> list[tuple[str, str, list[str]]]:
+    """``(value, source, homes)`` for each library *link* loads by name that
+    neither *shipped* (the bundle and its runtime closure, indexed like
+    :func:`library_index`) nor the OS provides.  *source* says who has it
+    instead: ``"prefix"`` -- *prefix_libs*, the build's deps prefix, in the
+    *homes* directories -- ``"host"`` -- *host_libs*, the build host's package
+    tree (:func:`host_package_libraries`) -- or ``""``, nothing known.
 
     Mach-O: every ``@rpath/`` load.  The OS's own dylibs are loaded by absolute
     path (``/usr/lib``, ``/System``), so an ``@rpath`` library the bundle does
     not carry is missing on a clean Mac -- unless the object also searches an
-    OS directory (``LC_RPATH /usr/lib/swift``), where it may be found.
+    OS directory (``LC_RPATH /usr/lib/swift``), where it may be found.  A weak
+    load (:attr:`Linkage.weak`) is optional by design, so it is reported only
+    when *prefix_libs* has it: then the build linked the prefix's copy.
 
-    ELF: a bare NEEDED name only when *prefix_libs* has it.  ``libc.so.6`` is a
-    bare name too, and an absent library may be the host's to provide; the
-    leak this catches is a library that is in the build prefix only because
-    the prefix is shared (pack-all's populate prefix), never declared.  Names
-    of :func:`is_system_soname` and those in *system_libs* (see
-    :func:`system_libraries`) are never reported.
+    ELF: a bare NEEDED name only when *prefix_libs* or *host_libs* has it.
+    ``libc.so.6`` is a bare name too, and an absent library may be the host's
+    to provide; the leaks this catches are a library that is in the build
+    prefix only because the prefix is shared (pack-all's populate prefix), and
+    one a BSD build found in the host's ports or pkgsrc (OpenBSD ffmpeg's
+    ``libiconv.so.7.1``), never declared.  Names of :func:`is_system_soname`
+    and those in *system_libs* (see :func:`system_libraries`) are never
+    reported.  Names are matched as *platform*'s loader matches them
+    (:class:`_Sonames`).
     """
-    prefix_libs = prefix_libs or {}
-    out: list[tuple[str, list[str]]] = []
+    out: list[tuple[str, str, list[str]]] = []
+    prefix = _sonames(prefix_libs, platform)
     if link.format == "macho":
         if any(r.startswith(MACOS_SYSTEM_ROOTS) for r in link.rpaths):
             return out
         for n in link.needed:
             tail = n[len("@rpath/") :] if n.startswith("@rpath/") else ""
-            if tail and not _ships(shipped, tail):
-                out.append((n, _by_preference(prefix_libs.get(tail.rpartition("/")[2]) or ())))
+            if not tail or _ships(shipped, tail):
+                continue
+            homes = _by_preference(prefix.get(tail.rpartition("/")[2]) or ())
+            if homes or n not in link.weak:
+                out.append((n, "prefix" if homes else "", homes))
         return out
-    system = set(system_libs)
+    ships, system, host = (
+        _sonames(shipped, platform),
+        _sonames(system_libs, platform),
+        _sonames(host_libs, platform),
+    )
     for n in link.needed:
-        if "/" in n or n in shipped or is_system_soname(n) or n in system:
+        if "/" in n or is_system_soname(n) or ships.match(n) or system.match(n):
             continue
-        homes = prefix_libs.get(n)
-        if homes:
-            out.append((n, _by_preference(homes)))
+        for source, index in (("prefix", prefix), ("host", host)):
+            homes = index.get(n)
+            if homes:
+                out.append((n, source, _by_preference(homes)))
+                break
     return out
 
 
@@ -724,8 +840,10 @@ class Finding:
 class AuditResult:
     objects: int = 0
     findings: list[Finding] = field(default_factory=list)
-    # Library names the undeclared-library check reported (see undeclared_libs).
+    # Library names the undeclared-library check reported (see undeclared_libs):
+    # from the build prefix or nowhere, and from the build host's packages.
     undeclared: set[str] = field(default_factory=set)
+    host_packages: set[str] = field(default_factory=set)
 
     @property
     def ok(self) -> bool:
@@ -753,6 +871,7 @@ def audit_tree(
     prefix_libs: Mapping[str, Iterable[str]] | None = None,
     unlisted_libs: Mapping[str, Iterable[str]] | None = None,
     system_libs: Iterable[str] = (),
+    host_libs: Mapping[str, Iterable[str]] | None = None,
 ) -> AuditResult:
     """Every loader path under *root* that will not exist once it is installed.
 
@@ -781,6 +900,9 @@ def audit_tree(
     closure is not known, so this is not checked.  *unlisted_libs* count as
     shipped here too: the deps-prefix libraries no installed manifest lists,
     which may belong to a runtime dependency whose manifest lists no files.
+    On the BSDs, *host_libs* (:func:`host_package_libraries`) are what the
+    build host's ports or pkgsrc hold: an ELF bare NEEDED found only there is
+    reported as well, since a consumer without that package cannot load it.
 
     *allow* lists prefixes a recipe vouches for (``package.linkage_allow``):
     absolute ones for paths -- e.g. a vendor framework installed at a fixed
@@ -796,11 +918,17 @@ def audit_tree(
     reach = platform in REACH_PLATFORMS
     # What the bundle and its runtime closure ship, beside each other once installed.
     index = library_index([root], dep_libs) if reach or dep_libs is not None else None
-    declared: dict[str, set[str]] | None = None
+    declared: _Sonames | None = None
     if index is not None and dep_libs is not None:
-        declared = {name: set(dirs) for name, dirs in index.items()}
+        merged = {name: set(dirs) for name, dirs in index.items()}
         for name, dirs in (unlisted_libs or {}).items():
-            declared.setdefault(name, set()).update(dirs)
+            merged.setdefault(name, set()).update(dirs)
+        declared = _Sonames(merged, platform)
+    prefix, system, host = (
+        _sonames(prefix_libs, platform),
+        _sonames(system_libs, platform),
+        _sonames(host_libs, platform),
+    )
 
     def check(rel: str, fld: str, value: str, macho: bool) -> None:
         if not value or is_relative_entry(value):
@@ -837,19 +965,31 @@ def audit_tree(
                     )
                 )
         if declared is not None:
-            for value, homes in undeclared_libs(link, declared, prefix_libs, system_libs):
+            found = undeclared_libs(link, declared, prefix, system, host, platform)
+            for value, source, homes in found:
                 if allowed and value.startswith(allowed):
                     continue
-                where = f"only the build prefix has it, in {homes[0]}/; " if homes else ""
+                where = ""
+                if source:
+                    who = (
+                        "the build prefix has"
+                        if source == "prefix"
+                        else "the build host's packages have"
+                    )
+                    where = f"only {who} it, in {homes[0]}/; "
+                fld = "NEEDED" if not macho else "LC_LOAD_DYLIB"
+                if value in link.weak:
+                    fld = "LC_LOAD_WEAK_DYLIB"
                 result.findings.append(
                     Finding(
                         rel,
-                        "LC_LOAD_DYLIB" if macho else "NEEDED",
+                        fld,
                         value,
                         f"{where}neither this bundle nor a runtime dependency ships it",
                     )
                 )
-                result.undeclared.add(value.rpartition("/")[2])
+                names = result.host_packages if source == "host" else result.undeclared
+                names.add(value.rpartition("/")[2])
     return result
 
 

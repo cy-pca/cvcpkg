@@ -40,12 +40,23 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     object loads by name must be shipped by the bundle or its runtime closure,
     or belong to the OS.
   - Mach-O: every `@rpath/` load is checked, frameworks included. An object
-    that also searches an OS directory (`LC_RPATH /usr/lib/swift`) is not.
-  - ELF: a bare NEEDED name fails only when some other package in the build
-    prefix ships it. These are never reported: the C library and its loader,
-    the compiler runtimes (gfortran's `lib64/libgcc_s.so.1`), the GPU
-    driver's GL/Vulkan libraries, Haiku's base libraries, and, when packing
-    natively, whatever the OS's own library directories hold.
+    that also searches an OS directory (`LC_RPATH /usr/lib/swift`) is not. A
+    weak load (`LC_LOAD_WEAK_DYLIB`) is optional, so it fails only when the
+    build prefix has the library.
+  - ELF: a bare NEEDED name fails when some other package in the build
+    prefix ships it. Packing natively on a BSD, it also fails when only the
+    host's ports or pkgsrc have it (`/usr/local/lib`, `/usr/pkg/lib`, or an
+    absolute RUNPATH into them). OpenBSD's ffmpeg-lgpl linked the ports
+    `libiconv.so.7.1` that way. These are never reported: the C library and
+    its loader, the compiler runtimes (gfortran's `lib64/libgcc_s.so.1`), the
+    GPU driver's GL/Vulkan libraries, Haiku's base libraries, and, when
+    packing natively, whatever the OS's own library directories hold.
+  - On OpenBSD, names match the way its `ld.so` matches them: `libfoo.so.X.Y`
+    is satisfied by `libfoo.so.X.Z` with Z ≥ Y, and an unversioned
+    `libfoo.so` by any version.
+  - When `cvcpkg install` installed a dependency from a bundle that carried
+    no manifest, it wrote one that lists no files. For such a dependency, a
+    deps-prefix library that no other manifest lists counts as possibly its.
   - The error names the package that ships the library in the build prefix.
   - `package.linkage_allow` now also takes the value the gate reports, or a
     prefix of it (`@rpath/libvulkan.`, `libX11.so`), for a library the

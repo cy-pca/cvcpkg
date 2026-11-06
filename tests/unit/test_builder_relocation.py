@@ -589,3 +589,43 @@ def test_stage_bundle_refuses_undeclared_prefix_library_elf(tmp_path):
         with pytest.raises(PackError):
             stage_bundle(inst, manifest, tmp_path / "s3", dep_prefixes=(deps,))
         probe.assert_not_called()
+
+
+def test_stage_bundle_refuses_a_bsd_host_package_library(tmp_path):
+    # OpenBSD's ffmpeg-lgpl 7.1.2+cvc.1 linked the ports libiconv.so.7.1 (env-openbsd.sh
+    # puts /usr/local on -L), and postgresql's libpq the ports perl's libperl.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    _installed(deps, "zlib", ["lib/libz.so.6.0"])
+    core = "/usr/local/lib/perl5/5.36/mach/CORE"
+    elf(
+        inst / "lib" / "libavcodec.so.61.19",
+        kind="dyn",
+        needed=["libiconv.so.7.1", "libperl.so.25.0", "libc.so.100.3"],
+        runpath=f"$ORIGIN:{core}",
+    )
+    bundle = {**_bundle("openbsd"), "name": "ffmpeg-lgpl"}
+    manifest = {"bundle": bundle, "dependencies": {"required": []}}
+    host = {"libiconv.so.7.1": {"/usr/local/lib"}, "libperl.so.25.0": {core}}
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="openbsd"),
+        mock.patch.object(builder._linkage, "system_libraries", return_value=frozenset()),
+        mock.patch.object(builder._linkage, "host_package_libraries", return_value=host) as probe,
+    ):
+        with pytest.raises(PackError) as exc:
+            stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+    platform, kwargs = probe.call_args.args[0], probe.call_args.kwargs
+    assert platform == "openbsd" and core in kwargs["extra_dirs"]
+    msg = str(exc.value)
+    assert (
+        "lib/libavcodec.so.61.19: NEEDED libiconv.so.7.1 "
+        "(only the build host's packages have it, in /usr/local/lib/;" in msg
+    )
+    assert f"NEEDED libperl.so.25.0 (only the build host's packages have it, in {core}/;" in msg
+    assert "only the build host's packages have (libiconv.so.7.1, libperl.so.25.0)" in msg
+    # Packing for OpenBSD anywhere else, the host's packages are not OpenBSD's.
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="linux"),
+        mock.patch.object(builder._linkage, "host_package_libraries") as probe,
+    ):
+        stage_bundle(inst, manifest, tmp_path / "s2", dep_prefixes=(deps,))
+        probe.assert_not_called()
