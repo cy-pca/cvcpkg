@@ -18,6 +18,8 @@ else
 fi
 
 # ── Platform-specific configure flags ──
+# OpenMP on linux only: the libraries then NEED libgomp.so.1, which the
+# declared gcc-runtime runtime dependency ships (recipe.yaml).
 CONFIGURE_CC=""
 OPENMP_FLAG="--enable-openmp"
 case "${CVC_PLATFORM}" in

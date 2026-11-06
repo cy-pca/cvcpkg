@@ -70,7 +70,14 @@ recipe:
   # the libssl it loads. Packaging also gained a relocatability gate and an
   # executable-aware relocation pass (src/cvcpkg/linkage.py, builder.py) that
   # would have refused every one of these bundles.
-  cvc_revision: 8
+  #
+  # Bumped 8 -> 9: no ccmake (-DBUILD_CursesDialog=OFF in build.sh and
+  # build-haiku.sh).  +cvc.8's linux bin/ccmake NEEDed libncurses.so.6, found
+  # by FindCurses in the shared populate prefix and never declared; macOS and
+  # the BSDs could pick up the same copy.  Not declaring ncurses instead: cmake
+  # is a build dependency of nearly every recipe, so its runtime closure lands
+  # in their build prefixes, where their own configure checks would find it.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -163,6 +170,11 @@ notes:
     description: >-
       On Windows the recipe downloads pre-built CMake binaries from
       the official GitHub release rather than building from source.
+  - title: "No ccmake"
+    description: >-
+      Built with -DBUILD_CursesDialog=OFF on every source-built platform, so
+      the bundle needs no curses library.  Windows repackages Kitware's
+      binaries, which never included ccmake.
   - title: "Base bootstrap tool — keep deps minimal (cycle risk)"
     description: >-
       CMake bootstraps via ./bootstrap using the host make + C++ compiler (not

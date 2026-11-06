@@ -7,7 +7,14 @@ recipe:
   # build.sh disables systemd, logind, selinux, udev, dbus, alsa and v4l2, which
   # is exactly the Linux-specific surface. OpenBSD has no port and NetBSD has
   # only a pkgsrc-wip one, so neither is claimed.
-  cvc_revision: 3
+  #
+  # Bumped 3 -> 4: no pw-top.  cvc.3's linux bin/pw-top NEEDed
+  # libncursesw.so.6 from cvcpkg's ncurses, found in the shared populate
+  # prefix and never declared; FreeBSD could do the same.  pipewire has no
+  # option for it, so build.sh hands meson a not-found ncursesw dependency.
+  # pw-top is a diagnostics TUI; declaring ncurses would add it to every
+  # libpipewire consumer's runtime closure (SDL2, SDL3, OpenAL Soft).
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

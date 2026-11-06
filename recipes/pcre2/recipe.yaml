@@ -6,7 +6,11 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 6
+  # cvc.7: pcre2grep no longer links zlib/bzip2.  cvc.6's macOS pcre2grep loaded
+  # @rpath/libz.1.dylib and @rpath/libbz2.1.0.dylib from the shared populate
+  # prefix, and NetBSD's NEEDed libz.so.1/libbz2.so.1, none of them declared;
+  # build.sh/build.ps1 now pass PCRE2_SUPPORT_LIBZ/LIBBZ2=OFF.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -17,6 +17,17 @@ export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_P
 
 cd "${CVC_SOURCE_DIR}"
 
+# No pw-top, the only ncurses user.  meson.build looks up
+# dependency('ncursesw', required : false), with no option to skip it, and
+# src/tools builds pw-top whenever it is found: cvc.3's linux pw-top NEEDed
+# libncursesw.so.6 from cvcpkg's ncurses in the shared populate prefix,
+# undeclared (FreeBSD's pkg-config sees the same prefix).  A not-found
+# dependency instead keeps the lean core free of ncurses and its terminfo
+# database, which every libpipewire consumer would otherwise install.
+sed -i.orig "s/dependency('ncursesw', required : false)/dependency('', required : false)/" meson.build
+rm -f meson.build.orig
+grep -q "ncurses_dep = dependency('', required : false)" meson.build
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -73,6 +84,15 @@ meson setup "${CVC_BUILD_DIR}" \
 
 ninja -C "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 ninja -C "${CVC_BUILD_DIR}" install
+
+# Nothing installed may link ncurses (see the meson.build edit above).
+_curses_users="$(grep -r -a -l -E 'lib(n)?cursesw?\.so' \
+    "${CVC_INSTALL_DIR}/bin" "${CVC_INSTALL_DIR}/lib" 2>/dev/null || true)"
+if [[ -n "${_curses_users}" ]]; then
+    echo "pipewire build.sh: these link a curses library, which is not declared:" >&2
+    echo "${_curses_users}" >&2
+    exit 1
+fi
 
 # Make installed .pc files relocatable.
 cvc_rewrite_install_paths
