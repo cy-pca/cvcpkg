@@ -7,7 +7,7 @@
 # H.264/HEVC DECODE still works via FFmpeg's native LGPL decoders (x264/x265
 # are GPL encoders only).  HTTPS/TLS uses SChannel, the OS-native Windows TLS
 # stack — no OpenSSL, no external TLS library, no license impact.  Kept: Opus,
-# MP3, Vorbis, VP8/VP9, AV1 (dav1d), WebP, freetype, fribidi, bzip2, lzma.
+# MP3, Vorbis, VP8/VP9, AV1 (dav1d), WebP, freetype, bzip2, lzma.
 # Given up vs `ffmpeg`: H.264/HEVC encode.
 #
 # All codec/library dependencies must be pre-built and available in
@@ -100,7 +100,6 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-libdav1d \
     --enable-libwebp \
     --enable-libfreetype \
-    --enable-libfribidi \
     --enable-schannel \
     --enable-zlib \
     --enable-bzlib \
