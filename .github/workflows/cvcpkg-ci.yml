@@ -381,50 +381,17 @@ jobs:
           # stale tag (image prune only sweeps dangling, not tagged, images).
           docker image rm -f cvcpkg-test-test cvcpkg-test-playwright cvcpkg-test-backend 2>/dev/null || true
 
-          # Build the three test images on the isolated `cvcpkg-ci` builder (set
-          # up above) so this job never shares a content store with the rest of
+          # Build the test images on the isolated `cvcpkg-ci` builder (set up
+          # above) so this job never shares a content store with the rest of
           # the host -- that private store is what removed the original buildkit
           # lock contention (`failed to open writer: ref ... locked ...
-          # unavailable`).
+          # unavailable`).  One service at a time, judged by whether the image
+          # landed in the daemon; see the script for why.
           #
-          # Build ONE service at a time, and judge success by whether the image
-          # actually landed in the daemon -- NOT by the exit code of
-          # `docker compose build`. Both failure modes are then covered:
-          #
-          #   * Building test+playwright+backend together exported three OCI
-          #     tarballs from the container-driver builder into the daemon store
-          #     at once. The export storm stalled -- Playwright's "sending
-          #     tarball" ran for 2-4 minutes -- and compose returned a non-zero
-          #     exit even though every image reported "Built" and was imported
-          #     ("importing to docker ... DONE"). That spurious non-zero was read
-          #     as fatal and failed the whole job on green master and PRs #44/#45.
-          #     Serialising caps peak export IO; the presence check ignores the
-          #     bogus exit code.
-          #
-          #   * A genuine failure (residual lock contention, ENOSPC on the shared
-          #     ramdisk, a broken layer) leaves no image, so `docker image
-          #     inspect` fails, we retry, and then fail for real with a clear
-          #     message -- no error-string grep to keep in sync with docker.
-          #
-          # pipefail so a failing `docker ... | tee` isn't masked by tee's exit.
-          set -o pipefail
-          build_svc() {
-            local svc="$1" img="cvcpkg-test-$1"
-            for attempt in 1 2 3; do
-              docker compose -f docker-compose.test.yml build --no-cache \
-                --builder=cvcpkg-ci "$svc" 2>&1 | tee /tmp/build.log || true
-              if docker image inspect "$img" >/dev/null 2>&1; then
-                return 0
-              fi
-              echo "::warning::$img absent after build attempt $attempt/3; retrying"
-              sleep $((attempt * 20))
-            done
-            echo "::error::$img failed to build after 3 attempts"
-            return 1
-          }
-          # backend first (needed for `up -d` below), Playwright last (largest).
-          for svc in backend test playwright; do
-            build_svc "$svc" || exit 1
+          # backend first (needed for `up -d` below).  Playwright's image is
+          # built in its own step, right before it runs.
+          for svc in backend test; do
+            bash .github/scripts/build-test-image.sh "$svc" || exit 1
           done
 
           # postgres is a pulled image; backend was built by the loop above.
@@ -445,13 +412,16 @@ jobs:
       - name: Run Playwright browser tests
         working-directory: .
         run: |
-          # NO --build. `Start test stack` above already built this image with
-          # --no-cache, in this same job, from this same compose file. --build
-          # rebuilt it a SECOND time: minutes of duplicated work, and a second
-          # place to lose the buildkit content-store race -- which is exactly
-          # where #503 died, in this step rather than the one #505 wrapped in a
-          # retry. Removing the redundant build removes the collision site
-          # instead of retrying it.
+          # Build the image here, right before it runs, on the isolated builder.
+          # Built in `Start test stack` it sat unused through the 17-25 minute
+          # integration suite, and on this shared Docker host it was sometimes
+          # gone by then.  `compose run` then rebuilt it on the DEFAULT builder,
+          # whose cache here holds a broken entry ("parent snapshot ... does not
+          # exist"), and the step failed before any test ran (PR #549's run,
+          # master 2026-11-06).
+          bash .github/scripts/build-test-image.sh playwright || exit 1
+          # NO --build: the image was just built.  --build rebuilt it a SECOND
+          # time, on the default builder, which is where #503 died.
           docker compose -f docker-compose.test.yml run --rm playwright
 
       - name: Collect logs on failure
