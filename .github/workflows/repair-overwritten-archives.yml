@@ -17,7 +17,10 @@ name: Repair overwritten archives (dev)
 # Nuke is IRREVERSIBLE.  Dev only: the runner resolves the dev server itself.
 #
 # Required repo secret:
-#   CVCPKG_ADMIN_TOKEN — admin token for the dev server (nuke is admin-only)
+#   CVCPKG_DEV_ADMIN_TOKEN — admin token for the dev server (nuke is admin-only),
+#   as deploy-dev, populate-dev and pr-recipe-build-dev use.  Not
+#   CVCPKG_ADMIN_TOKEN: that one is cvcpkg.org's (deploy-prod uses it), and dev
+#   answers it with 401.  The script checks the role before it does anything.
 
 on:
   workflow_dispatch:
@@ -68,7 +71,7 @@ jobs:
 
       - name: Repair
         env:
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
           SERVER: ${{ steps.dev.outputs.url }}
           APPLY: ${{ inputs.apply }}
           EXPECT: ${{ inputs.expect }}

@@ -163,6 +163,14 @@ def wait_for_sync(server: str, after: str, timeout: float) -> str:
     return seen
 
 
+def caller_role(server: str, token: str) -> str:
+    """The role *token* has on *server* ("admin", "publisher", ...), or why it has none."""
+    try:
+        return get_json(f"{server}/v1/auth/whoami", token).get("role", "")
+    except urllib.error.HTTPError as exc:
+        return f"none (HTTP {exc.code})"
+
+
 def post_scoped(server: str, token: str, row: dict, action: str) -> int:
     """POST a yank or nuke scoped to exactly *row*'s variant; the count it changed."""
     n, v, p, a, b, link = coord(row)
@@ -197,6 +205,10 @@ def main(argv: list[str] | None = None) -> int:
     token = os.environ.get("CVCPKG_TOKEN", "")
     if args.apply and (not token or args.expect < 0):
         ap.error("--apply needs CVCPKG_TOKEN (admin) and --expect N")
+    # Before the hashing and the wait for a sync: a token another server issued
+    # (prod's, say) is refused only at the first yank, many minutes in.
+    if args.apply and (role := caller_role(server, token)) != "admin":
+        sys.exit(f"CVCPKG_TOKEN's role on {server} is {role or 'unknown'}, not admin; stopping")
 
     rows = fetch_catalog(server, token)
     shared = shared_files(rows)
