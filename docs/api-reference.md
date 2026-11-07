@@ -352,13 +352,20 @@ form fields only when the query would be too long.
 }
 ```
 
+The archive is named after its coordinates unless another package's archive
+already has that name: a row relabelled after it was published, or an org's
+twin of a public package. It is then stored as
+`<name>-<version>-<platform>-<arch>-<build_type>-<link>.<sha256[:16]>.tar.zst`,
+so always download from the `archive_url` returned. The chunked
+`.../complete` names it the same way.
+
 **Errors**:
 
 | Code | Meaning |
 |---|---|
 | `401` | Missing or invalid token |
 | `403` | Insufficient role |
-| `409` | Duplicate package (same name+version+platform+arch+build_type+link) |
+| `409` | Duplicate package (same name+version+platform+arch+build_type+link), or both the archive's names are other packages' archives |
 | `413` | Upload exceeds size limit |
 | `422` | Invalid metadata, e.g. `required_deps` or `provides` not a JSON list |
 | `429` | Rate limit exceeded |
