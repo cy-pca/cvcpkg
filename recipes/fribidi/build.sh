@@ -13,15 +13,15 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _default_lib=static
 fi
 
-# $ORIGIN for the library, $ORIGIN/../lib for bin/fribidi, which links it.  Set
-# at link time, as recipes/wayland does: cvcpkg's packager appends the bin/
-# entry itself only on linux, so bin/fribidi on FreeBSD and NetBSD could not
-# find lib/libfribidi.so.0.  On macOS the packager rewrites meson's absolute
-# install names to @rpath and adds @loader_path/../lib to bin/fribidi.
+# bin/fribidi's $ORIGIN/../lib cannot come from here: meson's install step
+# strips it as a build-tree entry (cvc.2 tried, and its FreeBSD and NetBSD
+# bin/fribidi kept only $ORIGIN).  bin-install-rpath.patch sets it as the
+# executable's install_rpath instead.  On macOS the packager rewrites meson's
+# absolute install names to @rpath and adds @loader_path/../lib to bin/fribidi.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     _rpath_flags="-Wl,-rpath,@loader_path"
 else
-    _rpath_flags="-Wl,-rpath,\$ORIGIN:\$ORIGIN/../lib"
+    _rpath_flags="-Wl,-rpath,\$ORIGIN"
 fi
 
 cd "${CVC_SOURCE_DIR}"
