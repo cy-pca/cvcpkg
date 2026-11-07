@@ -13,7 +13,10 @@ recipe:
   # OpenBSD the build host's ports libiconv.so.7.1 from /usr/local.  Linux and the
   # other BSDs keep libc's iconv, now pinned against a GNU <iconv.h> on the search
   # path; see build.sh.  ffmpeg-lgpl had the same leak (cy-pca/cvcpkg#545).
-  cvc_revision: 3
+  # cvc.4: drop fribidi.  Its only user in FFmpeg 7 is the drawtext filter, which
+  # also needs libharfbuzz, so no build ever linked it, yet every bundle declared it
+  # and installs pulled it in.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,7 +30,7 @@ recipe:
     shared libraries.  Built with --enable-gpl and a broad external
     codec set: H.264 (x264), H.265/HEVC (x265), Opus, MP3, Vorbis,
     VP8/VP9 (libvpx), AV1 (dav1d), WebP, JPEG, PNG, OpenSSL,
-    bzip2/lzma, freetype/fontconfig/fribidi, and PulseAudio on Linux.
+    bzip2/lzma, freetype/fontconfig, and PulseAudio on Linux.
     Pared-down static builds are also provided for wasm, wasi, and cosmo.
 
 source:
@@ -80,8 +83,6 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: fontconfig
       platforms: [linux, macos, freebsd, openbsd, netbsd]
-    - name: fribidi
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     # Not windows: TLS there is SChannel (build.ps1).
     - name: openssl
       platforms: [linux, macos, freebsd, openbsd, netbsd]
@@ -127,8 +128,6 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: fontconfig
       platforms: [linux, macos, freebsd, openbsd, netbsd]
-    - name: fribidi
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     # Not windows: TLS there is SChannel (build.ps1).
     - name: openssl
       platforms: [linux, macos, freebsd, openbsd, netbsd]

@@ -8,7 +8,10 @@ recipe:
   # loaded: @rpath/libiconv.2.dylib"), OpenBSD the build host's ports
   # libiconv.so.7.1 from /usr/local.  Linux and the other BSDs keep libc's
   # iconv, now pinned against a GNU <iconv.h> on the search path; see build.sh.
-  cvc_revision: 2
+  # cvc.3: drop fribidi.  Its only user in FFmpeg 7 is the drawtext filter, which
+  # also needs libharfbuzz, so no build ever linked it, yet every bundle declared it
+  # and installs pulled it in.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -44,7 +47,7 @@ recipe:
     are LGPL and stay in — x264/x265 are ENCODERS only.  All the
     LGPL/BSD-licensed external codecs are kept: Opus, MP3 (LAME),
     Vorbis, VP8/VP9 (libvpx), AV1 (dav1d), WebP, plus
-    freetype/fontconfig/fribidi and bzip2/lzma/zlib.  (PNG and MJPEG are
+    freetype/fontconfig and bzip2/lzma/zlib.  (PNG and MJPEG are
     FFmpeg's own native codecs — there is no external libpng/libjpeg to
     declare.  libpulse is deliberately omitted: a decode/streaming library
     has no need of a PulseAudio device backend.)  Given up versus `ffmpeg`:
@@ -96,8 +99,6 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: fontconfig
       platforms: [linux, macos, freebsd, openbsd, netbsd]
-    - name: fribidi
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     # TLS backend for Linux/BSD; macOS uses SecureTransport and Windows uses
     # SChannel (OS-native, no dependency).  See build.sh / build.ps1.
     - name: gnutls
@@ -134,8 +135,6 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     - name: fontconfig
       platforms: [linux, macos, freebsd, openbsd, netbsd]
-    - name: fribidi
-      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
     # TLS backend for Linux/BSD; macOS uses SecureTransport and Windows uses
     # SChannel (OS-native, no dependency).  See build.sh / build.ps1.
     - name: gnutls

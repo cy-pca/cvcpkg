@@ -4,7 +4,7 @@
 # GCC toolchain inside MSYS2.  The same GPL codec set as the Unix build
 # is enabled (--enable-gpl): the x264 (H.264) and x265 (HEVC) GPL
 # encoders, plus Opus, MP3, Vorbis, VP8/VP9, AV1 (dav1d), WebP, JPEG,
-# PNG, OpenSSL, freetype, fribidi, bzip2, lzma.  Enabling x264/x265
+# PNG, OpenSSL, freetype, bzip2, lzma.  Enabling x264/x265
 # makes the result GPL-2.0-or-later (matching recipe.yaml's license).
 #
 # All codec/library dependencies must be pre-built and available in
@@ -100,7 +100,6 @@ $depsFlag mkdir -p '$msysBuild' && cd '$msysBuild' && \
     --enable-libdav1d \
     --enable-libwebp \
     --enable-libfreetype \
-    --enable-libfribidi \
     --enable-zlib \
     --enable-bzlib \
     --enable-lzma \
