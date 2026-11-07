@@ -17,7 +17,18 @@ recipe:
   # openblas+cvc.6 added it. The macOS payload's BLAS changes, hence the bump.
   # Bumped 4 -> 5: add a wasm column (meson-python cross, -Dallow-noblas). New
   # platform only; native columns rebuild identically.
-  cvc_revision: 5
+  # Bumped 5 -> 6 (wasm and wasm-mt): each extension object gets a namespace of
+  # its own (_common/wasm_pyext.py: PyInit renamed after its dotted module, the
+  # other globals local, weak C++ RTTI kept global) and
+  # share/python-wasm/numpy-cp312.inittab lists them, so a host links them with
+  # no --allow-multiple-definition.
+  # ORDER: populate wasm and wasm-mt only after libcvc's manifest-aware
+  # bindings/pycvc/wasm/link-host.sh is on master. An older link-host registers
+  # PyInit_<leaf>, which cvc.6's objects no longer define. The new link-host
+  # links cvc.5 too (it localizes copies itself).
+  # The native columns' payload is unchanged; they needn't be populated now, and
+  # rebuild identically as cvc.6 whenever a native build reaches them.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -135,6 +146,7 @@ package:
     - { glob: "lib/python3.12/site-packages/numpy-2.4.6.dist-info/", platforms: [freebsd, linux, macos, netbsd, openbsd, wasm, wasm-mt] }
     - { glob: "Lib/site-packages/numpy/", platforms: [windows] }
     - { glob: "Lib/site-packages/numpy-2.4.6.dist-info/", platforms: [windows] }
+    - { glob: "share/python-wasm/numpy-cp312.inittab", platforms: [wasm, wasm-mt] }
 
 abi:
   cxx_std: 17

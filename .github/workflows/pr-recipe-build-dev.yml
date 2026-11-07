@@ -91,10 +91,14 @@ jobs:
           # Persist to $GITHUB_ENV (not just outputs) so the cancelled() cleanup
           # step below still has them if a later step is mid-cancelled.
           echo "DEV_URL=http://${IP}:8420" >> "$GITHUB_ENV"
-          # A per-RUN dag id (run_id, not a wall-clock stamp): the cleanup cancels
-          # exactly THIS run's sub-DAGs.  A PR-wide prefix would let a superseding
-          # run's cleanup cancel the fresh run's jobs (same PR number).
-          dag="pr-${{ github.event.pull_request.number }}-${{ github.run_id }}"
+          # A per-ATTEMPT dag id (run_id + run_attempt, not a wall-clock stamp):
+          # the cleanup cancels exactly THIS attempt's sub-DAGs.  A PR-wide prefix
+          # would let a superseding run's cleanup cancel the fresh run's jobs
+          # (same PR number).  A re-run keeps run_id, so without run_attempt it
+          # submitted into the first attempt's DAG and --wait counted that
+          # attempt's failed jobs too: #549's re-run built numpy on all five
+          # platforms and still failed on the 11 jobs attempt 1 had lost.
+          dag="pr-${{ github.event.pull_request.number }}-${{ github.run_id }}-${{ github.run_attempt }}"
           echo "DAG_BASE=${dag:0:50}" >> "$GITHUB_ENV"
 
       - name: Push + build changed recipes on dev

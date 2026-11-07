@@ -452,6 +452,20 @@ jobs:
           # where #503 died, in this step rather than the one #505 wrapped in a
           # retry. Removing the redundant build removes the collision site
           # instead of retrying it.
+          #
+          # But this step starts ~20 minutes after that build, and the daemon is
+          # shared: something else on the host can delete the tagged image while
+          # the Docker suite runs (it has no container to keep it).  `compose run`
+          # then rebuilds it on the DEFAULT builder, whose cache on this host held
+          # a dangling snapshot -- "parent snapshot uu3evbajpz8hlpofxtrhozdvv does
+          # not exist" failed master and three PRs on 2026-11-05/06, after every
+          # test had passed.  So when the image is gone, rebuild it on the
+          # isolated builder first; `compose run` never builds.
+          if ! docker image inspect cvcpkg-test-playwright >/dev/null 2>&1; then
+            echo "::warning::cvcpkg-test-playwright was deleted while the Docker suite ran; rebuilding it on cvcpkg-ci"
+            docker compose -f docker-compose.test.yml build --builder=cvcpkg-ci playwright
+            docker image inspect cvcpkg-test-playwright >/dev/null
+          fi
           docker compose -f docker-compose.test.yml run --rm playwright
 
       - name: Collect logs on failure

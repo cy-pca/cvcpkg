@@ -81,7 +81,38 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     (sha256). Populate never re-imports a coordinate it holds, so after a nuke
     and a republish a lift served the old bytes as live. Such a bundle now
     stays yanked, and every sync logs it until it is nuked on the mirror.
-
+- **Pack gate: a library nothing declares fails the pack.** The relocatability
+  gate never checked an `@rpath/` load or a bare NEEDED name against anything.
+  So ffmpeg-lgpl 7.1.2+cvc.1 printed `relocatable OK` on macOS while it linked
+  `@rpath/libiconv.2.dylib`, which the shared pack-all prefix held and the
+  recipe never declared (#545). gettext linked `libiconv.so.2` on linux/arm64
+  the same way. Such a bundle fails to load on a clean machine.
+  - On every platform, once the job's deps prefix is known, a library an
+    object loads by name must be shipped by the bundle or its runtime closure,
+    or belong to the OS.
+  - Mach-O: every `@rpath/` load is checked, frameworks included. An object
+    that also searches an OS directory (`LC_RPATH /usr/lib/swift`) is not. A
+    weak load (`LC_LOAD_WEAK_DYLIB`) is optional, so it fails only when the
+    build prefix has the library.
+  - ELF: a bare NEEDED name fails when some other package in the build
+    prefix ships it. Packing natively on a BSD, it also fails when only the
+    host's ports or pkgsrc have it (`/usr/local/lib`, `/usr/pkg/lib`, or an
+    absolute RUNPATH into them). OpenBSD's ffmpeg-lgpl linked the ports
+    `libiconv.so.7.1` that way. These are never reported: the C library and
+    its loader, the compiler runtimes (gfortran's `lib64/libgcc_s.so.1`), the
+    GPU driver's GL/Vulkan libraries, Haiku's base libraries, and, when
+    packing natively, whatever the OS's own library directories hold.
+  - On OpenBSD, names match the way its `ld.so` matches them: `libfoo.so.X.Y`
+    is satisfied by `libfoo.so.X.Z` with Z ≥ Y, and an unversioned
+    `libfoo.so` by any version.
+  - When `cvcpkg install` installed a dependency from a bundle that carried
+    no manifest, it wrote one that lists no files. For such a dependency, a
+    deps-prefix library that no other manifest lists counts as possibly its.
+  - The error names the package that ships the library in the build prefix.
+  - `package.linkage_allow` now also takes the value the gate reports, or a
+    prefix of it (`@rpath/libvulkan.`, `libX11.so`), for a library the
+    consumer supplies. It still never excuses a builder path.
+  - Builders run the check only after a cvcpkg release.
 - **`cvcpkg install --no-deps`: the named bundles without their runtime deps.**
   install always resolved a bundle's whole `required_deps` closure, so a bundle
   whose deps are wrong could not be installed at all, and none could be tried on

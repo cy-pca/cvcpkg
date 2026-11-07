@@ -251,6 +251,36 @@ def test_runtime_dep_libraries_resolves_a_provided_name(tmp_path):
     assert _runtime_dep_libraries((deps,), ["blas"]) == {"libopenblas.so.0": {"lib"}}
 
 
+def _synthesized(prefix, name, files):
+    """Install *name* as ``cvcpkg install`` does a bundle that carried no
+    manifest: its files, and a manifest it writes without contents."""
+    for f in files:
+        elf(prefix / f, kind="dyn")
+    meta = prefix / "share" / "libcvc-deps" / name
+    meta.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "schema_version": 3,
+        "bundle": {"name": name},
+        "dependencies": {"required": []},
+        "meta": {"synthesized": True},
+    }
+    (meta / "manifest.yaml").write_text(yaml.safe_dump(manifest))
+
+
+def test_runtime_dep_libraries_reports_unlisted_dependencies(tmp_path):
+    deps = tmp_path / "deps"
+    _installed(deps, "libwebp", ["lib/libwebp.so.7"], required=["dav1d"])
+    _synthesized(deps, "dav1d", ["lib/libdav1d.so.7"])
+    unlisted: list[str] = []
+    assert _runtime_dep_libraries((deps,), ["libwebp"], unlisted) == {"libwebp.so.7": {"lib"}}
+    assert unlisted == ["dav1d"]
+    # An empty package lists its files too: none.
+    _installed(deps, "meta-pkg", [])
+    unlisted.clear()
+    assert _runtime_dep_libraries((deps,), ["meta-pkg"], unlisted) == {}
+    assert unlisted == []
+
+
 def test_make_relocatable_reaches_runtime_deps_only(tmp_path):
     # gcc-runtime +cvc.1: libgfortran got $ORIGIN/../lib64 because its gfortran
     # build dependency, in the same job prefix, keeps libgcc_s.so.1 there.
@@ -461,3 +491,141 @@ def test_stage_bundle_linkage_allow(tmp_path):
         tmp_path / "s2",
         linkage_allow=["/Library/Frameworks/Vendor.framework/"],
     )
+
+
+# ── libraries nothing declares ──────────────────────────────────
+
+
+def test_stage_bundle_refuses_undeclared_prefix_library_macos(tmp_path):
+    # ffmpeg-lgpl 7.1.2+cvc.1: pack-all's shared prefix held iconv, never declared.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    macho(
+        inst / "lib" / "libavcodec.61.dylib",
+        filetype="dylib",
+        loads=["@rpath/libiconv.2.dylib", "@rpath/libz.1.dylib", "/usr/lib/libSystem.B.dylib"],
+        rpaths=["@loader_path"],
+    )
+    _installed(deps, "iconv", ["lib/libiconv.2.dylib"])
+    _installed(deps, "zlib", ["lib/libz.1.dylib"])
+    bundle = {**_bundle("macos"), "name": "ffmpeg-lgpl"}
+    manifest = {"bundle": bundle, "dependencies": {"required": [{"name": "zlib"}]}}
+    with pytest.raises(PackError) as exc:
+        stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+    msg = str(exc.value)
+    assert "lib/libavcodec.61.dylib: LC_LOAD_DYLIB @rpath/libiconv.2.dylib" in msg
+    assert "@rpath/libz.1.dylib" not in msg
+    assert "In the build prefix, libiconv.2.dylib is iconv's." in msg
+    # cvc.2 declares iconv.
+    cvc2 = {**manifest, "dependencies": {"required": [{"name": "zlib"}, {"name": "iconv"}]}}
+    stage_bundle(inst, cvc2, tmp_path / "s2", dep_prefixes=(deps,))
+    # Without a deps prefix the runtime closure is unknown, so this is not checked.
+    stage_bundle(inst, manifest, tmp_path / "s3")
+    stage_bundle(
+        inst,
+        manifest,
+        tmp_path / "s4",
+        dep_prefixes=(deps,),
+        linkage_allow=["@rpath/libiconv.2.dylib"],
+    )
+
+
+def test_stage_bundle_counts_unlisted_libraries_for_a_synthesized_manifest(tmp_path, capsys):
+    # dav1d 1.4.3+cvc.1 carried no manifest, so the one cvcpkg install wrote
+    # lists no files: its dylib must not read as undeclared, iconv's still does.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    macho(
+        inst / "lib" / "libavcodec.61.dylib",
+        filetype="dylib",
+        loads=["@rpath/libdav1d.7.dylib", "@rpath/libiconv.2.dylib"],
+        rpaths=["@loader_path"],
+    )
+    _synthesized(deps, "dav1d", ["lib/libdav1d.7.dylib"])
+    _installed(deps, "iconv", ["lib/libiconv.2.dylib"])
+    bundle = {**_bundle("macos"), "name": "ffmpeg-lgpl"}
+    manifest = {"bundle": bundle, "dependencies": {"required": [{"name": "dav1d"}]}}
+    with pytest.raises(PackError) as exc:
+        stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+    msg = str(exc.value)
+    assert "@rpath/libiconv.2.dylib" in msg and "@rpath/libdav1d.7.dylib" not in msg
+    assert "runtime dependencies dav1d list no installed files" in capsys.readouterr().out
+    # Without the unlisted dependency, nothing vouches for dav1d's dylib.
+    bare = {**manifest, "dependencies": {"required": []}}
+    with pytest.raises(PackError, match="@rpath/libdav1d.7.dylib"):
+        stage_bundle(inst, bare, tmp_path / "s2", dep_prefixes=(deps,))
+
+
+def test_stage_bundle_refuses_undeclared_prefix_library_elf(tmp_path):
+    # gettext on linux/arm64 NEEDED the shared prefix's libiconv.so.2.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    _job_prefix(deps)  # gfortran's lib64/libgcc_s.so.1 is the OS's, not a leak
+    _installed(deps, "iconv", ["lib/libiconv.so.2"])
+    elf(
+        inst / "lib" / "libintl.so.8",
+        kind="dyn",
+        needed=["libiconv.so.2", "libgcc_s.so.1", "libc.so.6"],
+        runpath="$ORIGIN",
+    )
+    bundle = {**_bundle("linux"), "name": "gettext", "arch": "arm64"}
+    manifest = {"bundle": bundle, "dependencies": {"required": []}}
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="linux"),
+        mock.patch.object(builder._linkage, "system_libraries", return_value=frozenset()) as probe,
+    ):
+        with pytest.raises(PackError) as exc:
+            stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+        probe.assert_called_with("linux")
+        # Packing natively, a library in the OS's own directories is the OS's.
+        probe.return_value = frozenset({"libiconv.so.2"})
+        stage_bundle(inst, manifest, tmp_path / "s2", dep_prefixes=(deps,))
+    msg = str(exc.value)
+    assert "lib/libintl.so.8: NEEDED libiconv.so.2 (only the build prefix has it, in lib/" in msg
+    assert "libgcc_s" not in msg
+    assert "In the build prefix, libiconv.so.2 is iconv's." in msg
+    # Packed for another OS than the host's, whose directories say nothing.
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="windows"),
+        mock.patch.object(builder._linkage, "system_libraries") as probe,
+    ):
+        with pytest.raises(PackError):
+            stage_bundle(inst, manifest, tmp_path / "s3", dep_prefixes=(deps,))
+        probe.assert_not_called()
+
+
+def test_stage_bundle_refuses_a_bsd_host_package_library(tmp_path):
+    # OpenBSD's ffmpeg-lgpl 7.1.2+cvc.1 linked the ports libiconv.so.7.1 (env-openbsd.sh
+    # puts /usr/local on -L), and postgresql's libpq the ports perl's libperl.
+    inst, deps = tmp_path / "install", tmp_path / "deps"
+    _installed(deps, "zlib", ["lib/libz.so.6.0"])
+    core = "/usr/local/lib/perl5/5.36/mach/CORE"
+    elf(
+        inst / "lib" / "libavcodec.so.61.19",
+        kind="dyn",
+        needed=["libiconv.so.7.1", "libperl.so.25.0", "libc.so.100.3"],
+        runpath=f"$ORIGIN:{core}",
+    )
+    bundle = {**_bundle("openbsd"), "name": "ffmpeg-lgpl"}
+    manifest = {"bundle": bundle, "dependencies": {"required": []}}
+    host = {"libiconv.so.7.1": {"/usr/local/lib"}, "libperl.so.25.0": {core}}
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="openbsd"),
+        mock.patch.object(builder._linkage, "system_libraries", return_value=frozenset()),
+        mock.patch.object(builder._linkage, "host_package_libraries", return_value=host) as probe,
+    ):
+        with pytest.raises(PackError) as exc:
+            stage_bundle(inst, manifest, tmp_path / "s1", dep_prefixes=(deps,))
+    platform, kwargs = probe.call_args.args[0], probe.call_args.kwargs
+    assert platform == "openbsd" and core in kwargs["extra_dirs"]
+    msg = str(exc.value)
+    assert (
+        "lib/libavcodec.so.61.19: NEEDED libiconv.so.7.1 "
+        "(only the build host's packages have it, in /usr/local/lib/;" in msg
+    )
+    assert f"NEEDED libperl.so.25.0 (only the build host's packages have it, in {core}/;" in msg
+    assert "only the build host's packages have (libiconv.so.7.1, libperl.so.25.0)" in msg
+    # Packing for OpenBSD anywhere else, the host's packages are not OpenBSD's.
+    with (
+        mock.patch.object(builder, "detect_platform", return_value="linux"),
+        mock.patch.object(builder._linkage, "host_package_libraries") as probe,
+    ):
+        stage_bundle(inst, manifest, tmp_path / "s2", dep_prefixes=(deps,))
+        probe.assert_not_called()
