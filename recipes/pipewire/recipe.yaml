@@ -19,7 +19,19 @@ recipe:
   # package) there; cvc.3's FreeBSD jobs stopped at one, then the other (dev
   # jobs 24590, 24623).  Restore the column with both declared once libinotify
   # has a recipe.
-  cvc_revision: 4
+  #
+  # Bumped 4 -> 5: the FreeBSD column again, now that cvcpkg packages
+  # libinotify (recipes/libinotify).  meson.build requires epoll-shim and
+  # libinotify there; libspa-support links epoll-shim and libpipewire links
+  # gettext's libintl, both runtime dependencies, while nothing links
+  # libinotify (a build dependency).  No raop-sink there, as on linux
+  # (build.sh).
+  #
+  # Bumped 5 -> 6: cvc.5 was a dev-cluster build only (never published).  Its
+  # FreeBSD raop-sink module NEEDed an undeclared libcrypto.so.3, and it
+  # declared libinotify at run time though nothing links it; both fixed as
+  # described above.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -52,12 +64,30 @@ depends:
       platforms: [linux, macos, freebsd, openbsd, netbsd]
     - name: python312
       platforms: [windows]
-  runtime: []
+    # FreeBSD has no inotify, and meson.build requires the libinotify shim
+    # there (dependency('libinotify')), but nothing this lean core builds
+    # links it: the cvc.5 FreeBSD bundle NEEDs no libinotify.  So it is a
+    # build dependency only.
+    - name: libinotify
+      platforms: [freebsd]
+  runtime:
+    # FreeBSD has no epoll either: meson.build requires the epoll-shim there,
+    # and libspa-support links it.
+    - name: epoll-shim
+      platforms: [freebsd]
+    # libintl, for libpipewire's message translations: FreeBSD's libc has
+    # none (build.sh).
+    - name: gettext
+      platforms: [freebsd]
   host_tools: []
 
 build:
   matrix:
     - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: freebsd
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
