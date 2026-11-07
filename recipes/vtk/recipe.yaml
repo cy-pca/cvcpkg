@@ -44,6 +44,12 @@ patches:
   # defines the missing ones, then runs CMake's own FindTIFF.  Only reached when
   # VTK uses an external libtiff (the wasm builds).
   - vtk-findtiff-import-deps.patch
+  # NetBSD: the bundled loguru casts pthread_self() to an integer for a thread
+  # id, and NetBSD's pthread_t is a pointer; use the LWP id there.
+  - vtk-loguru-netbsd-thread-id.patch
+  # NetBSD: the bundled IOSS calls statfs(2), which NetBSD replaced with
+  # statvfs(2).
+  - vtk-ioss-netbsd-statvfs.patch
 
 depends:
   build:
@@ -78,18 +84,24 @@ depends:
     - name: freetype
       version: "^2.13"
       platforms: [wasm, wasm-mt]
-    # Hermetic X11 + OpenGL (Linux only; macOS/Windows use native windowing/GL).
-    # VTK's X11 render window + RenderingOpenGL2 link these instead of system libs.
+    # Hermetic X11 + OpenGL on Linux, FreeBSD and NetBSD (macOS/Windows use
+    # native windowing/GL, OpenBSD its base X11 and Mesa). VTK's X11 render
+    # window + RenderingOpenGL2 link these instead of system libs.
     - name: libx11
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxext
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libxt
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: libglvnd
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
     - name: glu
-      platforms: [linux]
+      platforms: [linux, freebsd, netbsd]
+    # FreeBSD and NetBSD: the GL driver behind libglvnd (llvmpipe), so VTK
+    # renders there with no system Mesa.  NetBSD needs mesa >= cvc.2 for
+    # VTK's default multisampling (the resolve shader crashed cvc.1).
+    - name: mesa
+      platforms: [freebsd, netbsd]
   host_tools: []
 
 build:
@@ -107,16 +119,16 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
-    # No freebsd or netbsd entries for now; they need to come back.  vtk has
-    # never been built for either: its qt6 dep stops at configure on those
-    # builders ("The OpenGL functionality tests failed!", dev jobs 23606 and
-    # 23609, 2026-10-29) because they have no OpenGL, and VTK's rendering needs
-    # it too.  qt6 is likewise unpublished there.  With the entries in place,
-    # every vtk change sent qt6 for those platforms to the dev cluster and
-    # failed the PR's build-on-dev check.  To restore them: give the FreeBSD
-    # and NetBSD builders OpenGL (Mesa) or port the hermetic GL recipes the
-    # Linux build uses, get qt6 publishing there, then re-add both entries
-    # with CXXFLAGS "-O2 -fPIC -std=c++17", as openbsd has.
+    # FreeBSD and NetBSD render through cvcpkg's libglvnd + mesa (llvmpipe),
+    # as qt6 does there, never a system OpenGL.
+    - platform: freebsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC -std=c++17"
     - platform: openbsd
       script: build.sh
       env:
@@ -147,7 +159,7 @@ package:
     # package.files check (newer than the 9.5.0+cvc.3 wasm publishes) fails
     # them on this entry; the desktop builds install VTK's programs there,
     # and Windows its DLLs.
-    - { glob: "bin/vtk*", platforms: [linux, macos, openbsd, windows] }
+    - { glob: "bin/vtk*", platforms: [linux, macos, freebsd, openbsd, netbsd, windows] }
     - share/vtk*/
     - share/licenses/VTK/
   cmake_packages:
