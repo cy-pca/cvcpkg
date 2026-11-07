@@ -11,7 +11,17 @@ recipe:
   # relocatable-config-dir.patch resolves the config tree relative to the loaded
   # libasound.so via dladdr (<origin>/../share/alsa), mirroring upstream's own
   # dlmisc.c plugin-dir logic, so it "just works" wherever the prefix lands.
-  cvc_revision: 2
+  # cvc.3: the plugin and UCM directories were still the dead sandbox paths.
+  # The bundled alsa.conf loads the system's /etc/alsa/conf.d, which routes
+  # the default PCM to the distribution's pipewire/pulse plugins by type name,
+  # and libasound then looked for libasound_module_pcm_pipewire.so under
+  # /tmp/cvcpkg-.../install/lib/alsa-lib: "Cannot open shared library", and
+  # opening "default" failed (SDL3's ALSA backend printed it and got no
+  # device). relocatable-plugin-and-ucm-dirs.patch falls back to the
+  # distribution's plugin directory (/usr/lib/<multiarch>/alsa-lib,
+  # /usr/lib64/alsa-lib, /usr/lib/alsa-lib) and resolves the UCM directories
+  # from snd_config_topdir(), then the system's /usr/share/alsa/ucm2.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -32,6 +42,7 @@ source:
 
 patches:
   - relocatable-config-dir.patch
+  - relocatable-plugin-and-ucm-dirs.patch
 
 depends:
   build:
@@ -64,5 +75,14 @@ notes:
       <prefix>/lib/libasound.so.2 resolves the config dir to
       <prefix>/share/alsa via dladdr, so the package works wherever cvcpkg
       unpacks it. Setting the ALSA_CONFIG_DIR environment variable still
-      overrides this. Plugin modules are not shipped; the plugin directory
-      likewise self-resolves (upstream dlmisc.c) if ever added.
+      overrides this. The bundled alsa.conf loads the system's
+      /etc/alsa/conf.d, so the distribution's default-device setup (PipeWire,
+      PulseAudio) applies.
+  - title: "ALSA plugins and UCM profiles come from the system"
+    description: >-
+      The package ships no plugin modules and no UCM profiles. libasound
+      loads plugins from $ALSA_PLUGIN_DIR, then <prefix>/lib/alsa-lib, then
+      the distribution's plugin directory (/usr/lib/<multiarch>/alsa-lib,
+      /usr/lib64/alsa-lib or /usr/lib/alsa-lib), so the pipewire and pulse
+      PCMs named by /etc/alsa/conf.d work. UCM profiles come from
+      $ALSA_CONFIG_UCM2, then <config dir>/ucm2, then /usr/share/alsa/ucm2.

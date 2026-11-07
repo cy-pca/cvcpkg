@@ -1,0 +1,189 @@
+diff --git a/src/dlmisc.c b/src/dlmisc.c
+index 2856cd7..410f509 100644
+--- a/src/dlmisc.c
++++ b/src/dlmisc.c
+@@ -79,6 +79,56 @@ static void snd_dlinfo_origin(char *path, size_t path_len)
+ #endif
+ }
+ 
++/* cvcpkg: the distribution's plugin directory for this architecture, using
++ * Debian's multiarch tuple names. */
++#if defined(__x86_64__) && defined(__LP64__)
++#define SND_MULTIARCH "x86_64-linux-gnu"
++#elif defined(__aarch64__)
++#define SND_MULTIARCH "aarch64-linux-gnu"
++#elif defined(__i386__)
++#define SND_MULTIARCH "i386-linux-gnu"
++#elif defined(__arm__) && defined(__ARM_PCS_VFP)
++#define SND_MULTIARCH "arm-linux-gnueabihf"
++#elif defined(__powerpc64__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
++#define SND_MULTIARCH "powerpc64le-linux-gnu"
++#elif defined(__riscv) && __riscv_xlen == 64
++#define SND_MULTIARCH "riscv64-linux-gnu"
++#elif defined(__s390x__)
++#define SND_MULTIARCH "s390x-linux-gnu"
++#endif
++
++/*
++ * cvcpkg builds libasound under an ephemeral sandbox prefix and relocates the
++ * package, so the compiled-in ALSA_PLUGIN_DIR is a dead path and the package
++ * ships no <origin>/alsa-lib of its own.  The configuration it reads includes
++ * the system's /etc/alsa/conf.d, which names the distribution's plugins
++ * (pipewire, pulse, jack, rate converters, ...) by type only, so look for them
++ * in the distribution's plugin directory: Debian multiarch first, then
++ * lib64 (Fedora, openSUSE), then lib (Arch, Alpine, 32-bit systems).  A
++ * system libasound loads its plugins from <origin>/alsa-lib above, so this
++ * changes nothing for a system install.
++ */
++static void snd_dlinfo_system(void)
++{
++	static const char *const dirs[] = {
++#ifdef SND_MULTIARCH
++		"/usr/lib/" SND_MULTIARCH "/alsa-lib",
++#endif
++#if defined(__LP64__)
++		"/usr/lib64/alsa-lib",
++#endif
++		"/usr/lib/alsa-lib",
++	};
++	size_t i;
++
++	for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
++		if (access(dirs[i], X_OK) == 0) {
++			snd_plugin_dir = strdup(dirs[i]);
++			return;
++		}
++	}
++}
++
+ /**
+  *
+  * \brief Compose the dynamic path
+@@ -96,6 +146,8 @@ int snd_dlpath(char *path, size_t path_len, const char *name)
+ 			snd_plugin_dir = strdup(env);
+ 		} else {
+ 			snd_dlinfo_origin(path, path_len);
++			if (!snd_plugin_dir)
++				snd_dlinfo_system();
+ 		}
+ 		snd_plugin_dir_set = 1;
+ 	}
+diff --git a/src/ucm/parser.c b/src/ucm/parser.c
+index 2d7833e..24c3228 100644
+--- a/src/ucm/parser.c
++++ b/src/ucm/parser.c
+@@ -45,21 +45,17 @@ static int parse_sequence(snd_use_case_mgr_t *uc_mgr,
+ 
+ /*
+  * compose the absolute ucm filename
++ *
++ * cvcpkg: under uc_mgr_config_dir(), which falls back to the system's UCM
++ * tree when the relocated package has none (see utils.c).
+  */
+ static void ucm_filename(char *fn, size_t fn_len, long version,
+ 			  const char *dir, const char *file)
+ {
+-	const char *env = getenv(version > 1 ? ALSA_CONFIG_UCM2_VAR : ALSA_CONFIG_UCM_VAR);
+-
+ 	if (file[0] == '/')
+ 		file++;
+-	if (env == NULL)
+-		snprintf(fn, fn_len, "%s/%s/%s%s%s",
+-			 snd_config_topdir(), version > 1 ? "ucm2" : "ucm",
+-			 dir ?: "", dir ? "/" : "", file);
+-	else
+-		snprintf(fn, fn_len, "%s/%s%s%s",
+-			 env, dir ?: "", dir ? "/" : "", file);
++	snprintf(fn, fn_len, "%s/%s%s%s",
++		 uc_mgr_config_dir(version), dir ?: "", dir ? "/" : "", file);
+ }
+ 
+ /*
+@@ -3678,7 +3674,6 @@ static int filename_filter(const struct dirent64 *dirent)
+ int uc_mgr_scan_master_configs(const char **_list[])
+ {
+ 	char filename[PATH_MAX], dfl[PATH_MAX], fn[FILENAME_MAX];
+-	char *env = getenv(ALSA_CONFIG_UCM2_VAR);
+ 	snd_use_case_mgr_t *uc_mgr;
+ 	const char **list, *d_name;
+ 	char *s;
+@@ -3700,11 +3695,9 @@ int uc_mgr_scan_master_configs(const char **_list[])
+ 	}
+ 	cards += 4;	/* plug-and-play */
+ 
+-	if (env)
+-		snprintf(filename, sizeof(filename), "%s/conf.virt.d", env);
+-	else
+-		snprintf(filename, sizeof(filename), "%s/ucm2/conf.virt.d",
+-			 snd_config_topdir());
++	/* cvcpkg: uc_mgr_config_dir(), as in ucm_filename() */
++	snprintf(filename, sizeof(filename), "%s/conf.virt.d",
++		 uc_mgr_config_dir(2));
+ 
+ #if defined(_GNU_SOURCE) && \
+     !defined(__NetBSD__) && \
+diff --git a/src/ucm/utils.c b/src/ucm/utils.c
+index eb6bb4a..23e6719 100644
+--- a/src/ucm/utils.c
++++ b/src/ucm/utils.c
+@@ -31,6 +31,7 @@
+  */
+ 
+ #include "ucm_local.h"
++#include <limits.h>
+ 
+ void uc_mgr_error(const char *fmt,...)
+ {
+@@ -341,18 +342,50 @@ int uc_mgr_card_number(struct ctl_list *ctl_list)
+ 	return snd_ctl_card_info_get_card(ctl_list->ctl_info);
+ }
+ 
++/*
++ * cvcpkg: the default UCM directory, <topdir>/<name>, where topdir is
++ * snd_config_topdir() (ALSA_CONFIG_DIR from the environment, or the config
++ * tree next to the loaded libasound.so), instead of the compiled-in
++ * ALSA_CONFIG_DIR, which is the dead build sandbox prefix of a relocated
++ * package.  The package does not ship the UCM profiles (alsa-ucm-conf), so
++ * when <topdir>/<name> is missing, use the system's /usr/share/alsa/<name>.
++ * The result is cached for the process lifetime, like snd_config_topdir().
++ * parser.c's ucm_filename() and uc_mgr_scan_master_configs() use this too,
++ * where upstream builds <topdir>/ucm2 itself.
++ */
++static const char *uc_mgr_default_config_dir(const char *name,
++					     const char *fallback, char **cache)
++{
++	char path[PATH_MAX];
++	char system_path[PATH_MAX];
++
++	if (*cache)
++		return *cache;
++	snprintf(path, sizeof(path), "%s/%s", snd_config_topdir(), name);
++	if (access(path, R_OK) != 0) {
++		snprintf(system_path, sizeof(system_path), "/usr/share/alsa/%s", name);
++		if (access(system_path, R_OK) == 0)
++			snd_strlcpy(path, system_path, sizeof(path));
++	}
++	*cache = strdup(path);
++	return *cache ? *cache : fallback;
++}
++
+ const char *uc_mgr_config_dir(int format)
+ {
++	static char *ucm_dir, *ucm2_dir;
+ 	const char *path;
+ 
+ 	if (format >= 2) {
+ 		path = getenv(ALSA_CONFIG_UCM2_VAR);
+ 		if (!path || path[0] == '\0')
+-			path = ALSA_CONFIG_DIR "/ucm2";
++			path = uc_mgr_default_config_dir("ucm2",
++					ALSA_CONFIG_DIR "/ucm2", &ucm2_dir);
+ 	} else {
+ 		path = getenv(ALSA_CONFIG_UCM_VAR);
+ 		if (!path || path[0] == '\0')
+-			path = ALSA_CONFIG_DIR "/ucm";
++			path = uc_mgr_default_config_dir("ucm",
++					ALSA_CONFIG_DIR "/ucm", &ucm_dir);
+ 	}
+ 	return path;
+ }
