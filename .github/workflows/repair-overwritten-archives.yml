@@ -1,0 +1,83 @@
+name: Repair overwritten archives (dev)
+
+# One-off repair of the dev server's 2026-10-31 archive overwrites.  Migration
+# 036 relabelled noarch rows none/none but kept their ...-release-shared names;
+# populate (fixed in cy-pca/cvcpkg#554) and /v1/publish then wrote other builds
+# under those names, so 1,449 live rows serve bytes that fail their sha256.
+#
+# scripts/repair_overwritten_archives.py derives the targets live: rows whose
+# shared archive file holds another row's bytes, each hashed here.  It yanks
+# and nukes exactly those rows, with their full scope.  The files stay, since
+# the other rows still store them, and populate re-imports cvcpkg.org's copy.
+# Batches of `batch` land just before a populate sync, so each coordinate is
+# missing for minutes.
+#
+# `apply` defaults false: a dry run prints the targets and their count.  An
+# apply run needs `expect` = that count and refuses if the live set differs.
+# Nuke is IRREVERSIBLE.  Dev only: the runner resolves the dev server itself.
+#
+# Required repo secret:
+#   CVCPKG_ADMIN_TOKEN — admin token for the dev server (nuke is admin-only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually yank + nuke (false = dry run, just report)"
+        required: true
+        type: boolean
+        default: false
+      expect:
+        description: "REQUIRED for apply: the dry run's target count"
+        required: false
+        default: ""
+        type: string
+      batch:
+        description: "Targets per populate sync (dev imports at most 200 per sync)"
+        required: false
+        default: "200"
+        type: string
+
+concurrency:
+  group: repair-overwritten-archives
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: repair (apply=${{ inputs.apply }})
+    runs-on: [self-hosted, Linux, star-01]
+    # 1,449 targets at 200 a sync: 8 syncs of 15 min, plus the check after.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve dev server URL
+        id: dev
+        run: |
+          set -euo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
+          echo "Dev server: http://${IP}:8420"
+
+      - name: Repair
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
+          SERVER: ${{ steps.dev.outputs.url }}
+          APPLY: ${{ inputs.apply }}
+          EXPECT: ${{ inputs.expect }}
+          BATCH: ${{ inputs.batch }}
+        run: |
+          set -euo pipefail
+          args=(--server "$SERVER" --upstream https://cvcpkg.org --batch "$BATCH")
+          if [[ "$APPLY" == "true" ]]; then
+            [[ -n "$EXPECT" ]] || { echo "::error::apply needs expect = the dry run's count"; exit 1; }
+            args+=(--apply --expect "$EXPECT")
+          fi
+          python3 scripts/repair_overwritten_archives.py "${args[@]}"
