@@ -100,7 +100,28 @@ def _wire(script, monkeypatch, rows, file_sha):
     monkeypatch.setattr(script, "hash_archive", lambda server, token, f: file_sha[f])
     posted = []
     monkeypatch.setattr(script, "post_scoped", lambda *a: posted.append(a) or 1)
+    monkeypatch.setattr(script, "caller_role", lambda server, token: "admin")
     return posted
+
+
+def test_apply_with_a_token_this_server_rejects_stops_before_reading(script, monkeypatch):
+    """The first real run sent prod's admin token to dev: 401 at the first yank,
+    after the hashing and an 11-minute wait for a sync."""
+    posted = _wire(script, monkeypatch, [], {})
+    monkeypatch.setattr(script, "caller_role", lambda server, token: "none (HTTP 401)")
+    monkeypatch.setattr(script, "fetch_catalog", lambda *a: pytest.fail("read before the check"))
+    monkeypatch.setenv("CVCPKG_TOKEN", "prod-token")
+    with pytest.raises(SystemExit, match=r"role on http://dev is none \(HTTP 401\), not admin"):
+        script.main(["--server", "http://dev", "--apply", "--expect", "1449"])
+    assert posted == []
+
+
+def test_apply_with_a_publisher_token_stops(script, monkeypatch):
+    _wire(script, monkeypatch, [], {})
+    monkeypatch.setattr(script, "caller_role", lambda server, token: "publisher")
+    monkeypatch.setenv("CVCPKG_TOKEN", "pub")
+    with pytest.raises(SystemExit, match="is publisher, not admin"):
+        script.main(["--server", "http://dev", "--apply", "--expect", "1"])
 
 
 def test_dry_run_lists_and_writes_nothing(script, monkeypatch, capsys):
@@ -161,6 +182,7 @@ def test_apply_lands_each_batch_after_a_sync_and_checks_the_reimports(script, mo
     monkeypatch.setattr(script, "fetch_catalog", catalog)
     monkeypatch.setattr(script, "hash_archive", lambda server, token, f: file_sha[f])
     monkeypatch.setattr(script, "last_sync", last_sync)
+    monkeypatch.setattr(script, "caller_role", lambda server, token: "admin")
     monkeypatch.setattr(script.time, "sleep", lambda s: None)
     monkeypatch.setattr(script, "post_scoped", lambda s, t, row, action: events.append(action) or 1)
     monkeypatch.setenv("CVCPKG_TOKEN", "tok")
