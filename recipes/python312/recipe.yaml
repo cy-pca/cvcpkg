@@ -122,7 +122,20 @@ recipe:
   # extension module imported (cryptography's _rust: "DLL load failed").  The walk
   # now skips python3*.dll, and the layout checks the forwarder's target.  Other
   # platforms rebuild unchanged.
-  cvc_revision: 22
+  #
+  # Bumped 22 -> 23 (wasm, wasm-mt): libpython3.12.a carries the expat and
+  # SHA-2 code its builtin pyexpat and _sha2 call.  The published wasm cvc.13
+  # archive left 52 PyExpat_XML_* and 12 python_hashlib_Hacl_Hash_SHA2_*
+  # symbols undefined.  CPython links that code from Modules/expat/libexpat.a
+  # and Modules/_hacl/libHacl_Hash_SHA2.a, which never reach libpython, and
+  # cvc.11's HACL fold went only into the config-3.12-wasm32-emscripten/ copy
+  # of the archive, not lib/'s.  An app embedding libpython had to link with
+  # -sERROR_ON_UNDEFINED_SYMBOLS=0, and then xml.parsers.expat,
+  # hashlib.sha256() and random.seed(str) aborted it.  _common/build-python.sh
+  # now folds Modules/expat/*.o and Modules/_hacl/*.o into every installed
+  # copy, and fails the build if a bundled-library symbol is still undefined.
+  # Other platforms rebuild unchanged.
+  cvc_revision: 23
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

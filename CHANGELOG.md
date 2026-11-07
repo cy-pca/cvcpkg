@@ -35,6 +35,28 @@ import over another row's archive (#556, #554), a mirror lifts its own stale
 yanks (#552), and builders run the pack gate's undeclared-library check
 (#547), which #551's 40 recipe fixes went in ahead of. No migration.**
 
+- **python312 cvc.23 (wasm, wasm-mt): the static libpython has its bundled
+  expat and SHA-2.** The wasm `lib/libpython3.12.a` (3.12.10+cvc.13) defined
+  the builtin `pyexpat` and `_sha2` modules but not the code they call: 52
+  `PyExpat_XML_*` symbols (CPython's bundled expat) and 12
+  `python_hashlib_Hacl_Hash_SHA2_*` symbols (HACL SHA-2). An app embedding it,
+  such as libcvc's pycvc_gl and ariglx-web wasm hosts, had to link with
+  `-sERROR_ON_UNDEFINED_SYMBOLS=0`. Then `xml.parsers.expat`,
+  `hashlib.sha256()` and `random.seed(str)` aborted the page.
+  - CPython links that code from `Modules/expat/libexpat.a` and
+    `Modules/_hacl/libHacl_Hash_SHA2.a`, which `make install` never puts in
+    libpython. `_common/build-python.sh` folds those objects into every
+    installed `libpython3.X*.a` on emscripten.
+  - cvc.11 already folded the HACL objects, but into the first archive `find`
+    returned. On the builder that was the copy in
+    `lib/python3.12/config-3.12-wasm32-emscripten/`, so `lib/`'s, the one
+    consumers link, still lacked SHA-2.
+  - After the fold, the build checks each archive with `llvm-nm`. A symbol from
+    a bundled library (`PyExpat_*`, `python_hashlib_*`, `mpd_*`) that the
+    archive leaves undefined now fails the build.
+  - python311, python313 and python313t share the script. Their wasm bundles
+    pick up the fix at their next revision.
+
 - **Server: `/v1/publish` no longer overwrites an archive another row stores.**
   Publish named each archive after its coordinates and stored it over whatever
   was there, but its duplicate check is per coordinate. A row at other
