@@ -27,7 +27,12 @@ source:
   sha256: "9cbde5099c6deb73691b0579063da5827522ccbbcba3f0020fd04e8c8c16c0d4"
   strip_components: 0
 
-patches: []
+patches:
+  # Haiku port of the console: no dirent d_type, no <sys/sysinfo.h>, no
+  # <sys/sysmacros.h>.  Every hunk is behind __HAIKU__, so no other platform
+  # compiles different code and there is no revision bump (the Haiku bundle was
+  # never published: it did not build).  See the patch header.
+  - haiku-port.patch
 
 depends:
   build: []

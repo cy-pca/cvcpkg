@@ -1,0 +1,121 @@
+Haiku: 7-Zip 26.03's POSIX sources assume Linux, a BSD, AIX, Solaris or QNX.
+
+Four things in the console build do not exist on Haiku:
+
+1. struct dirent has no d_type (it is {d_dev, d_pdev, d_ino, d_pino, d_reclen,
+   d_name[]}).  CPP/Windows/FileFind.{h,cpp} read it for CDirEntry::Type,
+   IsDots, NextAny and DirEntry_IsDir, and already compile those uses out on
+   AIX, Solaris and QNX.  Add Haiku to that list.  The code behind the guard
+   handles an unknown type with a stat() (Fill_FileInfo), so directory scans
+   keep working.
+2. <sys/sysinfo.h> (Linux only) is included by CPP/Windows/System.cpp.  Haiku
+   has neither it nor <sys/sysctl.h>, but sysconf(_SC_PHYS_PAGES) works, so use
+   the existing sysconf branch (Solaris') for GetRamSize.
+3. <sys/sysmacros.h> and major()/minor() (CPP/7zip/Common/FileStreams.cpp,
+   CPP/7zip/UI/Common/UpdateCallback.cpp), used to report a device node's
+   numbers.  Haiku has neither, and st_rdev is documented as "not used", so
+   both report 0.
+   (CPP/Windows/FileFind.cpp has the include commented out.)
+
+Every hunk is behind __HAIKU__, so no other platform compiles different code.
+The sources use CRLF line endings; the patch keeps them.
+
+Checked on a Haiku x86_64 VM (hrev57937): the console builds and links, and a
+nested tree with an empty directory round-trips through `7zz a` / `7zz x`
+byte for byte.
+
+--- a/CPP/Windows/FileFind.h
++++ b/CPP/Windows/FileFind.h
+@@ -275,13 +275,13 @@
+ struct CDirEntry
+ {
+   ino_t iNode;
+-#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__)
++#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__) && !defined(__HAIKU__)
+   Byte Type;
+ #endif
+   FString Name;
+ 
+   /*
+-#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__)
++#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__) && !defined(__HAIKU__)
+   bool IsDir() const
+   {
+     // (Type == DT_UNKNOWN) on some systems
+@@ -308,7 +308,7 @@
+   bool Fill_FileInfo(const CDirEntry &de, CFileInfo &fileInfo, bool followLink) const;
+   bool DirEntry_IsDir(const CDirEntry &de, bool followLink) const
+   {
+-#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__)
++#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__) && !defined(__HAIKU__)
+     if (de.Type == DT_DIR)
+       return true;
+     if (de.Type != DT_UNKNOWN)
+--- a/CPP/Windows/FileFind.cpp
++++ b/CPP/Windows/FileFind.cpp
+@@ -1321,7 +1321,7 @@
+   /* some systems (like CentOS 7.x on XFS) have (Type == DT_UNKNOWN)
+      we can call fstatat() for that case, but we use only (Name) check here */
+ 
+-#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__)
++#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__) && !defined(__HAIKU__)
+   if (Type != DT_DIR && Type != DT_UNKNOWN)
+     return false;
+ #endif
+@@ -1361,7 +1361,7 @@
+ 
+   fi.iNode = de->d_ino;
+   
+-#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__)
++#if !defined(_AIX) && !defined(__sun) && !defined(__QNXNTO__) && !defined(__HAIKU__)
+   fi.Type = de->d_type;
+   /* some systems (like CentOS 7.x on XFS) have (Type == DT_UNKNOWN)
+      we can set (Type) from fstatat() in that case.
+--- a/CPP/Windows/System.cpp
++++ b/CPP/Windows/System.cpp
+@@ -9,7 +9,7 @@
+     || defined(BSD) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) \
+     || defined(__QNXNTO__)
+ #include <sys/sysctl.h>
+-#else
++#elif !defined(__HAIKU__)
+ #include <sys/sysinfo.h>
+ #endif
+ #endif
+@@ -340,7 +340,7 @@
+     #if defined(_SC_AIX_REALMEM) // AIX
+       size64 = (UInt64)sysconf(_SC_AIX_REALMEM) * 1024;
+     #endif
+-  #elif 0 || defined(__sun)
++  #elif 0 || defined(__sun) || defined(__HAIKU__)
+     #if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+     // FreeBSD, Linux, OpenBSD, and Solaris.
+     {
+--- a/CPP/7zip/Common/FileStreams.cpp
++++ b/CPP/7zip/Common/FileStreams.cpp
+@@ -28,6 +28,11 @@
+ #if defined(__APPLE__) || defined(__DragonFly__) || \
+     defined(BSD) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+ #include <sys/types.h>
++#elif defined(__HAIKU__)
++#include <sys/types.h>
++// Haiku has no device major/minor numbers (struct stat's st_rdev is "not used").
++#define major(dev) ((unsigned)0)
++#define minor(dev) ((unsigned)0)
+ #else
+ #include <sys/sysmacros.h>
+ #endif
+--- a/CPP/7zip/UI/Common/UpdateCallback.cpp
++++ b/CPP/7zip/UI/Common/UpdateCallback.cpp
+@@ -11,6 +11,11 @@
+ #if defined(__APPLE__) || defined(__DragonFly__) || \
+     defined(BSD) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+ #include <sys/types.h>
++#elif defined(__HAIKU__)
++#include <sys/types.h>
++// Haiku has no device major/minor numbers (struct stat's st_rdev is "not used").
++#define major(dev) ((unsigned)0)
++#define minor(dev) ((unsigned)0)
+ #else
+ #include <sys/sysmacros.h>
+ #endif
