@@ -59,6 +59,41 @@ cd "${CVC_SOURCE_DIR}"
 # builders, a path any local user can create on a machine that uses this
 # libpq.  Use the system locations instead, which only root can write; libpq
 # reads them as a /usr build of PostgreSQL does.
+#
+# Optional libraries this recipe does not declare are off or the OS's own,
+# never whatever meson finds: it took what the builder had, and cvc.9's
+# bundles needed it wherever they ran.  FreeBSD's PL/Perl modules needed the
+# ports libperl.so.5.42; NetBSD's libpq.so needed pkgsrc's libldap_r.so.6,
+# its postgres, dblink and libpqwalreceiver libldap.so.6, postgres and pgxml
+# libxml2.so.16, PL/Perl libperl.so; linux's postgres cvcpkg's libxml2.so.2,
+# from a shared prefix.
+#   PL/Perl, PL/Tcl: server languages that link the interpreter's library, so
+#     built only where the OS ships it: macOS both (/System's libperl and
+#     Tcl.framework), OpenBSD PL/Perl (base libperl; its Tcl is a port).
+#     PERL names the OS's /usr/bin/perl: a shared prefix can put cvcpkg's perl
+#     first on PATH, and PL/Perl would then link its libperl, undeclared.
+#     cvcpkg packages no Tcl, so only the OS's is found.  Off elsewhere.
+#   libxml, libxslt: only the server's xml type and contrib/xml2 use them.
+#   libcurl: libpq-oauth (the OAuth device flow), which libpq never had.
+#   LDAP: cvcpkg packages no OpenLDAP; macOS keeps its own (part of the OS).
+_optional=(-Dlibxml=disabled -Dlibxslt=disabled -Dlibcurl=disabled)
+case "${CVC_PLATFORM}" in
+    macos)   _optional+=(-DPERL=/usr/bin/perl) ;;
+    openbsd) _optional+=(-DPERL=/usr/bin/perl -Dpltcl=disabled -Dldap=disabled) ;;
+    *)       _optional+=(-Dplperl=disabled -Dpltcl=disabled -Dldap=disabled) ;;
+esac
+
+# The BSDs: env-<bsd>.sh appends the ports/pkgsrc include and lib dirs to
+# CFLAGS/LDFLAGS, and meson puts LDFLAGS ahead of every dependency's own -L, so
+# where the host has a library this recipe declares (openssl, zstd, lz4, krb5,
+# gettext) the build could link the host's copy.  Search the deps prefix first.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd|netbsd)
+        export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+        export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib ${LDFLAGS:-}"
+        ;;
+esac
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
@@ -76,7 +111,8 @@ meson setup "${CVC_BUILD_DIR}" \
     -Dzstd=enabled \
     -Dlz4=enabled \
     -Dnls=enabled \
-    -Dgssapi=enabled
+    -Dgssapi=enabled \
+    "${_optional[@]}"
 
 cd "${CVC_BUILD_DIR}"
 # Build only the libpq shared library and install the whole project.

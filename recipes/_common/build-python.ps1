@@ -271,10 +271,19 @@ function Invoke-CvcPythonBuild {
     Get-ChildItem -LiteralPath $buildDir -File | Where-Object { $_.Extension -in '.pyd', '.dll', '.exe' } |
         ForEach-Object { $queue.Enqueue($_.FullName) }
     $copied = @{}
+    # Never the interpreter's own DLLs: the build made python3XX.dll and its
+    # python3.dll forwarder, and since #542 a Python in the deps prefix (the
+    # python313 PCbuild's generators run with) carries its own in bin\.  PCbuild's
+    # abi3 test modules import python3.dll, so the walk copied python313's over
+    # this build's: python311 +cvc.15 and python312 +cvc.21 shipped a python3.dll
+    # forwarding to python313.dll, and no abi3 extension module imported
+    # ("DLL load failed while importing _rust"; checked after layout below).
     while ($queue.Count -gt 0) {
         foreach ($line in (& dumpbin /nologo /dependents $queue.Dequeue())) {
             if ($line -notmatch '^\s+(\S+\.dll)\s*$') { continue }
-            $dll = $depsDlls[$Matches[1]]
+            $name = $Matches[1]
+            if ($name -match '^python3\d*t?\.dll$') { continue }
+            $dll = $depsDlls[$name]
             if (-not $dll -or $copied.ContainsKey($dll.Name)) { continue }
             Copy-Item -LiteralPath $dll.FullName -Destination $buildDir -Force
             $copied[$dll.Name] = $true
@@ -343,6 +352,21 @@ function Invoke-CvcPythonBuild {
     $pyDlls = @(Get-ChildItem -LiteralPath $env:CVC_INSTALL_DIR -Filter 'python3*.dll' -File)
     if ($pyDlls.Count -lt 2) {
         throw "PC\layout staged $($pyDlls.Count) python3*.dll at the root (expected python3XX.dll and python3.dll)"
+    }
+    # python3.dll (python3t.dll) must forward the limited API to this build's
+    # python3XX.dll (python3XXt.dll); see the DLL walk in step 2.
+    foreach ($fwd in @($pyDlls | Where-Object { $_.Name -in 'python3.dll', 'python3t.dll' })) {
+        $ft = if ($fwd.Name -eq 'python3t.dll') { 't' } else { '' }
+        $own = @($pyDlls | Where-Object { $_.Name -match "^python3\d+$ft\.dll$" })
+        if ($own.Count -ne 1) { throw "PC\layout staged $($fwd.Name) beside $($own.Count) python3XX$ft.dll (expected 1)" }
+        $target = [IO.Path]::GetFileNameWithoutExtension($own[0].Name)
+        $exports = (& dumpbin /nologo /exports $fwd.FullName) -join "`n"
+        $targets = @([regex]::Matches($exports, 'forwarded to (python3\d+t?)\.') |
+            ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        if ($targets.Count -ne 1 -or $targets[0] -ne $target) {
+            throw "$($fwd.Name) forwards to $($targets -join ', '), not $($own[0].Name): it is another Python's"
+        }
+        Write-Host "$($fwd.Name) forwards to $($own[0].Name)"
     }
     foreach ($dll in $pyDlls) {
         Copy-Item -LiteralPath $dll.FullName -Destination $binDir -Force

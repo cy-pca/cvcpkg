@@ -18,12 +18,20 @@ BOOTSTRAP_ARGS=(
 
 CMAKE_FLAGS=(
     -DCMAKE_USE_OPENSSL=ON
+    # No ccmake.  CMake builds its curses dialog whenever its curses check
+    # passes, and with CMAKE_PREFIX_PATH at the deps prefix FindCurses took
+    # cvcpkg's ncurses from a shared populate prefix: +cvc.8's linux bin/ccmake
+    # NEEDed libncurses.so.6, undeclared (and macOS/the BSDs could do the
+    # same).  Declaring ncurses instead would put it in the build prefix of
+    # every recipe that builds with cmake, where their own configure checks
+    # would find it.  OFF also skips the curses check (CMakeBuildUtilities).
+    -DBUILD_CursesDialog=OFF
 )
 
 if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     CMAKE_FLAGS+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
     CMAKE_FLAGS+=(-DOPENSSL_ROOT_DIR="${CVC_DEPS_PREFIX}")
-    # RPATH of the installed bin/{cmake,ctest,cpack,ccmake}. They link libcurl,
+    # RPATH of the installed bin/{cmake,ctest,cpack}. They link libcurl,
     # libssl and libcrypto from CVC_DEPS_PREFIX, which is this job's scratch
     # prefix (cvcpkg-job-cmake-<id>/cvcpkg-prefix-cmake-<id>/) and is deleted
     # when the job ends. CMake's own CMakeLists caches
@@ -85,8 +93,8 @@ if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
     # On BSDs with static OpenSSL, cmake's bundled libarchive (cmlibarchive)
     # uses EVP_MAC_* from libcrypto.  The static archive doesn't propagate
-    # its ADDITIONAL_LIBS to the final executables (cmake, ccmake, cpack,
-    # ctest).  Append the OpenSSL libs + pthread via
+    # its ADDITIONAL_LIBS to the final executables (cmake, cpack, ctest).
+    # Append the OpenSSL libs + pthread via
     # CMAKE_CXX_STANDARD_LIBRARIES so they appear at the END of every link
     # command (LDFLAGS goes at the start, which is too early for the linker's
     # left-to-right symbol resolution with static archives).
@@ -183,3 +191,10 @@ case "${CVC_PLATFORM:-}" in
         fi
         ;;
 esac
+
+# BUILD_CursesDialog=OFF (CMAKE_FLAGS above): no bin/ccmake, so no curses
+# library to depend on.  Fail rather than ship one again.
+if [[ -e "${CVC_INSTALL_DIR}/bin/ccmake" ]]; then
+    echo "cmake build.sh: bin/ccmake was installed although BUILD_CursesDialog=OFF" >&2
+    exit 1
+fi

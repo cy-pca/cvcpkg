@@ -16,7 +16,13 @@ recipe:
   # cvc.6: libiconv is linked only on OpenBSD and macOS, the platforms that
   # declare it.  linux/arm64 cvc.5 picked it up from a shared populate prefix
   # without declaring it, so its msgfmt could not start elsewhere (build.sh).
-  cvc_revision: 6
+  # cvc.7: link only what is declared.  OpenBSD cvc.6 NEEDed the build host's
+  # ports libiconv.so.7.1 from /usr/local; linux cvc.6 NEEDed libxml2.so.2 and
+  # GCC's libgomp.so.1.  gettext's own libxml, libunistring and (off linux)
+  # libintl are used, OpenMP is off, the declared iconv is required on
+  # OpenBSD/macOS, and a check after `make install` fails the build on anything
+  # else (build.sh).
+  cvc_revision: 7
   maintainer: "CyberPC Angel, LLC"
   maintainer_email: "cvcpkg@cyberpcangel.com"
   maintainer_url: "https://cyberpcangel.com"

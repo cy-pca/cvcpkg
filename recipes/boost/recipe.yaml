@@ -22,7 +22,12 @@ recipe:
   #
   # Bumped 7 -> 8: quadmath on linux x86_64 only.  GCC has no libquadmath for
   # aarch64, and forcing it ON failed linux/arm64 (quadmath.h not found).
-  cvc_revision: 8
+  #
+  # Bumped 8 -> 9: declare iconv on OpenBSD and macOS.  +cvc.8's libboost_locale
+  # linked an undeclared libiconv there: the OpenBSD build host's ports
+  # libiconv.so.7.1 from /usr/local, and on macOS cvcpkg's from a shared prefix
+  # (@rpath/libiconv.2.dylib).  build.sh now names the declared copy.
+  cvc_revision: 9
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -53,6 +58,12 @@ depends:
     # $ORIGIN run paths, so the libraries load gcc-runtime's libquadmath.
     - name: patchelf
       platforms: [linux]
+    # cvcpkg's GNU libiconv for Boost.Locale on OpenBSD, whose libc has no
+    # iconv, and on macOS, as gettext and ffmpeg-lgpl link it there.  Linux and
+    # the other BSDs use libc's.  See build.sh.
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
   runtime:
     - name: zlib
       version: "^1.3"
@@ -60,6 +71,9 @@ depends:
     - name: gcc-runtime
       version: "^11.4"
       platforms: [linux]
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd, macos]
   host_tools: []
 
 build:

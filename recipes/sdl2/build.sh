@@ -26,7 +26,18 @@ else
     _sdl_shared=ON
 fi
 
+# OpenBSD: SDL's own iconv (SDL_iconv: UTF-8/16/32, UCS-2/4, ASCII, Latin-1),
+# as SDL itself chooses on macOS and Windows.  OpenBSD's libc has no iconv, so
+# SDL_SYSTEM_ICONV linked the -liconv on the link path, the build host's ports
+# libiconv.so.7.1 from /usr/local/lib (env-openbsd.sh), and cvc.1's libSDL2
+# NEEDed it undeclared.
+_sdl_extra=()
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    _sdl_extra+=(-DSDL_SYSTEM_ICONV=OFF)
+fi
+
 cvc_cmake_build \
+    ${_sdl_extra[@]+"${_sdl_extra[@]}"} \
     -DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}" \
     -DSDL_STATIC="${_sdl_static}" \
     -DSDL_SHARED="${_sdl_shared}" \

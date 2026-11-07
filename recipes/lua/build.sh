@@ -32,10 +32,21 @@ lua_detect_version
 
 # Upstream target, plus the libraries that target links lua with (its SYSLIBS),
 # repeated below for the relink against the shared library.
+#
+# FreeBSD links the declared readline, as Linux and macOS do.  Upstream's
+# freebsd target compiles against base libedit's <edit/readline/readline.h> but
+# links a bare -ledit, and env-freebsd.sh's -L/usr/local/lib found the
+# builder's ports libedit.so.0 first: lua +cvc.1's bin/lua and bin/luac NEEDed
+# it, and nothing declares it.  `bsd` is the same POSIX + dlopen + -Wl,-E build
+# (freebsd's LUA_USE_LINUX is LUA_USE_POSIX + LUA_USE_DLOPEN), and
+# lua_readline_* add readline to it.
+lua_readline_cflags=""
+lua_readline_libs=""
 case "$(uname -s)" in
     Linux)   target=linux-readline; lua_syslibs="-Wl,-E -ldl -lreadline"; dl="-ldl" ;;
     Darwin)  target=macosx;         lua_syslibs="-lreadline";             dl="" ;;
-    FreeBSD) target=freebsd;        lua_syslibs="-Wl,-E -ledit";          dl="" ;;
+    FreeBSD) target=bsd;            lua_syslibs="-Wl,-E -lreadline";      dl=""
+             lua_readline_cflags="-DLUA_USE_READLINE"; lua_readline_libs="-lreadline" ;;
     NetBSD)  target=bsd;            lua_syslibs="-Wl,-E";                 dl="" ;;
     OpenBSD) target=bsd;            lua_syslibs="-Wl,-E";                 dl="" ;;
     # Upstream has no Haiku target, and `posix` leaves out LUA_USE_DLOPEN, so
@@ -54,12 +65,40 @@ if [ -n "${CVC_DEPS_PREFIX:-}" ]; then
     [ -d "${CVC_DEPS_PREFIX}/lib" ] && dep_ldflags="-L${CVC_DEPS_PREFIX}/lib"
 fi
 
+# FreeBSD/OpenBSD: nothing from the ports tree.  env-<bsd>.sh appends
+# -I/usr/local/include and -L/usr/local/lib, which come before dep_cflags and
+# dep_ldflags below and would hand lua a ports readline (or libedit, see above).
+# Lua needs nothing from /usr/local, so drop those dirs, as recipes/mesa does.
+case "$(uname -s)" in
+    FreeBSD|OpenBSD)
+        _drop_host_dirs() {
+            local _w _out=""
+            for _w in $1; do
+                case "${_w}" in
+                    -I/usr/local/include|-L/usr/local/lib) ;;
+                    *) _out="${_out:+${_out} }${_w}" ;;
+                esac
+            done
+            printf '%s' "${_out}"
+        }
+        CFLAGS="$(_drop_host_dirs "${CFLAGS:-}")"
+        LDFLAGS="$(_drop_host_dirs "${LDFLAGS:-}")"
+        ;;
+esac
+
 # CC is passed explicitly: the Makefile hard-codes `gcc -std=gnu99`, and the
-# BSDs' env scripts select clang (OpenBSD has no gcc in base).
+# BSDs' env scripts select clang (OpenBSD has no gcc in base).  MYLIBS is
+# passed only where it adds readline, so the other targets' make line is as it
+# was.
+lua_make_extra=()
+if [ -n "${lua_readline_libs}" ]; then
+    lua_make_extra+=("MYLIBS=${lua_readline_libs}")
+fi
 make -j "${CVC_JOBS}" "${target}" \
     CC="${CC} -std=gnu99" \
-    MYCFLAGS="${CFLAGS:-} ${dep_cflags}" \
-    MYLDFLAGS="${LDFLAGS:-} ${dep_ldflags}"
+    MYCFLAGS="${CFLAGS:-} ${dep_cflags}${lua_readline_cflags:+ ${lua_readline_cflags}}" \
+    MYLDFLAGS="${LDFLAGS:-} ${dep_ldflags}" \
+    ${lua_make_extra[@]+"${lua_make_extra[@]}"}
 
 # ── Shared library from the liblua.a objects ─────────────────────────────────
 cd src

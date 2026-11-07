@@ -1536,6 +1536,15 @@ SEED_PACKAGES = {
         "version": "0.14.0",
         "license": "Apache-2.0",
         "deps": ["async-timeout", "packaging", "typing-extensions"],
+        # setup.py links all four _crecords extensions with -lz except on
+        # Windows (LIBRARIES = ["z"]).  Undeclared, -lz took whatever zlib the
+        # build prefix held: +cvc.1's macOS columns loaded cvcpkg's
+        # @rpath/libz.1.dylib (cp313: @rpath/libz.1.3.1.dylib), which a clean
+        # install does not have.  Declared like pillow's and lxml's zlib, on
+        # every platform setup.py links it (the BSDs, should a column gain them).
+        "native_deps": [
+            {"name": "zlib", "platforms": ["linux", "macos", "freebsd", "openbsd", "netbsd"]}
+        ],
         "files": ["aiokafka/", "*.dist-info/"],
         "check": "import aiokafka; from aiokafka.record import _crecords",
     },
@@ -3171,8 +3180,24 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
     # Native (non-Python) libraries the package loads at run time, named as
     # their own cvcpkg recipes rather than -cpNNN columns (see the seed's
     # "native_deps"). Runtime edges so a consumer prefix carries them, and build
-    # edges like every runtime dep so the import check can load them.
-    deps += [n for n in m.get("native_deps") or [] if n not in deps]
+    # edges like every runtime dep so the import check can load them.  An entry
+    # is a recipe name, or {"name": ..., "platforms": [...]} for a library the
+    # package links only on some platforms (aiokafka: -lz everywhere but
+    # Windows); both edges then carry that platforms: list.
+    native_platforms: dict[str, list[str]] = {}
+    for n in m.get("native_deps") or []:
+        if isinstance(n, dict):
+            native_platforms[n["name"]] = list(n["platforms"])
+            n = n["name"]
+        if n not in deps:
+            deps.append(n)
+
+    def _dep_edge(name: str) -> str:
+        edge = f"    - name: {name}\n"
+        if name in native_platforms:
+            edge += f"      platforms: [{', '.join(native_platforms[name])}]\n"
+        return edge
+
     # From-source columns additionally need the PEP-517 backend importable at
     # build time (--no-build-isolation); those are build-only edges.
     backends = backend_edges(m.get("build_requires", []), interp) if mode == "sdist" else []
@@ -3307,7 +3332,7 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
         body += "  manylinux_min: manylinux_2_28\n"
     body += "\npatches: []\n\n"
 
-    body += "depends:\n  build:\n" + "".join(f"    - name: {b}\n" for b in dict.fromkeys(deps))
+    body += "depends:\n  build:\n" + "".join(_dep_edge(b) for b in dict.fromkeys(deps))
     if backends:
         body += (
             "    # PEP-517 build backend, from this sdist's [build-system] requires.\n"
@@ -3316,7 +3341,7 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
         ) + "".join(
             f"    - name: {b}\n" for b in dict.fromkeys(backends) if b not in dict.fromkeys(deps)
         )
-    body += "  runtime:\n" + "".join(f"    - name: {r}\n" for r in dict.fromkeys(deps))
+    body += "  runtime:\n" + "".join(_dep_edge(r) for r in dict.fromkeys(deps))
     if mode == "sdist":
         # pip and the compiler run ON the builder, so the interpreter is a host
         # tool as well as a dependency (see recipes/numpy-cp311).

@@ -2,7 +2,12 @@ schema_version: 1
 recipe:
   name: nfft3
   upstream_version: "3.5.3"
-  cvc_revision: 3
+  # cvc.4: declare gcc-runtime on linux.  build.sh configures linux with
+  # --enable-openmp, so the libraries NEED GCC's libgomp.so.1, which cvc.3
+  # took from the build host without declaring it (minimal hosts have none).
+  # gcc-runtime ships that libgomp.  macOS, the BSDs, Windows and the wasm/
+  # wasi/cosmo cross builds configure --disable-openmp and are unchanged.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -33,6 +38,11 @@ depends:
       platforms: [windows]
   runtime:
     - fftw3
+    # libgomp.so.1 for the OpenMP build (build.sh: --enable-openmp on linux
+    # only).  Same GCC 11.4 the fleet compiles with.
+    - name: gcc-runtime
+      version: "^11.4"
+      platforms: [linux]
   host_tools: []
 
 build:

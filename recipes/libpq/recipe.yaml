@@ -9,7 +9,14 @@ recipe:
   # C:\cvb\..., paths any local user can create where this libpq runs.  Now
   # /etc/postgresql and /usr/share/locale, or C:/Program Files/PostgreSQL/etc/
   # postgresql on Windows, where only root or an administrator can write.
-  cvc_revision: 9
+  # cvc.10: build without what nothing declares.  cvc.9 linked what meson
+  # found: FreeBSD's PL/Perl the ports libperl, NetBSD's libpq and server
+  # bits pkgsrc's libldap, libxml2 and libperl, linux's postgres cvcpkg's
+  # libxml2.  libxml, libxslt and OAuth (libcurl) are off; LDAP stays only on
+  # macOS (the OS's own); PL/Perl stays on macOS and OpenBSD and PL/Tcl on
+  # macOS, against the OS's /usr/bin/perl and Tcl.  The BSDs search the deps
+  # prefix ahead of ports/pkgsrc.  See build.sh.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

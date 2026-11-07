@@ -16,7 +16,9 @@ recipe:
   # GLIBC_2.38, so Blender (which links libopenal) cannot start on the dev
   # cluster's glibc 2.35 noarch builder; --skip-existing never rebuilds a
   # published variant.  The new revision is built under the 2.35 floor.
-  cvc_revision: 2
+  # cvc.3: OpenBSD links no libatomic.  cvc.2's OpenBSD libopenal NEEDed the
+  # builder's ports gcc libatomic.so.4.0 (see build.sh).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

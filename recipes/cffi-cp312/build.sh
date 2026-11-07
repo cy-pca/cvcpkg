@@ -85,9 +85,42 @@ echo "cffi-cp312: libffi $("${PKG_CONFIG}" --modversion libffi) from $("${PKG_CO
 # downloading its own.
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
-# NetBSD: build against our prefix ahead of pkgsrc, with a long RPATH that the
-# patchelf --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
-[ "${CVC_PLATFORM}" != "netbsd" ] || cvc_netbsd_prefix_first
+# The BSDs: build against our prefix ahead of the host's packages.
+#  * NetBSD: cvc_netbsd_prefix_first, with a long RPATH that the patchelf
+#    --set-rpath below shrinks in place (growing it: a refused PT_LOAD).
+#  * OpenBSD/FreeBSD: env-<bsd>.sh appends the ports dirs (-I/usr/local/include,
+#    -L/usr/local/lib) to CFLAGS/LDFLAGS, and the interpreter's sysconfig LDSHARED
+#    carries -L/usr/local/lib from its own build.  setuptools puts both ahead of
+#    the -I/-L pkg-config reports for libffi, so cvc.3 compiled against the ports
+#    ffi.h and, on OpenBSD, linked the ports libffi.so.2.2, which nothing
+#    declares.  Drop the ports dirs and put ours first; LDSHARED from the
+#    environment replaces sysconfig's.
+_drop_ports() {
+    local _w _out="" _ws=()
+    read -r -a _ws <<< "$1"
+    for _w in ${_ws[@]+"${_ws[@]}"}; do
+        case "${_w}" in
+            -I/usr/local/include|-L/usr/local/lib) ;;
+            *) _out="${_out:+${_out} }${_w}" ;;
+        esac
+    done
+    printf '%s' "${_out}"
+}
+case "${CVC_PLATFORM}" in
+    netbsd) cvc_netbsd_prefix_first ;;
+    openbsd|freebsd)
+        _ldshared="$("${PY}" -c 'import sysconfig; print(sysconfig.get_config_var("LDSHARED") or "")')"
+        if [ -n "${_ldshared}" ]; then
+            LDSHARED="$(_drop_ports "${_ldshared}")"
+            export LDSHARED
+        fi
+        CFLAGS="-I${DEPS}/include $(_drop_ports "${CFLAGS:-}")"
+        CXXFLAGS="-I${DEPS}/include $(_drop_ports "${CXXFLAGS:-}")"
+        LDFLAGS="-L${DEPS}/lib $(_drop_ports "${LDFLAGS:-}")"
+        export CFLAGS CXXFLAGS LDFLAGS
+        echo "cffi-cp312: LDSHARED=${LDSHARED:-<sysconfig>} LDFLAGS=${LDFLAGS}"
+        ;;
+esac
 "${PY}" -m pip wheel \
     --no-deps \
     --no-build-isolation \
@@ -181,6 +214,16 @@ else
     command -v patchelf >/dev/null 2>&1 || {
         echo "cffi-cp312: patchelf required on ${CVC_PLATFORM} but not on PATH" >&2; exit 1; }
     while IFS= read -r -d '' _so; do
+        # The libffi it needs must be the declared one in the deps prefix, not a
+        # host package's (cvc.3 on OpenBSD: the ports libffi.so.2.2; see step 4).
+        for _need in $(patchelf --print-needed "${_so}"); do
+            case "${_need}" in
+                libffi.so*)
+                    [ -e "${DEPS}/lib/${_need}" ] || {
+                        echo "cffi-cp312: $(basename "${_so}") needs ${_need}, which is not the declared libffi in ${DEPS}/lib" >&2
+                        exit 1; } ;;
+            esac
+        done
         _rel="$(_relpath_to_lib "${_so}")"
         patchelf --set-rpath "\$ORIGIN:\$ORIGIN/${_rel}" "${_so}"
     done < <(find "${SITE_PACKAGES}" -name '*.so' -print0)

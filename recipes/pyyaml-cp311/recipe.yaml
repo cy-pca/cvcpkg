@@ -14,7 +14,13 @@ recipe:
   # hard error. New dep edges: yaml (build+runtime), cython-cp311 (the sdist
   # ships only yaml/_yaml.pyx — there is no pre-generated _yaml.c), and the
   # setuptools-cp311 PEP-517 backend.
-  cvc_revision: 3
+  # cvc.4: link the declared yaml on OpenBSD and FreeBSD.  The ports dirs
+  # env-<bsd>.sh appends, and the -L/usr/local/lib in the interpreter's
+  # sysconfig LDSHARED, came ahead of the pyyaml_build_config dirs, so the
+  # extension needed the ports libyaml (libyaml-0.so.0.0 on OpenBSD,
+  # libyaml-0.so.2 on FreeBSD).  build.sh now drops them and puts the deps
+  # prefix first, as NetBSD already did (cvc_netbsd_prefix_first).
+  cvc_revision: 4
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

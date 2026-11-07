@@ -24,6 +24,15 @@ fi
 # OpenBSD's audio goes through the sndio backend.
 _extra=()
 if [ "$(uname -s)" = OpenBSD ]; then _extra+=(-DALSOFT_BACKEND_SOLARIS=OFF); fi
+# OpenBSD: no libatomic.  CMakeLists.txt links -latomic whenever a test program
+# links with it (HAVE_LIBATOMIC), not only when atomics need it.  Base has no
+# libatomic, but env-openbsd.sh's -L/usr/local/lib reaches the ports gcc's, so
+# cvc.2's libopenal.so.1.24.3 NEEDed the builder's libatomic.so.4.0.  Base
+# clang inlines the lock-free atomics OpenAL Soft uses: preset the result to
+# skip the check, and the check after the build proves nothing is left.
+# (FreeBSD's ports gcc keeps libatomic under /usr/local/lib/gcc<N>, which no -L
+# names.)
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then _extra+=(-DHAVE_LIBATOMIC=OFF); fi
 cvc_cmake_build \
     ${_extra[@]+"${_extra[@]}"} \
     -DLIBTYPE="${_libtype}" \
@@ -31,3 +40,21 @@ cvc_cmake_build \
     -DALSOFT_UTILS=OFF \
     -DALSOFT_TESTS=OFF \
     -DALSOFT_INSTALL_EXAMPLES=OFF
+
+# Without libatomic, an atomic clang could not inline would be an undefined
+# __atomic_* call that fails only when the library loads.
+if [[ "${CVC_PLATFORM}" == "openbsd" && "${_libtype}" == "SHARED" ]]; then
+    for _lib in "${CVC_INSTALL_DIR}"/lib/libopenal.so.*; do
+        [[ -f "${_lib}" && ! -L "${_lib}" ]] || continue
+        _undef="$(nm -D -u "${_lib}" 2>/dev/null || true)"
+        if [[ -z "${_undef}" ]]; then
+            echo "openal-soft: nm could not read ${_lib}" >&2
+            exit 1
+        fi
+        if grep -E '__atomic_' <<<"${_undef}"; then
+            echo "openal-soft: ${_lib##*/} needs libatomic for the atomics above" >&2
+            exit 1
+        fi
+        echo "openal-soft: ${_lib##*/} needs no libatomic"
+    done
+fi

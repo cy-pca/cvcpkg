@@ -8,6 +8,21 @@ case "$(echo "${CVC_BUILD_TYPE:-Release}" | tr '[:upper:]' '[:lower:]')" in
 esac
 _shared=ON; [ "${CVC_LINK:-shared}" = "static" ] && _shared=OFF
 
+# netCDF 4.9.2 looks for libcurl and the Szip, Bz2, Blosc and Zstd compressors
+# unconditionally, and libnetcdf links whichever it finds, even with DAP,
+# byte-range and plugins off as here.  cvc.2 needed undeclared libraries:
+# libcurl on OpenBSD (the ports one), FreeBSD and macOS, libzstd on FreeBSD and
+# macOS, libbz2 on macOS.  With DAP, byte-range, NCZarr and the filter plugins
+# off, libnetcdf calls none of them: nc_def_var_zstandard() and friends only
+# name an HDF5 filter id, which needs an HDF5 filter plugin at run time, and
+# without the library found they return NC_NOERR without setting the filter.
+# Only hdf5 and zlib are declared, so keep CMake from finding the rest.
+#
+# NetBSD: no mmap I/O (the NC_MMAP mode).  libsrc/mmapio.c declares Linux's
+# four-argument mremap, which conflicts with NetBSD's five-argument one in
+# <sys/mman.h> (dev job 24638; netcdf had never built on NetBSD).
+_netcdf_extra=()
+[[ "${CVC_PLATFORM:-}" != netbsd ]] || _netcdf_extra=(-DENABLE_MMAP=OFF)
 cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_BUILD_TYPE="${BT}" \
@@ -18,7 +33,11 @@ cmake -G Ninja -S "${CVC_SOURCE_DIR}" -B "${CVC_BUILD_DIR}" \
     -DENABLE_NCZARR=OFF -DENABLE_PLUGINS=OFF -DENABLE_LIBXML2=OFF \
     -DENABLE_NETCDF_4=ON -DENABLE_HDF5=ON \
     -DENABLE_TESTS=OFF -DBUILD_TESTING=OFF -DBUILD_UTILITIES=OFF \
-    -DENABLE_EXAMPLES=OFF -DENABLE_FILTER_TESTING=OFF
+    -DENABLE_EXAMPLES=OFF -DENABLE_FILTER_TESTING=OFF \
+    -DCMAKE_DISABLE_FIND_PACKAGE_CURL=ON -DCMAKE_DISABLE_FIND_PACKAGE_Szip=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_Bz2=ON -DCMAKE_DISABLE_FIND_PACKAGE_Blosc=ON \
+    -DCMAKE_DISABLE_FIND_PACKAGE_Zstd=ON \
+    ${_netcdf_extra[@]+"${_netcdf_extra[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"

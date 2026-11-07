@@ -62,12 +62,15 @@ fi
 export LDFLAGS="${LDFLAGS:-} -Wl,--no-as-needed -lnetwork -lbsd"
 # Haiku has no system curl/openssl dev by default; use cmake's bundled curl
 # (no HTTPS via openssl needed for a build-tool cmake — recipes fetch sources
-# through cvcpkg, not cmake's file(DOWNLOAD)).
+# through cvcpkg, not cmake's file(DOWNLOAD)).  No ccmake, as build.sh: it
+# would link whatever ncurses the Haiku box has, which the bundle does not
+# declare.
 ./bootstrap \
     --prefix="${CVC_INSTALL_DIR}" \
     --parallel="${CVC_JOBS}" \
     -- \
-    -DCMAKE_USE_OPENSSL=OFF
+    -DCMAKE_USE_OPENSSL=OFF \
+    -DBUILD_CursesDialog=OFF
 make -j"${CVC_JOBS}"
 make install
 

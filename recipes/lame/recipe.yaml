@@ -9,7 +9,9 @@ recipe:
   # needs langinfo.h under HAVE_ICONV; termcap from the ambient MinGW did not link).
   # cvc.4: Windows declares its MinGW toolchain (msys2/make/mingw-w64-gcc)
   # instead of using the builder's; see depends.build.
-  cvc_revision: 4
+  # cvc.5: OpenBSD declares iconv and links cvcpkg's.  cvc.4's bin/lame NEEDed
+  # the build host's ports libiconv.so.7.1 from /usr/local; see build.sh.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -47,7 +49,16 @@ depends:
       platforms: [windows]
     - name: mingw-w64-gcc
       platforms: [windows]
-  runtime: []
+    # cvcpkg's GNU libiconv on OpenBSD, whose libc has no iconv (ID3 tag text;
+    # see build.sh).  The other Unix platforms use the system's; Windows builds
+    # without iconv (build.ps1).
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd]
+  runtime:
+    - name: iconv
+      version: ">=1.17"
+      platforms: [openbsd]
   host_tools: []
 
 build:

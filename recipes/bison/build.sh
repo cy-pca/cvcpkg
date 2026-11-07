@@ -19,6 +19,16 @@ esac
 
 cd "${CVC_SOURCE_DIR}"
 
+# OpenBSD: no iconv.  Its libc has none, so configure linked the build host's
+# ports libiconv.so.7.1, found through env-openbsd.sh's -L/usr/local/lib, and
+# cvc.5's bin/bison NEEDed it undeclared.  Bison only uses iconv to print its
+# counterexample arrows and bullets in a non-UTF-8 locale (lib/unicodeio.c).
+# OpenBSD's only locales are C and UTF-8, and both print the same without it.
+CONFIGURE_EXTRA=()
+if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
+    CONFIGURE_EXTRA+=(am_cv_func_iconv=no)
+fi
+
 # --enable-relocatable: find the m4 skeletons (share/bison) relative to the
 # installed binary instead of this build's temporary prefix, which does not
 # exist where the bundle is unpacked ("m4sugar.m4: cannot open").
@@ -28,7 +38,8 @@ cd "${CVC_SOURCE_DIR}"
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-relocatable \
     --disable-nls \
-    M4=m4
+    M4=m4 \
+    ${CONFIGURE_EXTRA[@]+"${CONFIGURE_EXTRA[@]}"}
 
 "${MAKE}" -j "${CVC_JOBS}"
 "${MAKE}" install

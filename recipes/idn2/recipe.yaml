@@ -6,7 +6,10 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 4
+  # cvc.5: the BSDs link bin/idn2 against the build tree's own libidn2.  The
+  # cvc.4 OpenBSD bin/idn2 linked the builder's ports libidn2.so.1.1 instead
+  # of the bundle's libidn2.so.4.0 (see build.sh).
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +30,15 @@ depends:
   build:
     # Windows builds with MinGW-w64 under MSYS2 (Invoke-CvcMsysAutotoolsBuild).
     # Declared, as aspell does, now that a dep's build edge no longer brings it.
+    # The autotools too (autoconf brings m4): without them a builder with no
+    # MSYS2 of its own stopped at "MSYS2 autotools not found on PATH" (dev job
+    # 24645, cvc.5).
+    - name: autoconf
+      platforms: [windows]
+    - name: automake
+      platforms: [windows]
+    - name: libtool
+      platforms: [windows]
     - name: msys2
       platforms: [windows]
     - name: make

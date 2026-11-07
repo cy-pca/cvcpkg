@@ -6,7 +6,12 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 3
+  # cvc.4: declare ncurses on linux.  cvc.3's bin/aspell NEEDed
+  # libncursesw.so.6 (the full-screen `aspell check`) from whatever ncurses
+  # configure found, undeclared.  Linux now links cvcpkg's, a runtime
+  # dependency; macOS, the BSDs and Haiku keep their OS's own curses, which
+  # build.sh never looks for in the deps prefix.  build.sh checks both.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -45,7 +50,12 @@ depends:
       platforms: [windows]
     - name: mingw-w64-gcc
       platforms: [windows]
-  runtime: []
+  runtime:
+    # libncursesw for bin/aspell's `aspell check` screen (build.sh).  Linux
+    # only: the other platforms use the curses of their base system.
+    - name: ncurses
+      version: "^6.0"
+      platforms: [linux]
   host_tools: []
 
 build:

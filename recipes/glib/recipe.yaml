@@ -19,7 +19,9 @@ recipe:
   # also drops bin/glib-gettextize and the bash completions, which meson
   # installs only when sh/bash is on PATH (cvc.4's Windows bundle has neither).
   # The other platforms' payloads are unchanged.
-  cvc_revision: 5
+  # cvc.6: OpenBSD builds without libelf.  cvc.5's bin/gresource there linked the
+  # builder's ports libelf.so.3.0, which nothing declares (see build.sh).
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -11,7 +11,9 @@ recipe:
   # cvc.4: add wasm + wasm-mt builds (build-wasm.sh) — SDL3 cross-compiles to
   # Emscripten with the browser-backed audio/camera/joystick drivers, for the
   # browser VolRover/pycvc_gl stack (audio/mic/gamepad; VTK owns the canvas).
-  cvc_revision: 4
+  # cvc.5: OpenBSD uses SDL's built-in iconv.  cvc.4's libSDL3 NEEDed the build
+  # host's ports libiconv.so.7.1 from /usr/local, undeclared; see build.sh.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -27,9 +27,15 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # (pid.cpp: kp_pid); upstream has never built it there. Every other library
 # builds. (bsd-process-backports.patch still carries the cmd/exe/close_handles/
 # environ fixes NetBSD needs.)
+# NetBSD: no Boost.Wave.  With pkgsrc clang and NetBSD's libstdc++, Boost.Config
+# reports one of the C++11 features wave_config.hpp requires as missing, so its
+# "C++03 support ... was removed" guard fires; Wave was the only library that
+# failed (dev job 24636).  boost had never built on NetBSD.
 _boost_extra=()
 if [[ "${CVC_PLATFORM}" == "openbsd" ]]; then
     _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=process)
+elif [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
+    _boost_extra+=(-DBOOST_EXCLUDE_LIBRARIES=wave)
 fi
 # GCC builds libquadmath (and <quadmath.h>) only for x86, so linux/arm64 is OFF
 # too: forcing it ON there failed ("quadmath.h: No such file or directory"),
@@ -43,6 +49,33 @@ if [[ "${CVC_PLATFORM}" == "linux" ]] && [[ "$(uname -m)" == x86_64 ]]; then
 else
     _boost_extra+=(-DBOOST_CHARCONV_QUADMATH_FOUND=OFF)
 fi
+# Boost.Locale's iconv backend (its charset conversion, with ICU off) on OpenBSD
+# and macOS links cvcpkg's GNU libiconv, the declared iconv dependency, named
+# here so FindIconv cannot pick another.  +cvc.8 linked whatever it found:
+# OpenBSD's libboost_locale NEEDed the build host's ports libiconv.so.7.1 from
+# /usr/local, macOS's loaded @rpath/libiconv.2.dylib from a shared prefix, and
+# neither declared it.  Linux and the other BSDs keep libc's iconv.
+case "${CVC_PLATFORM}" in
+    openbsd|macos)
+        _iconv_lib=""
+        for _f in "${CVC_DEPS_PREFIX}"/lib/libiconv.dylib "${CVC_DEPS_PREFIX}"/lib/libiconv.so.[0-9]*; do
+            if [[ -f "${_f}" ]]; then
+                _iconv_lib="${_f}"
+                break
+            fi
+        done
+        if [[ -z "${_iconv_lib}" || ! -f "${CVC_DEPS_PREFIX}/include/iconv.h" ]]; then
+            echo "cvcpkg: boost: the declared iconv is missing from ${CVC_DEPS_PREFIX}" >&2
+            exit 1
+        fi
+        _boost_extra+=(
+            -DBOOST_LOCALE_ENABLE_ICONV=ON
+            -DIconv_IS_BUILT_IN=FALSE
+            "-DIconv_INCLUDE_DIR=${CVC_DEPS_PREFIX}/include"
+            "-DIconv_LIBRARY=${_iconv_lib}"
+        )
+        ;;
+esac
 
 cvc_cmake_build \
     ${_boost_extra[@]+"${_boost_extra[@]}"} \
@@ -54,3 +87,20 @@ cvc_cmake_build \
     -DBOOST_IOSTREAMS_ENABLE_BZIP2=OFF \
     -DBOOST_IOSTREAMS_ENABLE_LZMA=OFF \
     -DBOOST_IOSTREAMS_ENABLE_ZSTD=OFF
+
+# A libiconv the libraries link must be the declared one: the deps prefix's on
+# OpenBSD/macOS, and none elsewhere (libc's iconv).
+_iconv_linked="$(grep -a -h -o -E 'libiconv\.(so\.[0-9.]+|[0-9]+\.dylib)' \
+    "${CVC_INSTALL_DIR}"/lib/libboost_* 2>/dev/null | sort -u || true)"
+for _lib in ${_iconv_linked}; do
+    case "${CVC_PLATFORM}" in
+        openbsd|macos)
+            if [[ -e "${CVC_DEPS_PREFIX}/lib/${_lib}" ]]; then
+                echo "cvcpkg: Boost links ${_lib} from the declared iconv"
+                continue
+            fi
+            ;;
+    esac
+    echo "cvcpkg: Boost linked ${_lib}, which is not the declared iconv" >&2
+    exit 1
+done

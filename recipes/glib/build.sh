@@ -73,10 +73,15 @@ fi
 # b_lundef links shared libraries with --no-undefined and failed with
 # "undefined symbol: environ" (gspawn.c, genviron.c).  FreeBSD's own
 # devel/glib20 port builds with -Db_lundef=false for the same reason.
+#
+# OpenBSD has no libelf in base, and the libelf option defaults to auto, so
+# gresource linked whatever meson found: glib cvc.5's bin/gresource NEEDed the
+# builder's ports libelf.so.3.0 from /usr/local, which nothing declares.  It
+# only loses listing and extracting resources embedded in ELF files.
 _meson_extra=()
 case "${CVC_PLATFORM}" in
     freebsd) _meson_extra+=(-Dxattr=false -Db_lundef=false) ;;
-    openbsd) _meson_extra+=(-Dxattr=false) ;;
+    openbsd) _meson_extra+=(-Dxattr=false -Dlibelf=disabled) ;;
 esac
 
 # On a failed setup, show meson's own log: the console says only that a
