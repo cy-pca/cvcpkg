@@ -16,11 +16,12 @@ fi
 MAKE=make
 command -v gmake >/dev/null 2>&1 && MAKE=gmake
 
-# 7zip_gcc.mak links `-lpthread -ldl`, but OpenBSD and Haiku have no libdl
-# (dlopen lives in libc), so drop -ldl there via the LIB2 override.
+# 7zip_gcc.mak links `-lpthread -ldl`, but NetBSD, OpenBSD and Haiku have no
+# libdl (dlopen lives in libc; NetBSD: "ld: cannot find -ldl"), so drop -ldl
+# there via the LIB2 override.
 LIB2_OVERRIDE=()
 case "${CVC_PLATFORM}" in
-  openbsd|haiku) LIB2_OVERRIDE=(LIB2=-lpthread) ;;
+  netbsd|openbsd|haiku) LIB2_OVERRIDE=(LIB2=-lpthread) ;;
 esac
 
 # 7zip_gcc.mak compiles with `-Werror -Wall -Wextra`.  Haiku's errno constants
