@@ -219,7 +219,7 @@ package:
     # Unix layout (bin/lib/include). Globs that match nothing on a given platform
     # are skipped, so the Windows entries below coexist in this one list.
     - { glob: "bin/python3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
-    - { glob: "bin/pip3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi] }
     - { glob: "bin/idle3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "bin/pydoc3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "lib/libpython3.11*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }

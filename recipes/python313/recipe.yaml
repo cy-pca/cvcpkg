@@ -181,7 +181,7 @@ build:
 package:
   files:
     - { glob: "bin/python3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
-    - { glob: "bin/pip3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi] }
     - { glob: "bin/idle3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "bin/pydoc3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "lib/libpython3.13*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }

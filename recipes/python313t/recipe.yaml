@@ -185,7 +185,7 @@ package:
   files:
     # POSIX layout (autotools `make install`).
     - { glob: "bin/python3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
-    - { glob: "bin/pip3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
+    - { glob: "bin/pip3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi] }
     - { glob: "bin/python3t", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "lib/libpython3.13t*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }
     - { glob: "lib/python3.13t/", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm] }

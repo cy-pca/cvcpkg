@@ -28,6 +28,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **python312 cvc.23 (wasm, wasm-mt) packs on the fleet.** The first populate
+  of cvc.23 (run 42416701287) published neither column, so cvc.23 stays the
+  revision.
+  - wasm failed the pack's file check: the recipe declared `bin/pip3.12*` for
+    wasm and wasm-mt, and no wasm bundle has ever had it. `make install` runs
+    ensurepip with the native build python, which cannot write its own
+    site-packages, so pip went to the builder account's `~/.local` instead: once
+    there, every later build said "Requirement already satisfied", and the
+    account's `pip3` became a script run by a wasm `python3.12.js`. The wasm
+    columns now configure with `--with-ensurepip=no`, and python311, python312,
+    python313 and python313t no longer declare a wasm pip.
+  - wasm-mt's make died with `gmake: write error: stdout`. A node that emcc runs
+    sets O_NONBLOCK on the stdout or stderr pipe it inherits, and the flag is
+    shared by everything writing to that pipe. When the builder's reader fell
+    behind, make's next write failed with EAGAIN. On emscripten, make's output
+    now goes to a file, which is printed when make finishes.
+
 ## v2.5.12
 
 **A release so cvcpkg.org and pkg.tx.wtf stop storing a publish or a populate
