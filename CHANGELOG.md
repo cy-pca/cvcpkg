@@ -28,7 +28,12 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.12
+
+**A release so cvcpkg.org and pkg.tx.wtf stop storing a publish or a populate
+import over another row's archive (#556, #554), a mirror lifts its own stale
+yanks (#552), and builders run the pack gate's undeclared-library check
+(#547), which #551's 40 recipe fixes went in ahead of. No migration.**
 
 - **Server: `/v1/publish` no longer overwrites an archive another row stores.**
   Publish named each archive after its coordinates and stored it over whatever
