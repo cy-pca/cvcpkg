@@ -235,3 +235,76 @@ def test_submission_is_wellformed_regardless_of_deps_flag(tmp_path, monkeypatch,
         for j in body["jobs"]:
             for i in j["depends_on"]:
                 assert 0 <= i < n, "depends_on index must be in range"
+
+
+# ── Platform-scoped dependencies ────────────────────────────────
+
+
+def _write_scoped(tmp_path, name, *, platforms, runtime=(), build=()):
+    """Write a recipe whose deps carry ``platforms:`` scopes.
+
+    *runtime* and *build* are ``(dep, [platforms])`` pairs; an empty platform
+    list means the dependency is unscoped.
+    """
+
+    def block(deps):
+        out = ""
+        for dep, scope in deps:
+            out += f"    - name: {dep}\n"
+            if scope:
+                out += f"      platforms: [{', '.join(scope)}]\n"
+        return out
+
+    rdir = tmp_path / "recipes" / name
+    rdir.mkdir(parents=True)
+    matrix = "".join(f"    - platform: {p}\n      script: build.sh\n" for p in platforms)
+    (rdir / "recipe.yaml").write_text(
+        f"""schema_version: 1
+recipe:
+  name: {name}
+  upstream_version: "1.0.0"
+  cvc_revision: 1
+depends:
+  build:
+{block(build)}  runtime:
+{block(runtime)}build:
+  matrix:
+{matrix}"""
+    )
+    return rdir
+
+
+class TestPlatformScopedEdges:
+    """A dependency scoped away from the target platform must not become an edge.
+
+    Both recipes below are unpublished for the target, so both are in the DAG.
+    Edges built from every declared dependency, whatever its ``platforms:``
+    scope, made cmake -> curl -> cmake a cycle on Haiku (cmake's curl is scoped
+    to linux/macos/BSD, curl's cmake to windows): 47 jobs sat pending forever
+    behind two that could never start.
+    """
+
+    def test_dependency_scoped_to_another_platform_is_not_an_edge(self, tmp_path, monkeypatch):
+        _write_scoped(tmp_path, "alpha", platforms=("linux",), runtime=[("beta", ["windows"])])
+        _write_scoped(tmp_path, "beta", platforms=("linux",), build=[("alpha", ["windows"])])
+        posted: list = []
+        assert _submit(tmp_path, monkeypatch, posted, "alpha", "beta") == 0
+
+        assert len(posted) == 1
+        assert _edges(posted[0]) == {"alpha": set(), "beta": set()}
+
+    def test_dependency_scoped_to_the_target_platform_is_an_edge(self, tmp_path, monkeypatch):
+        _write_scoped(tmp_path, "alpha", platforms=("linux",), runtime=[("beta", ["linux"])])
+        _write_scoped(tmp_path, "beta", platforms=("linux",))
+        posted: list = []
+        assert _submit(tmp_path, monkeypatch, posted, "alpha", "beta") == 0
+
+        assert _edges(posted[0])["alpha"] == {"beta"}
+
+    def test_unscoped_dependency_is_an_edge(self, tmp_path, monkeypatch):
+        _write_scoped(tmp_path, "alpha", platforms=("linux",), runtime=[("beta", [])])
+        _write_scoped(tmp_path, "beta", platforms=("linux",))
+        posted: list = []
+        assert _submit(tmp_path, monkeypatch, posted, "alpha", "beta") == 0
+
+        assert _edges(posted[0])["alpha"] == {"beta"}
