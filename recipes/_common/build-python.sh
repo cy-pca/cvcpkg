@@ -269,23 +269,54 @@ fi
 ${_EMWRAP} $MAKE -j "${CVC_JOBS}"
 ${_EMWRAP} $MAKE install
 
-# [wasm] Fold the bundled HACL crypto objects into the static libpython. Same class
-# of gap as _decimal/libmpdec: CPython's emscripten build archives the hash MODULE
-# objects (sha2module.o, sha3module.o, ...) into libpython3.X.a but NOT the HACL
-# primitives they call (Modules/_hacl/*.o), so libpython carries undefined
-# python_hashlib_Hacl_* symbols that break ANY static app embedding it (e.g. the
-# pycvc_gl wasm host). Archive them so the built-in hash modules are self-contained
-# (CPython builds in-source, so the objects sit under CVC_SOURCE_DIR/Modules/_hacl).
+# [wasm] Fold CPython's bundled expat and HACL objects into the static libpython.
+# Same class of gap as _decimal/libmpdec: CPython's emscripten build archives the
+# builtin MODULE objects (pyexpat.o, sha2module.o, ...) into libpython3.X.a, but
+# the bundled code two of them call goes into side archives that only python.js's
+# own link uses: Modules/expat/libexpat.a (expat, renamed PyExpat_XML_* by
+# pyexpatns.h) and Modules/_hacl/libHacl_Hash_SHA2.a (python_hashlib_Hacl_Hash_SHA2_*).
+# So libpython carries undefined symbols that break ANY static app embedding it
+# (the pycvc_gl and ariglx wasm hosts link with -sERROR_ON_UNDEFINED_SYMBOLS=0, and
+# then xml.parsers.expat or hashlib.sha256() aborts the page). Archive them so the
+# builtin modules are self-contained. CPython builds in-source, so the objects sit
+# under CVC_SOURCE_DIR/Modules/{expat,_hacl}. MD5, SHA-1 and SHA-3 compile their
+# HACL file as part of the module and are in libpython already; `emar rs` replaces
+# that member with the same object.
+#
+# `make install` writes libpython3.X.a twice, to lib/ and to
+# lib/python3.X/config-3.X-wasm32-emscripten/, and consumers link lib/'s. This
+# used to fold into `find | head -1` only, which on the builder was the config/
+# copy: python312's wasm cvc.13 shipped SHA-2 there and not in lib/. Fold into
+# every copy, then check each: a bundled-library symbol (expat, HACL, libmpdec)
+# that the archive leaves undefined fails the build here, not an app's link.
 if [ "$IS_EMSCRIPTEN" = true ]; then
-    _libpy="$(find "${CVC_INSTALL_DIR}" -name "libpython${PYTHON_MINOR}*.a" 2>/dev/null | head -1)"
-    _hacl_objs="$(find "${CVC_SOURCE_DIR}/Modules/_hacl" -name '*.o' 2>/dev/null || true)"
-    if [ -n "${_libpy}" ] && [ -n "${_hacl_objs}" ]; then
-        # shellcheck disable=SC2086
-        emar rs "${_libpy}" ${_hacl_objs}
-        echo "build-python(wasm): archived $(printf '%s\n' ${_hacl_objs} | wc -l) HACL object(s) into $(basename "${_libpy}")"
-    else
-        echo "build-python(wasm): WARN — HACL objects or libpython not found; _sha2/_sha3 may leave undefined symbols" >&2
+    _bundled_objs="$(find "${CVC_SOURCE_DIR}/Modules/expat" "${CVC_SOURCE_DIR}/Modules/_hacl" -name '*.o' 2>/dev/null || true)"
+    _libpys="$(find "${CVC_INSTALL_DIR}" -name "libpython${PYTHON_MINOR}*.a" 2>/dev/null || true)"
+    if [ -z "${_libpys}" ]; then
+        echo "build-python(wasm): no libpython${PYTHON_MINOR}*.a under ${CVC_INSTALL_DIR}" >&2
+        exit 1
     fi
+    _nm="${EMSDK}/upstream/bin/llvm-nm"
+    if [ ! -x "${_nm}" ]; then
+        echo "build-python(wasm): ${_nm} not found; cannot check libpython for undefined symbols" >&2
+        exit 1
+    fi
+    for _libpy in ${_libpys}; do
+        if [ -n "${_bundled_objs}" ]; then
+            # shellcheck disable=SC2086
+            emar rs "${_libpy}" ${_bundled_objs}
+            echo "build-python(wasm): archived $(printf '%s\n' ${_bundled_objs} | wc -l) bundled object(s) into ${_libpy#"${CVC_INSTALL_DIR}/"}"
+        fi
+        _gaps="$(LC_ALL=C comm -23 \
+            <("${_nm}" -u -j "${_libpy}" 2>/dev/null | LC_ALL=C sort -u) \
+            <("${_nm}" --defined-only -j "${_libpy}" 2>/dev/null | LC_ALL=C sort -u) \
+            | grep -E '^(PyExpat_|python_hashlib_|mpd_)' || true)"
+        if [ -n "${_gaps}" ]; then
+            echo "build-python(wasm): ${_libpy#"${CVC_INSTALL_DIR}/"} leaves $(printf '%s\n' "${_gaps}" | wc -l) bundled-library symbol(s) undefined:" >&2
+            printf '  %s\n' ${_gaps} >&2
+            exit 1
+        fi
+    done
 fi
 
 # --- Relocatable RPATH post-fixup (native only) ---
