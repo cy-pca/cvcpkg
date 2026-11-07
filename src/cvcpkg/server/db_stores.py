@@ -1247,6 +1247,17 @@ class DbPackageIndex:
                 )
             ).scalar()
 
+    async def archive_is_referenced(self, archive_name: str) -> bool:
+        """True when some package row (any yank state, any org) stores its
+        archive as *archive_name*: the check before writing or unlinking it."""
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    select(PackageRow.id).where(_archive_name_is(archive_name)).limit(1)
+                )
+            ).first()
+        return row is not None
+
     async def get_archive_coords(self, archive_name: str) -> dict[str, str] | None:
         """``name``/``version``/``platform``/``arch`` of the package whose archive
         is *archive_name* (any yank state), or None when no row has it.

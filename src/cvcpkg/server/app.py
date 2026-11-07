@@ -2151,6 +2151,16 @@ def _safe_archive_filename(
     )
 
 
+def _sha_qualified_archive_filename(filename: str, sha256: str) -> str:
+    """*filename* with the first 16 hex digits of *sha256* before ``.tar.zst``,
+    for a populate import whose conventional name another row's archive has.
+
+    A dot, not a hyphen, so ``_archive_coords_from_name`` still reads the
+    coordinates off the five hyphen-separated fields.
+    """
+    return f"{filename.removesuffix('.tar.zst')}.{sha256[:16]}.tar.zst"
+
+
 _ARCHIVE_NAME_VERSION = _re.compile(r"(?P<name>.+?)-(?P<version>\d.*)")
 
 
@@ -2311,12 +2321,38 @@ async def _populate_sync_once() -> int:
                 )
                 continue
 
+            # Never the file another row stores.  No row has this coordinate, but
+            # one at other coordinates can have its name: a relabelled row (dev's
+            # migration 036 moved noarch rows to none/none and kept their names),
+            # or an org's package, which /v1/publish names as it would a public
+            # one.  Replacing that file left 1,443 live rows on dev serving bytes
+            # that fail their sha256.  A sha-qualified name, not a refusal: that
+            # would leave the coordinate unmirrored for good, over a row the
+            # import cannot resolve.
             safe_filename = _safe_archive_filename(*key)
+            if await _db_packages.archive_is_referenced(safe_filename):
+                taken = safe_filename
+                safe_filename = _sha_qualified_archive_filename(taken, h.hexdigest())
+                if await _db_packages.archive_is_referenced(safe_filename):
+                    tmp_path.unlink(missing_ok=True)
+                    logger.warning(
+                        "populate: %s==%s (%s/%s): %s and %s are both other rows' "
+                        "archives — skipping",
+                        key[0],
+                        key[1],
+                        key[2],
+                        key[3],
+                        taken,
+                        safe_filename,
+                    )
+                    continue
+                logger.info(
+                    "populate: %s is another row's archive; importing %s==%s (%s/%s/%s/%s) as %s",
+                    taken,
+                    *key,
+                    safe_filename,
+                )
             dest = state.archives_dir() / safe_filename
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
 
             try:
                 await _db_packages.add_package(
@@ -2347,8 +2383,16 @@ async def _populate_sync_once() -> int:
                 )
             except ValueError:
                 # A concurrent local publish won the race — keep theirs.
-                dest.unlink(missing_ok=True)
+                tmp_path.unlink(missing_ok=True)
                 continue
+
+            # Only once the row is ours, as /v1/publish does: moving the file in
+            # first let a lost race overwrite the winner's archive, and the
+            # unlink above then deleted it.
+            # Path.replace, not rename: on Windows rename() raises
+            # FileExistsError if dest exists (e.g. republish after delete);
+            # replace() has POSIX overwrite semantics on every platform.
+            tmp_path.replace(dest)
 
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -2593,7 +2637,10 @@ async def _enforce_mirror_budget() -> int:
             "package.deleted", removed, actor="mirror-evict", reason="mirror-evict"
         )
         for fname in groups[cand.key]["archives"]:
-            (state.archives_dir() / fname).unlink(missing_ok=True)
+            # Not a file a surviving row still stores: since migration 036, dev
+            # has 2,473 archive files that two rows share.
+            if not await _db_packages.archive_is_referenced(fname):
+                (state.archives_dir() / fname).unlink(missing_ok=True)
         if _db_audit is not None:
             await _db_audit.record(
                 action=AuditAction.delete,

@@ -204,6 +204,16 @@ Either way exactly one of {the build, the import} wins — whichever committed t
 the catalog first — and no published variant ever diverges from what a client
 would get from upstream.
 
+The archive *file* follows the row. Both writers move their bytes into place
+only after their row commits, so the loser never touches the winner's file. An
+import is also never written over the file of a row at *other* coordinates
+that has the same name: a row relabelled after import (migration 036 moved
+noarch rows to `none/none` and kept their `...-release-shared.tar.zst` names)
+or an org's package, which is named like a public one. Such an import is
+stored as `<name>.<sha256[:16]>.tar.zst` instead. On 2026-10-31 dev's populate
+replaced those files, before it had this check, and 1,443 live rows were left
+serving another build's bytes.
+
 ## Mirror trust and upstream authority
 
 Populate only ever *adds* packages, so on its own a mirror would keep serving a
