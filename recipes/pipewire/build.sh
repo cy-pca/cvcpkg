@@ -28,13 +28,43 @@ sed -i.orig "s/dependency('ncursesw', required : false)/dependency('', required 
 rm -f meson.build.orig
 grep -q "ncurses_dep = dependency('', required : false)" meson.build
 
+# No raop-sink on FreeBSD either, as -Draop=disabled gives linux.  meson.build
+# ignores that option on FreeBSD: it takes openssl from pkg-config (cvcpkg's,
+# which the python3 build dependency puts in the deps prefix) or else falls
+# back to -lssl -lcrypto, so the first FreeBSD bundle's raop-sink module
+# NEEDed an undeclared libcrypto.so.3 (dev job 24676).  Hand it a not-found
+# openssl instead.
+sed -i.orig \
+    -e "s/openssl_lib = dependency('openssl', required: false)/openssl_lib = dependency('', required : false)/" \
+    -e "s/openssl_lib = declare_dependency(link_args : \[ '-lssl', '-lcrypto'\])/openssl_lib = dependency('', required : false)/" \
+    meson.build
+rm -f meson.build.orig
+if grep -qE "openssl_lib = (dependency\('openssl', required: false\)|declare_dependency)" meson.build; then
+    echo "pipewire build.sh: meson.build's FreeBSD openssl lookup is not the expected one" >&2
+    exit 1
+fi
+
+# FreeBSD: libpipewire calls dgettext/bindtextdomain (src/pipewire/pipewire.c,
+# unconditionally), and FreeBSD's libc has no libintl, so meson.build looks for
+# cc.find_library('intl'): the declared gettext's.  It searches only the link
+# args, and -Dc_link_args below makes meson ignore LDFLAGS, so the deps
+# prefix's lib/ goes there; its include/ goes first in CFLAGS, ahead of the
+# /usr/local/include env-freebsd.sh adds.  The first FreeBSD build found a
+# libintl.h but no library and failed with "unable to find library -lintl"
+# (dev job 24666).  Linux has gettext in glibc.
+_link_args="-Wl,-rpath,\$ORIGIN"
+if [[ "${CVC_PLATFORM:-}" == freebsd ]]; then
+    export CFLAGS="-I${CVC_DEPS_PREFIX}/include ${CFLAGS:-}"
+    _link_args="-L${CVC_DEPS_PREFIX}/lib ${_link_args}"
+fi
+
 meson setup "${CVC_BUILD_DIR}" \
     --wrap-mode=nofallback \
     --prefix="${CVC_INSTALL_DIR}" \
     --buildtype=release \
     --libdir=lib \
     --pkg-config-path="${CVC_DEPS_PREFIX}/lib/pkgconfig" \
-    -Dc_link_args="-Wl,-rpath,\$ORIGIN" \
+    -Dc_link_args="${_link_args}" \
     -Dspa-plugins=enabled \
     -Dsession-managers="[]" \
     -Ddocs=disabled \
@@ -91,6 +121,14 @@ _curses_users="$(grep -r -a -l -E 'lib(n)?cursesw?\.so' \
 if [[ -n "${_curses_users}" ]]; then
     echo "pipewire build.sh: these link a curses library, which is not declared:" >&2
     echo "${_curses_users}" >&2
+    exit 1
+fi
+# Nor OpenSSL (the raop-sink edit above).
+_ssl_users="$(grep -r -a -l -E 'lib(ssl|crypto)\.so' \
+    "${CVC_INSTALL_DIR}/bin" "${CVC_INSTALL_DIR}/lib" 2>/dev/null || true)"
+if [[ -n "${_ssl_users}" ]]; then
+    echo "pipewire build.sh: these link OpenSSL, which is not declared:" >&2
+    echo "${_ssl_users}" >&2
     exit 1
 fi
 

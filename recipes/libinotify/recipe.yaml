@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: libinotify
+  upstream_version: "20240724"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/libinotify-kqueue/libinotify-kqueue
+  license: MIT
+  tags: [libraries]
+  description: >-
+    libinotify-kqueue -- Linux's inotify API (inotify_init, inotify_add_watch,
+    ...) implemented on top of kqueue, for FreeBSD, which has no native inotify
+    before 15.0.  Required by pipewire on FreeBSD; consumed via its pkg-config
+    file `libinotify`.  The same library FreeBSD's devel/libinotify port builds.
+
+source:
+  # The release tarball: it ships the generated configure, so nothing is
+  # autoreconf'ed.  sha256 matches FreeBSD ports' devel/libinotify distinfo.
+  type: tarball
+  url: https://github.com/libinotify-kqueue/libinotify-kqueue/releases/download/20240724/libinotify-20240724.tar.gz
+  sha256: "5cc3fb7af407b17b7daa871cc98bb882716c4b5c296fadfb66bfe86c37cc599c"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    # FreeBSD only: Linux has inotify natively, and pipewire, the consumer, is
+    # built for linux and freebsd.  FreeBSD 15 adds a native inotify; the
+    # builders run 14.x.
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+
+package:
+  files:
+    - lib/libinotify*
+    - lib/pkgconfig/libinotify.pc
+    - include/sys/inotify.h
+  pkg_config:
+    - libinotify
