@@ -2151,6 +2151,39 @@ def _safe_archive_filename(
     )
 
 
+def _sha_qualified_archive_filename(filename: str, sha256: str) -> str:
+    """*filename* with the first 16 hex digits of *sha256* before ``.tar.zst``,
+    for a populate import or a publish whose conventional name another row's
+    archive has.
+
+    A dot, not a hyphen, so ``_archive_coords_from_name`` still reads the
+    coordinates off the five hyphen-separated fields.
+    """
+    return f"{filename.removesuffix('.tar.zst')}.{sha256[:16]}.tar.zst"
+
+
+async def _publish_archive_filename(filename: str, sha256: str) -> str | None:
+    """The name a publish stores its archive under: *filename*, its
+    conventional name, unless another row's archive has it; then the
+    sha-qualified name.  None when that is another row's archive too.
+
+    The duplicate check is per coordinate, and another row can have the name:
+    one at other coordinates that migration 036 relabelled (it moved rows to
+    none/none and kept their ``...-release-shared.tar.zst`` names), or an org's
+    twin of a public package, which the insert allows (its key includes the
+    org) and which is named alike.  Storing over its file left that row serving
+    bytes that fail its sha256: dev's six traitlets/traittypes windows rows,
+    2026-10-31.
+    """
+    if not await _db_packages.archive_is_referenced(filename):
+        return filename
+    qualified = _sha_qualified_archive_filename(filename, sha256)
+    if await _db_packages.archive_is_referenced(qualified):
+        return None
+    logger.info("publish: %s is another row's archive; storing as %s", filename, qualified)
+    return qualified
+
+
 _ARCHIVE_NAME_VERSION = _re.compile(r"(?P<name>.+?)-(?P<version>\d.*)")
 
 
@@ -2311,12 +2344,38 @@ async def _populate_sync_once() -> int:
                 )
                 continue
 
+            # Never the file another row stores.  No row has this coordinate, but
+            # one at other coordinates can have its name: a relabelled row (dev's
+            # migration 036 moved noarch rows to none/none and kept their names),
+            # or an org's package, which /v1/publish names as it would a public
+            # one.  Replacing that file left 1,443 live rows on dev serving bytes
+            # that fail their sha256.  A sha-qualified name, not a refusal: that
+            # would leave the coordinate unmirrored for good, over a row the
+            # import cannot resolve.
             safe_filename = _safe_archive_filename(*key)
+            if await _db_packages.archive_is_referenced(safe_filename):
+                taken = safe_filename
+                safe_filename = _sha_qualified_archive_filename(taken, h.hexdigest())
+                if await _db_packages.archive_is_referenced(safe_filename):
+                    tmp_path.unlink(missing_ok=True)
+                    logger.warning(
+                        "populate: %s==%s (%s/%s): %s and %s are both other rows' "
+                        "archives — skipping",
+                        key[0],
+                        key[1],
+                        key[2],
+                        key[3],
+                        taken,
+                        safe_filename,
+                    )
+                    continue
+                logger.info(
+                    "populate: %s is another row's archive; importing %s==%s (%s/%s/%s/%s) as %s",
+                    taken,
+                    *key,
+                    safe_filename,
+                )
             dest = state.archives_dir() / safe_filename
-            # Path.replace, not rename: on Windows rename() raises
-            # FileExistsError if dest exists (e.g. republish after delete);
-            # replace() has POSIX overwrite semantics on every platform.
-            tmp_path.replace(dest)
 
             try:
                 await _db_packages.add_package(
@@ -2347,8 +2406,16 @@ async def _populate_sync_once() -> int:
                 )
             except ValueError:
                 # A concurrent local publish won the race — keep theirs.
-                dest.unlink(missing_ok=True)
+                tmp_path.unlink(missing_ok=True)
                 continue
+
+            # Only once the row is ours, as /v1/publish does: moving the file in
+            # first let a lost race overwrite the winner's archive, and the
+            # unlink above then deleted it.
+            # Path.replace, not rename: on Windows rename() raises
+            # FileExistsError if dest exists (e.g. republish after delete);
+            # replace() has POSIX overwrite semantics on every platform.
+            tmp_path.replace(dest)
 
             await _db_audit.record(
                 action=AuditAction.publish,
@@ -2593,7 +2660,10 @@ async def _enforce_mirror_budget() -> int:
             "package.deleted", removed, actor="mirror-evict", reason="mirror-evict"
         )
         for fname in groups[cand.key]["archives"]:
-            (state.archives_dir() / fname).unlink(missing_ok=True)
+            # Not a file a surviving row still stores: since migration 036, dev
+            # has 2,473 archive files that two rows share.
+            if not await _db_packages.archive_is_referenced(fname):
+                (state.archives_dir() / fname).unlink(missing_ok=True)
         if _db_audit is not None:
             await _db_audit.record(
                 action=AuditAction.delete,
@@ -5041,11 +5111,7 @@ def create_app(
         # large archives in memory.
         h = hashlib.sha256()
         total_size = 0
-        safe_filename = f"{name}-{version}-{platform}-{arch}-{build_type}-{link}.tar.zst"
-        safe_filename = "".join(
-            c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
-            for c in safe_filename
-        )
+        safe_filename = _safe_archive_filename(name, version, platform, arch, build_type, link)
         # Write to a temp file first.  It is committed to the storage backend
         # (archive_store.store) only AFTER the catalog row is written: the DB
         # unique index (or the file-backed dup check) is the arbiter between
@@ -5111,6 +5177,21 @@ def create_app(
                     f" org={org or 'public'}"
                 ),
             ):
+                # Never the file another row stores.  Decided before the insert,
+                # so the row's archive_url names the file, and inside the
+                # transaction: its audit lock serializes this worker's
+                # publishes, so a concurrent one's committed row is seen.
+                stored_as = await _publish_archive_filename(safe_filename, sha256)
+                if stored_as is None:
+                    tmp_path.unlink(missing_ok=True)
+                    raise HTTPException(
+                        409,
+                        f"{name}=={version} ({platform}/{arch}/{build_type}/{link}): "
+                        f"{safe_filename} and its sha-qualified name are both other "
+                        "packages' archives",
+                    )
+                safe_filename = stored_as
+                archive_url = f"/v1/download/{safe_filename}"
                 try:
                     await _db_packages.add_package(
                         name=name,
@@ -5520,13 +5601,13 @@ def create_app(
         # destination only AFTER the catalog row is committed — the DB
         # unique index is the arbiter between racing duplicate publishes,
         # and the loser must never touch (or delete) the winner's archive.
-        safe_filename = (
-            f"{session.name}-{session.version}-{session.platform}-{session.arch}"
-            f"-{session.build_type}-{session.link}.tar.zst"
-        )
-        safe_filename = "".join(
-            c if c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-+" else "_"
-            for c in safe_filename
+        safe_filename = _safe_archive_filename(
+            session.name,
+            session.version,
+            session.platform,
+            session.arch,
+            session.build_type,
+            session.link,
         )
         dest = state.archives_dir() / safe_filename
 
@@ -5560,6 +5641,21 @@ def create_app(
             async with _audit_txn(
                 AuditAction.publish, actor.name, _publish_target, _publish_detail
             ):
+                # Never the file another row stores (as in /v1/publish).
+                stored_as = await _publish_archive_filename(safe_filename, sha256)
+                if stored_as is None:
+                    session.temp_path.unlink(missing_ok=True)
+                    _upload_sessions.pop(upload_id, None)
+                    raise HTTPException(
+                        409,
+                        f"{session.name}=={session.version} ({session.platform}/"
+                        f"{session.arch}/{session.build_type}/{session.link}): "
+                        f"{safe_filename} and its sha-qualified name are both other "
+                        "packages' archives",
+                    )
+                safe_filename = stored_as
+                dest = state.archives_dir() / safe_filename
+                archive_url = f"/v1/download/{safe_filename}"
                 try:
                     await _db_packages.add_package(
                         name=session.name,

@@ -3,8 +3,8 @@
 #
 # Builds a feature-rich GPL set (--enable-gpl): the x264 (H.264) and x265
 # (HEVC) GPL encoders, plus external codecs (Opus, MP3, Vorbis, VP8/VP9,
-# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, subtitle
-# rendering (freetype, fontconfig, fribidi), and PulseAudio on Linux.
+# AV1), image formats (WebP, JPEG, PNG), OpenSSL for HTTPS, fonts for the
+# showcqt filter (freetype, fontconfig), and PulseAudio on Linux.
 # Enabling x264/x265 makes the result GPL-2.0-or-later (matching
 # recipe.yaml's license).  The non-free fdk-aac codec remains excluded.
 set -euo pipefail
@@ -16,7 +16,7 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 # Put the cvcpkg prefix bin on PATH so FFmpeg's configure finds nasm
 # (built as a build dependency) and pkg-config finds external libs.
 export PATH="${CVC_DEPS_PREFIX}/bin:${PATH}"
-# libdata/pkgconfig is where meson puts .pc files on FreeBSD (dav1d, fribidi);
+# libdata/pkgconfig is where meson puts .pc files on FreeBSD (dav1d);
 # without it configure stops at "dav1d >= 0.5.0 not found using pkg-config".
 export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/libdata/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
@@ -46,9 +46,11 @@ CONFIGURE_ARGS=(
     # configure abort with "Unknown option", which is why this recipe had never
     # produced a build. Only WebP needs an external library.
     --enable-libwebp
-    # Subtitle rendering
+    # Fonts for the showcqt filter.  No libfribidi: its only user is drawtext,
+    # which FFmpeg 7 builds only together with libharfbuzz, and harfbuzz would
+    # add glib to the runtime closure.  fribidi used to be enabled and declared,
+    # but no build ever linked it.
     --enable-libfreetype
-    --enable-libfribidi
     # Network / compression
     --enable-openssl
     --enable-zlib
@@ -76,7 +78,6 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
         --enable-libdav1d
         --enable-libwebp
         --enable-libfreetype
-        --enable-libfribidi
         --enable-openssl
         --enable-zlib
         --enable-bzlib

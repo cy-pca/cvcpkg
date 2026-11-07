@@ -1,0 +1,29 @@
+VTK's bundled loguru: a NetBSD thread id.
+
+loguru's fallback for a thread with no name prints its id, and on platforms it
+doesn't list it does static_cast<uint64_t>(pthread_self()).  NetBSD's
+pthread_t is a pointer, so that doesn't compile: "static_cast from 'pthread_t'
+(aka '__pthread_st *') to 'uint64_t' is not allowed" (netbsd-build-2,
+2026-10-30).  Use the LWP id, as the FreeBSD (thr_self) and OpenBSD
+(getthrid) branches use theirs.
+
+--- a/ThirdParty/loguru/vtkloguru/loguru.cpp
++++ b/ThirdParty/loguru/vtkloguru/loguru.cpp
+@@ -107,6 +107,8 @@
+ 		#include <sys/thr.h>
+ 	#elif defined(__OpenBSD__)
+ 		#include <pthread_np.h>
++	#elif defined(__NetBSD__)
++		#include <lwp.h>
+ 	#endif
+ 
+ 	#ifdef __linux__
+@@ -991,6 +993,8 @@
+ 				(void)thr_self(&thread_id);
+ 			#elif defined(__OpenBSD__)
+ 				pid_t thread_id = getthrid();
++			#elif defined(__NetBSD__)
++				lwpid_t thread_id = _lwp_self();
+ 			#elif LOGURU_PTHREADS
+ 				// Here we rely on the opaque pthread_t being of integer type, which is the case on linux, but not other platforms.
+ 				uint64_t thread_id = static_cast<uint64_t>(pthread_self());

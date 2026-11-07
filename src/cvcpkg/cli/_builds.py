@@ -2049,7 +2049,14 @@ def builds_submit_dag(
                     ("any", "noarch", *_neutral_key),
                 ]
             dep_indices: list[int] = []
-            for dep_name in _dep_names(job["recipe_name"]):
+            # Filter by the job's own target, as the auto-add closure does: a
+            # dependency scoped to other platforms is not an edge here.  Edges
+            # built from every declared dep turned cmake (curl scoped to
+            # linux/macos/BSD) and curl (cmake scoped to windows) into a cycle
+            # on Haiku, and 47 jobs sat pending behind the two.  A noarch job
+            # builds on a reference target, so its deps stay unfiltered.
+            edge_plat = "" if job["platform"] == "any" else job["platform"]
+            for dep_name in _dep_names(job["recipe_name"], edge_plat):
                 for lookup in lookups:
                     dep_idx = index.get((dep_name, *lookup))
                     if dep_idx is not None:

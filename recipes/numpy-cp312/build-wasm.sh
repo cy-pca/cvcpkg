@@ -158,4 +158,15 @@ DEST="${CVC_INSTALL_DIR}/lib/python3.12/site-packages"; mkdir -p "${DEST}"
 echo "numpy(wasm): extracted into ${DEST}"
 find "${CVC_INSTALL_DIR}" -maxdepth 5 \( -name '_multiarray_umath*.so' -o -name 'version.py' -path '*numpy*' \) -print | head
 [ -d "${DEST}/numpy" ] || { echo "numpy(wasm): FATAL — numpy/ not staged" >&2; exit 1; }
+
+# ── (6) one namespace per extension (_common/wasm_pyext.py) ────────────────
+# A host links these objects statically into one module, where every extension
+# would share one namespace: each bundles npymath, and PyInit_<leaf> names
+# aren't unique across packages. Each extension's PyInit is renamed after its
+# dotted module, its other globals become local, and
+# share/python-wasm/numpy-cp312.inittab lists them for the host's link.
+"${PY_NATIVE}" "${SCRIPT_DIR}/../_common/wasm_pyext.py" package "${CVC_INSTALL_DIR}" numpy \
+  --site-packages "${DEST}" --manifest-name numpy-cp312
+[ -s "${CVC_INSTALL_DIR}/share/python-wasm/numpy-cp312.inittab" ] \
+  || { echo "numpy(wasm): FATAL — no inittab manifest" >&2; exit 1; }
 echo "numpy(wasm) build complete (no-BLAS static wasm)"

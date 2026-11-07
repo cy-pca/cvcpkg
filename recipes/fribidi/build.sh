@@ -13,6 +13,11 @@ if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     _default_lib=static
 fi
 
+# bin/fribidi's $ORIGIN/../lib cannot come from here: meson's install step
+# strips it as a build-tree entry (cvc.2 tried, and its FreeBSD and NetBSD
+# bin/fribidi kept only $ORIGIN).  bin-install-rpath.patch sets it as the
+# executable's install_rpath instead.  On macOS the packager rewrites meson's
+# absolute install names to @rpath and adds @loader_path/../lib to bin/fribidi.
 if [[ "${CVC_PLATFORM}" == "macos" ]]; then
     _rpath_flags="-Wl,-rpath,@loader_path"
 else

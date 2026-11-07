@@ -1,0 +1,36 @@
+VTK's bundled IOSS: statvfs on NetBSD.
+
+Ioss_FileInfo.C's is_nfs() puts NetBSD with the BSDs that have statfs(2), but
+NetBSD replaced statfs with statvfs(2) long ago: "variable has incomplete type
+'struct statfs'" (netbsd-build-2, 2026-10-30).  Use statvfs there; its struct
+keeps the f_fstypename field the BSD branch reads.
+
+--- a/ThirdParty/ioss/vtkioss/Ioss_FileInfo.C
++++ b/ThirdParty/ioss/vtkioss/Ioss_FileInfo.C
+@@ -30,7 +30,9 @@
+ #endif
+ #else
+ #include <unistd.h>
+-#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__)
++#if defined(__NetBSD__)
++#include <sys/statvfs.h>
++#elif defined(__APPLE__) || defined(__FreeBSD__)
+ #include <sys/mount.h>
+ #elif defined(__OpenBSD__)
+ #include <sys/mount.h>
+@@ -182,9 +184,15 @@
+     char *path = ::realpath(tmp_path.c_str(), nullptr);
+     if (path != nullptr) {
+ 
++#if defined(__NetBSD__)
++      // NetBSD replaced statfs(2) with statvfs(2), whose struct keeps f_fstypename.
++      struct statvfs stat_fs;
++      if (statvfs(path, &stat_fs) == -1) {
++#else
+       struct statfs stat_fs;
+       // We want to run `statfs` on the path; not the filename since it might not exist.
+       if (statfs(path, &stat_fs) == -1) {
++#endif
+         free(path);
+         std::ostringstream errmsg;
+         errmsg << "ERROR: Could not run statfs on '" << filename_ << "'.\n";

@@ -11,6 +11,7 @@ mocked-httpx style as the other submit-dag tests.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -53,6 +54,23 @@ def _bundle(name="zlib", version="1.3.1+cvc.3", platform="windows", arch="x86_64
     }
     b.update(kw)
     return b
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _archives_dir() -> Path:
+    archives = app_mod._get_state().archives_dir()
+    archives.mkdir(parents=True, exist_ok=True)
+    return archives
+
+
+def _assert_each_row_serves_its_bytes(pkgs) -> None:
+    """What `cvcpkg install` checks: every row's file hashes to its sha256."""
+    for p in pkgs:
+        stored = _archives_dir() / p.archive_url.rsplit("/", 1)[-1]
+        assert _sha(stored.read_bytes()) == p.sha256, p.archive_url
 
 
 class _FakeAsyncResponse:
@@ -227,6 +245,146 @@ class TestPopulateSyncOnce:
         assert total == 2
         assert ("", "populate:http://upstream.example") in rows  # public one landed
         assert any(org == "acme" for org, _ in rows)  # org one untouched
+
+    def test_relabelled_row_keeps_its_archive(self, populate_env):
+        """Dev, 2026-10-31: migration 036 relabelled local noarch rows
+        ``release/shared`` -> ``none/none`` and kept their archive names, so
+        populate imported upstream's ``release/shared`` row under the very file
+        a live row stored, and 1,443 rows then served bytes failing their sha256.
+        """
+        run, _, monkeypatch = populate_env
+        local, up = b"local build", b"upstream build"
+        taken = app_mod._safe_archive_filename(
+            "flit", "3.12.0+cvc.3", "any", "noarch", "release", "shared"
+        )
+        archives = _archives_dir()
+        (archives / taken).write_bytes(local)
+        bundle = _bundle(
+            name="flit",
+            version="3.12.0+cvc.3",
+            platform="any",
+            arch="noarch",
+            sha256=_sha(up),
+            size_bytes=len(up),
+        )
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda **kw: _FakeAsyncClient([bundle], {taken: up})
+        )
+
+        async def _test():
+            await app_mod._db_packages.add_package(
+                name="flit",
+                version="3.12.0+cvc.3",
+                platform="any",
+                arch="noarch",
+                build_type="none",
+                link="none",
+                sha256=_sha(local),
+                size_bytes=len(local),
+                archive_url=f"/v1/download/{taken}",
+            )
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, pkgs
+
+        n, pkgs = run(_test)
+        assert n == 1
+        assert (archives / taken).read_bytes() == local
+        _assert_each_row_serves_its_bytes(pkgs)
+        imported = next(p for p in pkgs if p.build_type == "release")
+        assert imported.archive_url != f"/v1/download/{taken}"
+
+    def test_org_package_keeps_its_archive(self, populate_env):
+        """/v1/publish names an org's archive exactly as it names a public one,
+        so a public import at the same coordinates finds the file taken."""
+        run, _, monkeypatch = populate_env
+        org_bytes, up = b"acme build", b"upstream build"
+        taken = app_mod._safe_archive_filename(
+            "zlib", "1.3.1+cvc.3", "windows", "x86_64", "release", "shared"
+        )
+        archives = _archives_dir()
+        (archives / taken).write_bytes(org_bytes)
+        bundle = _bundle(sha256=_sha(up), size_bytes=len(up))
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda **kw: _FakeAsyncClient([bundle], {taken: up})
+        )
+
+        async def _test():
+            await app_mod._db_packages.add_package(
+                name="zlib",
+                version="1.3.1+cvc.3",
+                platform="windows",
+                arch="x86_64",
+                build_type="release",
+                link="shared",
+                sha256=_sha(org_bytes),
+                size_bytes=len(org_bytes),
+                archive_url=f"/v1/download/{taken}",
+                org_slug="acme",
+            )
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, pkgs
+
+        n, pkgs = run(_test)
+        assert n == 1
+        assert (archives / taken).read_bytes() == org_bytes
+        _assert_each_row_serves_its_bytes(pkgs)
+
+    def test_free_name_is_the_conventional_one(self, populate_env):
+        run, _, monkeypatch = populate_env
+        bundle = _bundle(sha256=_sha(b"data"))
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient([bundle]))
+
+        async def _test():
+            await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return pkgs
+
+        (p,) = run(_test)
+        assert p.archive_url == "/v1/download/" + app_mod._safe_archive_filename(
+            "zlib", "1.3.1+cvc.3", "windows", "x86_64", "release", "shared"
+        )
+
+    def test_lost_race_leaves_the_winners_archive(self, populate_env):
+        """A local publish of the same variant commits between the download and
+        populate's insert.  Populate moved its file in first and, on losing,
+        unlinked that path: the winner's archive, whichever bytes it held."""
+        run, _, monkeypatch = populate_env
+        from cvcpkg.server.db_stores import DbPackageIndex
+
+        won, up = b"local publish", b"upstream build"
+        name = app_mod._safe_archive_filename(
+            "zlib", "1.3.1+cvc.3", "windows", "x86_64", "release", "shared"
+        )
+        archives = _archives_dir()
+        bundle = _bundle(sha256=_sha(up), size_bytes=len(up))
+        monkeypatch.setattr(
+            "httpx.AsyncClient", lambda **kw: _FakeAsyncClient([bundle], {name: up})
+        )
+        add = DbPackageIndex.add_package
+
+        async def racing_add(self, **kw):
+            # The publish's row commits, then it stores its archive (as
+            # /v1/publish does); populate's insert then hits the duplicate.
+            winner = {**kw, "sha256": _sha(won), "size_bytes": len(won)}
+            winner.update(published_by="alice", origin_upstream="")
+            await add(self, **winner)
+            (archives / name).write_bytes(won)
+            await add(self, **kw)
+
+        monkeypatch.setattr(DbPackageIndex, "add_package", racing_add)
+
+        async def _test():
+            n = await app_mod._populate_sync_once()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return n, pkgs
+
+        n, pkgs = run(_test)
+        assert n == 0
+        assert [p.published_by for p in pkgs] == ["alice"]
+        assert (archives / name).read_bytes() == won
+        assert not list(archives.glob("*.populate"))  # the download is discarded
 
     def test_skips_placeholders_orgs_and_sha_mismatch(self, populate_env):
         run, _, monkeypatch = populate_env
@@ -1022,6 +1180,43 @@ class TestMirrorEviction:
         evicted, remaining = run(_test)
         assert evicted == 0  # org + locally-published are never evicted
         assert remaining == ["localpub", "orgpkg"]
+
+    def test_eviction_keeps_an_archive_another_row_stores(self, populate_env):
+        """Dev holds 1,443 files shared by a live local row and a yanked mirrored
+        one; evicting the mirrored row must not take the live row's bytes."""
+        run, _, monkeypatch = populate_env
+        monkeypatch.setattr(app_mod, "POPULATE_MAX_MIRROR_BYTES", 50)
+        shared = "flit-1.0.0-any-noarch-release-shared.tar.zst"
+        (_archives_dir() / shared).write_bytes(b"bytes")
+
+        async def _test():
+            from cvcpkg.server.db_stores import DbDownloadStore
+
+            monkeypatch.setattr(app_mod, "_db_downloads", DbDownloadStore())
+            for build_type, link, published_by in (
+                ("release", "shared", "populate:up"),
+                ("none", "none", "alice"),
+            ):
+                await app_mod._db_packages.add_package(
+                    name="flit",
+                    version="1.0.0",
+                    platform="any",
+                    arch="noarch",
+                    build_type=build_type,
+                    link=link,
+                    sha256=_sha(b"bytes"),
+                    size_bytes=100,
+                    archive_url=f"/v1/download/{shared}",
+                    published_by=published_by,
+                )
+            evicted = await app_mod._enforce_mirror_budget()
+            pkgs, _ = await app_mod._db_packages.get_bundles(limit=10)
+            return evicted, [p.published_by for p in pkgs]
+
+        evicted, remaining = run(_test)
+        assert evicted == 1
+        assert remaining == ["alice"]
+        assert (_archives_dir() / shared).read_bytes() == b"bytes"
 
     def test_no_budget_evicts_nothing(self, populate_env):
         run, _, monkeypatch = populate_env

@@ -138,12 +138,17 @@ export MAKE
 $MAKE -j "${CVC_JOBS}"
 $MAKE install
 
-# The installed .la files record the shim by path; a consumer's libtool
-# resolves -liconv against its own prefix instead.
+# The installed .la files record the shim by path, and its directory as an -L
+# (from LDFLAGS); a consumer's libtool resolves -liconv against its own prefix
+# instead.
 if [[ -n "${_iconv_shim}" ]]; then
     for _la in "${CVC_INSTALL_DIR}"/lib/*.la; do
         [[ -f "${_la}" ]] || continue
-        sed -i.orig "s#${_iconv_shim}/libiconv.la#-liconv#g" "${_la}"
+        sed -i.orig \
+            -e "s#${_iconv_shim}/libiconv.la#-liconv#g" \
+            -e "s#-L${_iconv_shim} ##g" \
+            -e "s#-L${_iconv_shim}'#'#g" \
+            "${_la}"
         rm -f "${_la}.orig"
     done
     if grep -l "${_iconv_shim}" "${CVC_INSTALL_DIR}"/lib/*.la 2>/dev/null; then
