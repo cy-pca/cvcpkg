@@ -76,6 +76,16 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     carries `-L/usr/local/lib` into C extensions built against it. NetBSD's
     `libintl.so.1` is in its base system and was not affected.
 
+- **python313 and python313t `_decimal` use CPython's bundled libmpdec on every
+  platform (same revisions).** From 3.13, configure defaults to
+  `--with-system-libmpdec` and takes a libmpdec wherever pkg-config or a plain
+  `-lmpdec` finds one. cvcpkg has no mpdecimal package. The published python313
+  cvc.11 and python313t cvc.13 `_decimal` on FreeBSD and NetBSD need the
+  host's `libmpdec.so.4` (ports, pkgsrc), and the builders' linkage gate
+  refused NetBSD's: pkgsrc's pkg-config finds `/usr/pkg/lib/pkgconfig/libmpdec.pc`.
+  `_common/build-python.sh` passes `--without-system-libmpdec` for every
+  platform, as it already did on macOS. That is 3.11's and 3.12's default.
+
 - **python312 cvc.23 (wasm, wasm-mt) packs on the fleet.** The first populate
   of cvc.23 (run 42416701287) published neither column, so cvc.23 stays the
   revision.

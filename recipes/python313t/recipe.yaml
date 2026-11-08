@@ -83,6 +83,10 @@ recipe:
   # libintl.so.8, and on OpenBSD _blake2 linked ports' libb2.
   # _common/build-python.sh drops -L/usr/local/lib, keeps pkg-config to the deps
   # prefix and turns libintl off.
+  # And (FreeBSD, NetBSD): _decimal uses CPython's bundled libmpdec, as on every
+  # other platform.  3.13 defaults to --with-system-libmpdec, so cvc.13's needs the
+  # host's libmpdec.so.4 (ports, pkgsrc); build-python.sh passes
+  # --without-system-libmpdec.
   cvc_revision: 15
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

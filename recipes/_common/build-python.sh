@@ -249,11 +249,11 @@ fi
 # /usr/local/opt/mpdecimal/lib/libmpdec.4.dylib, and aborted on any Mac without
 # them.  Say so explicitly, so a local build on a developer's Mac is as clean as
 # CI's: no libintl (CPython only uses it for locale.bindtextdomain & co.), the
-# bundled libmpdec, _dbm on macOS's own ndbm, and no _gdbm.
+# bundled libmpdec (below, for every platform), _dbm on macOS's own ndbm, and no
+# _gdbm.
 if [ "${CVC_PLATFORM}" = "macos" ]; then
     CONFIGURE_ARGS+=(
         ac_cv_lib_intl_textdomain=no
-        --without-system-libmpdec
         --with-dbmliborder=ndbm
         py_cv_module__gdbm=n/a
     )
@@ -263,6 +263,14 @@ fi
 case "${CVC_PLATFORM}" in
     freebsd|openbsd) CONFIGURE_ARGS+=(ac_cv_lib_intl_textdomain=no) ;;
 esac
+# The bundled libmpdec everywhere.  From 3.13, configure defaults to
+# --with-system-libmpdec and takes one wherever pkg-config or a plain -lmpdec finds
+# it, and cvcpkg has no mpdecimal package.  So the published python313 cvc.11 and
+# python313t cvc.13 _decimal on FreeBSD and NetBSD need the host's libmpdec.so.4
+# (ports, pkgsrc), and the builders' linkage gate refused NetBSD's: pkgsrc's
+# pkg-config finds /usr/pkg/lib/pkgconfig/libmpdec.pc.  3.11 and 3.12 already
+# default to the bundled copy.
+CONFIGURE_ARGS+=(--without-system-libmpdec)
 
 # [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
 # the static libpython3.X.a but does NOT archive its bundled libmpdec objects
