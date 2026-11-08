@@ -42,9 +42,5 @@ if ($LASTEXITCODE -ne 0) { throw 'lib.exe failed' }
 Copy-Item -Force imgui.h, imconfig.h, imgui_internal.h, `
     imstb_rectpack.h, imstb_textedit.h, imstb_truetype.h $incRoot
 Copy-Item -Recurse -Force 'backends\*' $incBackends
-# And the FreeType font loader, as source too: a consumer that links FreeType compiles it.
-$incFreetype = Join-Path $incRoot 'misc\freetype'
-New-Item -ItemType Directory -Force -Path $incFreetype | Out-Null
-Copy-Item -Force 'misc\freetype\imgui_freetype.h', 'misc\freetype\imgui_freetype.cpp' $incFreetype
 
 Invoke-CvcRewriteInstallPaths

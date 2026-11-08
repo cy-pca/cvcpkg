@@ -7,13 +7,11 @@ recipe:
   # Bumped 2 -> 3: ships a cmake package config (lib/cmake/imgui/imguiConfig.cmake)
   # exposing the relocatable imgui::imgui imported target, so consumers
   # find_package(imgui) + link a target instead of a bare -limgui + manual -L.
-  # Bumped 3 -> 4: ImWchar is 32-bit (imconfig-wchar32.patch), so ImGui text holds emoji and the
-  # other characters past U+FFFF (a 16-bit build draws them as '?' whatever the font), and the
-  # FreeType font loader ships as source (include/imgui/misc/freetype), as the backends do, so a
-  # consumer that links FreeType compiles it and draws colour glyphs (emoji fonts). ABI: ImWchar's
-  # size changes every structure that holds one, so a consumer must be rebuilt against this
-  # revision; a published package pins the revision it was built with.
-  cvc_revision: 4
+  # 1.92.9+cvc.4 (a 32-bit ImWchar) was yanked: packages built against cvc.3 name plain `imgui`
+  # with no revision, so an install resolved cvc.4 under them and failed to load (ImWchar's size
+  # changes ImGui's ABI). This recipe stays 16-bit, as those packages expect; the 32-bit build is
+  # its own package, imgui-w32, with its own headers, library and cmake names.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -36,8 +34,7 @@ source:
   sha256: "af97ed649182c39314320514a672b82008ab462b9293fe23d37b30bfa5d05519"
   strip_components: 1
 
-patches:
-  - imconfig-wchar32.patch
+patches: []
 
 depends:
   build: []
