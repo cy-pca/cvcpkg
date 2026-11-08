@@ -16,15 +16,27 @@ fi
 MAKE=make
 command -v gmake >/dev/null 2>&1 && MAKE=gmake
 
-# 7zip_gcc.mak links `-lpthread -ldl`, but OpenBSD and Haiku have no libdl
-# (dlopen lives in libc), so drop -ldl there via the LIB2 override.
+# 7zip_gcc.mak links `-lpthread -ldl`, but NetBSD, OpenBSD and Haiku have no
+# libdl (dlopen lives in libc; NetBSD: "ld: cannot find -ldl"), so drop -ldl
+# there via the LIB2 override.
 LIB2_OVERRIDE=()
 case "${CVC_PLATFORM}" in
-  openbsd|haiku) LIB2_OVERRIDE=(LIB2=-lpthread) ;;
+  netbsd|openbsd|haiku) LIB2_OVERRIDE=(LIB2=-lpthread) ;;
+esac
+
+# 7zip_gcc.mak compiles with `-Werror -Wall -Wextra`.  Haiku's errno constants
+# are negative ints, so 7-Zip's `DWORD == ERROR_ALREADY_EXISTS` style checks
+# (Windows/FileDir.cpp) trip -Wsign-compare.  They are correct (both sides convert
+# to unsigned the same way), so keep the warnings but not as errors there.
+WARN_OVERRIDE=()
+case "${CVC_PLATFORM}" in
+  haiku) WARN_OVERRIDE=(CFLAGS_WARN_WALL="-Wall -Wextra") ;;
 esac
 
 cd "${CVC_SOURCE_DIR}/CPP/7zip/Bundles/Alone2"
-"$MAKE" -j"${CVC_JOBS:-2}" -f makefile.gcc ${LIB2_OVERRIDE[@]+"${LIB2_OVERRIDE[@]}"}
+"$MAKE" -j"${CVC_JOBS:-2}" -f makefile.gcc \
+  ${LIB2_OVERRIDE[@]+"${LIB2_OVERRIDE[@]}"} \
+  ${WARN_OVERRIDE[@]+"${WARN_OVERRIDE[@]}"}
 
 bin="$(find . -name '7zz' -type f 2>/dev/null | head -1)"
 if [ -z "$bin" ]; then echo "7zz binary not produced" >&2; exit 1; fi
