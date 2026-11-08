@@ -32,11 +32,14 @@ jobs:
   deploy:
     name: Deploy to cvcpkg.org + pkg.tx.wtf
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    # A normal deploy takes 24-26 minutes: the cvcpkg.org deploy step 10-16,
-    # pkg.tx.wtf 1-2, then pushing recipes 10-14.  At 30 a slow server deploy
-    # (16 min in run 38276696779) let the job time out mid recipe push, after
-    # the new server was already live.
-    timeout-minutes: 50
+    # A normal deploy takes about 25 minutes: the cvcpkg.org deploy step 8-16,
+    # pkg.tx.wtf 1-3, then pushing recipes about 11 (one `recipe push-all`
+    # over ~2,260 recipes).  At 30 a slow server deploy (16 min in run
+    # 38276696779) let the job time out mid recipe push, after the new server
+    # was already live.  At 50 the old one-process-per-recipe push did the
+    # same: 34 min in run 42406565717, and run 42417899248 was cancelled 38
+    # min into it while a populate's push-all ran against the same server.
+    timeout-minutes: 60
     outputs:
       sha: ${{ steps.target.outputs.sha }}
 
@@ -459,20 +462,23 @@ jobs:
           python3 -m pip install --quiet --user '.[publish]' || true
           # Prefer the freshly-checked-out package script over any installed copy.
           CVCPKG="python3 -m cvcpkg"
-          ok=0
-          fail=0
-          for d in recipes/*/; do
-            name=$(basename "$d")
-            [[ "$name" == "_common" ]] && continue
-            [[ -f "$d/recipe.yaml" ]] || continue
-            if $CVCPKG recipe push "$name" >/dev/null 2>&1; then
-              ok=$((ok+1))
-            else
-              echo "::warning::recipe push failed: $name"
-              fail=$((fail+1))
-            fi
-          done
-          echo "Recipes: $ok ok, $fail failed"
+          # One process for the whole set, as populate does: a `recipe push`
+          # per recipe paid a Python start and a cvcpkg import ~2,260 times
+          # and took 34+ minutes; push-all takes about 11.  Exactly this
+          # checkout's recipes (no bundled default, no CWD overlay).  It prints
+          # each failure to stderr; a failed push never fails the deploy,
+          # whose servers are already live by now.
+          out=$(mktemp)
+          log=$(mktemp)
+          rc=0
+          $CVCPKG recipe push-all --no-default-recipes --recipes-dir recipes \
+            >"$out" 2>"$log" || rc=$?
+          sed -n 's/^  \([^ :]*\): \(failed\|error\) \(.*\)$/::warning::recipe push failed: \1: \2 \3/p' "$log"
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::recipe push-all exited $rc"
+            tail -20 "$log"
+          fi
+          grep -h '^cvcpkg: pushed' "$out" || true
 
       # ── Builder WebSocket route, through the public proxy ─────
       # /healthz above runs INSIDE the container, so it cannot see the two
