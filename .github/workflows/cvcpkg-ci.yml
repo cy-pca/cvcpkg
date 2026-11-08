@@ -440,6 +440,22 @@ jobs:
           CVCPKG_TEST_SERVER_URL: http://127.0.0.1:8421
         run: |
           # No --build: `test` is built inside the retry in `Start test stack`.
+          #
+          # But the tagged images can be deleted in between, as the Playwright
+          # step below explains, and then `compose run` builds them on the
+          # DEFAULT builder. PR #570's run 42458618157 (attempt 2) died that
+          # way: `cvcpkg-test-test` was "Built" by `Start test stack`, gone
+          # minutes later, and the default builder's rebuild failed with
+          # `failed to solve: lease "...": not found`. So rebuild a missing
+          # image on the isolated builder first, `backend` too, since `test`
+          # depends on it.
+          for svc in backend test; do
+            if ! docker image inspect "cvcpkg-test-$svc" >/dev/null 2>&1; then
+              echo "::warning::cvcpkg-test-$svc was deleted after Start test stack built it; rebuilding it on cvcpkg-ci"
+              docker compose -f docker-compose.test.yml build --builder=cvcpkg-ci "$svc"
+              docker image inspect "cvcpkg-test-$svc" >/dev/null
+            fi
+          done
           docker compose -f docker-compose.test.yml run --rm test
 
       - name: Run Playwright browser tests
@@ -460,12 +476,15 @@ jobs:
           # a dangling snapshot -- "parent snapshot uu3evbajpz8hlpofxtrhozdvv does
           # not exist" failed master and three PRs on 2026-11-05/06, after every
           # test had passed.  So when the image is gone, rebuild it on the
-          # isolated builder first; `compose run` never builds.
-          if ! docker image inspect cvcpkg-test-playwright >/dev/null 2>&1; then
-            echo "::warning::cvcpkg-test-playwright was deleted while the Docker suite ran; rebuilding it on cvcpkg-ci"
-            docker compose -f docker-compose.test.yml build --builder=cvcpkg-ci playwright
-            docker image inspect cvcpkg-test-playwright >/dev/null
-          fi
+          # isolated builder first; `compose run` never builds.  `backend` too,
+          # which `playwright` depends on.
+          for svc in backend playwright; do
+            if ! docker image inspect "cvcpkg-test-$svc" >/dev/null 2>&1; then
+              echo "::warning::cvcpkg-test-$svc was deleted while the Docker suite ran; rebuilding it on cvcpkg-ci"
+              docker compose -f docker-compose.test.yml build --builder=cvcpkg-ci "$svc"
+              docker image inspect "cvcpkg-test-$svc" >/dev/null
+            fi
+          done
           docker compose -f docker-compose.test.yml run --rm playwright
 
       - name: Collect logs on failure
