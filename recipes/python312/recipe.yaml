@@ -153,6 +153,11 @@ recipe:
   # _common/build-python.sh compiles serially now, and fails the build if the
   # stdlib is not byte-compiled.  macOS, linux arm64 and Windows were not affected
   # and rebuild unchanged.
+  # Also in cvc.24 (FreeBSD, OpenBSD): nothing from the build host's /usr/local,
+  # which the builders' linkage gate now refuses to pack.  cvc.20 needs ports'
+  # libintl.so.8, and on OpenBSD its bin/python3.12 linked the ports python's
+  # libpython3.12.so.0.0 and _blake2 ports' libb2.  _common/build-python.sh drops
+  # -L/usr/local/lib, keeps pkg-config to the deps prefix and turns libintl off.
   cvc_revision: 24
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

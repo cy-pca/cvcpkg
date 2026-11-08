@@ -78,6 +78,11 @@ recipe:
   # (linux cvc.13 is 55 MB, cvc.12 91 MB).  _common/build-python.sh compiles
   # serially now, and fails the build if the stdlib is not byte-compiled.  Other
   # platforms rebuild unchanged.
+  # Also in cvc.15 (FreeBSD, OpenBSD): nothing from the build host's /usr/local,
+  # which the builders' linkage gate now refuses to pack.  cvc.13 needs ports'
+  # libintl.so.8, and on OpenBSD _blake2 linked ports' libb2.
+  # _common/build-python.sh drops -L/usr/local/lib, keeps pkg-config to the deps
+  # prefix and turns libintl off.
   cvc_revision: 15
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

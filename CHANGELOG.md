@@ -55,6 +55,27 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - Not affected: python311 (its compileall has no forkserver), macOS (spawn),
     linux arm64 (built outside the fleet) and Windows (`PC\layout --precompile`).
 
+- **python312, python313 and python313t on FreeBSD and OpenBSD link nothing
+  from the build host's `/usr/local` (same revisions).** The builders' linkage
+  gate (cvcpkg 2.5.12) refused to pack them. `env-<platform>.sh` adds
+  `-L/usr/local/lib`, and the published bundles (python312 cvc.20, python313
+  cvc.11, python313t cvc.13) carry what it let in:
+  - `bin/python3.X` and `libpython3.X.so` need ports' `libintl.so.8`. configure
+    found it with `AC_CHECK_LIB([intl])`, and nothing uses it, since
+    `libintl.h` was already out of reach.
+  - On OpenBSD, python312's `bin/python3.12` needs the ports python's
+    `libpython3.12.so.0.0`, not its own `libpython3.12.so.1.0`. CPython links
+    the interpreter with LDFLAGS ahead of its own `-L. -lpython3.X`, and
+    OpenBSD's linker takes the first directory that has the library.
+  - On OpenBSD, `_blake2` needs ports' `libb2.so.0.0`. pkg-config searches
+    `/usr/local/lib/pkgconfig` by default.
+  - `_common/build-python.sh` drops `-L/usr/local/lib` on both platforms, sets
+    `PKG_CONFIG_LIBDIR` to the deps prefix as the cffi recipes do, and
+    configures with `ac_cv_lib_intl_textdomain=no` as on macOS. `_blake2`
+    builds its vendored copy. The interpreter's sysconfig `LDSHARED` no longer
+    carries `-L/usr/local/lib` into C extensions built against it. NetBSD's
+    `libintl.so.1` is in its base system and was not affected.
+
 - **python312 cvc.23 (wasm, wasm-mt) packs on the fleet.** The first populate
   of cvc.23 (run 42416701287) published neither column, so cvc.23 stays the
   revision.

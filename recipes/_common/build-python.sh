@@ -93,6 +93,29 @@ case "${CVC_PLATFORM}" in
         export CXXFLAGS="${CXXFLAGS//-I\/usr\/local\/include/}"
         ;;
 esac
+# FreeBSD and OpenBSD: the same for the link and for pkg-config, which the
+# builders' linkage gate (cvcpkg 2.5.12) refuses to pack otherwise.  env-<platform>.sh
+# also adds -L/usr/local/lib, and the published python312 cvc.20, python313 cvc.11
+# and python313t cvc.13 carry what it let in:
+#   - configure's AC_CHECK_LIB([intl]) found ports' gettext there, so python3.X and
+#     libpython3.X.so need /usr/local/lib/libintl.so.8 (and use nothing from it:
+#     libintl.h was already out of reach);
+#   - CPython links bin/python3.X with LDFLAGS ahead of its own -L. -lpython3.X, and
+#     OpenBSD's linker takes the first directory that has a libpython3.12.so.M.N, so
+#     python312 there linked the ports python's libpython3.12.so.0.0, not its own;
+#   - pkg-config searches /usr/local/lib/pkgconfig by default, so OpenBSD's _blake2
+#     linked ports' libb2.so.0.0.
+# Drop the -L, keep pkg-config to CVC_DEPS_PREFIX (PKG_CONFIG_LIBDIR replaces the
+# default search path, as the cffi recipes do), and turn libintl off below.  _blake2
+# then builds its vendored copy.  sysconfig's LDSHARED loses the -L too, which every
+# C extension built against this interpreter inherited (cffi cvc.4 had to strip it).
+# NetBSD's libintl.so.1 is in base, and its pkgsrc flags are handled next.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd)
+        export LDFLAGS="${LDFLAGS//-L\/usr\/local\/lib/}"
+        export PKG_CONFIG_LIBDIR="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig"
+        ;;
+esac
 # NetBSD: the same for pkgsrc's /usr/pkg, and for the link too.  CPython bakes
 # its build flags into sysconfig (CFLAGS, LDFLAGS, LDSHARED), and setuptools
 # puts those FIRST on every extension's command line, ahead of the extension's
@@ -235,6 +258,11 @@ if [ "${CVC_PLATFORM}" = "macos" ]; then
         py_cv_module__gdbm=n/a
     )
 fi
+# [freebsd, openbsd] No libintl either: base has none, and the one in ports'
+# /usr/local/lib is not where the bundle is installed (see the LDFLAGS scrub above).
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd) CONFIGURE_ARGS+=(ac_cv_lib_intl_textdomain=no) ;;
+esac
 
 # [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
 # the static libpython3.X.a but does NOT archive its bundled libmpdec objects
