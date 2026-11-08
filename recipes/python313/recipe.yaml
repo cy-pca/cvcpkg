@@ -63,7 +63,24 @@ recipe:
   # python.exe, where an executable in bin\ that embeds Python (libcvc's arix and
   # ariglx, volrover3) could not load python313.dll and would not start, and where its
   # abi3 extension modules did not find python3.dll.  Other platforms rebuild unchanged.
-  cvc_revision: 12
+  # Bumped 12 -> 13 (linux x86_64, the BSDs): the stdlib ships its .pyc again, as
+  # python312 cvc.24.  make install's compileall -j0 starts a forkserver, whose
+  # AF_UNIX socket goes under TMPDIR, and a fleet build's TMPDIR (in its job dir
+  # since cvcpkg 2.5.2) made that path too long.  compileall died and the Makefile
+  # ignored it, so linux cvc.11 and the BSDs' cvc.10 and cvc.11 have no stdlib .pyc
+  # (linux cvc.11 is 55 MB, cvc.10 91 MB).  _common/build-python.sh compiles
+  # serially now, and fails the build if the stdlib is not byte-compiled.  Other
+  # platforms rebuild unchanged.
+  # Also in cvc.13 (FreeBSD, OpenBSD): nothing from the build host's /usr/local,
+  # which the builders' linkage gate now refuses to pack.  cvc.11 needs ports'
+  # libintl.so.8, and on OpenBSD _blake2 linked ports' libb2.
+  # _common/build-python.sh drops -L/usr/local/lib, keeps pkg-config to the deps
+  # prefix and turns libintl off.
+  # And (FreeBSD, NetBSD): _decimal uses CPython's bundled libmpdec, as on every
+  # other platform.  3.13 defaults to --with-system-libmpdec, so cvc.11's needs the
+  # host's libmpdec.so.4 (ports, pkgsrc); build-python.sh passes
+  # --without-system-libmpdec.
+  cvc_revision: 13
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

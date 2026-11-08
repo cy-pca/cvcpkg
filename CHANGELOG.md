@@ -30,6 +30,62 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **python312, python313 and python313t ship a byte-compiled stdlib again
+  (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
+  on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux
+  x86_64) and 2026-11-08 (python312 wasm and wasm-mt) have no stdlib `.pyc`:
+  python312 linux cvc.20 has 0 of 1,803 `.py` files compiled, against cvc.19's
+  1,774, and is 52 MB instead of 85. Each module compiles at its first import,
+  and at every import where the prefix is read-only.
+  - `make install` byte-compiles the stdlib with `compileall -j0`. From 3.12,
+    compileall starts its workers through multiprocessing's forkserver wherever
+    the default start method is fork, and the forkserver binds an AF_UNIX socket
+    under `$TMPDIR`. Since cvcpkg 2.5.2 (#398), a build's TMPDIR is in its work
+    dir. On the fleet that is
+    `/tmp/cvcpkg-builder/cvcpkg-job-<recipe>-<id>/cvcpkg-<recipe>-<id>/tmp`, so
+    the socket path is ~111 bytes, past Linux's 108 (104 on the BSDs).
+    compileall died with `OSError: AF_UNIX path too long`. CPython's Makefile
+    ignores a failed compileall, so the log showed only `Error 1 (ignored)`.
+  - `_common/build-python.sh` passes `COMPILEALL_OPTS=-j1`. A serial compile has
+    no worker pool, puts nothing in TMPDIR, and costs a few seconds.
+  - After `make install`, the build counts the stdlib `.py` files that have all
+    three `.pyc` (optimization levels 0, 1 and 2). Below 90%, it fails. A
+    complete install has 98-99%; the rest is test data that is not meant to
+    compile.
+  - Not affected: python311 (its compileall has no forkserver), macOS (spawn),
+    linux arm64 (built outside the fleet) and Windows (`PC\layout --precompile`).
+
+- **python312, python313 and python313t on FreeBSD and OpenBSD link nothing
+  from the build host's `/usr/local` (same revisions).** The builders' linkage
+  gate (cvcpkg 2.5.12) refused to pack them. `env-<platform>.sh` adds
+  `-L/usr/local/lib`, and the published bundles (python312 cvc.20, python313
+  cvc.11, python313t cvc.13) carry what it let in:
+  - `bin/python3.X` and `libpython3.X.so` need ports' `libintl.so.8`. configure
+    found it with `AC_CHECK_LIB([intl])`, and nothing uses it, since
+    `libintl.h` was already out of reach.
+  - On OpenBSD, python312's `bin/python3.12` needs the ports python's
+    `libpython3.12.so.0.0`, not its own `libpython3.12.so.1.0`. CPython links
+    the interpreter with LDFLAGS ahead of its own `-L. -lpython3.X`, and
+    OpenBSD's linker takes the first directory that has the library.
+  - On OpenBSD, `_blake2` needs ports' `libb2.so.0.0`. pkg-config searches
+    `/usr/local/lib/pkgconfig` by default.
+  - `_common/build-python.sh` drops `-L/usr/local/lib` on both platforms, sets
+    `PKG_CONFIG_LIBDIR` to the deps prefix as the cffi recipes do, and
+    configures with `ac_cv_lib_intl_textdomain=no` as on macOS. `_blake2`
+    builds its vendored copy. The interpreter's sysconfig `LDSHARED` no longer
+    carries `-L/usr/local/lib` into C extensions built against it. NetBSD's
+    `libintl.so.1` is in its base system and was not affected.
+
+- **python313 and python313t `_decimal` use CPython's bundled libmpdec on every
+  platform (same revisions).** From 3.13, configure defaults to
+  `--with-system-libmpdec` and takes a libmpdec wherever pkg-config or a plain
+  `-lmpdec` finds one. cvcpkg has no mpdecimal package. The published python313
+  cvc.11 and python313t cvc.13 `_decimal` on FreeBSD and NetBSD need the
+  host's `libmpdec.so.4` (ports, pkgsrc), and the builders' linkage gate
+  refused NetBSD's: pkgsrc's pkg-config finds `/usr/pkg/lib/pkgconfig/libmpdec.pc`.
+  `_common/build-python.sh` passes `--without-system-libmpdec` for every
+  platform, as it already did on macOS. That is 3.11's and 3.12's default.
+
 - **python312 cvc.23 (wasm, wasm-mt) packs on the fleet.** The first populate
   of cvc.23 (run 42416701287) published neither column, so cvc.23 stays the
   revision.

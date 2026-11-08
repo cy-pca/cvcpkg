@@ -93,6 +93,29 @@ case "${CVC_PLATFORM}" in
         export CXXFLAGS="${CXXFLAGS//-I\/usr\/local\/include/}"
         ;;
 esac
+# FreeBSD and OpenBSD: the same for the link and for pkg-config, which the
+# builders' linkage gate (cvcpkg 2.5.12) refuses to pack otherwise.  env-<platform>.sh
+# also adds -L/usr/local/lib, and the published python312 cvc.20, python313 cvc.11
+# and python313t cvc.13 carry what it let in:
+#   - configure's AC_CHECK_LIB([intl]) found ports' gettext there, so python3.X and
+#     libpython3.X.so need /usr/local/lib/libintl.so.8 (and use nothing from it:
+#     libintl.h was already out of reach);
+#   - CPython links bin/python3.X with LDFLAGS ahead of its own -L. -lpython3.X, and
+#     OpenBSD's linker takes the first directory that has a libpython3.12.so.M.N, so
+#     python312 there linked the ports python's libpython3.12.so.0.0, not its own;
+#   - pkg-config searches /usr/local/lib/pkgconfig by default, so OpenBSD's _blake2
+#     linked ports' libb2.so.0.0.
+# Drop the -L, keep pkg-config to CVC_DEPS_PREFIX (PKG_CONFIG_LIBDIR replaces the
+# default search path, as the cffi recipes do), and turn libintl off below.  _blake2
+# then builds its vendored copy.  sysconfig's LDSHARED loses the -L too, which every
+# C extension built against this interpreter inherited (cffi cvc.4 had to strip it).
+# NetBSD's libintl.so.1 is in base, and its pkgsrc flags are handled next.
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd)
+        export LDFLAGS="${LDFLAGS//-L\/usr\/local\/lib/}"
+        export PKG_CONFIG_LIBDIR="${CVC_DEPS_PREFIX}/lib/pkgconfig:${CVC_DEPS_PREFIX}/share/pkgconfig"
+        ;;
+esac
 # NetBSD: the same for pkgsrc's /usr/pkg, and for the link too.  CPython bakes
 # its build flags into sysconfig (CFLAGS, LDFLAGS, LDSHARED), and setuptools
 # puts those FIRST on every extension's command line, ahead of the extension's
@@ -226,15 +249,28 @@ fi
 # /usr/local/opt/mpdecimal/lib/libmpdec.4.dylib, and aborted on any Mac without
 # them.  Say so explicitly, so a local build on a developer's Mac is as clean as
 # CI's: no libintl (CPython only uses it for locale.bindtextdomain & co.), the
-# bundled libmpdec, _dbm on macOS's own ndbm, and no _gdbm.
+# bundled libmpdec (below, for every platform), _dbm on macOS's own ndbm, and no
+# _gdbm.
 if [ "${CVC_PLATFORM}" = "macos" ]; then
     CONFIGURE_ARGS+=(
         ac_cv_lib_intl_textdomain=no
-        --without-system-libmpdec
         --with-dbmliborder=ndbm
         py_cv_module__gdbm=n/a
     )
 fi
+# [freebsd, openbsd] No libintl either: base has none, and the one in ports'
+# /usr/local/lib is not where the bundle is installed (see the LDFLAGS scrub above).
+case "${CVC_PLATFORM}" in
+    freebsd|openbsd) CONFIGURE_ARGS+=(ac_cv_lib_intl_textdomain=no) ;;
+esac
+# The bundled libmpdec everywhere.  From 3.13, configure defaults to
+# --with-system-libmpdec and takes one wherever pkg-config or a plain -lmpdec finds
+# it, and cvcpkg has no mpdecimal package.  So the published python313 cvc.11 and
+# python313t cvc.13 _decimal on FreeBSD and NetBSD need the host's libmpdec.so.4
+# (ports, pkgsrc), and the builders' linkage gate refused NetBSD's: pkgsrc's
+# pkg-config finds /usr/pkg/lib/pkgconfig/libmpdec.pc.  3.11 and 3.12 already
+# default to the bundled copy.
+CONFIGURE_ARGS+=(--without-system-libmpdec)
 
 # [wasm] Disable _decimal. CPython's emscripten build archives _decimal.o into
 # the static libpython3.X.a but does NOT archive its bundled libmpdec objects
@@ -275,6 +311,18 @@ else
     ./configure "${CONFIGURE_ARGS[@]}"
 fi
 
+# `make install` byte-compiles the stdlib serially (COMPILEALL_OPTS=-j1, from the
+# Makefile's -j0). From 3.12, compileall starts its worker pool through
+# multiprocessing's forkserver wherever the default start method is fork (Linux,
+# the BSDs, and the native build python a wasm install runs). The forkserver binds
+# an AF_UNIX socket at $TMPDIR/pymp-*/listener-*, and since cvcpkg 2.5.2 (#398) a
+# fleet build's TMPDIR is in its job dir, so that path is ~111 bytes, past
+# sun_path's 108 (104 on the BSDs). compileall died with "OSError: AF_UNIX path too
+# long", and CPython's Makefile ignores it (the line starts with `-`), so the
+# python312, python313 and python313t bundles built from 2026-10-19 on the BSDs,
+# 2026-11-02 on linux and 2026-11-08 on wasm have no stdlib .pyc at all (python312
+# linux cvc.19: 1,774 of 1,803 .py compiled, cvc.20: 0). Serially there is no pool
+# and nothing in TMPDIR, for a few seconds more. 3.11 never used the forkserver.
 if [ "$IS_EMSCRIPTEN" = true ]; then
     # [wasm] make writes to a file, printed when it finishes. emcc runs node, and a
     # node that writes to an inherited stdout or stderr pipe sets O_NONBLOCK on that
@@ -285,7 +333,7 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     # "gmake: write error: stdout" (populate run 42416701287). A regular file
     # ignores O_NONBLOCK.
     _make_log="${CVC_SOURCE_DIR}/cvcpkg-make.log"
-    for _make_args in "-j ${CVC_JOBS}" install; do
+    for _make_args in "-j ${CVC_JOBS}" "install COMPILEALL_OPTS=-j1"; do
         _make_rc=0
         # shellcheck disable=SC2086
         emmake $MAKE ${_make_args} > "${_make_log}" 2>&1 || _make_rc=$?
@@ -297,7 +345,33 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     done
 else
     $MAKE -j "${CVC_JOBS}"
-    $MAKE install
+    $MAKE install COMPILEALL_OPTS=-j1
+fi
+
+# --- Byte-code check ---
+# Fail here when the stdlib went uncompiled, since nothing else notices: CPython's
+# Makefile ignores a failed compileall, and the pack ships whatever is there. A
+# full install has all three .pyc (compileall -o 0 -o 1 -o 2) for 98-99% of the
+# stdlib's .py files; the rest is test data that is not meant to compile
+# (bad_coding*, badsyntax_*, test_lib2to3/data) and config-3.X-*/python-config.py.
+# site-packages (pip) is compiled on its own and not counted.
+_STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_LDVERSION}"
+[ -d "${_STDLIB_DIR}" ] || _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}"
+_n_py=0
+_n_compiled=0
+while IFS= read -r _py; do
+    _n_py=$((_n_py + 1))
+    _stem="${_py##*/}"
+    _n_pyc=0
+    for _pyc in "${_py%/*}/__pycache__/${_stem%.py}".*.pyc; do
+        if [ -e "${_pyc}" ]; then _n_pyc=$((_n_pyc + 1)); fi
+    done
+    if [ "${_n_pyc}" -ge 3 ]; then _n_compiled=$((_n_compiled + 1)); fi
+done < <(find "${_STDLIB_DIR}" -path "${_STDLIB_DIR}/site-packages" -prune -o -name '*.py' -type f -print)
+echo "build-python.sh: ${_n_compiled} of ${_n_py} stdlib .py files have their .pyc"
+if [ "${_n_py}" -eq 0 ] || [ $((_n_compiled * 10)) -lt $((_n_py * 9)) ]; then
+    echo "build-python.sh: the stdlib under ${_STDLIB_DIR#"${CVC_INSTALL_DIR}/"} is not byte-compiled; see make install's compileall output above" >&2
+    exit 1
 fi
 
 # [wasm] Fold CPython's bundled expat and HACL objects into the static libpython.

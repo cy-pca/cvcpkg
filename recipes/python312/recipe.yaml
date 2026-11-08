@@ -143,7 +143,22 @@ recipe:
   # "gmake: write error: stdout" (node had made the builder's pipe
   # non-blocking).  The wasm columns no longer declare pip, configure with
   # --with-ensurepip=no, and send make's output to a file.
-  cvc_revision: 23
+  #
+  # Bumped 23 -> 24 (linux x86_64, the BSDs, wasm, wasm-mt): the stdlib ships its
+  # .pyc again.  make install's compileall -j0 starts a forkserver, whose AF_UNIX
+  # socket goes under TMPDIR, and a fleet build's TMPDIR (in its job dir since
+  # cvcpkg 2.5.2) made that path too long.  compileall died and the Makefile
+  # ignored it, so linux cvc.20, the BSDs' cvc.19 and cvc.20, and wasm and wasm-mt
+  # cvc.23 have no stdlib .pyc (linux cvc.20 is 52 MB, cvc.19 85 MB).
+  # _common/build-python.sh compiles serially now, and fails the build if the
+  # stdlib is not byte-compiled.  macOS, linux arm64 and Windows were not affected
+  # and rebuild unchanged.
+  # Also in cvc.24 (FreeBSD, OpenBSD): nothing from the build host's /usr/local,
+  # which the builders' linkage gate now refuses to pack.  cvc.20 needs ports'
+  # libintl.so.8, and on OpenBSD its bin/python3.12 linked the ports python's
+  # libpython3.12.so.0.0 and _blake2 ports' libb2.  _common/build-python.sh drops
+  # -L/usr/local/lib, keeps pkg-config to the deps prefix and turns libintl off.
+  cvc_revision: 24
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
