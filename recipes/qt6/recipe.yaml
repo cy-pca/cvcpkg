@@ -20,7 +20,10 @@ recipe:
   # Bumped 8 -> 9: the BSDs use Qt's bundled libb2, as Linux does. The OpenBSD
   # libQt6Core.so.6.8.2 (+cvc.7) linked the builder's ports libb2.so.0.0,
   # which nothing declares (build.sh).
-  cvc_revision: 9
+  # Bumped 9 -> 10: the BSDs build without brotli, as Linux does. The FreeBSD
+  # libQt6Network.so.6.8.2 (+cvc.9) linked the builder's ports
+  # libbrotlidec.so.1, which nothing declares; the pack gate refused it.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

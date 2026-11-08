@@ -70,8 +70,12 @@ fi
 # CMake searches /usr/local on OpenBSD and FreeBSD, so QtCore linked any ports
 # libb2 the builder has: 6.8.2+cvc.7's OpenBSD libQt6Core.so.6.8.2 NEEDed the
 # ports libb2.so.0.0, which nothing declares.  NetBSD is the same with pkgsrc.
+# And no brotli, as on Linux: 6.8.2+cvc.9's FreeBSD libQt6Network.so.6.8.2
+# NEEDed the ports libbrotlidec.so.1 in /usr/local/lib (freebsd-build-cvcpkg-org,
+# populate 2026-11-07), so QtNetwork did not load where brotli is not installed.
+# It only drops brotli Content-Encoding from QNetworkAccessManager.
 if [[ "${CVC_PLATFORM}" == "freebsd" || "${CVC_PLATFORM}" == "netbsd" || "${CVC_PLATFORM}" == "openbsd" ]]; then
-    CMAKE_EXTRA+=(-DFEATURE_system_libb2=OFF)
+    CMAKE_EXTRA+=(-DFEATURE_system_libb2=OFF -DFEATURE_brotli=OFF)
 fi
 # OpenBSD: no backtrace feature.  Qt 6.8.2's qlogging.cpp passes a const frame
 # pointer to a lambda taking `void *&` in its execinfo backtrace path, which
