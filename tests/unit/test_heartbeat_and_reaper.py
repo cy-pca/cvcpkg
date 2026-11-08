@@ -297,6 +297,17 @@ class TestReaperScript:
 
         assert slug.is_dir() and job.is_dir()
 
+    def test_never_deletes_a_fleet_container_holding_only_a_job_tmpdir(self, tmp_path):
+        # A job's TMPDIR (cvcpkg-t-*) sits beside its job root, so a builder
+        # killed between removing the two leaves one in the container alone.
+        slug = tmp_path / "cvcpkg-org"
+        tmp = _build_tree(slug, "cvcpkg-t-k3x9q2wa")
+        _backdate(slug, 99999)
+
+        _reap("-a", "60", "-d", "1", str(tmp_path))
+
+        assert slug.is_dir() and tmp.is_dir()
+
     def test_depth_2_reaches_the_fleet_supervisor_layout(self, tmp_path):
         # /var/lib/cvcpkg-builder/<server-slug>/cvcpkg-job-*: a depth-1 sweep
         # silently cleans nothing on a converted host.

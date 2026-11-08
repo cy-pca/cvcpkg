@@ -1353,6 +1353,10 @@ class BuildContext:
     # dependency *edge* -- ``depends.build`` lands here, ``depends.runtime``
     # lands in ``prefix``.  None => no separation (same as prefix).
     build_prefix: Path | None = None
+    # The build's TMPDIR on POSIX hosts (see _build_env).  None => <work_dir>/tmp.
+    # The fleet builder passes a short per-job directory instead, because its
+    # nested work dirs are too long for a unix socket under them.
+    tmp_dir: Path | None = None
 
 
 # Platforms whose ldconfig(8) maintains a SYSTEM-WIDE hints cache that it
@@ -1465,6 +1469,47 @@ def _script_base_env() -> dict[str, str]:
     return env
 
 
+def sets_build_tmpdir() -> bool:
+    """Whether :func:`_build_env` gives the build a TMPDIR of its own.
+
+    POSIX hosts only: Windows tools read TMP/TEMP, and some MSVC builds are
+    sensitive to the longer path.
+    """
+    return sys.platform != "win32"
+
+
+#: What Python's multiprocessing forkserver adds to TMPDIR for its listening
+#: socket, ``/pymp-XXXXXXXX/listener-XXXXXXXX``.  compileall -j0 and a Pool
+#: start one wherever the start method is forkserver, the default from 3.14.
+_FORKSERVER_SOCKET_TAIL = 32
+
+
+def _sun_path_size(platform: str = "") -> int:
+    """``sizeof(sockaddr_un.sun_path)``, NUL included: 108 on Linux, 104 on the
+    BSDs and macOS (and assumed anywhere else)."""
+    return 108 if (platform or sys.platform).startswith("linux") else 104
+
+
+def _tmpdir_socket_warning(tmpdir: str, platform: str = "") -> str:
+    """A warning when Python's forkserver socket would not fit under *tmpdir*.
+
+    An AF_UNIX path that does not fit sun_path fails to bind, and the tool that
+    tried may not say so: CPython's ``make install`` runs ``compileall -j0``
+    from a ``-`` recipe line, so the fleet's python312/313/313t bundles built
+    since cvcpkg 2.5.2 shipped without stdlib .pyc, and the log said only
+    "Error 1 (ignored)".  Returns ``""`` when the socket fits.
+    """
+    size = len(os.fsencode(tmpdir))
+    limit = _sun_path_size(platform)
+    if size + _FORKSERVER_SOCKET_TAIL < limit:
+        return ""
+    return (
+        f"cvcpkg: warning: TMPDIR is {size} bytes, too long for a unix socket under it "
+        f"(sun_path is {limit} bytes; Python's forkserver binds TMPDIR + "
+        f"{_FORKSERVER_SOCKET_TAIL}): {tmpdir}"
+    )
+
+
 def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     """Construct the environment for the build script."""
     env = _script_base_env()
@@ -1494,11 +1539,12 @@ def _build_env(ctx: BuildContext, matrix: MatrixEntry) -> dict[str, str]:
     # volume a builder measures and sweeps.  In the system /tmp, what a killed or
     # crashed build left behind accumulated until /tmp filled, and then every
     # job on that builder failed in its first second (openbsd-build-2, populate
-    # 2026-10-19: "[Errno 28] No space left on device" on 9 jobs).  POSIX hosts
-    # only: Windows tools read TMP/TEMP, and some MSVC builds are sensitive to
-    # the longer path.
-    if sys.platform != "win32":
-        tmp = ctx.work_dir / "tmp"
+    # 2026-10-19: "[Errno 28] No space left on device" on 9 jobs).  A caller
+    # whose work dir is deep passes a shorter ctx.tmp_dir on the same volume:
+    # the fleet's <work_dir>/tmp is 79 bytes for python312, and a unix socket
+    # under it does not fit (see _tmpdir_socket_warning).
+    if sets_build_tmpdir():
+        tmp = ctx.tmp_dir or ctx.work_dir / "tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         env["TMPDIR"] = str(tmp.resolve())
 
@@ -2421,6 +2467,11 @@ def run_build(
     print(f"cvcpkg: install dir: {ctx.install_dir}")
     if log_callback:
         log_callback(f"{header}\n")
+    tmp_warning = _tmpdir_socket_warning(env.get("TMPDIR", "")) if sets_build_tmpdir() else ""
+    if tmp_warning:
+        print(tmp_warning)
+        if log_callback:
+            log_callback(f"{tmp_warning}\n")
 
     if log_callback:
         # Stream output line-by-line so it reaches the server in real time.
@@ -4282,12 +4333,17 @@ def build_recipe(
     host_tools_prefix: Path | None = None,
     incremental: bool = False,
     log_callback: Callable[[str], None] | None = None,
+    tmp_dir: Path | None = None,
 ) -> BuildContext:
     """Build a single recipe. Returns the BuildContext.
 
     *work_dir_root*, when given, is the parent directory in which the
     temporary work directory is created.  Otherwise the system temp
     directory (``$TMPDIR`` / ``/tmp``) is used.
+
+    *tmp_dir*, when given, is the build's TMPDIR in place of
+    ``<work dir>/tmp`` (:attr:`BuildContext.tmp_dir`).  The caller owns it and
+    removes it.
 
     *incremental* keeps a STABLE work/build tree keyed by (recipe name,
     platform, config, link) under *work_dir_root* (or :func:`_incremental_root`
@@ -4377,6 +4433,7 @@ def build_recipe(
             host_platform=host_platform,
             cross_toolchain_env=cross_toolchain_env or {},
             build_prefix=build_prefix,
+            tmp_dir=tmp_dir,
         )
 
         run_build(ctx, log_callback=log_callback)
@@ -4428,12 +4485,15 @@ def pack_recipe(
     cross_toolchain_env: dict[str, str] | None = None,
     cvc_revision: int | None = None,
     strict_globs: bool = True,
+    tmp_dir: Path | None = None,
 ) -> tuple[Path, str, int]:
     """Build + package a recipe. Returns (archive_path, sha256, size).
 
     *cvc_revision*, when set, overrides the recipe's committed revision for
     this bundle's manifest and archive name (``cvcpkg pack --bump``).  The
     recipe on disk is not modified.
+
+    *tmp_dir* is the build's TMPDIR, as for :func:`build_recipe`.
 
     A platform-independent recipe (all matrix entries ``platform: any``) is
     always packaged as a single ``any``/``noarch`` bundle, regardless of the
@@ -4491,6 +4551,7 @@ def pack_recipe(
         log_callback=log_callback,
         host_platform=host_platform,
         cross_toolchain_env=cross_toolchain_env,
+        tmp_dir=tmp_dir,
     )
 
     # Stamp the bundle at the caller-chosen revision (``--bump``).  Recipe is a

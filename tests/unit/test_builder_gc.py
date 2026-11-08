@@ -98,6 +98,25 @@ class TestSweepWorkDir:
         assert not nested.exists()
         assert slug.is_dir(), "the per-server container itself must survive"
 
+    def test_a_stranded_job_tmpdir_is_swept(self, tmp_path):
+        # A job's TMPDIR sits beside its job root, not in it (see
+        # _execute_job), so a killed builder strands it in the work root.
+        tmp = _job_dir(tmp_path, "cvcpkg-t-k3x9q2wa")
+        res = sweep_work_dir(tmp_path)
+        assert res.removed == 1
+        assert not tmp.exists()
+
+    def test_a_container_holding_only_a_job_tmpdir_survives(self, tmp_path):
+        # Were cvcpkg-t-* not a job root, cvcpkg-org would hold no scratch
+        # children and match the legacy bare pattern itself.
+        slug = tmp_path / "cvcpkg-org"
+        slug.mkdir()
+        tmp = _job_dir(slug, "cvcpkg-t-k3x9q2wa")
+        res = sweep_work_dir(tmp_path)
+        assert res.removed == 1
+        assert not tmp.exists()
+        assert slug.is_dir(), "the per-server container itself must survive"
+
     def test_container_survives_while_its_live_job_is_kept(self, tmp_path):
         # The dangerous composition: an old per-server container holding an
         # in-flight job.  Sweeping the container would delete the running

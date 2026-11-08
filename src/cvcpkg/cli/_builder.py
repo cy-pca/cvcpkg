@@ -2452,6 +2452,7 @@ def builder_run(
         Recipe,
         build_recipe,
         pack_recipe,
+        sets_build_tmpdir,
     )
     from cvcpkg.platform import detect_arch, detect_platform
     from cvcpkg.tokenenv import SCRUB_NAMES_ENV, scrub_token_env, split_names
@@ -3449,11 +3450,13 @@ def builder_run(
         job_link: str,
         log_cb: Callable[[str], None],
         implicit: tuple[str, ...] = (),
+        tmp_dir: Path | None = None,
     ) -> None:
         """Download and install runtime dependencies into *prefix*.
 
         *implicit* names packages the builder itself needs in *prefix*
         whatever the recipe declares (cvcpkg's patchelf); they install first.
+        *tmp_dir* is the TMPDIR of any dep built here (the job's own).
 
         Resolves the full transitive dependency closure, then queries
         the server catalog for each dep, downloads the matching
@@ -3614,6 +3617,7 @@ def builder_run(
                     prefix=prefix,
                     work_dir_root=prefix.parent,
                     log_callback=log_cb,
+                    tmp_dir=tmp_dir,
                 )
             except Exception as exc:
                 raise RuntimeError(
@@ -4116,6 +4120,7 @@ def builder_run(
         archive_path: Path | None = None
         dep_prefix: Path | None = None
         job_root: Path | None = None
+        job_tmp: Path | None = None
         try:
             # Checkpoints like this one end a job the server is done with
             # (_abandon_job) between steps; a running build is killed.
@@ -4157,14 +4162,29 @@ def builder_run(
             # sibling variant's still-in-use work dir mid-build, which raised
             # FileNotFoundError at staging.mkdir() in the losing variant.
             job_root = Path(tempfile.mkdtemp(prefix=f"cvcpkg-job-{recipe_name}-", dir=work_root))
+            # The job's TMPDIR, beside the job root rather than inside it.  Inside,
+            # <work_root>/cvcpkg-job-<recipe>-<id>/cvcpkg-<recipe>-<id>/tmp is 79
+            # bytes for python312, more for a longer name or under the
+            # multi-server cvcpkg-org/ layer, and a unix socket under it does not
+            # fit sun_path (108 bytes on Linux, 104 on the BSDs): compileall's
+            # forkserver binds at TMPDIR + 32, so the python312/313/313t bundles
+            # built here since cvcpkg 2.5.2 shipped without stdlib .pyc.  This is
+            # the work root + 18 whatever the recipe, on the same volume, and goes
+            # with the job: watched, kept and removed alongside job_root, and
+            # swept like one when a killed builder strands it
+            # (builder_gc._JOB_ROOT_PREFIXES).
+            if sets_build_tmpdir():
+                job_tmp = Path(tempfile.mkdtemp(prefix="cvcpkg-t-", dir=work_root))
+            job_dirs = [d for d in (job_root, job_tmp) if d is not None]
             with jobs_lock:
-                active_job_roots.add(job_root)
+                active_job_roots.update(job_dirs)
             # active_job_roots only protects this tree from *our own* periodic
             # gc.  The fleet's disk reaper runs from the deploy workflow, in
             # another process and possibly as another user, and can only judge
             # by what it can stat.  Publish liveness so it can tell a running
             # job from one stranded by a SIGKILL. (cvcpkg/heartbeat.py)
-            heartbeat_watch(job_root, label=recipe_name)
+            for d in job_dirs:
+                heartbeat_watch(d, label=recipe_name)
             dep_prefix = Path(
                 tempfile.mkdtemp(prefix=f"cvcpkg-prefix-{recipe_name}-", dir=job_root)
             )
@@ -4194,6 +4214,7 @@ def builder_run(
                 dep_link,
                 log_cb,
                 implicit=implicit,
+                tmp_dir=job_tmp,
             )
 
             # 3a-2. Install cross-toolchains (e.g. emsdk for wasm)
@@ -4224,6 +4245,7 @@ def builder_run(
                     log_callback=log_cb,
                     host_platform=host_plat,
                     cross_toolchain_env=cross_env or None,
+                    tmp_dir=job_tmp,
                 )
                 _stream_log(
                     job_id,
@@ -4301,25 +4323,28 @@ def builder_run(
             click.echo(f"  [{job_id}] Failed: {recipe_name} - {exc}{suffix}", err=True)
 
         finally:
-            # Remove exactly this job's isolated tree (dep prefix, build work
-            # dir, and output dir all live under job_root). Do NOT glob
-            # cvcpkg-<recipe>-* across the shared work_root — concurrent
-            # variant jobs of the same recipe would delete each other's
-            # live work dirs (the FileNotFoundError-at-staging bug).
-            if job_root is not None:
+            # Remove exactly this job's isolated trees (dep prefix, build work
+            # dir, and output dir all live under job_root; job_tmp is its
+            # TMPDIR). Do NOT glob cvcpkg-<recipe>-* across the shared
+            # work_root — concurrent variant jobs of the same recipe would
+            # delete each other's live work dirs (the
+            # FileNotFoundError-at-staging bug).
+            for scratch in (job_root, job_tmp):
+                if scratch is None:
+                    continue
                 with jobs_lock:
-                    active_job_roots.discard(job_root)
-                heartbeat_unwatch(job_root)
-                if job_root.is_dir():
+                    active_job_roots.discard(scratch)
+                heartbeat_unwatch(scratch)
+                if scratch.is_dir():
                     # Not rmtree(ignore_errors=True): on Windows that left every
                     # job root holding a read-only file (all of perl-src) in place,
                     # 7,738 files per job, without a word (sandipaws, 2026-10-19).
                     from cvcpkg.builder_gc import remove_tree
 
-                    leftover = remove_tree(job_root)
+                    leftover = remove_tree(scratch)
                     if leftover:
                         click.echo(
-                            f"  [{job_id}] could not remove {job_root}: {leftover[0]}"
+                            f"  [{job_id}] could not remove {scratch}: {leftover[0]}"
                             f"{f' (+{len(leftover) - 1} more)' if len(leftover) > 1 else ''}",
                             err=True,
                         )
