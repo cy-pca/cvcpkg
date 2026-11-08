@@ -52,8 +52,10 @@ from pathlib import Path
 from typing import Any
 
 # Per-job roots, named unambiguously.  A ``cvcpkg-job-*`` tree is always scratch
-# and is removed whole (its own prefix/out children live inside it).
-_JOB_ROOT_PREFIXES = ("cvcpkg-job-", "cvcpkg-prefix-", "cvcpkg-out-")
+# and is removed whole (its own prefix/out children live inside it).  A
+# ``cvcpkg-t-*`` is a job's TMPDIR, kept beside its job root so that a unix
+# socket under it fits sun_path (see _execute_job).
+_JOB_ROOT_PREFIXES = ("cvcpkg-job-", "cvcpkg-prefix-", "cvcpkg-out-", "cvcpkg-t-")
 
 # The pre-job-root layout put build dirs straight in the work dir as
 # ``cvcpkg-<recipe>-<rand>`` (still present on builders that have been leaking

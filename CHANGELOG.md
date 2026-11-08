@@ -47,6 +47,30 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     behind, make's next write failed with EAGAIN. On emscripten, make's output
     now goes to a file, which is printed when make finishes.
 
+- **Builder: a fleet job's TMPDIR is short enough for a unix socket under it.**
+  Since cvcpkg 2.5.2 (#398), a POSIX build's TMPDIR is in its work dir. On the
+  fleet that is
+  `/tmp/cvcpkg-builder/cvcpkg-job-<recipe>-<id>/cvcpkg-<recipe>-<id>/tmp`: 79
+  bytes for python312, and more for a longer recipe name or under a
+  multi-server work dir's `cvcpkg-org/`. An AF_UNIX socket's path must fit
+  sun_path, 108 bytes on Linux and 104 on the BSDs with the NUL, and Python's
+  multiprocessing forkserver binds at TMPDIR + 32 bytes. That is how CPython's
+  `compileall -j0` failed (#570). Python 3.14 makes forkserver the default
+  start method, so pip builds and test suites would hit it next. Of the 3,099
+  POSIX build logs since 2026-10-19, only python312, python313 and python313t
+  print `AF_UNIX path too long`.
+  - `cvcpkg builder run` gives each job its own TMPDIR beside the job root,
+    `<work dir>/cvcpkg-t-<id>`: 18 bytes past the work dir whatever the recipe,
+    so 48 under `/tmp/cvcpkg-builder/cvcpkg-org`. It is on the same volume, and
+    it goes with the job. It is heartbeated and kept from the periodic gc while
+    the job runs, and removed with the job root. When a killed builder strands
+    one, `builder gc` and `scripts/reap-stale-build-dirs.sh` sweep it like a job
+    root. Every build in the job uses it, a locally built
+    `redistributable: false` dep included. Windows builders are unchanged.
+  - Other builds (`cvcpkg build`, `cvcpkg pack`) keep `<work dir>/tmp`. When it
+    leaves no room for the forkserver's socket, the build log now says
+    `cvcpkg: warning: TMPDIR is <n> bytes, too long for a unix socket under it`.
+
 ## v2.5.12
 
 **A release so cvcpkg.org and pkg.tx.wtf stop storing a publish or a populate

@@ -214,7 +214,7 @@ tree_recently_touched() {
 # in src/cvcpkg/builder_gc.py.
 is_container() {
     [ -e "$1/cvcpkg-builder.pid" ] && return 0
-    for kid in "$1"/cvcpkg-job-* "$1"/cvcpkg-prefix-* "$1"/cvcpkg-out-*; do
+    for kid in "$1"/cvcpkg-job-* "$1"/cvcpkg-prefix-* "$1"/cvcpkg-out-* "$1"/cvcpkg-t-*; do
         [ -d "$kid" ] && return 0
     done
     return 1
