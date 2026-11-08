@@ -275,6 +275,18 @@ else
     ./configure "${CONFIGURE_ARGS[@]}"
 fi
 
+# `make install` byte-compiles the stdlib serially (COMPILEALL_OPTS=-j1, from the
+# Makefile's -j0). From 3.12, compileall starts its worker pool through
+# multiprocessing's forkserver wherever the default start method is fork (Linux,
+# the BSDs, and the native build python a wasm install runs). The forkserver binds
+# an AF_UNIX socket at $TMPDIR/pymp-*/listener-*, and since cvcpkg 2.5.2 (#398) a
+# fleet build's TMPDIR is in its job dir, so that path is ~111 bytes, past
+# sun_path's 108 (104 on the BSDs). compileall died with "OSError: AF_UNIX path too
+# long", and CPython's Makefile ignores it (the line starts with `-`), so the
+# python312, python313 and python313t bundles built from 2026-10-19 on the BSDs,
+# 2026-11-02 on linux and 2026-11-08 on wasm have no stdlib .pyc at all (python312
+# linux cvc.19: 1,774 of 1,803 .py compiled, cvc.20: 0). Serially there is no pool
+# and nothing in TMPDIR, for a few seconds more. 3.11 never used the forkserver.
 if [ "$IS_EMSCRIPTEN" = true ]; then
     # [wasm] make writes to a file, printed when it finishes. emcc runs node, and a
     # node that writes to an inherited stdout or stderr pipe sets O_NONBLOCK on that
@@ -285,7 +297,7 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     # "gmake: write error: stdout" (populate run 42416701287). A regular file
     # ignores O_NONBLOCK.
     _make_log="${CVC_SOURCE_DIR}/cvcpkg-make.log"
-    for _make_args in "-j ${CVC_JOBS}" install; do
+    for _make_args in "-j ${CVC_JOBS}" "install COMPILEALL_OPTS=-j1"; do
         _make_rc=0
         # shellcheck disable=SC2086
         emmake $MAKE ${_make_args} > "${_make_log}" 2>&1 || _make_rc=$?
@@ -297,7 +309,33 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     done
 else
     $MAKE -j "${CVC_JOBS}"
-    $MAKE install
+    $MAKE install COMPILEALL_OPTS=-j1
+fi
+
+# --- Byte-code check ---
+# Fail here when the stdlib went uncompiled, since nothing else notices: CPython's
+# Makefile ignores a failed compileall, and the pack ships whatever is there. A
+# full install has all three .pyc (compileall -o 0 -o 1 -o 2) for 98-99% of the
+# stdlib's .py files; the rest is test data that is not meant to compile
+# (bad_coding*, badsyntax_*, test_lib2to3/data) and config-3.X-*/python-config.py.
+# site-packages (pip) is compiled on its own and not counted.
+_STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_LDVERSION}"
+[ -d "${_STDLIB_DIR}" ] || _STDLIB_DIR="${CVC_INSTALL_DIR}/lib/python${PYTHON_MINOR}"
+_n_py=0
+_n_compiled=0
+while IFS= read -r _py; do
+    _n_py=$((_n_py + 1))
+    _stem="${_py##*/}"
+    _n_pyc=0
+    for _pyc in "${_py%/*}/__pycache__/${_stem%.py}".*.pyc; do
+        if [ -e "${_pyc}" ]; then _n_pyc=$((_n_pyc + 1)); fi
+    done
+    if [ "${_n_pyc}" -ge 3 ]; then _n_compiled=$((_n_compiled + 1)); fi
+done < <(find "${_STDLIB_DIR}" -path "${_STDLIB_DIR}/site-packages" -prune -o -name '*.py' -type f -print)
+echo "build-python.sh: ${_n_compiled} of ${_n_py} stdlib .py files have their .pyc"
+if [ "${_n_py}" -eq 0 ] || [ $((_n_compiled * 10)) -lt $((_n_py * 9)) ]; then
+    echo "build-python.sh: the stdlib under ${_STDLIB_DIR#"${CVC_INSTALL_DIR}/"} is not byte-compiled; see make install's compileall output above" >&2
+    exit 1
 fi
 
 # [wasm] Fold CPython's bundled expat and HACL objects into the static libpython.
