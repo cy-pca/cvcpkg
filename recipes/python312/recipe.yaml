@@ -135,6 +135,14 @@ recipe:
   # now folds Modules/expat/*.o and Modules/_hacl/*.o into every installed
   # copy, and fails the build if a bundled-library symbol is still undefined.
   # Other platforms rebuild unchanged.
+  #
+  # Still 23 (wasm, wasm-mt), since no cvc.23 bundle was published anywhere: its
+  # first populate packed neither column.  wasm failed the pack's file check on
+  # bin/pip3.12*, which no wasm bundle has ever had (ensurepip put pip in the
+  # builder's ~/.local, never the bundle), and wasm-mt's make died with
+  # "gmake: write error: stdout" (node had made the builder's pipe
+  # non-blocking).  The wasm columns no longer declare pip, configure with
+  # --with-ensurepip=no, and send make's output to a file.
   cvc_revision: 23
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -282,7 +290,7 @@ package:
   files:
     # POSIX layout (autotools `make install`).
     - { glob: "bin/python3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
-    - { glob: "bin/pip3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
+    - { glob: "bin/pip3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi] }
     - { glob: "bin/idle3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
     - { glob: "bin/pydoc3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }
     - { glob: "lib/libpython3.12*", platforms: [cosmo, freebsd, linux, macos, netbsd, openbsd, wasi, wasm, wasm-mt] }

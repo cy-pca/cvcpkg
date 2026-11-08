@@ -252,22 +252,53 @@ case "${CVC_PLATFORM}" in
         ;;
 esac
 
+# [wasm] No ensurepip (configure takes the last --with-ensurepip). `make install`
+# runs ensurepip with the NATIVE build python, whose own site-packages is not
+# writable, so pip "defaults to user installation": it lands in the builder
+# account's ~/.local, never in the bundle, and once ~/.local has a pip every later
+# build reports "Requirement already satisfied" instead. No published wasm python
+# has shipped pip, and a pip for the wasm interpreter would be of no use; the
+# recipes do not declare one for wasm.
+if [ "$IS_EMSCRIPTEN" = true ]; then
+    CONFIGURE_ARGS+=(--with-ensurepip=no)
+fi
+
 # wasm builds must go through the emscripten compiler wrappers
 # (emconfigure/emmake), which put emcc/em++ on CC/CXX. env-wasm.sh only prepares
 # the emsdk PATH (so cmake toolchain files resolve) — it does NOT set CC=emcc, so
 # a bare ./configure builds CPython with native cc and dies compiling
 # Python/emscripten_signal.c (emscripten.h not found). wasi/cosmo set CC via their
 # own env, so they configure/make bare.
-_EMWRAP=""
-[ "$IS_EMSCRIPTEN" = true ] && _EMWRAP="emmake"
 if [ "$IS_EMSCRIPTEN" = true ]; then
     emconfigure ./configure "${CONFIGURE_ARGS[@]}"
 else
     ./configure "${CONFIGURE_ARGS[@]}"
 fi
 
-${_EMWRAP} $MAKE -j "${CVC_JOBS}"
-${_EMWRAP} $MAKE install
+if [ "$IS_EMSCRIPTEN" = true ]; then
+    # [wasm] make writes to a file, printed when it finishes. emcc runs node, and a
+    # node that writes to an inherited stdout or stderr pipe sets O_NONBLOCK on that
+    # pipe until it exits. The flag belongs to the pipe, so make and the compilers
+    # writing to it at the same time get a non-blocking pipe too. A fleet builder
+    # reads build output through a pipe, and when it falls behind (it was packing
+    # another job), their next write fails with EAGAIN: python312 wasm-mt died with
+    # "gmake: write error: stdout" (populate run 42416701287). A regular file
+    # ignores O_NONBLOCK.
+    _make_log="${CVC_SOURCE_DIR}/cvcpkg-make.log"
+    for _make_args in "-j ${CVC_JOBS}" install; do
+        _make_rc=0
+        # shellcheck disable=SC2086
+        emmake $MAKE ${_make_args} > "${_make_log}" 2>&1 || _make_rc=$?
+        cat "${_make_log}"
+        if [ "${_make_rc}" -ne 0 ]; then
+            echo "build-python(wasm): make ${_make_args} failed (exit ${_make_rc})" >&2
+            exit "${_make_rc}"
+        fi
+    done
+else
+    $MAKE -j "${CVC_JOBS}"
+    $MAKE install
+fi
 
 # [wasm] Fold CPython's bundled expat and HACL objects into the static libpython.
 # Same class of gap as _decimal/libmpdec: CPython's emscripten build archives the
