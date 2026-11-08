@@ -46,6 +46,11 @@ cp imgui.h imconfig.h imgui_internal.h \
 # Ship the whole backends/ tree (headers, .cpp, .mm, sub-dirs) as source.
 cp -R backends/. "${CVC_INSTALL_DIR}/include/imgui/backends/"
 
+# And the FreeType font loader, as source too: a consumer that links FreeType compiles it.
+mkdir -p "${CVC_INSTALL_DIR}/include/imgui/misc/freetype"
+cp misc/freetype/imgui_freetype.h misc/freetype/imgui_freetype.cpp \
+   "${CVC_INSTALL_DIR}/include/imgui/misc/freetype/"
+
 # Emit a relocatable cmake package config so consumers can find_package(imgui)
 # and link the imgui::imgui imported target — no bare -limgui, no per-consumer
 # -L path. ImGui ships no cmake install, so we generate it here. The prefix is
