@@ -54,9 +54,14 @@ if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
          "Install this recipe's dependency closure (cvcpkg install-deps)." >&2
     exit 1
 fi
-# The generator links libclang.so.18.1, and libclang cannot parse the Qt or
-# libstdc++ headers without the resource headers (stddef.h, the intrinsics).
-for _need in lib/libclang.so.18.1 lib/clang/18/include/stddef.h; do
+# The generator links libclang (libclang.so.18.1 on Linux, libclang.dylib on
+# macOS), and libclang cannot parse the Qt or C++ library headers without the
+# resource headers (stddef.h, the intrinsics).
+case "${CVC_PLATFORM}" in
+    macos) _libclang=lib/libclang.dylib ;;
+    *)     _libclang=lib/libclang.so.18.1 ;;
+esac
+for _need in "${_libclang}" lib/clang/18/include/stddef.h; do
     if [[ ! -e "${LLVM_INSTALL_DIR}/${_need}" ]]; then
         echo "shiboken6: ${LLVM_INSTALL_DIR}/${_need} is missing; the llvm18 bundle is incomplete" >&2
         exit 1
@@ -65,8 +70,30 @@ done
 export LLVM_INSTALL_DIR
 echo "shiboken6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR} (cvcpkg llvm18)"
 # The freshly built generator resolves libclang, libQt6Core and libshiboken
-# from these dirs when it runs during this build.
-export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
+# from these dirs when it runs during this build. On macOS the build-tree
+# LC_RPATHs CMake records do that (SIP drops DYLD_* when ninja runs /bin/sh),
+# so the variables there are only a fallback for a direct run.
+case "${CVC_PLATFORM}" in
+    macos)
+        export DYLD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+        export DYLD_FRAMEWORK_PATH="${CVC_DEPS_PREFIX:-}/lib${DYLD_FRAMEWORK_PATH:+:${DYLD_FRAMEWORK_PATH}}"
+        ;;
+    *)
+        export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
+        ;;
+esac
+
+# Linux: $ORIGIN RPATHs baked in at build time. macOS: CMake's default
+# build-tree LC_RPATHs (absolute, so the generator runs during the build), and
+# cvcpkg's pack step rewrites every Mach-O to @rpath ids with @loader_path
+# RPATHs (_patch_macos_install_names).
+_rpath_args=()
+if [[ "${CVC_PLATFORM}" != "macos" ]]; then
+    _rpath_args=(
+        -DCMAKE_INSTALL_RPATH="\$ORIGIN;\$ORIGIN/../lib"
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+    )
+fi
 
 # Install the importable package into THIS prefix's site-packages (not the
 # python311 interpreter's own prefix). shiboken otherwise prefixes
@@ -90,8 +117,7 @@ cmake -G Ninja \
     -DFORCE_LIMITED_API=yes \
     -DBUILD_TESTS=OFF \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_INSTALL_RPATH="\$ORIGIN;\$ORIGIN/../lib" \
-    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+    ${_rpath_args[@]+"${_rpath_args[@]}"}
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 
