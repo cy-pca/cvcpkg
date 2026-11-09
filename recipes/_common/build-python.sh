@@ -441,6 +441,19 @@ if [ "$IS_CROSS" = false ]; then
             exit 1
         fi
         patchelf --set-rpath '$ORIGIN/../lib' "${PY_BIN}"
+        # The shared libpython (libpython3.X.so.1.0, and libpython3.so) is linked
+        # by the same make-mangled flags and carried "RIGIN/../lib" too. NetBSD
+        # and OpenBSD packers have no $ORIGIN pass that could fix it (patchelf
+        # growing a NetBSD object adds a PT_LOAD it refuses), so the pack gate
+        # (cvcpkg.linkage.elf_rpath_entry_problem) would fail python311/312/313/313t
+        # there. A library's own directory is lib/, where its siblings are, so
+        # "$ORIGIN" is the whole entry -- and shorter than what it replaces, which
+        # patchelf rewrites in place.
+        for _lib in "${CVC_INSTALL_DIR}"/lib/libpython3*.so*; do
+            [ -f "${_lib}" ] && [ ! -L "${_lib}" ] || continue
+            patchelf --print-rpath "${_lib}" >/dev/null 2>&1 || continue
+            patchelf --set-rpath '$ORIGIN' "${_lib}"
+        done
         # Extension modules (lib/pythonX.Y/**): point each back at the prefix
         # lib/ (where libssl/libcrypto/libffi/... live). The depth varies —
         # stdlib C extensions sit at lib/pythonX.Y/lib-dynload/ (needs

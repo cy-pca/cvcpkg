@@ -30,6 +30,43 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **The pack gate rejects an RPATH that cannot work; 31 autotools recipes are
+  fixed and 20 of them rebuild.** An autotools recipe that exported
+  `LDFLAGS="... -Wl,-rpath,\$ORIGIN"` linked every library with the RPATH `RIGIN`:
+  `./configure` copies LDFLAGS into the Makefiles, where make reads `$ORIGIN` as the
+  empty variable `$O` plus `RIGIN`. Linux and FreeBSD packs mostly hid it by
+  rewriting `lib/*.so` with patchelf; NetBSD has no such pass (growing an object
+  adds a PT_LOAD that ld.elf_so refuses), so every NetBSD X11 library shipped
+  `RIGIN:/usr/pkg/lib` and a multi-hop chain loaded only through `LD_LIBRARY_PATH`
+  or pkgsrc's copy. The pass never covers `bin/` either: openssh's programs and
+  alsa-lib's `aserver` have it on Linux.
+  - `check_relocatable` (`linkage.elf_rpath_entry_problem`) fails the pack for an ELF
+    RUNPATH/RPATH entry that is neither absolute nor `$ORIGIN`-relative (`RIGIN`,
+    `lib`, `/../lib`) or is empty beside others, on every platform, and names
+    `cvc_make_origin_rpath` as the fix. No `linkage_allow` entry excuses it. Mach-O
+    is not judged.
+  - `recipes/_common/rewrite-install-paths.sh` gets `cvc_make_origin_rpath`, which
+    prints `-Wl,-rpath,\$$ORIGIN` (`$$` is make's `$`; the backslash keeps the shell
+    that runs the recipe line from expanding what make leaves). All 30 autotools
+    recipes with the bare spelling, and openssh, use it. Built on Linux, FreeBSD and
+    NetBSD: `RIGIN` before, `$ORIGIN` after, libtool's relink at install included.
+    `tests/unit/test_make_origin_rpath.py` drives a real make and fails if a
+    `./configure` recipe goes back to the bare spelling.
+  - Bumped because a published Linux, FreeBSD or NetBSD artifact has the entry:
+    alsa-lib, libice, libsm, libxcb, libxdamage, libxdmcp, libxext, libxi,
+    libxrender, libxshmfence, libxt, libxxf86vm, openssh, opusfile and the six
+    xcb-util recipes. Fixed in source, not bumped: libx11, libxcursor, libxinerama,
+    libxrandr, libxscrnsaver and libxtst (only their OpenBSD artifacts have it, where
+    `$ORIGIN` is inert and the installer bakes an absolute RPATH), and libfontenc,
+    libxfont2, pthread-stubs, xtrans and xcb-proto (clean everywhere, or no ELF
+    object). libffi had already dropped the flag.
+  - Found by running the gate over every published package: python311, python312,
+    python313 and python313t on NetBSD and OpenBSD ship `libpython3*.so` with
+    `RIGIN/../lib` (harmless: a `$ORIGIN` entry follows it), and qhull on both with
+    `lib` (its CMakeLists gives each library `INSTALL_RPATH "lib"`). Both are fixed
+    in source (`build-python.sh` sets `$ORIGIN` on libpython; qhull's `build.sh`
+    patches the CMakeLists) and not bumped, so their next rebuild passes the gate.
+
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
   on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux

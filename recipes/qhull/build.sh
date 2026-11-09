@@ -10,6 +10,23 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1090
 source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
+# Qhull's CMakeLists gives each of its shared libraries INSTALL_RPATH
+# "${LIB_INSTALL_DIR}" ("lib"), which overrides cvc_cmake_build's $ORIGIN with a
+# path relative to the process's cwd (netbsd and openbsd shipped libqhull_r with
+# RPATH "lib"; linux and freebsd packs rewrite it with patchelf).  Make it
+# loader-relative before configuring.
+cd "${CVC_SOURCE_DIR}"
+case "${CVC_PLATFORM}" in
+    macos) _origin='@loader_path' ;;
+    *)     _origin='$ORIGIN' ;;
+esac
+sed -i.bak "s|INSTALL_RPATH \"\${LIB_INSTALL_DIR}\"|INSTALL_RPATH \"${_origin}\"|" CMakeLists.txt
+rm -f CMakeLists.txt.bak
+if grep -q 'INSTALL_RPATH "${LIB_INSTALL_DIR}"' CMakeLists.txt; then
+    echo "qhull: CMakeLists.txt still has INSTALL_RPATH \"\${LIB_INSTALL_DIR}\"; the source changed" >&2
+    exit 1
+fi
+
 cvc_cmake_build
 
 # pkg-config file — upstream doesn't provide one (see recipes/bzip2/build.sh

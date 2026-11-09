@@ -221,6 +221,19 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   packages have fails a native pack too, as OpenBSD ffmpeg-lgpl's ports
   `libiconv.so.7.1` would have; the base system's libraries are fine. A weak
   Mach-O load fails only when the build prefix has the library.
+  An ELF RUNPATH/RPATH entry must be absolute or `$ORIGIN`-relative: one that is
+  neither (`RIGIN`, `lib`, `/../lib`), or an empty one beside others, is searched
+  from the process's current directory and fails the pack on every platform. The
+  usual cause is a `-Wl,-rpath,\$ORIGIN` in an autotools recipe's `LDFLAGS`:
+  ./configure copies it into the Makefiles, make reads `$O` as an empty variable
+  and the library is linked with the RPATH `RIGIN` (libxshmfence and libXext
+  shipped it; Linux and FreeBSD packs usually hid it by rewriting `lib/*.so`
+  with patchelf, NetBSD has no such pass). In a build that runs through make,
+  use `cvc_make_origin_rpath` from `recipes/_common/rewrite-install-paths.sh`
+  (it prints `-Wl,-rpath,\$$ORIGIN`; `cvc_make_origin_rpath ../lib .` for two
+  entries). Assign its output on a line of its own, so a missing helper stops
+  the build, and put the variable in LDFLAGS (see `recipes/libxext/build.sh`).
+  Meson, CMake and a direct compiler command take the plain `$ORIGIN`.
   The fix is almost always in the recipe: link the dependency from
   `$CVC_DEPS_PREFIX`, declare it in `depends.runtime`, and do not let an
   optional feature pick up whatever the build host or prefix has installed
