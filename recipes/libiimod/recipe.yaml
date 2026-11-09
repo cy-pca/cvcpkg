@@ -79,6 +79,7 @@ package:
     - lib/libiimod*
     - lib/cmake/libiimod/
     - include/libiimod/
+    - share/licenses/libiimod/
   cmake_packages:
     - { name: libiimod, targets: ["libiimod::libiimod"] }
 

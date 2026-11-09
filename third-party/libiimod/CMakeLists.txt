@@ -231,3 +231,16 @@ install(FILES
   "${CMAKE_CURRENT_BINARY_DIR}/libiimod-config-version.cmake"
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/libiimod
 )
+
+# IMOD's copyright notice and the licence texts it names, from the same pinned
+# commit as the sources. dist/COPYRIGHT puts the libraries "written entirely
+# in C/C++" -- libiimod and libcfshr are -- under the Lesser GPL (LGPL.txt,
+# version 3), which is built on the GPL version 3 (GPL-3.0.txt). The vendored
+# tree carries no licence file, so cvcpkg's automatic collection would find
+# nothing here.
+install(FILES
+  "${IMOD_SRC}/dist/COPYRIGHT"
+  "${IMOD_SRC}/dist/LGPL.txt"
+  "${IMOD_SRC}/dist/GPL-3.0.txt"
+  DESTINATION share/licenses/libiimod
+)

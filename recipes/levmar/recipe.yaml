@@ -79,6 +79,8 @@ build:
       script: build-cosmo.sh
 
 package:
+  # The vendored upstream tree is third-party/levmar/upstream/.
+  license_files: [upstream/LICENSE]
   files:
     - lib/liblevmar*
     - lib/levmar*
