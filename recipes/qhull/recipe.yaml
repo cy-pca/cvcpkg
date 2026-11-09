@@ -13,7 +13,9 @@ recipe:
     pkg-config file, and meson's dependency('qhull_r') needs one to pick the
     system copy instead of downloading its subproject wrap (which an offline
     builder cannot do).  The version and source pin match matplotlib 3.10's
-    own subprojects/qhull.wrap exactly.
+    own subprojects/qhull.wrap exactly.  wasm and wasm-mt ship the static
+    libqhullstatic_r and libqhullcpp (libcvc's 3D Delaunay, in the browser
+    as natively).
   homepage: http://www.qhull.org/
   license: Qhull
   tags: [math, geometry]
@@ -61,6 +63,15 @@ build:
         CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+    # Static only (emscripten has no shared libraries); see build-wasm.sh.
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # Threaded: the same script, -pthread from env-wasm-mt.sh. Its own platform
+    # because wasm-ld will not mix -pthread and plain objects in one link.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
 
 package:
   files:
