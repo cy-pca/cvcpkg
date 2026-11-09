@@ -25,7 +25,10 @@ source:
   sha256: "2a3693aceab4aed3e39b743e038d87701acc53cf05ed7b2013aab3e0aec5287e"
   strip_components: 1
 
-patches: []
+# Triangulate ORs into an uninitialized error code, which GCC's -Werror build of
+# the library rejects; see the patch.
+patches:
+  - patches/triangulate-ec-init.patch
 
 depends:
   build:
