@@ -23,6 +23,9 @@ $LinkJobs = [Math]::Max(1, [Math]::Min(2, [int]$env:CVC_JOBS))
 # Visual Studio's DIA SDK, whose headers need ATL; Build Tools without the ATL
 # component then fail in DIASupport.h ("Cannot open include file: 'atlbase.h'",
 # llvm20 on sandipaws, populate 2026-10-19).  The bundle never shipped DIA.
+# The other optional libraries (libedit, libxml2, libpfm, FFI, curl, httplib,
+# Z3) are pinned OFF as in build.sh, so a copy on the build host cannot leak in;
+# zlib is the one declared dependency.
 cmake -G Ninja `
     -S $srcLlvm `
     -B $env:CVC_BUILD_DIR `
@@ -40,7 +43,13 @@ cmake -G Ninja `
     -DLLVM_INCLUDE_EXAMPLES=OFF `
     -DLLVM_ENABLE_ZLIB=FORCE_ON `
     -DLLVM_ENABLE_ZSTD=OFF `
+    -DLLVM_ENABLE_LIBEDIT=OFF `
     -DLLVM_ENABLE_LIBXML2=OFF `
+    -DLLVM_ENABLE_LIBPFM=OFF `
+    -DLLVM_ENABLE_FFI=OFF `
+    -DLLVM_ENABLE_CURL=OFF `
+    -DLLVM_ENABLE_HTTPLIB=OFF `
+    -DLLVM_ENABLE_Z3_SOLVER=OFF `
     -DLLVM_ENABLE_TERMINFO=OFF `
     -DLLVM_ENABLE_BINDINGS=OFF `
     "-DLLVM_PARALLEL_LINK_JOBS=$LinkJobs"
