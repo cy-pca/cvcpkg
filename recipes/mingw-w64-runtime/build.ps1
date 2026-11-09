@@ -46,3 +46,12 @@ if ($staged -notcontains 'libwinpthread-1.dll') {
 
 Write-Host "mingw-w64-runtime: staged $($staged.Count) runtime DLL(s):"
 $staged | ForEach-Object { Write-Host "  $_" }
+
+# The archive carries no licence text for any of these DLLs, so the texts are
+# kept beside this script (licenses/README.md says which covers which, and
+# where each was taken from) and installed as the package's licence directory.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dstLic = Join-Path $env:CVC_INSTALL_DIR 'share/licenses/mingw-w64-runtime'
+New-Item -ItemType Directory -Force -Path $dstLic | Out-Null
+Copy-Item (Join-Path $scriptDir 'licenses/*') $dstLic -Force
+Write-Host "mingw-w64-runtime: installed licence texts in share/licenses/mingw-w64-runtime/"
