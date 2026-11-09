@@ -169,6 +169,32 @@ else
     registry_curl() { curl "$@"; }
 fi
 
+# Bounded retries for every request: timeouts, DNS failures and HTTP
+# 408/429/5xx always (--retry), refused connections from curl 7.52 on, and from
+# 7.71 on a transfer cut off midway as well.  The newer flags are probed so an
+# older curl still runs this script; an unknown option makes curl exit 2.
+retry_flags="--retry 3 --retry-delay 2"
+for flag in --retry-connrefused --retry-all-errors; do
+    if curl "$flag" -V >/dev/null 2>&1; then
+        retry_flags="$retry_flags $flag"
+    fi
+done
+
+# download CURL URL FILE: fetch URL into FILE with CURL (curl, or
+# registry_curl for this registry's own URLs).  No --fail, because --retry
+# checks the HTTP status only of a transfer that ended 0 or 22, and with --fail
+# the macOS runners' curl reported a 504 from GitHub's release CDN as exit 56
+# (a receive error), so the 504 was never retried.  Without --fail an error
+# response is a finished transfer: --retry retries a 5xx, --retry-all-errors
+# leaves a 4xx alone, and the final status is checked here.
+download() {
+    code="$("$1" -sSL $retry_flags -o "$3" -w '%{http_code}' "$2")" || return 1
+    case "$code" in
+        2??) ;;
+        *) say "HTTP $code from $2"; return 1 ;;
+    esac
+}
+
 # json_field FILE KEY: the string value of KEY in the JSON object in FILE.
 # Splitting on , { } puts every key on its own line; a , inside a string can
 # only start a fragment with text or a space, never with a bare "KEY":, so the
@@ -227,8 +253,8 @@ from_registry() {
 
     say "Installing cvcpkg $pkg_version for $platform/$arch from $SERVER_URL..."
     case "$url" in
-        "$SERVER_URL"/*) registry_curl -fsSL -o "$tmp/bundle" "$url" ;;
-        *)               curl -fsSL -o "$tmp/bundle" "$url" ;;
+        "$SERVER_URL"/*) download registry_curl "$url" "$tmp/bundle" ;;
+        *)               download curl "$url" "$tmp/bundle" ;;
     esac || die "download failed: $url"
     verify "$tmp/bundle" "$sha256" "$url"
     unpack "$tmp/bundle" "$tmp/pkg" "$url"
@@ -254,19 +280,21 @@ from_github() {
         tag="cvcpkg-v${version%%+*}"
     else
         say "Resolving the latest cvcpkg release of $REPO..."
-        tag="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" \
-            | grep -o '"tag_name": *"cvcpkg-v[0-9][^"]*"' \
-            | grep -v -- '-rc' \
-            | head -n1 \
-            | sed -E 's/.*"(cvcpkg-v[^"]+)".*/\1/')"
+        tag=""
+        if download curl "https://api.github.com/repos/${REPO}/releases" "$tmp/releases.json"; then
+            tag="$(grep -o '"tag_name": *"cvcpkg-v[0-9][^"]*"' "$tmp/releases.json" \
+                | grep -v -- '-rc' \
+                | head -n1 \
+                | sed -E 's/.*"(cvcpkg-v[^"]+)".*/\1/')"
+        fi
         [ -n "$tag" ] || die "could not resolve the latest cvcpkg release — set CVCPKG_VERSION=X.Y.Z"
     fi
 
     say "Installing cvcpkg ($tag) for $platform/$arch from github.com/$REPO..."
     base_url="https://github.com/${REPO}/releases/download/${tag}"
-    curl -fsSL -o "$tmp/$asset" "${base_url}/${asset}" \
+    download curl "${base_url}/${asset}" "$tmp/$asset" \
         || die "download failed: ${base_url}/${asset}"
-    curl -fsSL -o "$tmp/$asset.sha256" "${base_url}/${asset}.sha256" \
+    download curl "${base_url}/${asset}.sha256" "$tmp/$asset.sha256" \
         || die "checksum download failed: ${base_url}/${asset}.sha256"
     verify "$tmp/$asset" "$(awk '{print $1}' "$tmp/$asset.sha256")" "$asset"
     mv "$tmp/$asset" "$tmp/cvcpkg"
@@ -275,11 +303,11 @@ from_github() {
 # ---- Pick the source ----------------------------------------------------
 # Only "nothing for this platform / version" (404), or a server too old to
 # have the lookup at all (405: the path matches its DELETE route), falls back
-# to GitHub.  Any other failure stops here: installing upstream's build
-# because this registry was briefly unreachable is exactly what a fork does
-# not want.
+# to GitHub.  Any other failure stops here, once the retries are spent:
+# installing upstream's build because this registry was briefly unreachable is
+# exactly what a fork does not want.
 say "Looking up cvcpkg${version:+ $version} for $platform/$arch on $SERVER_URL..."
-status="$(registry_curl -sS -L -G -o "$tmp/latest.json" -w '%{http_code}' \
+status="$(registry_curl -sS -L -G $retry_flags -o "$tmp/latest.json" -w '%{http_code}' \
     --data-urlencode "platform=$platform" \
     --data-urlencode "arch=$arch" \
     --data-urlencode "version=$version" \

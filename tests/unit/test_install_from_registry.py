@@ -11,6 +11,7 @@ real ``install.sh`` against the real app on a real socket.
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import io
 import os
@@ -290,6 +291,33 @@ def _seed_and_serve(tmp_path, monkeypatch, **app_kwargs):
     return app, reader
 
 
+def _flaky(app, failure, times, prefix="/"):
+    """*app*, except the first *times* requests for each path under *prefix* fail.
+
+    *failure* is an HTTP status to answer, or ``"cut"`` for a response that
+    stops short of its Content-Length, as a dropped connection does.  The
+    returned app's ``seen`` counts the requests made for each path.
+    """
+    seen = collections.Counter()
+
+    async def wrapped(scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith(prefix):
+            seen[scope["path"]] += 1
+            if seen[scope["path"]] <= times:
+                if failure == "cut":
+                    headers = [(b"content-length", b"1000")]
+                    await send({"type": "http.response.start", "status": 200, "headers": headers})
+                    await send({"type": "http.response.body", "body": b"partial"})
+                    return
+                await send({"type": "http.response.start", "status": failure, "headers": []})
+                await send({"type": "http.response.body", "body": b"upstream timed out\n"})
+                return
+        await app(scope, receive, send)
+
+    wrapped.seen = seen
+    return wrapped
+
+
 @needs_posix_sh
 class TestInstallShAgainstRegistry:
     def test_installs_the_registrys_newest_build(self, tmp_path, monkeypatch):
@@ -343,6 +371,37 @@ class TestInstallShAgainstRegistry:
         assert "could not reach http://127.0.0.1:9" in r.stderr
         assert "GitHub" not in r.stderr
         assert not (tmp_path / "cvcpkg").exists()
+
+    # A cut-off transfer is retried only by --retry-all-errors (curl 7.71+);
+    # a 504 by any curl's --retry, provided the script does not pass --fail.
+    @pytest.mark.parametrize("failure", [504, "cut"])
+    def test_retries_a_transient_failure(self, tmp_path, monkeypatch, failure):
+        app, _reader = _seed_and_serve(tmp_path, monkeypatch)
+        flaky = _flaky(app, failure, times=1)
+        dest = tmp_path / "bin"
+        with _serve(flaky) as url:
+            r = _install_sh(tmp_path, "--server", url, "--install-dir", str(dest))
+        assert r.returncode == 0, r.stderr
+        assert "GitHub" not in r.stderr
+        assert (dest / "cvcpkg").read_text() == '#!/bin/sh\necho "cvcpkg 2.1.0 (registry)"\n'
+        # The lookup and the bundle download each failed once, then got through.
+        downloads = [n for p, n in flaky.seen.items() if p.startswith("/v1/download/")]
+        assert flaky.seen[LATEST] == 2
+        assert downloads == [2]
+
+    def test_gives_up_after_the_retries(self, tmp_path, monkeypatch):
+        app, _reader = _seed_and_serve(tmp_path, monkeypatch)
+        flaky = _flaky(app, 503, times=100, prefix="/v1/download/")
+        dest = tmp_path / "bin"
+        with _serve(flaky) as url:
+            r = _install_sh(tmp_path, "--server", url, "--install-dir", str(dest))
+        assert r.returncode != 0
+        assert "HTTP 503 from" in r.stderr
+        assert "download failed" in r.stderr
+        # The registry answered the lookup, so this is no reason to fall back.
+        assert "GitHub" not in r.stderr
+        assert not (dest / "cvcpkg").exists()
+        assert list(flaky.seen.values()) == [4]  # the first try and 3 retries
 
 
 # ── install.ps1, end to end (under PowerShell 7 on a non-Windows host) ─────
