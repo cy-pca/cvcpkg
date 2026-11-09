@@ -590,6 +590,18 @@ $defs:
           nor its runtime dependencies ship, because the consumer supplies it.
           It never excuses a builder path (a job's scratch prefix, /tmp, a CI
           workspace).
+      license_files:
+        type: array
+        items: { type: string, minLength: 1 }
+        minItems: 1
+        description: >
+          Globs, relative to the source root, naming the upstream licence texts
+          to ship in share/licenses/<name>/. Only needed when they are not at
+          the top of the source tree: by default every top-level LICENSE*,
+          LICENCE*, COPYING*, COPYRIGHT*, NOTICE* and UNLICENSE file, and a
+          REUSE-style LICENSES/ directory, are collected after the build. A
+          recipe that installs share/licenses/<name>/ itself is left alone. An
+          entry that matches nothing fails the build.
       archive_format:
         type: string
         enum: [tar.gz, tar.xz, tar.bz2, zip]

@@ -273,6 +273,30 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   input is the dispatcher's own yes. A builder agent that builds such a recipe
   as a job dependency (see above) gets no prompt: the build script refuses
   unless the builder's own environment sets `<env>=1`.
+- **Licence texts** — every bundle carries its upstream licence texts in
+  `share/licenses/<name>/`, without the recipe doing anything. After the build
+  script runs, cvcpkg copies every top-level `LICENSE*`, `LICENCE*`,
+  `COPYING*`, `COPYRIGHT*`, `NOTICE*` and `UNLICENSE` file of the source tree
+  there (gmp's `COPYING`, `COPYING.LESSERv3`, `COPYINGv2`; Boost's
+  `LICENSE_1_0.txt`), plus a REUSE-style `LICENSES/` directory, and the build
+  log names what it took. Two cases need the recipe:
+  - the texts are not at the top of the tree: list them, relative to the
+    source root, in **`package.license_files`**. Globs are allowed, and an
+    entry that matches nothing fails the build:
+
+    ```yaml
+    package:
+      files: [lib/, include/]
+      license_files: [docs/LICENSE.TXT, docs/FTL.TXT, docs/GPLv2.TXT]
+    ```
+  - the recipe installs `share/licenses/<name>/` itself (eigen, pegtl): cvcpkg
+    then leaves that directory alone.
+
+  A build that finds nothing says so with a `WARNING` line. The texts are what
+  lets anyone redistribute the bundle: an application that ships the
+  libraries, as F2Dock's packages do, copies `share/licenses/` along with them.
+  Like any change to a bundle's contents, adding or fixing them reaches
+  consumers only with a `cvc_revision` bump.
 - **Python packages** are a special case: they use the `python_wheel` /
   `python_sdist` source types plus a `python:` block naming the target
   interpreter and ABI, and every Python package is published as a matrix of
