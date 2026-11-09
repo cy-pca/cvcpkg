@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: mingw-w64-runtime
   upstream_version: "16.1.0"
-  cvc_revision: 1
+  cvc_revision: 2  # licence texts in share/licenses/mingw-w64-runtime/ (cvcpkg#576)
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"

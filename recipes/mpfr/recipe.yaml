@@ -15,7 +15,7 @@ recipe:
   # 8: FreeBSD/OpenBSD build without the ports dirs env-<bsd>.sh adds. The
   # +cvc.7 OpenBSD libmpfr.so.8.1 linked the builder's ports libgmp.so.11.1,
   # not the declared gmp's libgmp.so.15.0 (see build.sh).
-  cvc_revision: 8
+  cvc_revision: 9  # licence texts in share/licenses/mpfr/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

@@ -6,7 +6,7 @@ recipe:
   # build edge scoped to windows, and the Windows package.files entries. The
   # linux/macos build is unchanged; their bundles embed this recipe.yaml, so the
   # revision moves with it.
-  cvc_revision: 2
+  cvc_revision: 3  # licence texts in share/licenses/openmp/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

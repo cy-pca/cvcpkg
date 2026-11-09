@@ -50,7 +50,7 @@ recipe:
   # openssl.exe and its symlinks failed silently without the privilege.
   # build.ps1 fails if any packaged file but a PDB names the build tree.  Other
   # platforms rebuild unchanged.
-  cvc_revision: 11
+  cvc_revision: 12  # licence texts in share/licenses/openssl/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

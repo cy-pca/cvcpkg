@@ -13,7 +13,7 @@ recipe:
   # .../cvcpkg-prefix-assimp-*/lib/z.lib: _common/env-windows.ps1's
   # Invoke-CvcRewriteInstallPaths relocated only $env:CVC_INSTALL_DIR paths.
   # It now relocates $env:CVC_DEPS_PREFIX ones too, as the Unix helper does.
-  cvc_revision: 7
+  cvc_revision: 8  # licence texts in share/licenses/assimp/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

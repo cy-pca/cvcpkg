@@ -31,7 +31,7 @@ recipe:
   # dylib segfaulted in the first cblas_dgemm under every kernel, so
   # numpy-cp3XX died with SIGBUS in its matmul check on Intel Macs. build.sh
   # now also runs a dgemm through the installed library on macOS.
-  cvc_revision: 10
+  cvc_revision: 11  # licence texts in share/licenses/openblas/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

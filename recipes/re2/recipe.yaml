@@ -7,7 +7,7 @@ recipe:
   # order correctly, matching the dated-upstream convention (cf. vcglib
   # "2025.07").  The source URL below keeps the real upstream tag "2024-07-02".
   upstream_version: "2024.07.02"
-  cvc_revision: 1
+  cvc_revision: 2  # licence texts in share/licenses/re2/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
