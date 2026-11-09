@@ -28,7 +28,36 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.13
+
+**A release so every bundle a builder packs carries its upstream licence texts
+in `share/licenses/<name>/` (#576), with F2Dock's 50-recipe closure bumped to
+republish with them (#582); a fleet job's TMPDIR is short enough for a unix
+socket (#572); and python312 / python313 / python313t ship a byte-compiled
+stdlib again and link nothing from the BSD hosts (#570). No migration.**
+
+- **Builder: every bundle ships its upstream licence texts (#576).** A bundle
+  that is redistributed, inside an application or as a prefix copied
+  elsewhere, has to carry the licence texts of what it contains, and most
+  recipes never installed them. In a macos/arm64 prefix of F2Dock's closure
+  only eigen and libigl had `share/licenses/`.
+  - After every build, cvcpkg copies the source tree's top-level `LICENSE*`,
+    `LICENCE*`, `COPYING*` (gmp's `COPYINGv2` included), `COPYRIGHT*`,
+    `NOTICE*` and `UNLICENSE` files, plus a REUSE `LICENSES/` directory, into
+    `share/licenses/<name>/`, and the build log names them.
+  - New optional `package.license_files`: globs relative to the source root,
+    for texts kept elsewhere. An entry that matches nothing fails the build.
+    A recipe that installs `share/licenses/<name>/` itself is left alone.
+  - `pack --from-prefix` adds the same for a `vendored` recipe, into the
+    staged copy and the manifest only. libcvc and F2Dock publish this way.
+  - Recipe fixes: freetype and levmar name their texts; libiimod installs
+    IMOD's `COPYRIGHT`, `LGPL.txt` and `GPL-3.0.txt` from its pinned commit;
+    mingw-w64-runtime vendors the texts of the runtime DLLs it stages and
+    completes its `license:`.
+  - Published bundles gain the texts only when rebuilt at a new revision.
+
+- **Recipes: F2Dock's closure is bumped to rebuild with them (#582).** 50
+  recipes, each one revision above the highest published on any tuple.
 
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
