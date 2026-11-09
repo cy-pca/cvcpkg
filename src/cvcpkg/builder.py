@@ -414,36 +414,16 @@ def license_dir(install_dir: Path, name: str) -> Path:
     return install_dir / "share" / "licenses" / name
 
 
-def collect_licenses(recipe: Recipe, source_dir: Path | None, install_dir: Path) -> list[Path]:
-    """Copy the upstream licence texts into ``share/licenses/<name>/``.
+def _license_sources(recipe: Recipe, src: Path) -> list[tuple[Path, str]]:
+    """The licence texts in source tree *src*, each with its name in share/licenses/<name>/.
 
-    A bundle that is redistributed -- inside an application, or a prefix
-    copied to another machine -- has to carry the licence texts of what it
-    contains, and most recipes never installed them: in F2Dock's 45-component
-    closure only a handful did, each somewhere different (share/doc/mpfr/,
-    share/COPYING, share/log4cplus/).  So every build gets them here, in one
-    place per package, without the recipe doing anything.
-
-    * A recipe that installs ``share/licenses/<name>/`` itself is left alone.
-    * Otherwise ``package.license_files`` globs (relative to the source root)
-      are copied when the recipe has them; without them, every top-level file
-      whose name says licence (see :data:`_LICENSE_NAME`), plus a REUSE-style
-      ``LICENSES/`` directory.
-    * Files keep their names. Two matches with the same name, from different
-      directories, keep their relative path with ``/`` spelled ``_``.
-
-    Returns the files written, which is empty when the recipe installed its
-    own or nothing was found; the latter is reported, since a bundle without
-    a licence text is one nobody can redistribute.
+    ``package.license_files`` globs when the recipe has them (an entry that
+    matches nothing is a :class:`BuildError`); otherwise every top-level file
+    whose name says licence (see :data:`_LICENSE_NAME`), plus a REUSE-style
+    ``LICENSES/`` directory.  Files keep their names; two matches with the
+    same name, from different directories, keep their relative path with ``/``
+    spelled ``_``.
     """
-    dest = license_dir(install_dir, recipe.name)
-    if dest.exists():
-        return []
-    if source_dir is None or not source_dir.is_dir():
-        print(f"cvcpkg: licence texts: no source tree for {recipe.name}; none collected")
-        return []
-    src = source_dir.resolve()
-
     found: list[Path] = []
     if recipe.license_files:
         for pattern in recipe.license_files:
@@ -459,25 +439,55 @@ def collect_licenses(recipe: Recipe, source_dir: Path | None, install_dir: Path)
         reuse = src / "LICENSES"
         if reuse.is_dir():
             found.extend(sorted(p for p in reuse.iterdir() if p.is_file()))
-
-    if not found:
-        print(
-            f"cvcpkg: licence texts: WARNING: {recipe.name} installs none and its source "
-            f"has no LICENSE / COPYING / NOTICE at the top level; name them with "
-            f"package.license_files"
-        )
-        return []
-
     # Two globs may match the same file; it is still one text.
     found = list(dict.fromkeys(found))
     names: dict[str, int] = {}
     for p in found:
         names[p.name] = names.get(p.name, 0) + 1
+    return [
+        (p, p.name if names[p.name] == 1 else p.relative_to(src).as_posix().replace("/", "_"))
+        for p in found
+    ]
+
+
+def _report_none(recipe: Recipe) -> None:
+    print(
+        f"cvcpkg: licence texts: WARNING: {recipe.name} installs none and its source "
+        f"has no LICENSE / COPYING / NOTICE at the top level; name them with "
+        f"package.license_files"
+    )
+
+
+def collect_licenses(recipe: Recipe, source_dir: Path | None, install_dir: Path) -> list[Path]:
+    """Copy the upstream licence texts into ``share/licenses/<name>/``.
+
+    A bundle that is redistributed -- inside an application, or a prefix
+    copied to another machine -- has to carry the licence texts of what it
+    contains, and most recipes never installed them: in F2Dock's 45-component
+    closure only a handful did, each somewhere different (share/doc/mpfr/,
+    share/COPYING, share/log4cplus/).  So every build gets them here, in one
+    place per package, without the recipe doing anything.
+
+    A recipe that installs ``share/licenses/<name>/`` itself is left alone;
+    otherwise the texts :func:`_license_sources` finds are copied.  Returns
+    the files written, which is empty when the recipe installed its own or
+    nothing was found; the latter is reported, since a bundle without a
+    licence text is one nobody can redistribute.
+    """
+    dest = license_dir(install_dir, recipe.name)
+    if dest.exists():
+        return []
+    if source_dir is None or not source_dir.is_dir():
+        print(f"cvcpkg: licence texts: no source tree for {recipe.name}; none collected")
+        return []
+    sources = _license_sources(recipe, source_dir.resolve())
+    if not sources:
+        _report_none(recipe)
+        return []
     dest.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
-    for p in found:
-        rel = p.relative_to(src).as_posix()
-        target = dest / (p.name if names[p.name] == 1 else rel.replace("/", "_"))
+    for p, name in sources:
+        target = dest / name
         shutil.copyfile(p, target)
         os.chmod(target, 0o644)
         written.append(target)
@@ -486,6 +496,32 @@ def collect_licenses(recipe: Recipe, source_dir: Path | None, install_dir: Path)
         f"({', '.join(t.name for t in written)})"
     )
     return written
+
+
+def _from_prefix_licenses(recipe: Recipe, prefix: Path) -> list[tuple[Path, str]]:
+    """The licence texts ``pack --from-prefix`` adds to the staged copy.
+
+    A from-prefix pack never builds, so :func:`collect_licenses` does not run,
+    and the prefix belongs to the caller and must not change.  libcvc and
+    F2Dock publish this way, from a tree their own CMake installed.  For a
+    recipe whose source is ``vendored`` -- the repository it lives in -- the
+    texts are found the same way and returned as (source file, path in the
+    bundle) pairs for the staged copy and the manifest.  Nothing for a
+    prefix that already has ``share/licenses/<name>/`` or a recipe with no
+    local source tree.
+    """
+    if license_dir(prefix, recipe.name).exists() or recipe.source.type != "vendored":
+        return []
+    try:
+        src = _resolve_vendored(recipe.source, recipe.recipe_dir)
+    except RecipeError:
+        return []
+    if not src.is_dir():
+        return []
+    sources = _license_sources(recipe, src.resolve())
+    if not sources:
+        _report_none(recipe)
+    return [(p, f"share/licenses/{recipe.name}/{name}") for p, name in sources]
 
 
 # ── Source fetching ─────────────────────────────────────────────
@@ -4905,6 +4941,15 @@ def pack_from_prefix(
         org_slug=org_slug,
     )
 
+    # Licence texts go into the staged copy and the manifest, never the
+    # caller's prefix (see _from_prefix_licenses).
+    extra_licenses = _from_prefix_licenses(recipe, prefix)
+    if extra_licenses:
+        contents = manifest.setdefault("contents", {})
+        contents["files"] = sorted(
+            set(contents.get("files") or []) | {rel for _, rel in extra_licenses}
+        )
+
     staging = Path(tempfile.mkdtemp(prefix=f"cvcpkg-pack-{recipe.name}-"))
     try:
         stage_bundle(
@@ -4915,6 +4960,16 @@ def pack_from_prefix(
             temp_prefixes=(prefix,),
             linkage_allow=recipe.linkage_allow,
         )
+        for src_file, rel in extra_licenses:
+            target = staging / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src_file, target)
+            os.chmod(target, 0o644)
+        if extra_licenses:
+            print(
+                f"cvcpkg: licence texts: share/licenses/{recipe.name}/ "
+                f"({', '.join(Path(rel).name for _, rel in extra_licenses)})"
+            )
         archive_path, sha256, size = create_archive(
             staging,
             output_dir,

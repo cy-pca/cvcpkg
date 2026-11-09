@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from cvcpkg.builder import BuildError, Recipe, collect_licenses, license_dir
 
@@ -130,3 +131,70 @@ def test_no_source_tree_collects_nothing(tmp_path: Path) -> None:
 def test_recipe_load_reads_license_files(tmp_path: Path) -> None:
     assert _recipe(tmp_path, "a").license_files == []
     assert _recipe(tmp_path, "b", ["docs/LICENSE"]).license_files == ["docs/LICENSE"]
+
+
+# ── pack --from-prefix ──────────────────────────────────────────
+#
+# libcvc and F2Dock publish with `cvcpkg pack --from-prefix`, from a tree
+# their own CMake installed, so collect_licenses (which runs in build_recipe)
+# never sees them. For a vendored recipe the texts go into the staged copy and
+# the manifest, and the caller's prefix stays as it was.
+
+
+def _from_prefix_repo(tmp_path: Path, *, prefix_has_own: bool = False) -> tuple[Path, Path]:
+    """A repo with its recipe in cvcpkg/recipes/<name>/ (source ../../.. from
+    cvcpkg/recipes/_vendored/, as libcvc's is) and a staged install tree."""
+    repo = _tree(tmp_path / "repo", "LICENSE", "THIRD-PARTY.md", "src/a.c")
+    rdir = repo / "cvcpkg" / "recipes" / "libfoo"
+    rdir.mkdir(parents=True)
+    (rdir / "recipe.yaml").write_text(
+        "schema_version: 1\n"
+        "recipe:\n  name: libfoo\n  upstream_version: '1.0.0'\n  cvc_revision: 1\n"
+        "source:\n  type: vendored\n  path: ../../..\n"
+        "build:\n  matrix:\n    - {platform: linux, script: build.sh}\n"
+        "package:\n  files: [lib/*]\n"
+    )
+    (repo / "cvcpkg" / "recipes" / "_vendored").mkdir()
+    stage = _tree(tmp_path / "stage", "lib/libfoo.so")
+    if prefix_has_own:
+        _tree(stage, "share/licenses/libfoo/COPYING")
+    return rdir, stage
+
+
+def _archive_members(archive: Path) -> tuple[set[str], dict]:
+    import tarfile
+
+    with tarfile.open(archive, "r:*") as tf:
+        names = {m.name.removeprefix("./") for m in tf.getmembers()}
+        mf = tf.extractfile("share/libcvc-deps/libfoo/manifest.yaml")
+        assert mf is not None
+        manifest = yaml.safe_load(mf.read())
+    return names, manifest
+
+
+def test_from_prefix_ships_a_vendored_recipes_licence(tmp_path: Path) -> None:
+    from cvcpkg.builder import pack_from_prefix
+
+    rdir, stage = _from_prefix_repo(tmp_path)
+    before = sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*"))
+    archive, _, _ = pack_from_prefix(
+        rdir, stage, platform="linux", arch="x86_64", output_dir=tmp_path / "dist"
+    )
+    names, manifest = _archive_members(archive)
+    assert "share/licenses/libfoo/LICENSE" in names
+    assert "share/licenses/libfoo/LICENSE" in manifest["contents"]["files"]
+    # THIRD-PARTY.md is not a licence name; the caller's tree is untouched.
+    assert "share/licenses/libfoo/THIRD-PARTY.md" not in names
+    assert sorted(p.relative_to(stage).as_posix() for p in stage.rglob("*")) == before
+
+
+def test_from_prefix_keeps_a_prefix_that_has_its_own(tmp_path: Path) -> None:
+    from cvcpkg.builder import pack_from_prefix
+
+    rdir, stage = _from_prefix_repo(tmp_path, prefix_has_own=True)
+    archive, _, _ = pack_from_prefix(
+        rdir, stage, platform="linux", arch="x86_64", output_dir=tmp_path / "dist"
+    )
+    names, _ = _archive_members(archive)
+    assert "share/licenses/libfoo/COPYING" in names
+    assert "share/licenses/libfoo/LICENSE" not in names
