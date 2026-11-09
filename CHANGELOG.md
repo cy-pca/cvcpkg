@@ -30,6 +30,28 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **deploy-prod pushes only the recipes a deploy changed, and builders are
+  told about the new server before the recipes are pushed.** The recipe push
+  took 22-36 minutes on every deploy, and on 2026-10-31 and 2026-11-07 it
+  outlasted the job (cancelled at 50 minutes), which skipped
+  `notify-builders` and left the server with a partial recipe set.
+  - `scripts/changed_recipes.py` names the recipes whose bundle differs
+    between the previously deployed commit (the push event's `before`, or the
+    new `base_sha` dispatch input) and the one being deployed, including a
+    recipe's vendored source. It says "all" when `recipes/_common` changed
+    (every bundle carries it) or the base commit is unknown, which is a
+    dispatch without `base_sha`.
+  - `cvcpkg recipe push-all --only NAME` (repeatable) pushes just those.
+    `push-all` also uses one HTTP client for the whole run instead of one per
+    recipe (a TLS context and a connection each), reads `recipe.yaml` with
+    libyaml, and compresses bundles at gzip level 6 (the same size as 9 on
+    recipe text, less CPU). A full push on a loopback server went from 236 s
+    to 117 s.
+  - The builder notification is a step of the deploy job that runs right after
+    the WebSocket route check, ahead of the recipe push; the `notify-builders`
+    job is gone. The recipe push runs whenever both servers are up, is capped
+    at 30 minutes, and never fails the job.
+
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
   on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux

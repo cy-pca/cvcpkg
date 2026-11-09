@@ -700,6 +700,128 @@ class TestRecipePushAll:
         assert "pushed 0 recipes (2 failed)" in res.output
         assert "no recipe was pushed (2 failed)" in res.output
 
+    def test_push_all_only_pushes_just_the_named_recipes(self, tmp_path):
+        """deploy-prod pushes the few recipes a deploy changed: ``--only``
+        (repeatable, sorted, de-duplicated) leaves the rest alone."""
+        rdir = tmp_path / "recipes"
+        for name in ("zlib", "openssl", "boost"):
+            _make_recipe(rdir, name)
+        calls: list = []
+
+        def handler(method, url, **kw):
+            return FakeResp(200, {"ok": True})
+
+        with patch_httpx(handler, calls):
+            res = _run(
+                recipe_push_all,
+                [
+                    *_ARGS,
+                    "--recipes-dir",
+                    str(rdir),
+                    "--no-default-recipes",
+                    "--only",
+                    "zlib",
+                    "--only",
+                    "boost",
+                    "--only",
+                    "zlib",
+                ],
+            )
+        assert res.exit_code == 0, res.output
+        assert [c[1] for c in calls] == [
+            "http://srv/v1/recipes/boost",
+            "http://srv/v1/recipes/zlib",
+        ]
+        assert "pushed 2 recipes (0 failed)" in res.output
+
+    def test_push_all_only_an_unknown_recipe_pushes_nothing(self, tmp_path):
+        rdir = tmp_path / "recipes"
+        _make_recipe(rdir, "zlib")
+        (rdir / "_common").mkdir()
+        calls: list = []
+
+        def handler(method, url, **kw):
+            return FakeResp(200, {"ok": True})
+
+        with patch_httpx(handler, calls):
+            res = _run(
+                recipe_push_all,
+                [
+                    *_ARGS,
+                    "--recipes-dir",
+                    str(rdir),
+                    "--no-default-recipes",
+                    "--only",
+                    "zlib",
+                    "--only",
+                    "gone",
+                    "--only",
+                    "_common",
+                ],
+            )
+        assert res.exit_code != 0
+        assert "no such recipe: _common, gone" in res.output
+        assert calls == []
+
+    def test_push_all_only_still_fails_when_nothing_was_pushed(self, tmp_path):
+        """#526 holds for a delta push: every named recipe failing fails the step."""
+        rdir = tmp_path / "recipes"
+        _make_recipe(rdir, "a")
+        calls: list = []
+
+        def handler(method, url, **kw):
+            return FakeResp(401, {"detail": "invalid or expired token"})
+
+        with patch_httpx(handler, calls):
+            res = _run(
+                recipe_push_all,
+                [*_ARGS, "--recipes-dir", str(rdir), "--no-default-recipes", "--only", "a"],
+            )
+        assert res.exit_code != 0
+        assert "a: failed (401): invalid or expired token" in res.output
+        assert "no recipe was pushed (1 failed)" in res.output
+
+    def test_push_all_uses_one_http_client_for_the_whole_run(self, tmp_path):
+        """A client per recipe built a TLS context and a new connection 2,260
+        times; the whole set shares one."""
+        rdir = tmp_path / "recipes"
+        for name in ("a", "b", "c"):
+            _make_recipe(rdir, name)
+        calls: list = []
+        made: list = []
+
+        def factory(*a, **k):
+            made.append(k)
+            return FakeClient(lambda method, url, **kw: FakeResp(200, {"ok": True}), calls)
+
+        with mock.patch("httpx.Client", factory):
+            res = _run(
+                recipe_push_all,
+                [*_ARGS, "--recipes-dir", str(rdir), "--no-default-recipes"],
+            )
+        assert res.exit_code == 0, res.output
+        assert len(calls) == 3
+        assert len(made) == 1
+        assert made[0] == {"timeout": 60}
+
+    def test_push_all_reads_recipe_yaml_without_libyaml(self, tmp_path, monkeypatch):
+        """The C loader is used when PyYAML has it, and the push is the same
+        without it."""
+        import yaml
+
+        monkeypatch.delattr(yaml, "CSafeLoader", raising=False)
+        rdir = tmp_path / "recipes"
+        _make_recipe(rdir, "zlib", version="9.9")
+        calls: list = []
+        with patch_httpx(lambda method, url, **kw: FakeResp(200, {"ok": True}), calls):
+            res = _run(
+                recipe_push_all,
+                [*_ARGS, "--recipes-dir", str(rdir), "--no-default-recipes"],
+            )
+        assert res.exit_code == 0, res.output
+        assert "zlib (version=9.9)" in res.output
+        assert calls[0][2]["params"]["version"] == "9.9"
+
 
 # ── recipe sync-common ──────────────────────────────────────────
 
