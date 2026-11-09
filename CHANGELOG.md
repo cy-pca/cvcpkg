@@ -28,6 +28,43 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **`/install.sh` retries transient download errors (#584).** It ran curl once per
+  request: the registry lookup, the bundle download, and the GitHub fallback's
+  release list, binary and `.sha256`. So one bad answer failed the install. On
+  2026-11-09, a 504 from GitHub's release CDN for `cvcpkg-macos-arm64.sha256`
+  failed two of libcvc's macOS recipe jobs this way.
+  - Every request passes `--retry 3 --retry-delay 2`. Where curl has them, it
+    also passes `--retry-connrefused` (curl 7.52+) and `--retry-all-errors`
+    (curl 7.71+, which also retries a transfer cut off midway). The script
+    probes for both, so an older curl runs it without them.
+  - The downloads no longer pass `--fail`. With it, the macOS runners' curl
+    reported that 504 as exit 56, a receive error, rather than 22. `--retry`
+    checks the HTTP status only of a transfer that ended 0 or 22, so adding it
+    alone would not have retried the 504. The script now checks the final
+    status itself.
+  - Without `--fail`, a 4xx counts as a finished transfer, which
+    `--retry-all-errors` does not retry. A 404 from the registry still falls
+    back to GitHub at once. A registry that stays down, or keeps failing,
+    still stops the install once the retries are spent.
+
+- **`/install.ps1` retries transient download errors too (#588).** Its five web calls
+  (the registry lookup, the GitHub release list, the bundle or the binary, and
+  the `.sha256`) each ran once.
+  - A new `Invoke-WithRetry` retries each one up to 3 times, 2 s apart, on HTTP
+    408, 429 or 5xx, or when no answer came at all: refused, reset, timed out,
+    or cut off midway. Any other 4xx is rethrown at once, so a 404 still falls
+    back to GitHub. It does not use `-MaximumRetryCount`, which Windows
+    PowerShell 5.1 lacks and which in PowerShell 7 retries every 4xx, 404
+    included.
+  - Each download is now checked against its sha256 inside the retry
+    (`Save-Verified`). Windows PowerShell 5.1's `Invoke-WebRequest -OutFile`
+    reports success for a body cut off midway, so only the checksum catches it.
+    A `.sha256` that holds no whole hash is retried the same way.
+  - A failed download now dies with `download failed: <url> (<reason>)`, as
+    `install.sh` does.
+
 ## v2.5.13
 
 **A release so every bundle a builder packs carries its upstream licence texts
@@ -58,41 +95,6 @@ stdlib again and link nothing from the BSD hosts (#570). No migration.**
 
 - **Recipes: F2Dock's closure is bumped to rebuild with them (#582).** 50
   recipes, each one revision above the highest published on any tuple.
-
-- **`/install.sh` retries transient download errors.** It ran curl once per
-  request: the registry lookup, the bundle download, and the GitHub fallback's
-  release list, binary and `.sha256`. So one bad answer failed the install. On
-  2026-11-09, a 504 from GitHub's release CDN for `cvcpkg-macos-arm64.sha256`
-  failed two of libcvc's macOS recipe jobs this way.
-  - Every request passes `--retry 3 --retry-delay 2`. Where curl has them, it
-    also passes `--retry-connrefused` (curl 7.52+) and `--retry-all-errors`
-    (curl 7.71+, which also retries a transfer cut off midway). The script
-    probes for both, so an older curl runs it without them.
-  - The downloads no longer pass `--fail`. With it, the macOS runners' curl
-    reported that 504 as exit 56, a receive error, rather than 22. `--retry`
-    checks the HTTP status only of a transfer that ended 0 or 22, so adding it
-    alone would not have retried the 504. The script now checks the final
-    status itself.
-  - Without `--fail`, a 4xx counts as a finished transfer, which
-    `--retry-all-errors` does not retry. A 404 from the registry still falls
-    back to GitHub at once. A registry that stays down, or keeps failing,
-    still stops the install once the retries are spent.
-
-- **`/install.ps1` retries transient download errors too.** Its five web calls
-  (the registry lookup, the GitHub release list, the bundle or the binary, and
-  the `.sha256`) each ran once.
-  - A new `Invoke-WithRetry` retries each one up to 3 times, 2 s apart, on HTTP
-    408, 429 or 5xx, or when no answer came at all: refused, reset, timed out,
-    or cut off midway. Any other 4xx is rethrown at once, so a 404 still falls
-    back to GitHub. It does not use `-MaximumRetryCount`, which Windows
-    PowerShell 5.1 lacks and which in PowerShell 7 retries every 4xx, 404
-    included.
-  - Each download is now checked against its sha256 inside the retry
-    (`Save-Verified`). Windows PowerShell 5.1's `Invoke-WebRequest -OutFile`
-    reports success for a body cut off midway, so only the checksum catches it.
-    A `.sha256` that holds no whole hash is retried the same way.
-  - A failed download now dies with `download failed: <url> (<reason>)`, as
-    `install.sh` does.
 
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
