@@ -39,3 +39,19 @@ cvc_cmake_build \
     -DGLEW_REGAL=OFF \
     -DGLEW_OSMESA=OFF \
     ${_glew_extra[@]+"${_glew_extra[@]}"}
+
+# Refuse to package a GLEW::glew that still names a build-host path: no
+# /usr/lib*, /usr/local, /opt or Xcode/SDK path may be left in the export
+# after cvc_rewrite_install_paths. (OpenBSD's base X11 is /usr/X11R6 and
+# Windows names opengl32/glu32, so only linux and macOS are checked.)
+case "${CVC_PLATFORM}" in
+    linux|macos)
+        _glew_leaks="$(grep -rnE '/usr/lib|/usr/local|/opt/|/Applications/|\.sdk/' \
+            "${CVC_INSTALL_DIR}/lib/cmake/glew" "${CVC_INSTALL_DIR}/lib/pkgconfig" || true)"
+        if [[ -n "${_glew_leaks}" ]]; then
+            echo "glew: the installed CMake/pkg-config files name build-host paths:" >&2
+            echo "${_glew_leaks}" >&2
+            exit 1
+        fi
+        ;;
+esac
