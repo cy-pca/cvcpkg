@@ -413,6 +413,34 @@ References:
    `/install.ps1` install. It pins the release tag because it cannot pin
    the commit it lives in, so it lags until this bump lands, and the
    one-line installers keep handing out the previous release meanwhile.
+7. Once the bump is on `prod`, build and publish the package for **every**
+   platform the installers serve. Nothing builds it on its own. The x86_64
+   builders only build what a populate submits. macOS and linux/arm64 have
+   no builders at all, so they get the package only when `macos-build.yml`
+   or `linux-arm-build.yml` runs. Releases 2.5.2 to 2.5.12 were populated
+   for linux, freebsd and windows x86_64 only, so macOS and linux/arm64
+   stayed on 2.5.1. A pinned `install.sh` on those platforms then fell back
+   to the GitHub release's binary, and libcvc's macOS CI failed whenever
+   GitHub Releases answered 504. Two dispatches cover every platform (the
+   prod deploy has already pushed the recipe):
+   ```bash
+   # linux, freebsd and windows x86_64 on the builders; macOS arm64 and
+   # x86_64 through populate-server's macOS legs (arch=x86_64 adds Intel).
+   gh workflow run populate-server.yml -R cy-pca/cvcpkg --ref prod \
+     -f platforms=linux,freebsd,windows,macos -f arch=x86_64 \
+     -f recipes=cvcpkg -f deps=false -f skip_push=true
+   # linux/arm64. Not populate-server's arm64 leg: arch=arm64 would also
+   # submit arm64 jobs to the x86_64-only builders.
+   gh workflow run linux-arm-build.yml -R cy-pca/cvcpkg -f recipes=cvcpkg
+   ```
+   Then confirm that each platform's lookup reports the new version:
+   ```bash
+   for pa in linux/x86_64 linux/arm64 macos/arm64 macos/x86_64 \
+             windows/x86_64 freebsd/x86_64; do
+     curl -fsS "https://cvcpkg.org/v1/packages/cvcpkg/latest?platform=${pa%/*}&arch=${pa#*/}" \
+       | grep -o '"version": *"[^"]*"' | sed "s|^|$pa |"
+   done
+   ```
 
 ### 11.4. Pre-release flow (recommended for any version bump)
 
