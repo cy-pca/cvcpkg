@@ -60,6 +60,9 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     `$ORIGIN` is inert and the installer bakes an absolute RPATH), and libfontenc,
     libxfont2, pthread-stubs, xtrans and xcb-proto (clean everywhere, or no ELF
     object). libffi had already dropped the flag.
+  - opusfile also builds with `ACLOCAL=true AUTOMAKE=true ...` (as libtool does): on the
+    dev OpenBSD builder `make` judged `aclocal.m4` out of date and died on
+    `missing: aclocal-1.16: not found`; the release tarball ships the generated files.
   - Found by running the gate over every published package: python311, python312,
     python313 and python313t on NetBSD and OpenBSD ship `libpython3*.so` with
     `RIGIN/../lib` (harmless: a `$ORIGIN` entry follows it), and qhull on both with

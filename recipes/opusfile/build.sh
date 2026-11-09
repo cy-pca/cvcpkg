@@ -23,8 +23,13 @@ cd "${CVC_SOURCE_DIR}"
     --disable-http \
     --disable-examples \
     --disable-doc
-make -j "${CVC_JOBS}"
-make install
+# The release tarball ships configure, aclocal.m4 and Makefile.in, so the build must not run
+# aclocal/automake/autoconf (the host may not have them, and on the dev OpenBSD builder `make`
+# decided aclocal.m4 was out of date and died with "missing: aclocal-1.16: not found", PR #580's
+# build-on-dev).  Same arguments as recipes/libtool/build.sh.
+_no_regen=(ACLOCAL=true AUTOCONF=true AUTOMAKE=true AUTOHEADER=true MAKEINFO=true)
+make -j "${CVC_JOBS}" "${_no_regen[@]}"
+make install "${_no_regen[@]}"
 
 # Strip libtool archives (.la): they embed the dependency's absolute build-prefix
 # path, which is gone after cvcpkg relocates the prefix, so a downstream libtool

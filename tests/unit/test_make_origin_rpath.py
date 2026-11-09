@@ -10,6 +10,7 @@ tests drive a real make, and a real linker where there is one.
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,12 @@ from cvcpkg.linkage import read_linkage
 REPO = Path(__file__).resolve().parents[2]
 HELPER = REPO / "recipes" / "_common" / "rewrite-install-paths.sh"
 
-pytestmark = pytest.mark.skipif(
-    not (shutil.which("bash") and shutil.which("make")), reason="needs bash and make"
+# The helper is sourced by recipe builds on Linux, the BSDs, macOS and Haiku.  Git Bash on a
+# Windows runner cannot `source` a Windows-style (D:\a\...) path, and mingw's ld has no ELF
+# RUNPATH to read.
+needs_posix_make = pytest.mark.skipif(
+    sys.platform == "win32" or not (shutil.which("bash") and shutil.which("make")),
+    reason="needs bash and make on a POSIX host",
 )
 
 
@@ -41,17 +46,20 @@ def _make_sees(tmp_path: Path, ldflags: str) -> list[str]:
     return out.split()
 
 
+@needs_posix_make
 def test_helper_spelling():
     assert _flags() == r"-Wl,-rpath,\$$ORIGIN"
     assert _flags("../lib", ".") == r"-Wl,-rpath,\$$ORIGIN/../lib -Wl,-rpath,\$$ORIGIN"
     assert _flags("/..") == r"-Wl,-rpath,\$$ORIGIN/.."
 
 
+@needs_posix_make
 def test_bare_origin_is_what_make_mangles(tmp_path):
     # The bug: the literal `$ORIGIN` that `export LDFLAGS="... \$ORIGIN"` gives.
     assert _make_sees(tmp_path, "-Wl,-rpath,$ORIGIN") == ["-Wl,-rpath,RIGIN"]
 
 
+@needs_posix_make
 def test_helper_flags_reach_the_linker_as_origin(tmp_path):
     assert _make_sees(tmp_path, _flags()) == ["-Wl,-rpath,$ORIGIN"]
     assert _make_sees(tmp_path, _flags("../lib", ".")) == [
@@ -60,6 +68,7 @@ def test_helper_flags_reach_the_linker_as_origin(tmp_path):
     ]
 
 
+@needs_posix_make
 def test_helper_flags_survive_make_and_a_real_link(tmp_path):
     cc = shutil.which("cc") or shutil.which("gcc")
     if not cc:
