@@ -13,12 +13,26 @@ source "${SCRIPT_DIR}/../_common/env-${CVC_PLATFORM}.sh"
 
 export CVC_SOURCE_DIR="${CVC_SOURCE_DIR}/build/cmake"
 
-# On Linux, GL and Xlib come from cvcpkg's libglvnd and libx11 (recipe.yaml),
-# so FindOpenGL/FindX11 must search the deps prefix.
+# On Linux, GL, GLU and Xlib (with libSM/libICE) come from cvcpkg's libglvnd,
+# glu, libx11, libsm and libice (recipe.yaml), so FindOpenGL/FindX11 must
+# search the deps prefix.
+#
+# On macOS, FindOpenGL resolves OpenGL.framework inside the build host's Xcode
+# SDK (/Applications/Xcode_<ver>.app/.../OpenGL.framework), and GLEW exports
+# that absolute path in GLEW::glew's link interface, which exists on no other
+# Mac. Name the framework instead.
 _glew_extra=()
-if [[ "${CVC_PLATFORM}" == "linux" ]]; then
-    _glew_extra+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
-fi
+case "${CVC_PLATFORM}" in
+    linux)
+        _glew_extra+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
+        ;;
+    macos)
+        _glew_extra+=(
+            "-DOPENGL_gl_LIBRARY=-framework OpenGL"
+            "-DOPENGL_glu_LIBRARY=-framework OpenGL"
+        )
+        ;;
+esac
 
 cvc_cmake_build \
     -DBUILD_UTILS=OFF \
