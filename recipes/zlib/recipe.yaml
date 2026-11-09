@@ -5,7 +5,7 @@ recipe:
   # The Windows build now also installs z.lib (build.ps1), the MSVC spelling of
   # zlib.pc's -lz that package.files already declared.  No bump: Windows has no
   # cvc.5 bundle, and no other platform's files change.
-  cvc_revision: 5
+  cvc_revision: 6  # licence texts in share/licenses/zlib/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

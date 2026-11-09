@@ -51,7 +51,7 @@ recipe:
   # Distribution, i.e. no profiler). (3) test.sh builds + runs a find_package
   # consumer, natively and under node for wasm (JPH::RegisterTypes aborts on a
   # config mismatch, so it is a real ABI check).
-  cvc_revision: 6
+  cvc_revision: 7  # licence texts in share/licenses/joltphysics/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

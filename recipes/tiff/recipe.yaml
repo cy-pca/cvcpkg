@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: tiff
   upstream_version: "4.7.0"
-  cvc_revision: 3
+  cvc_revision: 4  # licence texts in share/licenses/tiff/ (cvcpkg#576)
   # cvc.3: the OpenBSD bundle also ships libtiff.so.6.1 / libtiffxx.so.6.1 (the
   # OpenBSD library-name convention; env-openbsd.sh's cvc_openbsd_lib_names), so
   # -ltiff resolves there.  Other platforms' bundles are unchanged.

@@ -27,7 +27,7 @@ recipe:
   # linked an undeclared libiconv there: the OpenBSD build host's ports
   # libiconv.so.7.1 from /usr/local, and on macOS cvcpkg's from a shared prefix
   # (@rpath/libiconv.2.dylib).  build.sh now names the declared copy.
-  cvc_revision: 9
+  cvc_revision: 10  # licence texts in share/licenses/boost/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

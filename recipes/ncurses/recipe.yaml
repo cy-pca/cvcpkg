@@ -13,7 +13,7 @@ recipe:
   # pass, bin/ tools get RUNPATH $ORIGIN/../lib (cvc.2's had $ORIGIN, so
   # infocmp, tput, tic... loaded the host's libncursesw and could fail with
   # "undefined symbol: _nc_disable_period"); test.sh checks both.
-  cvc_revision: 3
+  cvc_revision: 4  # licence texts in share/licenses/ncurses/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
