@@ -16,29 +16,33 @@ export CVC_SOURCE_DIR="${CVC_SOURCE_DIR}/build/cmake"
 # On Linux, GL, GLU and Xlib (with libSM/libICE) come from cvcpkg's libglvnd,
 # glu, libx11, libsm and libice (recipe.yaml), so FindOpenGL/FindX11 must
 # search the deps prefix.
-#
-# On macOS, FindOpenGL resolves OpenGL.framework inside the build host's Xcode
-# SDK (/Applications/Xcode_<ver>.app/.../OpenGL.framework), and GLEW exports
-# that absolute path in GLEW::glew's link interface, which exists on no other
-# Mac. Name the framework instead.
 _glew_extra=()
-case "${CVC_PLATFORM}" in
-    linux)
-        _glew_extra+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
-        ;;
-    macos)
-        _glew_extra+=(
-            "-DOPENGL_gl_LIBRARY=-framework OpenGL"
-            "-DOPENGL_glu_LIBRARY=-framework OpenGL"
-        )
-        ;;
-esac
+if [[ "${CVC_PLATFORM}" == "linux" ]]; then
+    _glew_extra+=(-DCMAKE_PREFIX_PATH="${CVC_DEPS_PREFIX}")
+fi
 
 cvc_cmake_build \
     -DBUILD_UTILS=OFF \
     -DGLEW_REGAL=OFF \
     -DGLEW_OSMESA=OFF \
     ${_glew_extra[@]+"${_glew_extra[@]}"}
+
+# On macOS, FindOpenGL resolves OpenGL.framework inside the build host's Xcode
+# SDK, and GLEW exports that absolute path in GLEW::glew's link interface
+# (/Applications/Xcode_<ver>.app/.../MacOSX<ver>.sdk/System/Library/Frameworks/
+# OpenGL.framework), which exists on no other Mac. Rewrite it to the system
+# framework path every Mac has; CMake links a .framework path as
+# "-framework OpenGL" and the linker finds it in the consumer's own SDK.
+# (Configuring with OPENGL_gl_LIBRARY="-framework OpenGL" instead does not
+# work: CMake takes that list item for a file and ninja fails on it.)
+if [[ "${CVC_PLATFORM}" == "macos" ]]; then
+    for _f in "${CVC_INSTALL_DIR}"/lib/cmake/glew/*.cmake; do
+        sed -i.bak -E \
+            's#[^";]*/SDKs/MacOSX[^/";]*\.sdk(/System/Library/Frameworks/[^/";]+\.framework)#\1#g' \
+            "${_f}"
+        rm -f "${_f}.bak"
+    done
+fi
 
 # Refuse to package a GLEW::glew that still names a build-host path: no
 # /usr/lib*, /usr/local, /opt or Xcode/SDK path may be left in the export
