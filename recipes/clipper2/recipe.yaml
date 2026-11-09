@@ -1,0 +1,75 @@
+schema_version: 1
+recipe:
+  name: clipper2
+  upstream_version: "2.0.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Clipper2 — polygon clipping (Boolean operations), offsetting, Minkowski
+    sums and polygon triangulation on exact int64 coordinates (PathsD scales
+    doubles onto them).  Boost-licensed, so it backs LGPL libcvc where CGAL's
+    GPL Boolean, offset and Minkowski packages cannot.  Built as static
+    libraries on every platform: Clipper2 and Clipper2Z (vertices carry a
+    user z), with CMake targets Clipper2::Clipper2 and Clipper2::Clipper2Z.
+    Its C++ library has no DLL export annotations, so a shared Windows build
+    would export nothing; consumers link it privately.
+  homepage: https://www.angusj.com/clipper2/Docs/Overview.htm
+  license: BSL-1.0
+  tags: [geometry, polygon, clipping, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/AngusJohnson/Clipper2/archive/refs/tags/Clipper2_2.0.1.tar.gz
+  sha256: "2a3693aceab4aed3e39b743e038d87701acc53cf05ed7b2013aab3e0aec5287e"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+    # build.sh serves wasm too: env-wasm.sh redefines cvc_cmake_build with the
+    # Emscripten toolchain, and env-wasm-mt.sh adds -pthread.
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    - lib/libClipper2*
+    - lib/Clipper2*
+    - lib/cmake/clipper2/
+    - lib/pkgconfig/Clipper2.pc
+    - lib/pkgconfig/Clipper2Z.pc
+    - include/clipper2/
+    - share/clipper2/
+  cmake_packages:
+    - { name: Clipper2, targets: ["Clipper2::Clipper2", "Clipper2::Clipper2Z"] }
+
+abi:
+  cxx_std: 17
