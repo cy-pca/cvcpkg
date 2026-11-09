@@ -50,7 +50,11 @@ if [[ -z "${LLVM_INSTALL_DIR:-}" ]]; then
          "Install this recipe's dependency closure (cvcpkg install-deps)." >&2
     exit 1
 fi
-for _need in lib/libclang.so.18.1 lib/clang/18/include/stddef.h; do
+case "${CVC_PLATFORM}" in
+    macos) _libclang=lib/libclang.dylib ;;
+    *)     _libclang=lib/libclang.so.18.1 ;;
+esac
+for _need in "${_libclang}" lib/clang/18/include/stddef.h; do
     if [[ ! -e "${LLVM_INSTALL_DIR}/${_need}" ]]; then
         echo "pyside6: ${LLVM_INSTALL_DIR}/${_need} is missing; the llvm18 bundle is incomplete" >&2
         exit 1
@@ -62,7 +66,28 @@ echo "pyside6: LLVM_INSTALL_DIR=${LLVM_INSTALL_DIR} (cvcpkg llvm18)"
 # The generator (bin/shiboken6, from the shiboken6 package) needs to resolve, at
 # RUN time during this build: libclang (cvcpkg llvm18), libQt6Core (cvcpkg qt6),
 # libshiboken6 (cvcpkg shiboken6). Put all three lib dirs on the loader path.
-export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${CVC_BUILD_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
+# On macOS the packaged generator finds them through its @loader_path RPATHs
+# (SIP drops DYLD_* under ninja's /bin/sh), so DYLD_* is only a fallback there.
+case "${CVC_PLATFORM}" in
+    macos)
+        export DYLD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${CVC_BUILD_PREFIX:-}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+        export DYLD_FRAMEWORK_PATH="${CVC_DEPS_PREFIX:-}/lib:${CVC_BUILD_PREFIX:-}/lib${DYLD_FRAMEWORK_PATH:+:${DYLD_FRAMEWORK_PATH}}"
+        ;;
+    *)
+        export LD_LIBRARY_PATH="${LLVM_INSTALL_DIR}/lib:${CVC_DEPS_PREFIX:-}/lib:${CVC_BUILD_PREFIX:-}/lib:${LD_LIBRARY_PATH:-}"
+        ;;
+esac
+
+# Linux: $ORIGIN RPATHs baked in at build time. macOS: CMake's default
+# build-tree LC_RPATHs, and cvcpkg's pack step rewrites every Mach-O to @rpath
+# ids with @loader_path RPATHs (as for shiboken6-cp311).
+_rpath_args=()
+if [[ "${CVC_PLATFORM}" != "macos" ]]; then
+    _rpath_args=(
+        -DCMAKE_INSTALL_RPATH="\$ORIGIN;\$ORIGIN/../lib"
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+    )
+fi
 
 # Install the importable package into THIS prefix's site-packages.
 SITE_PACKAGES="${CVC_INSTALL_DIR}/lib/python3.11/site-packages"
@@ -90,8 +115,7 @@ cmake -G Ninja \
     -DFORCE_LIMITED_API=yes \
     -DBUILD_TESTS=OFF \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_INSTALL_RPATH="\$ORIGIN;\$ORIGIN/../lib" \
-    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+    ${_rpath_args[@]+"${_rpath_args[@]}"}
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
 cmake --install "${CVC_BUILD_DIR}"
 

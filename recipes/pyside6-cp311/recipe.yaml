@@ -95,17 +95,22 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -std=c++17"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
 
 package:
   files:
     # PySide6 runtime support library (libpyside6) linked by every module.
-    - { glob: "lib/libpyside6*", platforms: [linux] }
+    - { glob: "lib/libpyside6*", platforms: [linux, macos] }
     # Importable abi3 package, fanned into every interpreter (cp311/cp312/
     # cp313): QtCore/QtGui/QtWidgets/QtOpenGL(.Widgets) .so's, typesystems,
     # and Qt-for-Python glue.
-    - { glob: "lib/python3.*/site-packages/PySide6/", platforms: [linux] }
+    - { glob: "lib/python3.*/site-packages/PySide6/", platforms: [linux, macos] }
     # CMake config for C++ consumers that embed/extend PySide6.
     - lib/cmake/PySide6*/
     # Public headers (libpyside).
