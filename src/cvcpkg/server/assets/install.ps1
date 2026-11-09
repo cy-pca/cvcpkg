@@ -59,6 +59,44 @@ function Die($msg) {
     exit 1
 }
 
+# Invoke-WithRetry { <web request> }: run the request, retrying a failure up to
+# 3 times, 2 s apart: an HTTP 408, 429 or 5xx, or no answer at all (refused,
+# reset, timed out, cut off midway).  Any other 4xx is an answer and is
+# rethrown at once, so a 404 still falls back to GitHub.  Not
+# -MaximumRetryCount: Windows PowerShell 5.1 does not have it, and PowerShell 7
+# retries every 4xx with it, 404 included.
+function Invoke-WithRetry([scriptblock]$Request) {
+    for ($n = 1; ; $n++) {
+        try {
+            return & $Request
+        } catch {
+            $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+            $answer = $code -ge 400 -and $code -lt 500 -and $code -ne 408 -and $code -ne 429
+            if ($answer -or $n -gt 3) { throw }
+            Write-Host "$($_.Exception.Message) Retrying in 2 s ($n of 3)..."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
+# Save-Verified URL FILE SHA256 HEADERS: download URL to FILE and check it
+# against SHA256, retrying the two together.  The check is inside the retry
+# because Windows PowerShell 5.1's Invoke-WebRequest -OutFile reports success
+# for a body cut off midway, and only the checksum shows it.
+function Save-Verified($Uri, $OutFile, $Sha256, $Headers) {
+    try {
+        Invoke-WithRetry {
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $Headers -UseBasicParsing
+            $Actual = (Get-FileHash -Path $OutFile -Algorithm SHA256).Hash.ToLower()
+            if ($Actual -ne $Sha256.ToLower()) {
+                throw "checksum mismatch: expected $($Sha256.ToLower()), got $Actual."
+            }
+        }
+    } catch {
+        Die "download failed: $Uri ($($_.Exception.Message))"
+    }
+}
+
 # A 32-bit PowerShell on 64-bit Windows reports x86 here; the real machine
 # architecture is in PROCESSOR_ARCHITEW6432.
 $MachineArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
@@ -75,16 +113,16 @@ if ($env:CVCPKG_TOKEN) { $RegistryHeaders["Authorization"] = "Bearer $($env:CVCP
 # ---- Pick the source ----------------------------------------------------
 # Only "nothing for this platform / version" (404), or a server too old to
 # have the lookup at all (405: the path matches its DELETE route), falls back
-# to GitHub.  Any other failure stops here: installing upstream's build
-# because this registry was briefly unreachable is exactly what a fork does
-# not want.
+# to GitHub.  Any other failure stops here, once the retries are spent:
+# installing upstream's build because this registry was briefly unreachable is
+# exactly what a fork does not want.
 $Label = if ($Ver) { "cvcpkg $Ver" } else { "cvcpkg" }
 Write-Host "Looking up $Label for windows/$Arch on $Server..."
 $Query = "platform=windows&arch=$Arch&version=$([uri]::EscapeDataString($Ver))"
 $Pkg = $null
 $Status = 0
 try {
-    $Pkg = Invoke-RestMethod -Uri "$Server/v1/packages/cvcpkg/latest?$Query" -Headers $RegistryHeaders
+    $Pkg = Invoke-WithRetry { Invoke-RestMethod -Uri "$Server/v1/packages/cvcpkg/latest?$Query" -Headers $RegistryHeaders }
 } catch {
     if ($_.Exception.Response) { $Status = [int]$_.Exception.Response.StatusCode }
     $LookupError = $_.Exception.Message
@@ -106,7 +144,7 @@ if (-not $Pkg) {
         $Tag = "cvcpkg-v" + ($Ver -replace '\+.*$', '')
     } else {
         Write-Host "Resolving the latest cvcpkg release of $Repo..."
-        $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -UserAgent "cvcpkg-installer"
+        $releases = Invoke-WithRetry { Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -UserAgent "cvcpkg-installer" }
         $Tag = ($releases | Where-Object { $_.tag_name -match '^cvcpkg-v[0-9]' -and $_.tag_name -notmatch '-rc' } | Select-Object -First 1).tag_name
         if (-not $Tag) {
             Die "could not resolve the latest cvcpkg release — set `$env:CVCPKG_VERSION = 'X.Y.Z'"
@@ -128,12 +166,7 @@ try {
 
         $Bundle = Join-Path $Tmp "bundle"
         $Headers = if ($Url.StartsWith("$Server/")) { $RegistryHeaders } else { @{} }
-        Invoke-WebRequest -Uri $Url -OutFile $Bundle -Headers $Headers -UseBasicParsing
-        $Expected = $Pkg.sha256.ToLower()
-        $Actual = (Get-FileHash -Path $Bundle -Algorithm SHA256).Hash.ToLower()
-        if ($Expected -ne $Actual) {
-            Die "checksum mismatch for $Url (expected $Expected, got $Actual)"
-        }
+        Save-Verified $Url $Bundle $Pkg.sha256 $Headers
 
         # Sniffed rather than trusted to the name: registry bundles are all
         # called .tar.zst, and a Windows one is a zip.
@@ -165,14 +198,19 @@ try {
         $BinPath = Join-Path $Tmp $Asset
         $ShaPath = "$BinPath.sha256"
 
-        Invoke-WebRequest -Uri "$BaseUrl/$Asset" -OutFile $BinPath -UseBasicParsing
-        Invoke-WebRequest -Uri "$BaseUrl/$Asset.sha256" -OutFile $ShaPath -UseBasicParsing
-
-        $Expected = ((Get-Content $ShaPath) -split '\s+')[0].Trim().ToLower()
-        $Actual = (Get-FileHash -Path $BinPath -Algorithm SHA256).Hash.ToLower()
-        if ($Expected -ne $Actual) {
-            Die "checksum mismatch for $Asset (expected $Expected, got $Actual)"
+        # A .sha256 cut off midway (the same 5.1 gap) shows as one that does
+        # not start with a whole sha256, so that is retried too.
+        try {
+            Invoke-WithRetry {
+                Invoke-WebRequest -Uri "$BaseUrl/$Asset.sha256" -OutFile $ShaPath -UseBasicParsing
+                if (((Get-Content $ShaPath) -split '\s+')[0] -notmatch '^[0-9a-fA-F]{64}$') {
+                    throw "it holds no sha256."
+                }
+            }
+        } catch {
+            Die "checksum download failed: $BaseUrl/$Asset.sha256 ($($_.Exception.Message))"
         }
+        Save-Verified "$BaseUrl/$Asset" $BinPath ((Get-Content $ShaPath) -split '\s+')[0] @{}
     }
 
     # ---- Install ----------------------------------------------------------

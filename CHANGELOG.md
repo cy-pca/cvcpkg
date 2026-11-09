@@ -78,6 +78,22 @@ stdlib again and link nothing from the BSD hosts (#570). No migration.**
     back to GitHub at once. A registry that stays down, or keeps failing,
     still stops the install once the retries are spent.
 
+- **`/install.ps1` retries transient download errors too.** Its five web calls
+  (the registry lookup, the GitHub release list, the bundle or the binary, and
+  the `.sha256`) each ran once.
+  - A new `Invoke-WithRetry` retries each one up to 3 times, 2 s apart, on HTTP
+    408, 429 or 5xx, or when no answer came at all: refused, reset, timed out,
+    or cut off midway. Any other 4xx is rethrown at once, so a 404 still falls
+    back to GitHub. It does not use `-MaximumRetryCount`, which Windows
+    PowerShell 5.1 lacks and which in PowerShell 7 retries every 4xx, 404
+    included.
+  - Each download is now checked against its sha256 inside the retry
+    (`Save-Verified`). Windows PowerShell 5.1's `Invoke-WebRequest -OutFile`
+    reports success for a body cut off midway, so only the checksum catches it.
+    A `.sha256` that holds no whole hash is retried the same way.
+  - A failed download now dies with `download failed: <url> (<reason>)`, as
+    `install.sh` does.
+
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
   on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux
