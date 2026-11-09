@@ -299,6 +299,27 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     CONFIGURE_ARGS+=(--with-ensurepip=no)
 fi
 
+# [wasm] Namespace all of the bundled expat. pyexpatns.h renames expat's API to
+# PyExpat_*, so the copy folded into libpython below can share a static link with
+# another expat. It misses two internals of expat 2.6 and later (2.7.1 in 3.12.10):
+# _INTERNAL_trim_to_complete_utf8_characters and g_reparseDeferralEnabledDefault.
+# VTK's bundled expat (libvtkexpat-9.5.a) leaves the same two unmangled, so the
+# pycvc_gl wasm host, which links both, failed on duplicate symbols once python312
+# cvc.23 archived expat. Upstream's pyexpatns.h still lacks them (3.12, 3.13, main).
+# pyexpatns.h is included (through expat_external.h) before either name is declared,
+# so these rename every declaration, definition and use. The fold below checks that
+# expat defines nothing else outside PyExpat_*.
+if [ "$IS_EMSCRIPTEN" = true ] && [ -f Modules/expat/pyexpatns.h ] \
+    && ! grep -q 'PyExpat_g_reparseDeferralEnabledDefault' Modules/expat/pyexpatns.h; then
+    cat >> Modules/expat/pyexpatns.h <<'EOF'
+
+/* cvcpkg (recipes/_common/build-python.sh): two internals upstream leaves out. */
+#define _INTERNAL_trim_to_complete_utf8_characters \
+        PyExpat__INTERNAL_trim_to_complete_utf8_characters
+#define g_reparseDeferralEnabledDefault PyExpat_g_reparseDeferralEnabledDefault
+EOF
+fi
+
 # wasm builds must go through the emscripten compiler wrappers
 # (emconfigure/emmake), which put emcc/em++ on CC/CXX. env-wasm.sh only prepares
 # the emsdk PATH (so cmake toolchain files resolve) — it does NOT set CC=emcc, so
@@ -405,6 +426,19 @@ if [ "$IS_EMSCRIPTEN" = true ]; then
     if [ ! -x "${_nm}" ]; then
         echo "build-python(wasm): ${_nm} not found; cannot check libpython for undefined symbols" >&2
         exit 1
+    fi
+    # The bundled expat must define nothing outside PyExpat_* (see pyexpatns.h above):
+    # a bare global clashes with any other expat in the same static link.
+    _expat_objs="$(find "${CVC_SOURCE_DIR}/Modules/expat" -name '*.o' 2>/dev/null || true)"
+    if [ -n "${_expat_objs}" ]; then
+        # shellcheck disable=SC2086
+        _bare="$("${_nm}" --defined-only --extern-only -j ${_expat_objs} 2>/dev/null \
+            | grep -vE '^$|:$|^PyExpat' | LC_ALL=C sort -u || true)"
+        if [ -n "${_bare}" ]; then
+            echo "build-python(wasm): the bundled expat defines $(printf '%s\n' "${_bare}" | wc -l) global(s) pyexpatns.h does not rename:" >&2
+            printf '  %s\n' ${_bare} >&2
+            exit 1
+        fi
     fi
     for _libpy in ${_libpys}; do
         if [ -n "${_bundled_objs}" ]; then

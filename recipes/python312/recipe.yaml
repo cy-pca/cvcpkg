@@ -158,7 +158,16 @@ recipe:
   # libintl.so.8, and on OpenBSD its bin/python3.12 linked the ports python's
   # libpython3.12.so.0.0 and _blake2 ports' libb2.  _common/build-python.sh drops
   # -L/usr/local/lib, keeps pkg-config to the deps prefix and turns libintl off.
-  cvc_revision: 24
+  #
+  # Bumped 24 -> 25 (wasm, wasm-mt): libpython3.12.a's expat is wholly
+  # namespaced.  pyexpatns.h leaves two expat 2.7 internals bare
+  # (_INTERNAL_trim_to_complete_utf8_characters, g_reparseDeferralEnabledDefault),
+  # and VTK's bundled expat defines the same two, so since cvc.23 archived expat a
+  # static link with both failed on duplicate symbols (libcvc's pycvc_gl wasm
+  # host, transfix/libcvc#1075).  _common/build-python.sh renames them, and fails
+  # the build if expat defines any other global outside PyExpat_*.  Every other
+  # column is unchanged.
+  cvc_revision: 25
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
