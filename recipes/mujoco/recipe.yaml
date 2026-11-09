@@ -1,0 +1,139 @@
+schema_version: 1
+recipe:
+  name: mujoco
+  upstream_version: "4.0.0"
+  # cvc.1: first packaging.  Native (linux, macos, windows): shared libmujoco +
+  # CMake package mujoco::mujoco, the actuator/sensor/sdf plugins in
+  # bin/mujoco_plugin/, the simulate viewer and sample programs (GLFW static),
+  # and upstream's example models in share/mujoco/model/.  wasm / wasm-mt: the
+  # official Embind JS bindings (share/mujoco/wasm/) plus a static libmujoco
+  # and a CMake package for C++ programs compiled with emscripten.  See
+  # build.sh and build-wasm.sh for the reasoning behind each choice.
+  #
+  # Upstream's CMake clones its dependencies at configure time; deps.lock pins
+  # the same commits as sha256-checked archives fed through upstream's
+  # MUJOCO_CMAKE_DEP_CACHE hook, and a configure that clones anyway fails.
+  #
+  # Not (yet) here: the BSDs (upstream does not test them), Studio and the
+  # Filament renderer, OpenUSD.  The Python bindings are the mujoco-core-cpXYZ
+  # recipes, which build from the PyPI sdist against this package.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://mujoco.org
+  license: Apache-2.0
+  tags: [libraries, physics, robotics, simulation, wasm]
+  description: >-
+    MuJoCo (Multi-Joint dynamics with Contact) — Google DeepMind's physics
+    engine for robotics, biomechanics and reinforcement learning: generalized-
+    coordinate articulated dynamics, soft convex contact, actuators, tendons,
+    sensors and deformables, loaded from MJCF or URDF.  Native builds ship the
+    shared libmujoco (third-party deps compiled in, no runtime dependencies),
+    headers and the mujoco::mujoco CMake package, the first-party engine
+    plugins in bin/mujoco_plugin/, the interactive simulate viewer and the
+    sample tools (compile, testspeed, basic), and upstream's example models in
+    share/mujoco/model/.  x86_64 builds require AVX, like upstream's binaries.
+    The wasm and wasm-mt builds ship the official JavaScript/TypeScript
+    bindings (share/mujoco/wasm/mujoco.js + .wasm + .d.ts, the @mujoco/mujoco
+    npm build) and a static libmujoco with a mujoco::mujoco CMake package for
+    C++ programs compiled with emscripten (wasm-mt pages must be served
+    cross-origin isolated).
+
+source:
+  type: tarball
+  url: https://github.com/google-deepmind/mujoco/archive/refs/tags/4.0.0.tar.gz
+  sha256: "bf85305af56458ab5b752767925a3bebd713d86a694838774ed634ffa8e78197"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+    # GLFW (compiled statically into simulate/basic from deps.lock) needs the
+    # X11 and GL headers; it dlopen()s the libraries at run time, so these are
+    # build-only.  Same set as recipes/glfw, minus the Wayland backend.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: libxrandr
+      platforms: [linux]
+    - name: libxinerama
+      platforms: [linux]
+    - name: libxcursor
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    # Threaded wasm: same scripts with MUJOCO_WASM_THREADS=ON; a separate
+    # platform because emscripten cannot link -pthread objects into a
+    # single-threaded program (or the reverse).
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
+    - platform: wasm-mt
+      host_platform: windows
+      script: build-wasm.ps1
+      env:
+        CVC_WASM_THREADS: "1"
+
+package:
+  files:
+    # Native shared library: .so/.so.N (linux), .dylib (macos), DLL + import lib (windows).
+    - lib/libmujoco.so*
+    - lib/libmujoco*.dylib
+    - bin/mujoco.dll
+    - lib/mujoco.lib
+    # wasm static library + its private third-party archives.
+    - lib/libmujoco.a
+    - lib/mujoco/
+    # Plugins, viewer, samples.
+    - bin/mujoco_plugin/
+    - bin/simulate*
+    - bin/basic*
+    - bin/compile*
+    - bin/testspeed*
+    - bin/dependencies*
+    - lib/libsimulate.a
+    - lib/simulate.lib
+    - include/simulate/
+    # Headers, CMake package, models, JS bindings.
+    - include/mujoco/
+    - lib/cmake/mujoco/
+    - share/mujoco/
+  cmake_packages:
+    - { name: mujoco, targets: ["mujoco::mujoco"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 20

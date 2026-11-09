@@ -1,0 +1,92 @@
+schema_version: 1
+recipe:
+  name: mujoco-core-cp313
+  upstream_version: "4.0.0"
+  # cvc.1: first packaging, hand-written (not tools/gen_python_recipes.py):
+  # the sdist builds against the `mujoco` recipe's C library and its CMake
+  # fetches abseil/Eigen/pybind11/GLFW/lodepng, which deps.lock pins.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/mujoco-core/
+  license: Apache-2.0
+  tags: [python, source, physics, robotics, simulation]
+  description: >-
+    MuJoCo 4.0.0 Python bindings (PyPI mujoco-core; `import mujoco`) for
+    CPython 3.13 — MjModel/MjData, every mj_* function, mjSpec model editing,
+    rollout and batch simulation, with numpy views of the simulation state.
+    Since 4.0 upstream's `mujoco` PyPI name is a metapackage over mujoco-core
+    and mujoco-studio (the Filament renderer); this is mujoco-core.  Built
+    FROM SOURCE: the PyPI sdist is compiled with the prefix's CPython 3.13
+    against cvcpkg's `mujoco` C library, which is bundled into the package as
+    in upstream's wheels (no runtime dependency on the mujoco recipe).
+    mujoco.viewer and mujoco.Renderer additionally need upstream's optional
+    `rendering` extra (the glfw and PyOpenGL PyPI packages), not yet packaged
+    by cvcpkg.  x86_64 builds require AVX.
+
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/d6/50/5745a505dd14526bb13f71cbfab61d0382f2560256b127e74a007517f59e/mujoco_core-4.0.0.tar.gz
+  sha256: "7300cc232f27ceb8694aa45b26c790667eebd4a06286156b49b9726e3bf1d7cf"
+  strip_components: 1
+
+python:
+  interpreter: python313
+  abi: cp313
+
+patches: []
+
+depends:
+  build:
+    - name: python313
+    - name: numpy-cp313
+    # PEP-517 backend (pyproject [build-system] requires = ["setuptools"]);
+    # --no-build-isolation means it must already be in the build prefix.
+    - name: setuptools-cp313
+    # The C library setup.py builds against (MUJOCO_PATH), bundled into the wheel.
+    - name: mujoco
+      version: "==4.0.0"
+    - cmake
+    - ninja
+    # GLFW (compiled into the _simulate extension from deps.lock) needs the X11
+    # and GL headers on Linux; see recipes/mujoco.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: libxrandr
+      platforms: [linux]
+    - name: libxinerama
+      platforms: [linux]
+    - name: libxcursor
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+  runtime:
+    - name: python313
+    - name: numpy-cp313
+  host_tools:
+    - python313
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/python3.13/site-packages/mujoco/", platforms: [linux, macos] }
+    - { glob: "lib/python3.13/site-packages/mujoco_core-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "bin/mjpython", platforms: [macos] }
+    - { glob: "Lib/site-packages/mujoco/", platforms: [windows] }
+    - { glob: "Lib/site-packages/mujoco_core-*.dist-info/", platforms: [windows] }
+    - share/licenses/mujoco-core-cp313/

@@ -1,0 +1,52 @@
+# mujocoConfig.cmake — MuJoCo @MUJOCO_VERSION@ for Emscripten (cvcpkg wasm bundle).
+#
+# Written by cvcpkg's mujoco recipe (build-wasm.sh / build-wasm.ps1): upstream
+# installs no CMake package when it builds under EMSCRIPTEN.  Provides the same
+# target name as the native package, mujoco::mujoco, as a static library.
+#
+#   find_package(mujoco REQUIRED)
+#   target_link_libraries(app PRIVATE mujoco::mujoco)
+#
+# libmujoco.a is linked WHOLE_ARCHIVE: MuJoCo's OBJ/STL/gmsh mesh decoders
+# register from static initialisers (mjPLUGIN_LIB_INIT) that the linker would
+# otherwise drop, and every mesh asset would then fail to load.  That needs
+# CMake 3.24 or newer in the consuming project.
+#
+# mujoco_WASM_THREADS is ON for the wasm-mt bundle (everything compiled with
+# -pthread; link the consumer with -pthread and serve it cross-origin
+# isolated) and OFF for the single-threaded wasm bundle.
+cmake_minimum_required(VERSION 3.24)
+
+set(mujoco_WASM_THREADS @MUJOCO_WASM_THREADS@)
+
+get_filename_component(_mujoco_prefix "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+
+if(NOT TARGET mujoco::mujoco)
+  set(_mujoco_dep_targets)
+  foreach(_mujoco_dep IN ITEMS @MUJOCO_DEP_LIBS@)
+    add_library(mujoco::_dep_${_mujoco_dep} STATIC IMPORTED)
+    set_target_properties(mujoco::_dep_${_mujoco_dep} PROPERTIES
+      IMPORTED_LOCATION "${_mujoco_prefix}/lib/mujoco/lib${_mujoco_dep}.a")
+    list(APPEND _mujoco_dep_targets mujoco::_dep_${_mujoco_dep})
+  endforeach()
+
+  add_library(mujoco::mujoco_static STATIC IMPORTED)
+  set_target_properties(mujoco::mujoco_static PROPERTIES
+    IMPORTED_LOCATION "${_mujoco_prefix}/lib/libmujoco.a"
+    INTERFACE_INCLUDE_DIRECTORIES "${_mujoco_prefix}/include")
+
+  add_library(mujoco::mujoco INTERFACE IMPORTED)
+  set_target_properties(mujoco::mujoco PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${_mujoco_prefix}/include"
+    INTERFACE_LINK_LIBRARIES
+      "$<LINK_LIBRARY:WHOLE_ARCHIVE,mujoco::mujoco_static>;${_mujoco_dep_targets}")
+  if(mujoco_WASM_THREADS)
+    set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_COMPILE_OPTIONS -pthread)
+    set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_LINK_OPTIONS -pthread)
+  endif()
+  unset(_mujoco_dep_targets)
+  unset(_mujoco_dep)
+endif()
+
+set(mujoco_FOUND TRUE)
+unset(_mujoco_prefix)
