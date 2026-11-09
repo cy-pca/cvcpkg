@@ -30,6 +30,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **`/install.sh` retries transient download errors.** It ran curl once per
+  request: the registry lookup, the bundle download, and the GitHub fallback's
+  release list, binary and `.sha256`. So one bad answer failed the install. On
+  2026-11-09, a 504 from GitHub's release CDN for `cvcpkg-macos-arm64.sha256`
+  failed two of libcvc's macOS recipe jobs this way.
+  - Every request passes `--retry 3 --retry-delay 2`. Where curl has them, it
+    also passes `--retry-connrefused` (curl 7.52+) and `--retry-all-errors`
+    (curl 7.71+, which also retries a transfer cut off midway). The script
+    probes for both, so an older curl runs it without them.
+  - The downloads no longer pass `--fail`. With it, the macOS runners' curl
+    reported that 504 as exit 56, a receive error, rather than 22. `--retry`
+    checks the HTTP status only of a transfer that ended 0 or 22, so adding it
+    alone would not have retried the 504. The script now checks the final
+    status itself.
+  - Without `--fail`, a 4xx counts as a finished transfer, which
+    `--retry-all-errors` does not retry. A 404 from the registry still falls
+    back to GitHub at once. A registry that stays down, or keeps failing,
+    still stops the install once the retries are spent.
+
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
   on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux
