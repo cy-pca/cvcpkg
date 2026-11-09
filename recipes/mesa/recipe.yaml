@@ -7,6 +7,10 @@ recipe:
   # segfaulted compiling VTK's multisample-resolve shader (NIR out-of-SSA).
   # glibc and FreeBSD already map alloca to the builtin, so the linux and
   # freebsd builds compile the same code.
+  # Not bumped for the windows build: it is a new variant (no windows bundle
+  # was ever published), and scoping the X11/GLVND/libdrm, expat and zstd
+  # edges to the Unix platforms leaves what linux, freebsd and netbsd build
+  # and ship unchanged.
   cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -25,6 +29,10 @@ recipe:
     libraries and the EGL vendor JSON relative to its own location, so no
     environment variables are needed beyond the usual cvcpkg activate.
     No hardware drivers, no Vulkan, no gbm, no video codecs, no OpenCL.
+    On Windows: llvmpipe and softpipe behind WGL (bin/opengl32.dll +
+    bin/libgallium_wgl.dll, LLVM linked in), for a process that must render
+    with no GPU, such as a CI runner, where Windows offers only GDI's
+    OpenGL 1.1.
 
 source:
   # Built from the source package mesa-src, which pins the upstream tarball
@@ -46,10 +54,14 @@ depends:
     - meson
     - ninja
     - pkg-config
-    - patchelf
+    - name: patchelf
+      platforms: [linux, freebsd, netbsd]
+    # On Windows these are winflexbison's win_flex and win_bison.
     - bison
     - flex
     - m4
+    # On Windows, meson.cmd runs the build prefix's python.exe, so this is also
+    # the interpreter meson itself runs on.
     - name: python311
     # Mesa's code generators import mako, yaml and packaging.
     - name: markupsafe-cp311
@@ -57,27 +69,47 @@ depends:
     - name: pyyaml-cp311
     - name: packaging-cp311
     - name: xorgproto
+      platforms: [linux, freebsd, netbsd]
+    # MSVC cannot build the libLLVM DLL, so on Windows libgallium_wgl.dll links
+    # llvm20's component .lib files and LLVM does not ship.
+    - name: llvm20
+      platforms: [windows]
   runtime:
     - name: llvm20
+      platforms: [linux, freebsd, netbsd]
     # >= libglvnd 1.7.0+cvc.2 (relocatable EGL vendor dir) is required for the
     # EGL path; the resolver serves the newest revision.
     - name: libglvnd
+      platforms: [linux, freebsd, netbsd]
     - name: libdrm
+      platforms: [linux, freebsd, netbsd]
     - name: libx11
+      platforms: [linux, freebsd, netbsd]
     - name: libxext
+      platforms: [linux, freebsd, netbsd]
     - name: libxcb
+      platforms: [linux, freebsd, netbsd]
     - name: libxxf86vm
+      platforms: [linux, freebsd, netbsd]
     - name: libxshmfence
+      platforms: [linux, freebsd, netbsd]
     - name: expat
+      platforms: [linux, freebsd, netbsd]
     - name: zlib
     - name: zstd
+      platforms: [linux, freebsd, netbsd]
   host_tools: []
 
 package:
   files:
     - lib/
-    - include/
-    - share/
+    # The Windows build installs no headers and no data (no GLVND vendor
+    # files, no drirc).
+    - { glob: "include/", platforms: [linux, freebsd, netbsd] }
+    - { glob: "share/", platforms: [linux, freebsd, netbsd] }
+    # Windows: the WGL stub and the drivers, plus their import libs in lib/.
+    - { glob: "bin/opengl32.dll", platforms: [windows] }
+    - { glob: "bin/libgallium_wgl.dll", platforms: [windows] }
 
 build:
   matrix:
@@ -92,6 +124,11 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    # MSVC + Meson.  libcvc's Windows CI stages the DLLs beside its cvcGL
+    # render tests; before this it fetched mesa-dist-win from GitHub Releases,
+    # which answered 504 for minutes at a time.
+    - platform: windows
+      script: build.ps1
 
 notes:
   - title: "Relocation / environment"
@@ -123,6 +160,20 @@ notes:
       are baked absolute paths that do not follow a relocated prefix; they only
       affect hardware-driver app workarounds, never llvmpipe.  The classic
       OSMesa library was removed from Mesa in 25.1 and is not built.
+  - title: "Windows"
+    platforms: [windows]
+    description: >-
+      Copy bin/opengl32.dll and bin/libgallium_wgl.dll into the directory of
+      the executable that should render with llvmpipe.  Windows searches an
+      executable's own directory before System32, so this replaces the GDI
+      OpenGL 1.1 path for that process only; nothing is installed system-wide.
+      Both are needed: opengl32.dll is only the WGL loader and
+      libgallium_wgl.dll holds the drivers (LLVM is linked into it).
+      libgallium_wgl.dll also loads zlib1.dll, which the install puts in the
+      same bin/: copy it along, or keep that bin/ on PATH.
+      GALLIUM_DRIVER=llvmpipe (the default) or softpipe picks the rasterizer.
+      Desktop OpenGL only (4.5 core and compatibility with llvmpipe); no EGL,
+      GLES or Vulkan.
   - title: "FreeBSD and NetBSD"
     platforms: [freebsd, netbsd]
     description: >-
