@@ -7,22 +7,37 @@
 #   cvc_wasm_run     — execute a wasm binary with the appropriate runtime
 #   CVC_WASM_RUNNER  — "node" (emscripten) or "wasmtime" (wasi)
 #
-# Expects CVC_PLATFORM to be set ("wasm" or "wasi").
-# For wasm: CVC_EMSDK_DIR must point to the activated emsdk prefix.
+# Expects CVC_PLATFORM to be set ("wasm", "wasm-mt" or "wasi").
+# For wasm and wasm-mt: CVC_EMSDK_DIR must point to the activated emsdk prefix.
+# wasm-mt runs on the same emcc and node; a test adds -pthread itself. (Tests
+# that set CVC_PLATFORM=wasm around sourcing this for wasm-mt, from before it
+# knew wasm-mt, keep working.)
 # For wasi: CVC_WASI_SDK_DIR must point to the wasi-sdk prefix.
 
 set -euo pipefail
 
 CVC_WASM_RUNNER=""
 
-if [[ "${CVC_PLATFORM:-}" == "wasm" ]]; then
-    # ── Emscripten (wasm) ──────────────────────────────────────────
+if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasm-mt" ]]; then
+    # ── Emscripten (wasm, wasm-mt) ─────────────────────────────────
     : "${CVC_EMSDK_DIR:?CVC_EMSDK_DIR must be set for wasm tests}"
 
     # Activate emscripten environment (adds emcc, node to PATH).
+    # Source emsdk_env.sh from INSIDE the emsdk dir, as env-wasm.sh does. The
+    # fleet builders symlink-merge the toolchain into the prefix, so
+    # emsdk_env.sh there is an absolute symlink. Its self-location then prepends
+    # its own dir to the absolute target, the cd fails, and it finds emsdk.py
+    # only if the CWD holds it. Until this, every fleet wasm test printed "emcc
+    # not found after sourcing emsdk_env.sh, skipping wasm test" and passed
+    # without compiling anything (zlib job 29047, joltphysics job 28998,
+    # 2026-11-02). A real emsdk tree (Windows, catx-03) is unaffected.
     # shellcheck disable=SC1091
     _cvc_em_cache_pre="${EM_CACHE:-}"  # emsdk_env.sh clears it; restored below
+    _cvc_em_prev_pwd="$PWD"
+    cd "${CVC_EMSDK_DIR}"
     source "${CVC_EMSDK_DIR}/emsdk_env.sh" 2>/dev/null
+    cd "${_cvc_em_prev_pwd}"
+    unset _cvc_em_prev_pwd
     # emcc must WRITE to its cache (lock files under cache/symbol_lists at link
     # time, system libs on first use). On a shared builder the emsdk can belong
     # to another account (catx-03: /opt/cvc-wasm/emsdk is owned by github-runner

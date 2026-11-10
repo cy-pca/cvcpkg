@@ -38,11 +38,15 @@ cvcpkg pack <path-to-recipe> --from-prefix /tmp/myapp/inst \
 
 Rules that bite:
 
-- **`wasm` and `wasm-mt` are not interchangeable.** Emscripten refuses to mix
-  `-pthread` and non-`-pthread` objects at link time (`--shared-memory is
-  disallowed`). A `wasm` bundle must never feed a `wasm-mt` consumer, or
-  vice versa. The catalog keeps the two worlds separate; one `install` or
-  requirements file targets exactly one of them.
+- **`wasm` and `wasm-mt` are not interchangeable.** A `wasm` bundle must never
+  feed a `wasm-mt` consumer, or vice versa. The catalog keeps the two worlds
+  separate; one `install` or requirements file targets exactly one of them.
+  - An object compiled without `-pthread` has its thread-locals and atomics
+    stripped: they become plain globals and plain loads/stores.
+  - wasm-ld refuses such an object in a `-pthread` link (`--shared-memory is
+    disallowed by X.o`).
+  - An object with neither links either way (a plain `wasm` libgmp.a does), so
+    the link error does not catch every mix.
 - **Everything is static.** `recipes/_common/env-wasm.sh` forces
   `BUILD_SHARED_LIBS=OFF` for wasm builds, so wasm `install` / `build`
   commands pass `--link static` (a wasm static bundle is self-contained —
@@ -197,7 +201,7 @@ Emscripten** (a build configured with `emcmake`), so the same
 
 | Entry point | What it does |
 | --- | --- |
-| `cvcpkg_wasm_threads()` | Adds `-pthread` to the directory's C/C++ compile *and* linker flags (idempotent). Threaded deps with unthreaded app objects is the classic `--shared-memory is disallowed` link failure; this is the fix. |
+| `cvcpkg_wasm_threads()` | Adds `-pthread` to the directory's C/C++ compile *and* linker flags (idempotent). Threaded deps with unthreaded app objects is the classic `--shared-memory is disallowed` link failure (when the app objects have thread-locals or atomics); this is the fix. |
 | `cvcpkg_wasm_deps([PREFIX ...])` | Appends cvcpkg wasm deps prefixes to `CMAKE_FIND_ROOT_PATH`. With no argument: `$ENV{CVCPKG_WASM_DEPS}`, then `$ENV{CVC_WASM_DEPS}`. Appends only — it deliberately does not set `CMAKE_FIND_ROOT_PATH_MODE_*` (that would hide the Emscripten sysroot). |
 | `cvcpkg_wasm_app(<target> ...)` | The browser-side link fixes for one target, with the keywords below. |
 
@@ -337,9 +341,13 @@ with COOP/COEP when threaded) inside the bundle's `bin/`; that is the
 
 ## Gotchas
 
-1. **Mixing `wasm` and `wasm-mt`** → `--shared-memory is disallowed`. One
-   platform per build, end to end (deps *and* app objects).
-2. **Threaded deps, unthreaded app objects** → the same error, at link.
+1. **Mixing `wasm` and `wasm-mt`** → `--shared-memory is disallowed by X.o`,
+   when a plain object has thread-locals or atomics. One without them links
+   anyway, so a clean link proves nothing. One platform per build, end to end
+   (deps *and* app objects).
+2. **Threaded deps, unthreaded app objects** → the same error at a `-pthread`
+   link when the app objects have thread-locals or atomics. A link without
+   `-pthread` succeeds and gives a module with no threads.
    `cvcpkg_wasm_threads()` before the targets are created.
 3. **`wasm-mt` without COOP/COEP** → `SharedArrayBuffer` is undefined; the
    app dies at startup with no useful error.

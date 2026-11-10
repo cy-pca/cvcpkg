@@ -31,10 +31,11 @@ CANONICAL_PLATFORMS = frozenset(
         "wasm",
         # Threaded wasm (emscripten -pthread) is its own platform, not a
         # config of "wasm": every object is compiled with atomics+shared
-        # memory and wasm-ld refuses to mix the two worlds ("--shared-memory
-        # is disallowed" linking a single-threaded archive into a -pthread
-        # build).  One OS, two incompatible ABIs, two catalog keys — the
-        # windows / windows-gnu precedent.
+        # memory. A single-threaded object has its thread-locals and atomics
+        # stripped, and wasm-ld refuses it in a -pthread build
+        # ("--shared-memory is disallowed"); one without either links but was
+        # not built for shared memory. One OS, two incompatible ABIs, two
+        # catalog keys — the windows / windows-gnu precedent.
         "wasm-mt",
         "wasi",
         "cosmo",
