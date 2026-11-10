@@ -59,6 +59,27 @@ else
     CACHE="${XDG_CACHE_HOME:-${HOME}/.cache}/cvcpkg/sources"
 fi
 
+# Download $1 to $2, retrying every failure. curl's own --retry covers timeouts
+# and HTTP 408/429/5xx, but not a reset connection (curl 35 "SSL_connect:
+# Connection reset by peer", seen from GitHub runners). --retry-all-errors
+# would cover it, but it needs curl >= 7.71, and this recipe runs on whatever
+# machine installs it, so the loop is here instead.
+FETCH_ATTEMPTS=5
+fetch() {
+    local url="$1" out="$2" attempt
+    for attempt in $(seq 1 "${FETCH_ATTEMPTS}"); do
+        if curl -fsSL --retry 3 --connect-timeout 30 -o "${out}" "${url}"; then
+            return 0
+        fi
+        if [ "${attempt}" -lt "${FETCH_ATTEMPTS}" ]; then
+            echo "cuda-toolkit: download failed (attempt ${attempt} of ${FETCH_ATTEMPTS}); retrying in $((attempt * 5)) s" >&2
+            sleep $((attempt * 5))
+        fi
+    done
+    echo "cuda-toolkit: download failed after ${FETCH_ATTEMPTS} attempts: ${url}" >&2
+    return 1
+}
+
 ROOT="${CVC_INSTALL_DIR}/cuda"
 EXTRACT="${CVC_BUILD_DIR}/redist"
 rm -rf "${EXTRACT}"
@@ -92,7 +113,7 @@ while read -r plat comp ver sha path name; do
     else
         archive="${CVC_BUILD_DIR}/${file}"
         echo "cuda-toolkit: downloading ${BASE}/${path}"
-        curl -fsSL --retry 3 -o "${archive}" "${BASE}/${path}"
+        fetch "${BASE}/${path}" "${archive}"
         actual="$(sha256sum "${archive}" | awk '{print $1}')"
         if [ "${actual}" != "${sha}" ]; then
             echo "cuda-toolkit: sha256 mismatch for ${file}: expected ${sha}, got ${actual}" >&2
