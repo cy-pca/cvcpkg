@@ -1,0 +1,78 @@
+schema_version: 1
+recipe:
+  name: cdt
+  upstream_version: "2.0.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    CDT (artem-ogre/CDT) — header-only 2D constrained Delaunay triangulation in
+    C++, with William Lenthe's robust predicates. Permissively licensed (MPL-2.0,
+    file-level), so it backs LGPL libcvc where CGAL's GPL 2D triangulations cannot
+    (libcvc's VolumeRover ports, docs/roadmap/VOLROVER-LIBRARY-PORTS-ROADMAP.md
+    §1.2). Installed header-only under include/CDT/ (CDT's own install puts
+    generic names such as predicates.h and KDTree.h straight into include/), with
+    a CMake package exporting the CDT::CDT INTERFACE target, found with
+    find_package(CDT CONFIG). Patched so its headers hold no mutable
+    process-wide state (patches/no-mutable-statics.patch).
+  homepage: https://github.com/artem-ogre/CDT
+  # CDT's own files are MPL-2.0; its predicates.h is BSD-3-Clause (Lenthe) and
+  # its portable_nth_element.hpp Apache-2.0 WITH LLVM-exception (libc++).
+  license: "MPL-2.0 AND BSD-3-Clause AND Apache-2.0 WITH LLVM-exception"
+  tags: [geometry, triangulation, delaunay, header-only, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/artem-ogre/CDT/archive/refs/tags/2.0.1.tar.gz
+  sha256: "5e3c45715e55b5f2d4390082c8c1ac026f635ddee233516fdcf94b197954367d"
+  strip_components: 1
+
+# A never-written static made const, and Lenthe's error-bound constants
+# initialised from constant expressions; see the patch.
+patches:
+  - patches/no-mutable-statics.patch
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+# Header-only: every row copies the headers and writes the CMake package; there
+# is nothing to compile.
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: haiku
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    - include/CDT/
+    - lib/cmake/CDT/
+    - share/licenses/cdt/
+  cmake_packages:
+    - { name: CDT, targets: ["CDT::CDT"] }
+
+abi:
+  cxx_std: 11
