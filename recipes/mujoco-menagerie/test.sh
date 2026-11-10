@@ -81,7 +81,7 @@ export PATH="${MJ_PREFIX}/bin:${PATH}"
 export LD_LIBRARY_PATH="${MJ_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export DYLD_LIBRARY_PATH="${MJ_PREFIX}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
 
-for s in "${scenes[@]}"; do
+for s in ${scenes[@]+"${scenes[@]}"}; do
     rel="${s#"${SHARE}/"}"
     if ! "${COMPILE}" "${s}" "${T}/scene.mjb" > "${T}/compile.log" 2>&1; then
         cat "${T}/compile.log"
