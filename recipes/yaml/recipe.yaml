@@ -74,7 +74,12 @@ package:
   files:
     - lib/libyaml*
     - lib/yaml*
-    - lib/cmake/yaml/
+    # libyaml's CMake installs its package config to cmake/ on Windows
+    # (INSTALL_CMAKE_DIR) and to lib/cmake/yaml/ everywhere else.
+    - glob: lib/cmake/yaml/
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo]
+    - glob: cmake/
+      platforms: [windows]
     # No lib/pkgconfig/yaml*: libyaml's CMake build installs no .pc file.
     - include/yaml.h
   cmake_packages:
