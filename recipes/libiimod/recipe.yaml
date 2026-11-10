@@ -75,8 +75,11 @@ build:
 
 package:
   files:
-    # lib/libiimod* covers both spellings (libiimod.a / libiimod.lib).
+    # The Unix / MSVC pair: the target is `iimod`, so Unix installs
+    # lib/libiimod.a and MSVC lib/iimod.lib. The pack gate judges the two
+    # together; lib/libiimod* alone matched nothing on Windows.
     - lib/libiimod*
+    - lib/iimod*
     - lib/cmake/libiimod/
     - include/libiimod/
     - share/licenses/libiimod/
