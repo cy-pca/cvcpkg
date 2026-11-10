@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # recipes/glfw/build.sh — build GLFW with CMake (static or shared per CVC_LINK).
 #
-# On Linux/BSD both the X11 and Wayland backends are built; the X11 libs,
+# On Linux both the X11 and Wayland backends are built; the X11 libs,
 # xkbcommon, wayland-client and wayland-scanner/wayland-protocols come from
-# the cvcpkg dependency prefix.  On macOS the Cocoa backend is used and GLFW
-# forces the X11/Wayland options OFF on Apple, so we don't pass them there.
+# the cvcpkg dependency prefix.  The BSDs build X11 only (see below).  On macOS
+# the Cocoa backend is used and GLFW forces the X11/Wayland options OFF on
+# Apple, so we don't pass them there.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -40,11 +41,15 @@ _glfw_opts=(
 )
 
 case "${CVC_PLATFORM}" in
-    linux|freebsd)
+    linux)
         _glfw_opts+=( -DGLFW_BUILD_X11=ON -DGLFW_BUILD_WAYLAND=ON )
         ;;
-    openbsd|netbsd)
-        # Wayland is not a first-class platform on OpenBSD/NetBSD; X11 only.
+    freebsd|openbsd|netbsd)
+        # X11 only.  Wayland is not a first-class platform on OpenBSD/NetBSD,
+        # and on FreeBSD GLFW's Wayland backend includes <linux/input.h>
+        # (wl_init.c), which there comes only from the evdev-proto port, not
+        # from cvcpkg: the dev cluster's FreeBSD build stopped on it (PR #599).
+        # The FreeBSD row had never built, so no published bundle changes.
         _glfw_opts+=( -DGLFW_BUILD_X11=ON -DGLFW_BUILD_WAYLAND=OFF )
         ;;
     macos)
