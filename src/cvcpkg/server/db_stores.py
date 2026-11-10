@@ -1122,6 +1122,7 @@ _CATALOG_COLUMNS = (
     PackageRow.org_slug.label("org"),
     PackageRow.required_deps,
     PackageRow.provides,
+    PackageRow.requires_capabilities,
     # Last, and not a field: the tiebreak between rows of one version.
     PackageRow.id,
 )
@@ -1435,6 +1436,7 @@ class DbPackageIndex:
                         org=row.org_slug,
                         required_deps=json.loads(row.required_deps or "[]"),
                         provides=json.loads(row.provides or "[]"),
+                        requires_capabilities=json.loads(row.requires_capabilities or "[]"),
                     )
                 )
             if order == "version":
@@ -1706,6 +1708,7 @@ class DbPackageIndex:
                 b["diverges_upstream"] = bool(b["diverges_upstream"])
                 b["required_deps"] = _json_list(b["required_deps"])
                 b["provides"] = _json_list(b["provides"])
+                b["requires_capabilities"] = _json_list(b["requires_capabilities"])
                 bundles.append(b)
         return bundles
 
@@ -1775,6 +1778,7 @@ class DbPackageIndex:
         published_by: str = "",
         required_deps: str = "[]",
         provides: str = "[]",
+        requires_capabilities: str = "[]",
         origin_upstream: str = "",
     ) -> None:
         async with get_session() as session:
@@ -1818,6 +1822,7 @@ class DbPackageIndex:
                 published_by=published_by,
                 required_deps=required_deps,
                 provides=provides,
+                requires_capabilities=requires_capabilities,
                 origin_upstream=origin_upstream,
             )
             session.add(row)
@@ -2255,9 +2260,11 @@ class DbPackageIndex:
         org_slug: str,
         required_deps: str,
         provides: str,
+        requires_capabilities: str = "[]",
         expect_required_deps: str | None = None,
     ) -> dict[str, int]:
-        """Fill one variant's EMPTY ``required_deps`` / ``provides`` in place.
+        """Fill one variant's EMPTY ``required_deps`` / ``provides`` /
+        ``requires_capabilities`` in place.
 
         Each column is written only where it still holds ``[]``, so a row that
         already records its edges is never touched -- the backfill can only add
@@ -2266,14 +2273,16 @@ class DbPackageIndex:
         With *expect_required_deps* (a JSON string), ``required_deps`` is
         instead replaced -- by ``[]`` too -- only where it equals that string
         exactly: a compare-and-set that corrects a backfill without touching a
-        row anything else has changed.  ``provides`` stays fill-only.  Returns
-        how many rows each column changed.
+        row anything else has changed.  ``provides`` and
+        ``requires_capabilities`` stay fill-only.  Returns how many rows each
+        column changed.
         """
         counts: dict[str, int] = {}
         async with get_session() as session:
             for column, value in (
                 (PackageRow.required_deps, required_deps),
                 (PackageRow.provides, provides),
+                (PackageRow.requires_capabilities, requires_capabilities),
             ):
                 current = "[]"
                 if column is PackageRow.required_deps and expect_required_deps is not None:

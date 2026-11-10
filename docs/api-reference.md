@@ -331,10 +331,11 @@ Upload and publish a package bundle.
 | `recipe_version` | string | ❌ | Recipe revision hash |
 | `required_deps` | string | ❌ | JSON list of runtime deps, `[{"name", "org"?, "version"?}, ...]` (default `[]`) |
 | `provides` | string | ❌ | JSON list of virtual slot names this package fills (default `[]`) |
+| `requires_capabilities` | string | ❌ | JSON list of host capabilities the bundle needs, e.g. `["cuda"]` (default `[]`). The resolver never picks the bundle on a host that lacks one; `/v1/catalog` serves it per bundle |
 
 **Body**: `multipart/form-data` with a `file` field containing the `.tar.zst` archive.
-`required_deps` and `provides` may also be sent as form fields of the same
-name, and a form field wins over the query parameter.  A bundle with hundreds
+`required_deps`, `provides` and `requires_capabilities` may also be sent as form
+fields of the same name, and a form field wins over the query parameter.  A bundle with hundreds
 of deps needs this: front-end proxies refuse request lines over about 8 KB
 (cvcpkg.org answers `414`).  Servers that support it list
 `publish-metadata-body` in `/healthz` `features`; `cvcpkg publish` uses the
@@ -367,7 +368,7 @@ so always download from the `archive_url` returned. The chunked
 | `403` | Insufficient role |
 | `409` | Duplicate package (same name+version+platform+arch+build_type+link), or both the archive's names are other packages' archives |
 | `413` | Upload exceeds size limit |
-| `422` | Invalid metadata, e.g. `required_deps` or `provides` not a JSON list |
+| `422` | Invalid metadata, e.g. `required_deps` or `provides` not a JSON list, or a `requires_capabilities` entry that is not a non-empty name |
 | `429` | Rate limit exceeded |
 
 ### Chunked uploads
@@ -384,10 +385,11 @@ and does not check ownership.
 Initialise a chunked upload session.  Takes the same query parameters as
 `POST /v1/publish` (including the metadata params `description`,
 `homepage`, `license`, `maintainer`, `tags`, `required_deps`,
-`provides`, and `org`, which publish also accepts) plus `total_size`
-(bytes, `0` = unknown).  An optional JSON body
-`{"required_deps": [...], "provides": [...]}` carries those two as lists
-instead of query parameters, and wins over them (`publish-metadata-body`).
+`provides`, `requires_capabilities`, and `org`, which publish also accepts)
+plus `total_size` (bytes, `0` = unknown).  An optional JSON body
+`{"required_deps": [...], "provides": [...], "requires_capabilities": [...]}`
+carries those as lists instead of query parameters, and wins over them
+(`publish-metadata-body`).
 Rate limited; duplicates are rejected with `409` up front.
 
 **Response** `201 Created`:

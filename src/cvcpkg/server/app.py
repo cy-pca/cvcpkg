@@ -372,6 +372,20 @@ def _json_list_param(field: str, query_value: str, body_value: object) -> str:
     return raw
 
 
+def _capability_list_param(query_value: str, body_value: object) -> str:
+    """``requires_capabilities`` as stored: a JSON list of non-empty names.
+
+    Stricter than ``_json_list_param``: the resolver compares these names with
+    the host's capability set, so an entry that is not a string can never be
+    met and would hide the bundle from every host.
+    """
+    raw = _json_list_param("requires_capabilities", query_value, body_value)
+    caps = json.loads(raw)
+    if not all(isinstance(c, str) and c for c in caps):
+        raise HTTPException(422, "requires_capabilities entries must be non-empty names")
+    return raw
+
+
 def _edge_public_publish_warning(org: str) -> str:
     """Advise (or, in strict mode, forbid) a local public publish on an edge.
 
@@ -724,6 +738,7 @@ class UploadSession:
     tags: str = ""
     required_deps: str = "[]"
     provides: str = "[]"
+    requires_capabilities: str = "[]"
     org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
@@ -2400,6 +2415,7 @@ async def _populate_sync_once() -> int:
                     published_by=f"populate:{upstream}",
                     required_deps=json.dumps(b.get("required_deps") or []),
                     provides=json.dumps(b.get("provides") or []),
+                    requires_capabilities=json.dumps(b.get("requires_capabilities") or []),
                     # Provenance, so reconciliation may later follow upstream's
                     # yank/nuke decisions for this row -- and only this row.
                     origin_upstream=upstream,
@@ -4423,6 +4439,7 @@ def create_app(
             key_fingerprint=b.get("key_fingerprint", ""),
             required_deps=b.get("required_deps") or [],
             provides=b.get("provides") or [],
+            requires_capabilities=b.get("requires_capabilities") or [],
         )
 
     @app.get("/v1/packages/{name}/latest", response_model=PackageInfo, tags=["packages"])
@@ -5013,6 +5030,10 @@ def create_app(
             "[]",
             description="JSON-encoded list of virtual slot names this package fills",
         ),
+        requires_capabilities: str = Query(
+            "[]",
+            description="JSON-encoded list of host capabilities the bundle needs, e.g. ['cuda']",
+        ),
         required_deps_form: str | None = Form(
             None,
             alias="required_deps",
@@ -5022,6 +5043,13 @@ def create_app(
             None,
             alias="provides",
             description="provides as a multipart field; wins over the query parameter",
+        ),
+        requires_capabilities_form: str | None = Form(
+            None,
+            alias="requires_capabilities",
+            description=(
+                "requires_capabilities as a multipart field; wins over the query parameter"
+            ),
         ),
         actor: TokenRecord = Depends(
             require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
@@ -5034,6 +5062,9 @@ def create_app(
             )
         required_deps = _json_list_param("required_deps", required_deps, required_deps_form)
         provides = _json_list_param("provides", provides, provides_form)
+        requires_capabilities = _capability_list_param(
+            requires_capabilities, requires_capabilities_form
+        )
         edge_warning = _edge_public_publish_warning(org)
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
@@ -5216,6 +5247,7 @@ def create_app(
                         published_by=actor.name,
                         required_deps=required_deps,
                         provides=provides,
+                        requires_capabilities=requires_capabilities,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish of the same
@@ -5258,6 +5290,7 @@ def create_app(
                 "org": org,
                 "required_deps": json.loads(required_deps),
                 "provides": json.loads(provides),
+                "requires_capabilities": json.loads(requires_capabilities),
             }
             async with _audit_txn(
                 AuditAction.publish,
@@ -5323,6 +5356,9 @@ def create_app(
         pkg_tags: str = Query("", alias="tags"),
         required_deps: str = Query("[]", description="JSON-encoded runtime deps"),
         provides: str = Query("[]", description="JSON-encoded virtual slot names"),
+        requires_capabilities: str = Query(
+            "[]", description="JSON-encoded host capabilities the bundle needs"
+        ),
         org: str = Query(
             "",
             description="Organization slug. Empty for official/public packages.",
@@ -5347,6 +5383,9 @@ def create_app(
             "required_deps", required_deps, metadata.required_deps if metadata else None
         )
         provides = _json_list_param("provides", provides, metadata.provides if metadata else None)
+        requires_capabilities = _capability_list_param(
+            requires_capabilities, metadata.requires_capabilities if metadata else None
+        )
         # Strict-mode edges reject here (fail before the upload); non-strict
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)
@@ -5438,6 +5477,7 @@ def create_app(
             tags=pkg_tags,
             required_deps=required_deps,
             provides=provides,
+            requires_capabilities=requires_capabilities,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -5680,6 +5720,7 @@ def create_app(
                         published_by=actor.name,
                         required_deps=session.required_deps,
                         provides=session.provides,
+                        requires_capabilities=session.requires_capabilities,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish — roll back,
@@ -5721,6 +5762,7 @@ def create_app(
                 "org": session.org,
                 "required_deps": json.loads(session.required_deps),
                 "provides": json.loads(session.provides),
+                "requires_capabilities": json.loads(session.requires_capabilities),
             }
             async with _audit_txn(
                 AuditAction.publish, actor.name, _publish_target, _publish_detail
@@ -5928,10 +5970,13 @@ def create_app(
         org: str = Query("", description="Owning org slug ('' for the public namespace)"),
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
-        """Fill one published variant's EMPTY required_deps / provides.
+        """Fill one published variant's EMPTY required_deps / provides /
+        requires_capabilities.
 
         Rows published before #152 reached the catalog with no edges, so the
-        resolver installs them without their runtime dependencies.  This fills
+        resolver installs them without their runtime dependencies; rows
+        published before migration 037 lack requires_capabilities, so the
+        resolver picks a CUDA-only provider on hosts without CUDA.  This fills
         a column only while it is still ``[]`` -- a row that records its edges
         is never rewritten -- and addresses exactly one variant: every key is
         required, so no request can touch more than the variant it names.
@@ -5948,8 +5993,11 @@ def create_app(
                 )
         if any(not p for p in body.provides):
             raise HTTPException(422, "provides entries must be non-empty names")
+        if any(not c for c in body.requires_capabilities):
+            raise HTTPException(422, "requires_capabilities entries must be non-empty names")
         required_json = json.dumps(body.required_deps)
         provides_json = json.dumps(body.provides)
+        caps_json = json.dumps(body.requires_capabilities)
         expect_json = (
             None if body.expect_required_deps is None else json.dumps(body.expect_required_deps)
         )
@@ -5962,6 +6010,7 @@ def create_app(
             actor.name,
             target,
             f"required_deps={required_json} provides={provides_json}"
+            + (f" requires_capabilities={caps_json}" if body.requires_capabilities else "")
             + ("" if expect_json is None else f" expect_required_deps={expect_json}"),
         ):
             if _use_db:
@@ -5975,11 +6024,12 @@ def create_app(
                     org_slug=org,
                     required_deps=required_json,
                     provides=provides_json,
+                    requires_capabilities=caps_json,
                     expect_required_deps=expect_json,
                 )
             else:
                 state = _get_state()
-                counts = {"required_deps": 0, "provides": 0}
+                counts = {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
                 for b in state.index.get("bundles", []):
                     if (
                         b.get("name"),
@@ -6001,6 +6051,9 @@ def create_app(
                     if body.provides and not b.get("provides"):
                         b["provides"] = body.provides
                         counts["provides"] += 1
+                    if body.requires_capabilities and not b.get("requires_capabilities"):
+                        b["requires_capabilities"] = body.requires_capabilities
+                        counts["requires_capabilities"] += 1
                 state.save_index()
         return {"message": f"backfilled {target}", "count": counts}
 
