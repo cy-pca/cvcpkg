@@ -3,9 +3,13 @@
 #
 # wasm-mt is env-wasm.sh with -pthread injected into every compile and link
 # (emscripten atomics + shared memory).  It is a separate PLATFORM, not a
-# flag, because wasm-ld refuses to mix the two worlds ("--shared-memory is
-# disallowed" when a single-threaded archive meets a -pthread link) — so the
-# catalog must never hand a wasm bundle to a wasm-mt consumer or vice versa.
+# flag, so the catalog never hands a wasm bundle to a wasm-mt consumer or vice
+# versa.  An object compiled without -pthread has its thread-locals and atomics
+# stripped (they become plain globals and plain loads/stores), and wasm-ld then
+# refuses it in a -pthread link ("--shared-memory is disallowed by X.o"): MPFR's
+# thread-local state, C _Thread_local / C++ thread_local, <stdatomic.h> /
+# std::atomic.  An object with neither links either way (a plain libgmp.a does,
+# emsdk 5.0.7), so the link error does not catch every mix; the platform does.
 #
 # Recipes that source env-${CVC_PLATFORM}.sh get threading automatically;
 # recipes whose build-wasm.sh sources env-wasm.sh directly get it from the
