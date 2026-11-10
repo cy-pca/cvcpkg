@@ -54,14 +54,25 @@ if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasm-mt" ]]; then
         echo "cvcpkg: emsdk cache is read-only for $(id -un); using EM_CACHE=${EM_CACHE}" >&2
     fi
 
+    # The node that runs the programs: the emsdk's own (EMSDK_NODE, which
+    # emsdk_env.sh sets), else whatever node is on PATH. On the fleet emsdk_env.sh
+    # sets EMSDK_NODE but does not put its node on PATH, and a builder's system
+    # node can be too old for emscripten's output: mpfr wasm debug job 29923
+    # (builder 2, 2026-11-10) died on "SyntaxError: Unexpected token '.'" at
+    # `?.`, while builder 1's newer system node passed.
+    _cvc_node="${EMSDK_NODE:-}"
+    if [[ -z "${_cvc_node}" || ! -x "${_cvc_node}" ]]; then
+        _cvc_node=$(command -v node 2>/dev/null || true)
+    fi
     if ! command -v emcc >/dev/null 2>&1; then
         echo "WARN: emcc not found after sourcing emsdk_env.sh, skipping wasm test" >&2
         CVC_WASM_RUNNER="skip"
-    elif ! command -v node >/dev/null 2>&1; then
+    elif [[ -z "${_cvc_node}" ]]; then
         echo "WARN: node not found in emsdk, skipping wasm test" >&2
         CVC_WASM_RUNNER="skip"
     else
         CVC_WASM_RUNNER="node"
+        echo "cvcpkg: wasm tests run under ${_cvc_node} ($("${_cvc_node}" --version 2>/dev/null || echo '?'))" >&2
     fi
 
     # Cross-compile a C file using emcc.
@@ -78,7 +89,7 @@ if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasm-mt" ]]; then
     # Run a wasm program compiled with emscripten.
     # Usage: cvc_wasm_run program.js [args...]
     cvc_wasm_run() {
-        node "$@"
+        "${_cvc_node}" "$@"
     }
 
 elif [[ "${CVC_PLATFORM:-}" == "wasi" ]]; then
