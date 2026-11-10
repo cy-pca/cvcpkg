@@ -74,7 +74,17 @@ endif()
 # off made cl spend 100+ CPU-minutes optimising functions.cc on one core
 # (2026-11-09, stopped unfinished), while /GL + the multi-threaded /LTCG link
 # built it in about ten minutes.
-$env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache) -DCMAKE_PROJECT_INCLUDE=$($permissive -replace '\\', '/')"
+#
+# FETCHCONTENT_BASE_DIR: keep object paths under Windows' 260-character limit.
+# setup.py builds in <src>\build\temp.win-amd64-cpython-3XX\Release\, and
+# FetchContent puts abseil's build tree under that, so on the dev fleet
+# (C:\Users\tfx\cvcpkg-builder-dev\cvcpkg-job-...\cvcpkg-...\) the deepest
+# abseil object reached 282 characters and cl failed with "fatal error C1083:
+# Cannot open compiler generated file: '': Invalid argument".  Under
+# <build dir>\fc the same object is 240.  Upstream's wheel CI also points
+# FETCHCONTENT_BASE_DIR at a short directory.
+$fcBase = (Join-Path $env:CVC_BUILD_DIR 'fc') -replace '\\', '/'
+$env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache) -DFETCHCONTENT_BASE_DIR=$fcBase -DCMAKE_PROJECT_INCLUDE=$($permissive -replace '\\', '/')"
 
 # ── 4. Build the wheel from the extracted sdist ─────────────────────────────
 $wheelhouse = Join-Path $env:CVC_BUILD_DIR 'wheelhouse'
