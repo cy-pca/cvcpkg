@@ -75,10 +75,16 @@ build:
 
 package:
   files:
-    - lib/libqhull_r*
-    - lib/qhull_r*
+    # The shared libqhull_r is native only: wasm and wasm-mt build only the static libraries,
+    # so unscoped these two failed the wasm rows' strict package.files check
+    # (populate-server run 42739931761: "declares 2 entries that match nothing").
+    - { glob: "lib/libqhull_r*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows] }
+    - { glob: "lib/qhull_r*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows] }
+    # Each static library under both spellings, Unix (libX.a) and MSVC (X.lib).
     - lib/libqhullcpp*
+    - lib/qhullcpp*
     - lib/libqhullstatic*
+    - lib/qhullstatic*
     - lib/pkgconfig/qhull_r.pc
     - lib/cmake/Qhull/
     - include/libqhull_r/
