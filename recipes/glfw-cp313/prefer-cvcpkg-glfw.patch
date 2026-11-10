@@ -1,0 +1,72 @@
+cvcpkg: open the prefix's own GLFW (cvcpkg's glfw recipe) before searching the host.
+
+pyGLFW loads a GLFW shared library with ctypes at import time.  Its wheels on
+PyPI bundle one inside the package; the glfw-cpXYZ recipes ship none and depend
+on cvcpkg's `glfw` recipe instead, so the library lives in the prefix:
+<prefix>/lib/libglfw.so.3 (Linux, BSDs), <prefix>/lib/libglfw.3.dylib (macOS),
+<prefix>\bin\glfw3.dll (Windows).  Upstream's own search does not reliably
+reach it:
+
+- Linux/macOS: it globs ~20 directories (cwd, sys.prefix/lib, /usr/lib,
+  /usr/local/lib, /opt/homebrew/lib, LD_LIBRARY_PATH, ...) and loads the
+  NEWEST GLFW it finds, so a host copy newer than the prefix's wins, and a
+  venv's sys.prefix holds no library at all.
+- Windows: ctypes.CDLL('glfw3.dll').  Python 3.8+ does not search PATH for
+  DLLs, so this finds <prefix>\bin only through the prefix's
+  cvcpkg-dll-directories.pth, which python -S, a venv and an embedding
+  application never run.
+
+This adds _load_cvcpkg_library(): the library at that path relative to this
+package's own install location, then relative to sys.base_prefix.  Upstream's
+search stays as the fallback, and PYGLFW_LIBRARY still overrides everything.
+
+--- a/glfw/library.py
++++ b/glfw/library.py
+@@ -225,11 +225,47 @@
+         return os.path.join(package_path, 'x11')
+ 
+ 
++def _load_cvcpkg_library():
++    """
++    Loads the GLFW shared library of the cvcpkg prefix this package is
++    installed in (cvcpkg's glfw recipe), or returns None.
++
++    Tried first: the prefix of this file, then sys.base_prefix (the
++    interpreter's own prefix, also right in a venv).
++    """
++    if sys.platform == 'win32':
++        # <prefix>\Lib\site-packages\glfw\ -> <prefix>\bin\glfw3.dll
++        relative_path = ('bin', 'glfw3.dll')
++    elif sys.platform == 'darwin':
++        # <prefix>/lib/pythonX.Y/site-packages/glfw/ -> <prefix>/lib/
++        relative_path = ('lib', 'libglfw.3.dylib')
++    else:
++        relative_path = ('lib', 'libglfw.so.3')
++    package_path = os.path.abspath(os.path.dirname(__file__))
++    levels = 3 if sys.platform == 'win32' else 4
++    prefixes = [os.path.join(package_path, *[os.pardir] * levels),
++                sys.base_prefix]
++    for prefix in prefixes:
++        filename = os.path.normpath(os.path.join(prefix, *relative_path))
++        if os.path.isfile(filename):
++            try:
++                return ctypes.CDLL(filename)
++            except OSError:
++                pass
++    return None
++
++
++_cvcpkg_glfw = None
++if not os.environ.get('PYGLFW_LIBRARY', ''):
++    _cvcpkg_glfw = _load_cvcpkg_library()
++
+ if os.environ.get('PYGLFW_LIBRARY', ''):
+     try:
+         glfw = ctypes.CDLL(os.environ['PYGLFW_LIBRARY'])  # type: ctypes.CDLL | None
+     except OSError:
+         glfw = None
++elif _cvcpkg_glfw is not None:
++    glfw = _cvcpkg_glfw
+ elif sys.platform == 'win32':
+     glfw = None  # Will become `not None` on success.
+ 
