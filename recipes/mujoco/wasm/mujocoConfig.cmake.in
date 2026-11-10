@@ -2,7 +2,8 @@
 #
 # Written by cvcpkg's mujoco recipe (build-wasm.sh / build-wasm.ps1): upstream
 # installs no CMake package when it builds under EMSCRIPTEN.  Provides the same
-# target name as the native package, mujoco::mujoco, as a static library.
+# target name as the native package, mujoco::mujoco, as a static library, plus
+# the optional mujoco::render_noop (stub mjr_* functions).
 #
 #   find_package(mujoco REQUIRED)
 #   target_link_libraries(app PRIVATE mujoco::mujoco)
@@ -44,6 +45,13 @@ if(NOT TARGET mujoco::mujoco)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_COMPILE_OPTIONS -pthread)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_LINK_OPTIONS -pthread)
   endif()
+
+  # Optional: no-op mjr_* rendering functions (the browser has no MuJoCo GL
+  # renderer), for code shared with native builds that calls mjr_*.
+  add_library(mujoco::render_noop STATIC IMPORTED)
+  set_target_properties(mujoco::render_noop PROPERTIES
+    IMPORTED_LOCATION "${_mujoco_prefix}/lib/mujoco/librender_noop.a"
+    INTERFACE_LINK_LIBRARIES mujoco::mujoco)
   unset(_mujoco_dep_targets)
   unset(_mujoco_dep)
 endif()

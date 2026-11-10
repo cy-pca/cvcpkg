@@ -108,24 +108,24 @@ build:
 package:
   files:
     # Native shared library: .so/.so.N (linux), .dylib (macos), DLL + import lib (windows).
-    - lib/libmujoco.so*
-    - lib/libmujoco*.dylib
-    - bin/mujoco.dll
-    - lib/mujoco.lib
+    - { glob: "lib/libmujoco.so*", platforms: [linux] }
+    - { glob: "lib/libmujoco*.dylib", platforms: [macos] }
+    - { glob: "bin/mujoco.dll", platforms: [windows] }
+    - { glob: "lib/mujoco.lib", platforms: [windows] }
     # wasm static library + its private third-party archives.
-    - lib/libmujoco.a
-    - lib/mujoco/
-    # Plugins, viewer, samples.
-    - bin/mujoco_plugin/
-    - bin/simulate*
-    - bin/basic*
-    - bin/compile*
-    - bin/testspeed*
-    - bin/dependencies*
-    - lib/libsimulate.a
-    - lib/simulate.lib
-    - include/simulate/
-    # Headers, CMake package, models, JS bindings.
+    - { glob: "lib/libmujoco.a", platforms: [wasm, wasm-mt] }
+    - { glob: "lib/mujoco/", platforms: [wasm, wasm-mt] }
+    # Plugins, viewer, samples (native only).
+    - { glob: "bin/mujoco_plugin/", platforms: [linux, macos, windows] }
+    - { glob: "bin/simulate*", platforms: [linux, macos, windows] }
+    - { glob: "bin/basic*", platforms: [linux, macos, windows] }
+    - { glob: "bin/compile*", platforms: [linux, macos, windows] }
+    - { glob: "bin/testspeed*", platforms: [linux, macos, windows] }
+    - { glob: "bin/dependencies*", platforms: [linux, macos, windows] }
+    - { glob: "lib/libsimulate.a", platforms: [linux, macos] }
+    - { glob: "lib/simulate.lib", platforms: [windows] }
+    - { glob: "include/simulate/", platforms: [linux, macos, windows] }
+    # Headers, CMake package; models (native) or JS bindings (wasm) under share/mujoco.
     - include/mujoco/
     - lib/cmake/mujoco/
     - share/mujoco/

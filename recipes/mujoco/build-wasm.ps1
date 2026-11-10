@@ -20,6 +20,7 @@ if ($threads -eq 'ON') {
 Write-Host "mujoco: wasm build, MUJOCO_WASM_THREADS=$threads"
 
 $deps = Invoke-MjFetchDeps
+Install-MjTsc   # --emit-tsd (mujoco.d.ts) needs tsc; see deps.ps1
 New-Item -ItemType Directory -Force -Path $env:CVC_BUILD_DIR | Out-Null
 $log = Join-Path $env:CVC_BUILD_DIR 'mujoco-build.log'
 $dist = Join-Path $env:CVC_SOURCE_DIR 'wasm\dist'
@@ -63,6 +64,8 @@ $depLibs = @('ccd', 'tinyxml2', 'qhullstatic_r', 'lodepng', 'tinyobjloader', 'mi
 foreach ($d in $depLibs) {
     Copy-Item -Force -LiteralPath (Find-MjOne "lib$d.a") -Destination (Join-Path $libPriv "lib$d.a")
 }
+# mujoco::render_noop (optional stub mjr_* functions).
+Copy-Item -Force -LiteralPath (Find-MjOne 'librender_noop.a') -Destination (Join-Path $libPriv 'librender_noop.a')
 Copy-Item -Force -Path (Join-Path $env:CVC_SOURCE_DIR 'include\mujoco\*.h') -Destination $inc
 
 $verLine = Select-String -LiteralPath (Join-Path $env:CVC_SOURCE_DIR 'CMakeLists.txt') -Pattern '^\s*VERSION\s+([0-9][0-9.]*)\s*$' |

@@ -66,6 +66,7 @@ case "${CVC_PLATFORM:-linux}" in
         # protocol XMLs at build time for no gain here: simulate runs under
         # XWayland on a Wayland desktop.
         _args+=(-DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON)
+        mj_add_gl_headers
         ;;
 esac
 

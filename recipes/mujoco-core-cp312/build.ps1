@@ -43,6 +43,15 @@ $env:MUJOCO_PLUGIN_PATH = Join-Path $sdk 'plugin'
 $deps = Invoke-MjFetchDeps
 $env:MUJOCO_CMAKE = (Get-Command cmake.exe).Source
 $env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache)"
+# /permissive: the bindings compile as C++20 under MSVC (mujoco/CMakeLists.txt,
+# "for forceinline lambdas"), and /std:c++20 implies /permissive-, under which
+# MSVC 19.44 gives the MjWrapper specialisations over mjVisual's anonymous
+# nested structs (headlight, rgba) internal linkage: structs_wrappers.cc's
+# definitions become Static and _structs fails with LNK2019 on their copy
+# constructors.  /permissive restores external linkage (checked with a
+# two-line repro and dumpbin).  CXXFLAGS rather than -DCMAKE_CXX_FLAGS, which
+# would replace CMake's /EHsc /GR defaults instead of adding to them.
+$env:CXXFLAGS = "/permissive $env:CXXFLAGS".Trim()
 
 # ── 4. Build the wheel from the extracted sdist ─────────────────────────────
 $wheelhouse = Join-Path $env:CVC_BUILD_DIR 'wheelhouse'

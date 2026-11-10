@@ -61,6 +61,58 @@ mj_fetch_deps() {
     export MJ_DEP_CACHE MJ_MARCHINGCUBECPP_DIR
 }
 
+# mj_provide_tsc: put a TypeScript compiler on PATH for the wasm link.
+# Upstream links the JS bindings with emscripten's --emit-tsd (that is what
+# writes mujoco.d.ts), and emscripten runs `tsc` for it.  TypeScript is only a
+# devDependency of emscripten, so the emsdk bundle does not carry it, and
+# emscripten falls back to whatever `tsc` is on PATH.  This fetches the version
+# emscripten's package.json asks for (^5.9.3) as a sha256-pinned npm tarball
+# (sha512 matches the registry's published integrity) and runs it with the
+# emsdk's node.  A build tool only: nothing of it is installed.  Call it after
+# env-wasm.sh, which sets EMSDK_NODE.
+MJ_TS_URL="https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz"
+MJ_TS_SHA256="10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3"
+mj_provide_tsc() {
+    local dir="${CVC_BUILD_DIR}/mujoco-tools/typescript" tgz actual
+    mkdir -p "${dir}/bin"
+    tgz="${dir}/typescript-5.9.3.tgz"
+    curl -fsSL --retry 5 --retry-delay 3 -o "${tgz}" "${MJ_TS_URL}"
+    actual="$(_mj_sha256 "${tgz}")"
+    if [[ "${actual}" != "${MJ_TS_SHA256}" ]]; then
+        echo "mujoco: sha256 mismatch for ${MJ_TS_URL} (got ${actual})" >&2
+        return 1
+    fi
+    rm -rf "${dir}/package"
+    tar -xzf "${tgz}" -C "${dir}"
+    cat > "${dir}/bin/tsc" <<EOF
+#!/bin/sh
+exec "${EMSDK_NODE:-node}" "${dir}/package/bin/tsc" "\$@"
+EOF
+    chmod +x "${dir}/bin/tsc"
+    export PATH="${dir}/bin:${PATH}"
+    echo "mujoco: tsc $("${dir}/bin/tsc" --version) for --emit-tsd"
+}
+
+# mj_add_gl_headers: simulate's glfw_adapter.cc includes GLFW/glfw3.h without
+# GLFW_INCLUDE_NONE, so glfw3.h pulls in <GL/gl.h>.  The hermetic build prefix
+# has no system GL headers; the libglvnd build dependency provides them, but
+# GLFW's own X11/GL include directories are PRIVATE to the glfw target and
+# never reach simulate's sources.  Put the prefix holding GL/gl.h on the C and
+# C++ command lines (as -isystem, so it never outranks a project header).
+mj_add_gl_headers() {
+    local p
+    for p in "${CVC_BUILD_PREFIX:-}" "${CVC_DEPS_PREFIX:-}"; do
+        if [[ -n "${p}" && -f "${p}/include/GL/gl.h" ]]; then
+            export CFLAGS="${CFLAGS:-} -isystem ${p}/include"
+            export CXXFLAGS="${CXXFLAGS:-} -isystem ${p}/include"
+            echo "mujoco: GL headers from ${p}/include"
+            return 0
+        fi
+    done
+    echo "mujoco: no GL/gl.h in the build or deps prefix (is libglvnd staged?)" >&2
+    return 1
+}
+
 # mj_install_licenses <dir>: MuJoCo's LICENSE plus the licence text of every
 # dependency archive in the cache (all of them end up compiled into the
 # shipped binaries).  MarchingCubeCpp has no licence file: its README declares

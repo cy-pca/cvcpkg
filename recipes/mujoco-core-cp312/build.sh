@@ -71,7 +71,8 @@ _cmake_args="-GNinja -DMUJOCO_CMAKE_DEP_CACHE=${MJ_DEP_CACHE}"
 case "${CVC_PLATFORM:-linux}" in
     linux|freebsd|openbsd|netbsd)
         # X11 only (see recipes/mujoco/build.sh).
-        _cmake_args="${_cmake_args} -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON" ;;
+        _cmake_args="${_cmake_args} -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON"
+        mj_add_gl_headers ;;   # GL/gl.h for glfw3.h (see deps.sh); CMake reads CXXFLAGS
     macos)
         _cmake_args="${_cmake_args} -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-13.0}" ;;
 esac

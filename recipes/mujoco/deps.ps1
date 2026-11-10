@@ -70,6 +70,34 @@ function Invoke-MjFetchDeps {
     }
 }
 
+# Install-MjTsc: put a TypeScript compiler on PATH for the wasm link.  See
+# mj_provide_tsc in deps.sh: upstream links with emscripten's --emit-tsd, which
+# runs `tsc`; the emsdk bundle has no TypeScript (an emscripten devDependency),
+# and emscripten falls back to `tsc` on PATH.  On Windows that is a tsc.cmd
+# launcher running the pinned tarball's bin/tsc with the emsdk's node.  Call it
+# after env-wasm.ps1, which sets EMSDK_NODE.
+$script:MjTsUrl = 'https://registry.npmjs.org/typescript/-/typescript-5.9.3.tgz'
+$script:MjTsSha256 = '10e108c9cf7d5f2879053dff18515fb405abf2ccef63eaaf017d9c571687a1d3'
+function Install-MjTsc {
+    $dir = Join-Path $env:CVC_BUILD_DIR 'mujoco-tools\typescript'
+    $bin = Join-Path $dir 'bin'
+    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    $tgz = Join-Path $dir 'typescript-5.9.3.tgz'
+    & $script:MjCurl -fsSL --retry 5 --retry-delay 3 -o $tgz $script:MjTsUrl
+    if ($LASTEXITCODE -ne 0) { throw "mujoco: download failed for $script:MjTsUrl" }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $tgz).Hash.ToLower()
+    if ($actual -ne $script:MjTsSha256) { throw "mujoco: sha256 mismatch for $script:MjTsUrl (got $actual)" }
+    $pkg = Join-Path $dir 'package'
+    if (Test-Path -LiteralPath $pkg) { Remove-Item -Recurse -Force -LiteralPath $pkg }
+    & $script:MjTar -xzf $tgz -C $dir
+    if ($LASTEXITCODE -ne 0) { throw "mujoco: could not extract $tgz" }
+    $node = if ($env:EMSDK_NODE) { $env:EMSDK_NODE } else { 'node' }
+    $cmd = "@`"$node`" `"$(Join-Path $pkg 'bin\tsc')`" %*`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $bin 'tsc.cmd'), $cmd, (New-Object System.Text.ASCIIEncoding))
+    $env:PATH = "$bin;$env:PATH"
+    Write-Host "mujoco: tsc $(& (Join-Path $bin 'tsc.cmd') --version) for --emit-tsd"
+}
+
 # Upstream prints "Using FetchContent for <lib>: <git url>" when no cached
 # tarball was found and it is about to clone.
 function Assert-MjNoGitFetch {

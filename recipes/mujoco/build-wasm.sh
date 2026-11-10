@@ -47,6 +47,7 @@ _threads=OFF
 echo "mujoco: wasm build, MUJOCO_WASM_THREADS=${_threads}"
 
 mj_fetch_deps
+mj_provide_tsc   # --emit-tsd (mujoco.d.ts) needs tsc; see deps.sh
 mkdir -p "${CVC_BUILD_DIR}"
 _log="${CVC_BUILD_DIR}/mujoco-build.log"
 # Upstream writes the JS bindings to <source>/wasm/dist; start from an empty one.
@@ -87,6 +88,7 @@ _deplibs="ccd tinyxml2 qhullstatic_r lodepng tinyobjloader miniz"
 for _d in ${_deplibs}; do
     cp -f "$(_find_one "lib${_d}.a")" "${CVC_INSTALL_DIR}/lib/mujoco/lib${_d}.a"
 done
+cp -f "$(_find_one librender_noop.a)" "${CVC_INSTALL_DIR}/lib/mujoco/librender_noop.a"   # mujoco::render_noop
 cp -f "${CVC_SOURCE_DIR}"/include/mujoco/*.h "${CVC_INSTALL_DIR}/include/mujoco/"
 
 # The version upstream's project() declares, e.g. "VERSION 4.0.0".
