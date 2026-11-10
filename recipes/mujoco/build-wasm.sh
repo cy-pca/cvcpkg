@@ -15,7 +15,8 @@
 #     compiled to wasm (Ariadne's web hosts link C++, not the Embind layer).
 #     Upstream installs nothing under EMSCRIPTEN, so this script collects the
 #     archives itself.  The third-party archives libmujoco needs (libccd,
-#     tinyxml2, qhullstatic_r, lodepng, tinyobjloader, miniz) go to
+#     tinyxml2, qhullstatic_r, tinyobjloader, miniz; lodepng is an OBJECT
+#     library already inside libmujoco.a) go to
 #     lib/mujoco/, NOT lib/, so they cannot shadow a cvcpkg tinyxml2 or qhull
 #     package in a flat prefix.  The hand-written mujocoConfig.cmake links
 #     libmujoco.a WHOLE_ARCHIVE (CMake >= 3.24): the OBJ/STL/gmsh mesh decoders
@@ -73,6 +74,10 @@ for _f in mujoco.js mujoco.wasm mujoco.d.ts; do
 done
 [[ -f "${_dist}/mujoco.wasm.map" ]] && cp -f "${_dist}/mujoco.wasm.map" "${_js}/"
 cp -f "${CVC_SOURCE_DIR}/wasm/README.md" "${_js}/README.md"
+# Upstream's wasm/CMakeLists.txt also installs mujoco.js to bin/ (its install
+# DESTINATION variable is never set); share/mujoco/wasm/ is the one copy shipped.
+rm -f "${CVC_INSTALL_DIR}/bin/mujoco.js" "${CVC_INSTALL_DIR}/bin/mujoco.wasm"
+rmdir "${CVC_INSTALL_DIR}/bin" 2>/dev/null || true
 
 # ── static libraries, headers, CMake package ───────────────────────────────
 _find_one() {   # _find_one <archive-name>: exactly one match under the build tree
@@ -84,7 +89,8 @@ _find_one() {   # _find_one <archive-name>: exactly one match under the build tr
 }
 mkdir -p "${CVC_INSTALL_DIR}/lib/mujoco" "${CVC_INSTALL_DIR}/include/mujoco"
 cp -f "$(_find_one libmujoco.a)" "${CVC_INSTALL_DIR}/lib/libmujoco.a"
-_deplibs="ccd tinyxml2 qhullstatic_r lodepng tinyobjloader miniz"
+# lodepng is an OBJECT library upstream: its objects are already in libmujoco.a.
+_deplibs="ccd tinyxml2 qhullstatic_r tinyobjloader miniz"
 for _d in ${_deplibs}; do
     cp -f "$(_find_one "lib${_d}.a")" "${CVC_INSTALL_DIR}/lib/mujoco/lib${_d}.a"
 done

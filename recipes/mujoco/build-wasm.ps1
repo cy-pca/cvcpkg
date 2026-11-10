@@ -48,6 +48,16 @@ foreach ($f in 'mujoco.js', 'mujoco.wasm', 'mujoco.d.ts') {
 $map = Join-Path $dist 'mujoco.wasm.map'
 if (Test-Path -LiteralPath $map) { Copy-Item -Force -LiteralPath $map -Destination $js }
 Copy-Item -Force -LiteralPath (Join-Path $env:CVC_SOURCE_DIR 'wasm\README.md') -Destination (Join-Path $js 'README.md')
+# Upstream's wasm/CMakeLists.txt also installs mujoco.js to bin\ (its install
+# DESTINATION variable is never set); share\mujoco\wasm\ is the one copy shipped.
+$strayBin = Join-Path $env:CVC_INSTALL_DIR 'bin'
+foreach ($f in 'mujoco.js', 'mujoco.wasm') {
+    $p = Join-Path $strayBin $f
+    if (Test-Path -LiteralPath $p) { Remove-Item -Force -LiteralPath $p }
+}
+if ((Test-Path -LiteralPath $strayBin) -and -not (Get-ChildItem -LiteralPath $strayBin -Force)) {
+    Remove-Item -Force -LiteralPath $strayBin
+}
 
 # ── static libraries, headers, CMake package ───────────────────────────────
 function Find-MjOne([string]$Name) {
@@ -60,7 +70,8 @@ $libPriv = Join-Path $lib 'mujoco'
 $inc = Join-Path $env:CVC_INSTALL_DIR 'include\mujoco'
 New-Item -ItemType Directory -Force -Path $libPriv, $inc | Out-Null
 Copy-Item -Force -LiteralPath (Find-MjOne 'libmujoco.a') -Destination (Join-Path $lib 'libmujoco.a')
-$depLibs = @('ccd', 'tinyxml2', 'qhullstatic_r', 'lodepng', 'tinyobjloader', 'miniz')
+# lodepng is an OBJECT library upstream: its objects are already in libmujoco.a.
+$depLibs = @('ccd', 'tinyxml2', 'qhullstatic_r', 'tinyobjloader', 'miniz')
 foreach ($d in $depLibs) {
     Copy-Item -Force -LiteralPath (Find-MjOne "lib$d.a") -Destination (Join-Path $libPriv "lib$d.a")
 }

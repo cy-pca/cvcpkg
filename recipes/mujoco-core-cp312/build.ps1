@@ -42,16 +42,20 @@ $env:MUJOCO_PLUGIN_PATH = Join-Path $sdk 'plugin'
 # ── 3. Pinned sources for the bindings' CMake ───────────────────────────────
 $deps = Invoke-MjFetchDeps
 $env:MUJOCO_CMAKE = (Get-Command cmake.exe).Source
-$env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache)"
 # /permissive: the bindings compile as C++20 under MSVC (mujoco/CMakeLists.txt,
 # "for forceinline lambdas"), and /std:c++20 implies /permissive-, under which
 # MSVC 19.44 gives the MjWrapper specialisations over mjVisual's anonymous
 # nested structs (headlight, rgba) internal linkage: structs_wrappers.cc's
 # definitions become Static and _structs fails with LNK2019 on their copy
 # constructors.  /permissive restores external linkage (checked with a
-# two-line repro and dumpbin).  CXXFLAGS rather than -DCMAKE_CXX_FLAGS, which
-# would replace CMake's /EHsc /GR defaults instead of adding to them.
-$env:CXXFLAGS = "/permissive $env:CXXFLAGS".Trim()
+# two-line repro and dumpbin), but only when it comes AFTER -std:c++20 on the
+# command line.  CMAKE_CXX_FLAGS / CXXFLAGS land before CMake's standard flag,
+# directory compile options after it, so a project include adds it there.
+$permissive = Join-Path $env:CVC_BUILD_DIR 'mujoco-msvc-permissive.cmake'
+[System.IO.File]::WriteAllText($permissive,
+    "if(MSVC)`n  add_compile_options(`$<`$<COMPILE_LANGUAGE:CXX>:/permissive>)`nendif()`n",
+    (New-Object System.Text.UTF8Encoding($false)))
+$env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache) -DCMAKE_PROJECT_INCLUDE=$($permissive -replace '\\', '/')"
 
 # ── 4. Build the wheel from the extracted sdist ─────────────────────────────
 $wheelhouse = Join-Path $env:CVC_BUILD_DIR 'wheelhouse'
