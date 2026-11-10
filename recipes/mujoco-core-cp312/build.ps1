@@ -42,19 +42,34 @@ $env:MUJOCO_PLUGIN_PATH = Join-Path $sdk 'plugin'
 # ── 3. Pinned sources for the bindings' CMake ───────────────────────────────
 $deps = Invoke-MjFetchDeps
 $env:MUJOCO_CMAKE = (Get-Command cmake.exe).Source
-# /permissive: the bindings compile as C++20 under MSVC (mujoco/CMakeLists.txt,
-# "for forceinline lambdas"), and /std:c++20 implies /permissive-, under which
-# MSVC 19.44 gives the MjWrapper specialisations over mjVisual's anonymous
-# nested structs (headlight, rgba) internal linkage: structs_wrappers.cc's
-# definitions become Static and _structs fails with LNK2019 on their copy
-# constructors.  /permissive restores external linkage (checked with a
-# two-line repro and dumpbin), but only when it comes AFTER -std:c++20 on the
-# command line.  CMAKE_CXX_FLAGS / CXXFLAGS land before CMake's standard flag,
-# directory compile options after it, so a project include adds it there.
+# /permissive for structs_wrappers.cc ONLY.  Under /permissive- (implied by the
+# /std:c++20 the bindings use with MSVC, and present in no other form: no
+# single /Zc:...- switch undoes it), MSVC 19.44 gives the MjWrapper
+# specialisations over mjVisual's anonymous nested structs (headlight, rgba)
+# internal linkage, so structs_wrappers.cc emits their constructors as Static
+# and _structs fails with LNK2019 on the copy constructors structs.cc calls.
+# /permissive restores external linkage, but applied to every target it also
+# turns off two-phase lookup, and _functions then recurses until the stack
+# overflows (0xC00000FD) at import.  So it goes on the one target that emits
+# those definitions, as a target option (after -std:c++20, where it has to be),
+# added by a deferred call from a project include.  Checked on 2026-11-09:
+# check.py passes and copy.copy/deepcopy of MjModel.vis.headlight/rgba work.
 $permissive = Join-Path $env:CVC_BUILD_DIR 'mujoco-msvc-permissive.cmake'
-[System.IO.File]::WriteAllText($permissive,
-    "if(MSVC)`n  add_compile_options(`$<`$<COMPILE_LANGUAGE:CXX>:/permissive>)`nendif()`n",
-    (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($permissive, @'
+if(MSVC)
+  get_property(_cvc_mj_done GLOBAL PROPERTY CVC_MUJOCO_PERMISSIVE_DEFERRED)
+  if(NOT _cvc_mj_done)
+    set_property(GLOBAL PROPERTY CVC_MUJOCO_PERMISSIVE_DEFERRED TRUE)
+    function(_cvc_mujoco_permissive_structs_wrappers)
+      if(NOT TARGET structs_wrappers)
+        message(FATAL_ERROR "cvcpkg: target structs_wrappers not found; revisit the /permissive workaround")
+      endif()
+      target_compile_options(structs_wrappers PRIVATE /permissive)
+    endfunction()
+    cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL _cvc_mujoco_permissive_structs_wrappers)
+  endif()
+endif()
+'@, (New-Object System.Text.UTF8Encoding($false)))
 $env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache) -DCMAKE_PROJECT_INCLUDE=$($permissive -replace '\\', '/')"
 
 # ── 4. Build the wheel from the extracted sdist ─────────────────────────────
