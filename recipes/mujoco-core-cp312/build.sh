@@ -78,7 +78,20 @@ case "${CVC_PLATFORM:-linux}" in
     linux|freebsd|openbsd|netbsd)
         # X11 only (see recipes/mujoco/build.sh).
         _cmake_args="${_cmake_args} -DGLFW_BUILD_WAYLAND=OFF -DGLFW_BUILD_X11=ON"
-        mj_add_gl_headers ;;   # GL/gl.h for glfw3.h (see deps.sh); CMake reads CXXFLAGS
+        mj_add_gl_headers   # GL/gl.h for glfw3.h (see deps.sh); CMake reads CXXFLAGS
+        # Cap parallel compiles by memory.  setup.py runs `cmake --build -j<ncpu>`,
+        # and the four big binding sources (functions, specs, structs, enums)
+        # then compile at once; on GitHub's 16 GB linux/arm64 runner the runner
+        # shut down mid-compile twice (2026-11-10, linux-arm-build 42898701726).
+        # A Ninja job pool caps concurrency whatever -j says: one compile per
+        # 6 GB available, at least 1, at most the CPU count.
+        _mem_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+        _ncpu="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
+        _jobs=$(( ${_mem_kb:-0} / (6 * 1024 * 1024) ))
+        [ "${_jobs}" -lt 1 ] && _jobs=1
+        [ "${_jobs}" -gt "${_ncpu}" ] && _jobs="${_ncpu}"
+        echo "${_NAME}: at most ${_jobs} parallel compiles (MemAvailable ${_mem_kb:-?} kB, ${_ncpu} CPUs)"
+        _cmake_args="${_cmake_args} -DCMAKE_JOB_POOLS=mj_compile=${_jobs} -DCMAKE_JOB_POOL_COMPILE=mj_compile" ;;
     macos)
         _cmake_args="${_cmake_args} -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-13.0}" ;;
 esac
