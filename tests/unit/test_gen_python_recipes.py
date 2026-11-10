@@ -1075,6 +1075,24 @@ class TestEmitSdistColumn:
             {"platform": "windows", "script": "build.ps1", "env": {"WIDGET_NO_EXT": "1"}},
         ]
 
+    # Prebuilt binaries an sdist carries as data (PyOpenGL's freeglut/GLE DLLs)
+    # must be deleted before `pip wheel`, in both scripts, or the from-source
+    # column ships them.
+    def test_sdist_prune_runs_before_the_wheel_build(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(gen._SDIST_PRUNE, "widget", (["blobs/*", "x/y.dll"], "DLLs"))
+        _, sh, d = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        ps1 = (d / "build.ps1").read_text(encoding="utf-8")
+        for glob in ("blobs/*", "x/y.dll"):
+            rm = f'rm -rf -- "${{CVC_SOURCE_DIR}}"/{glob}\n'
+            assert rm in sh and sh.index(rm) < sh.index("-m pip wheel")
+            rm = f"Remove-Item -Path (Join-Path $env:CVC_SOURCE_DIR '{glob}') -Recurse -Force\n"
+            assert rm in ps1 and ps1.index(rm) < ps1.index("-m pip wheel")
+
+    def test_no_prune_without_an_entry(self, tmp_path):
+        _, sh, d = self._emit(tmp_path, kind="pure", wheels=_w("widget-1.2.3-py3-none-any.whl"))
+        assert "rm -rf" not in sh and "2b." not in sh
+        assert "Remove-Item" not in (d / "build.ps1").read_text(encoding="utf-8")
+
     def test_pure_build_env_leaves_compiled_columns_alone(self, tmp_path, monkeypatch):
         # A per-platform column is SUPPOSED to compile its extension.
         monkeypatch.setitem(gen._PURE_BUILD_ENV, "widget", {"WIDGET_NO_EXT": "1"})

@@ -87,6 +87,7 @@ import json
 import re
 import sys
 import tarfile
+import textwrap
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -2016,6 +2017,30 @@ SEED_PACKAGES = {
         "files": ["pythreejs/", "*.dist-info/"],
         "check": "import pythreejs; pythreejs.BoxGeometry(width=1, height=1, depth=1)",
     },
+    # ── MuJoCo's `rendering` extra (mujoco-core 4.0.0) ──────────────────────
+    # mujoco-core declares `rendering = [glfw, pyopengl]`: mujoco.viewer and the
+    # default (glfw) Renderer context import pyGLFW, and the Linux EGL/OSMesa
+    # contexts import PyOpenGL.  pyGLFW is not a seed: recipes/glfw-cp31X are
+    # hand-written, because they patch its loader to open the prefix's own
+    # libglfw (cvcpkg's glfw recipe) rather than the newest GLFW it can find on
+    # the host, which no generated column can express.
+    "pyopengl": {
+        "version": "3.1.10",
+        # PyPI's license field is empty.  license.txt is BSD-3-Clause, plus the
+        # BSD-style PyOpenGL v3 and pyglet licences for code taken from them.
+        "license": "BSD-3-Clause",
+        "deps": [],
+        "files": ["OpenGL/", "*.dist-info/"],
+        # Platform-independent: OpenGL.GL would load the host's libGL, which a
+        # headless builder may not have.  The arrays layer is what every GL
+        # call goes through, and the DLLS check proves the prune took.
+        "check": (
+            "import os, OpenGL, OpenGL.arrays; "
+            "assert OpenGL.__version__ == '3.1.10', OpenGL.__version__; "
+            "d = os.path.join(os.path.dirname(OpenGL.__file__), 'DLLS'); "
+            "assert not os.path.exists(d) or not os.listdir(d), os.listdir(d)"
+        ),
+    },
 }
 
 # ── Hand-written column families the generated matrix may depend on ──────────
@@ -2496,6 +2521,47 @@ _PURE_BUILD_ENV: dict[str, dict[str, str]] = {
     # cpython-312-darwin.so modules.  "0" pins the pure-Python modules.
     "fonttools": {"FONTTOOLS_WITH_CYTHON": "0"},
 }
+
+# Prebuilt binaries an sdist carries as data, deleted from the (copied) source
+# tree before `pip wheel` so they never reach the bundle: base -> (globs relative
+# to the sdist root, why).  The env switches above stop a build from COMPILING
+# something it should not; this is for files that arrive already compiled, which
+# no switch keeps out of the wheel.  A from-source column promises that nothing
+# third-party and compiled enters its bundle, and without this entry PyOpenGL's
+# broke that promise on every platform: its MANIFEST.in ships twelve freeglut and
+# GLE DLLs under OpenGL/DLLS/ as package data, and on Windows its setup.py
+# installs them a second time as data_files (<prefix>/OpenGL/DLLS/).
+_SDIST_PRUNE: dict[str, tuple[list[str], str]] = {
+    # Only the files go: on Windows setup.py lists OpenGL/DLLS and fails if the
+    # directory is missing.  Without them PyOpenGL looks for GLUT/GLE the way it
+    # does on Linux and macOS, in the system's search path (MuJoCo uses neither).
+    "pyopengl": (["OpenGL/DLLS/*"], "prebuilt freeglut and GLE DLLs for Windows"),
+}
+
+
+def _prune_block(base: str, shell: str) -> str:
+    """The build-script lines deleting _SDIST_PRUNE's files for *base* ('' if none).
+
+    *shell* is ``sh`` or ``ps1``.  The globs are this file's own literals, never
+    input, so they are spliced in as-is (unquoted in sh, so they expand)."""
+    if base not in _SDIST_PRUNE:
+        return ""
+    globs, why = _SDIST_PRUNE[base]
+    where = "(_SDIST_PRUNE in tools/gen_python_recipes.py)"
+    if shell == "sh":
+        head = "# ── 2b. Delete the prebuilt binaries the sdist ships "
+        text = f"The sdist ships {why}; left in, they would land in the wheel {where}."
+        cmds = "".join(f'rm -rf -- "${{CVC_SOURCE_DIR}}"/{g}\n' for g in globs)
+        head += "─" * (78 - len(head)) + "\n"
+    else:
+        head = ""
+        text = f"The sdist ships {why}: delete them before they land in the wheel {where}."
+        cmds = "".join(
+            f"Remove-Item -Path (Join-Path $env:CVC_SOURCE_DIR '{g}') -Recurse -Force\n"
+            for g in globs
+        )
+    comment = textwrap.fill(text, width=78, initial_indent="# ", subsequent_indent="# ")
+    return f"{head}{comment}\n{cmds}\n"
 
 
 def classify(wheels: list[dict], interps: list[str], name: str | None = None) -> str:
@@ -3426,6 +3492,7 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
             backends=", ".join(backends) or "(none declared)",
             meson_note=_MESON_NOTE if meson else "",
             meson_args="    -C setup-args=--wrap-mode=nofallback \\\n" if meson else "",
+            prune_block=_prune_block(base, "sh"),
             # An any-only column (Windows dropped by _windows_gap) is a noarch
             # recipe in the strict sense: it builds once on whichever host claims
             # it, so it must not read CVC_PLATFORM (tests/unit/test_noarch_recipes).
@@ -3446,6 +3513,7 @@ def _emit_column(out, base, m, interp, meta, cols, extra_universe=frozenset()):
                 dist=m["pypi_name"],
                 version=m["version"],
                 meson_args="    -C setup-args=--wrap-mode=nofallback `\n" if meson else "",
+                prune_block=_prune_block(base, "ps1"),
             ),
             encoding="utf-8",
             newline="\n",
@@ -3647,7 +3715,7 @@ if [ -n "${{CVC_BUILD_PREFIX:-}}" ]; then
     export PYTHONPATH="${{_BP_SITE}}${{PYTHONPATH:+:${{PYTHONPATH}}}}"
 fi
 
-# ── 3. Build the wheel from the extracted sdist ─────────────────────────────
+{prune_block}# ── 3. Build the wheel from the extracted sdist ─────────────────────────────
 # --no-deps: transitive deps are cvcpkg recipes, resolved by the depends graph.
 # --no-index: no network resolution — this is what makes air-gapped builds work.
 {meson_note}WHEELHOUSE="${{CVC_BUILD_DIR:-${{CVC_SOURCE_DIR}}}}/wheelhouse"
@@ -3702,7 +3770,7 @@ if ($env:CVC_BUILD_PREFIX) {{
     $env:PYTHONPATH = if ($env:PYTHONPATH) {{ "$sp;$env:PYTHONPATH" }} else {{ $sp }}
 }}
 
-$root = if ($env:CVC_BUILD_DIR) {{ $env:CVC_BUILD_DIR }} else {{ $env:CVC_SOURCE_DIR }}
+{prune_block}$root = if ($env:CVC_BUILD_DIR) {{ $env:CVC_BUILD_DIR }} else {{ $env:CVC_SOURCE_DIR }}
 $wheelhouse = Join-Path $root 'wheelhouse'
 New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 & $py -m pip wheel --no-build-isolation --no-deps --no-index --no-cache-dir `

@@ -13,7 +13,8 @@ recipe:
     GLFW — a multi-platform library for OpenGL, OpenGL ES and Vulkan
     application development.  Provides a simple API for creating windows,
     contexts and surfaces, and receiving input and events.  Builds the X11
-    and Wayland backends on Linux/BSD and the Cocoa backend on macOS.
+    and Wayland backends on Linux, X11 only on the BSDs, and the Cocoa
+    backend on macOS.
 
 source:
   type: tarball
@@ -48,13 +49,13 @@ depends:
       platforms: [linux, freebsd, openbsd, netbsd]
     - name: libxext
       platforms: [linux, freebsd, openbsd, netbsd]
-    # Wayland backend (Linux + FreeBSD).
+    # Wayland backend (Linux only; build.sh says why not FreeBSD).
     - name: xkbcommon
-      platforms: [linux, freebsd]
+      platforms: [linux]
     - name: wayland
-      platforms: [linux, freebsd]
+      platforms: [linux]
     - name: wayland-protocols
-      platforms: [linux, freebsd]
+      platforms: [linux]
   host_tools: []
 
 build:
