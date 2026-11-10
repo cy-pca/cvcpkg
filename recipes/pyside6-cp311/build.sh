@@ -75,12 +75,15 @@ SITE_PACKAGES="${CVC_INSTALL_DIR}/lib/python3.11/site-packages"
 # (Core, Gui, Widgets, OpenGL, OpenGLWidgets; no Qml/Quick/Sql, offscreen-only).
 PYSIDE_MODULES="Core;Gui;Widgets;OpenGL;OpenGLWidgets"
 
+# CMAKE_PREFIX_PATH is an environment variable, ':'-separated (env-linux.sh
+# joins the deps and build prefixes); -DCMAKE_PREFIX_PATH takes a CMake list.
+_cmake_prefix_path="${CMAKE_PREFIX_PATH:-${CVC_DEPS_PREFIX}}"
 cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}/sources/pyside6" \
     -B "${CVC_BUILD_DIR}" \
     -DCMAKE_INSTALL_PREFIX="${CVC_INSTALL_DIR}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
-    -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH:-${CVC_DEPS_PREFIX}}" \
+    -DCMAKE_PREFIX_PATH="${_cmake_prefix_path//:/;}" \
     -DPython_EXECUTABLE="${PY_EXE}" \
     -DPython_ROOT_DIR="${PY_ROOT}" \
     -DPython_FIND_STRATEGY=LOCATION \

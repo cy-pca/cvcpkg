@@ -40,14 +40,23 @@ fi
 #   CVC_BUILD_PREFIX — the build closure (build prefix; stripped on install)
 # Both must be searchable at build time; only the former is part of the
 # deliverable.  CVC_BUILD_PREFIX is unset/equal for legacy single-prefix
-# layouts, in which case this collapses to the old behaviour.
+# layouts, in which case this is just CVC_DEPS_PREFIX.
+#
+# The ENVIRONMENT variable is ':'-separated: CMake splits it like PATH, on ':'
+# on Unix.  It used to be joined with ';', so with a separate build prefix
+# (`cvcpkg build --with-deps`, the recipe checks' deps=source) it named one
+# nonexistent directory "<deps>;<build>".  find_package hid that, since it also
+# searches the prefixes of PATH's bin dirs, but find_path/find_library (FindX11,
+# FindOpenGL, FindZLIB, ...) fell back to the host's /usr.  A recipe that passes
+# the value on as -DCMAKE_PREFIX_PATH, a CMake list, must turn ':' into ';'
+# itself: -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH//:/;}".
 _cvc_prefix_path=""
 for _cvc_root in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
     [[ -n "${_cvc_root}" ]] || continue
     case ":${_cvc_prefix_path}:" in
         *":${_cvc_root}:"*) continue ;;   # already present
     esac
-    _cvc_prefix_path="${_cvc_prefix_path:+${_cvc_prefix_path};}${_cvc_root}"
+    _cvc_prefix_path="${_cvc_prefix_path:+${_cvc_prefix_path}:}${_cvc_root}"
 done
 if [[ -n "${_cvc_prefix_path}" ]]; then
     export CMAKE_PREFIX_PATH="${_cvc_prefix_path}"

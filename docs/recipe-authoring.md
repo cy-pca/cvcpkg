@@ -361,7 +361,11 @@ cvc_cmake_build -DMYLIB_BUILD_TESTS=OFF     # extra -D flags as needed
 ```
 
 `cvc_cmake_build` (bash) and `Invoke-CvcCMakeBuild` (PowerShell) configure,
-build, and install with the right prefix and dependency paths. Meson and
+build, and install with the right prefix and dependency paths. The env scripts
+also export `CMAKE_PREFIX_PATH` as an environment variable, which CMake reads
+like `PATH`: on Linux it holds `CVC_DEPS_PREFIX` and `CVC_BUILD_PREFIX`
+`:`-separated (`;` on Windows). In a `build.sh`, prepend to it with `:`. To pass it on as a
+CMake list instead, write `-DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH//:/;}"`. Meson and
 Autotools scaffolds call `meson`/`./configure` directly against the
 `CVC_*` variables — see the scaffolded `build.sh` for the exact commands.
 

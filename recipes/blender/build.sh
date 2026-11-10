@@ -50,6 +50,8 @@ for _root in "${CVC_DEPS_PREFIX:-}" "${CVC_BUILD_PREFIX:-}"; do
     _pc="${_pc:+${_pc}:}${_root}/lib/pkgconfig:${_root}/share/pkgconfig"
 done
 export PKG_CONFIG_PATH="${_pc}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+# env-linux.sh exports CMAKE_PREFIX_PATH ':'-separated, the environment
+# variable's form; the -DCMAKE_PREFIX_PATH below turns it into a CMake list.
 
 PY_VER="3.13"
 [[ -f "${CVC_DEPS_PREFIX}/include/python${PY_VER}/Python.h" ]] \
@@ -61,7 +63,7 @@ cmake -G Ninja \
     -B "${CVC_BUILD_DIR}" \
     -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" \
     -DCMAKE_INSTALL_PREFIX="${APP_DIR}" \
-    -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH}" \
+    -DCMAKE_PREFIX_PATH="${CMAKE_PREFIX_PATH//:/;}" \
     -DCMAKE_C_COMPILER="${CC}" \
     -DCMAKE_CXX_COMPILER="${CXX}" \
     -DCMAKE_INSTALL_RPATH="\$ORIGIN/.." \
