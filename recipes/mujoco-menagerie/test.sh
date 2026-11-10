@@ -13,8 +13,9 @@
 # testspeed's output. MuJoCo is found as bin/compile[.exe] in the build or
 # dependency prefix, and only where that prefix also has
 # include/mujoco/mujoco.h, so another program called `compile` is never taken
-# for it. mujoco is not a declared dependency (see recipe.yaml), so a build
-# without it reports a WARN and checks the files only.
+# for it. mujoco is a build dependency (see recipe.yaml), so fleet builds
+# always have it; a local `cvcpkg build --no-deps` into a prefix without it
+# reports a WARN and checks the files only.
 set -euo pipefail
 
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
