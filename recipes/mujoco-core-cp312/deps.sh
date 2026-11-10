@@ -142,6 +142,16 @@ mj_install_licenses() {
     rm -rf "${tmp}"
 }
 
+# mj_print_build_errors <log>: after a failed build, print the compiler and
+# linker error lines again, last.  Builders keep only the tail of a job's log
+# (build-on-dev shows 80 lines), and a failed pip wheel ends with ~60 lines of
+# Python traceback that push the real error out of it.
+mj_print_build_errors() {
+    echo "===== mujoco: error lines from $1 ====="
+    grep -E "error:|error [A-Z]+[0-9]+|fatal error|FAILED:|Killed|out of memory|internal compiler error" "$1" \
+        | grep -v "subprocess-exited-with-error" | tail -n 25 || true
+}
+
 # Upstream prints "Using FetchContent for <lib>: <git url>" when no cached
 # tarball was found and it is about to clone; "Using package cache" otherwise.
 mj_check_no_git_fetch() {

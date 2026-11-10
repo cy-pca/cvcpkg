@@ -70,6 +70,10 @@ if(MSVC)
   endif()
 endif()
 '@, (New-Object System.Text.UTF8Encoding($false)))
+# IPO stays at setup.py's default (on) here, unlike build.sh.  Under MSVC, IPO
+# off made cl spend 100+ CPU-minutes optimising functions.cc on one core
+# (2026-11-09, stopped unfinished), while /GL + the multi-threaded /LTCG link
+# built it in about ten minutes.
 $env:MUJOCO_CMAKE_ARGS = "-GNinja -DMUJOCO_CMAKE_DEP_CACHE=$($deps.Cache) -DCMAKE_PROJECT_INCLUDE=$($permissive -replace '\\', '/')"
 
 # ── 4. Build the wheel from the extracted sdist ─────────────────────────────
@@ -78,7 +82,11 @@ New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 $log = Join-Path $env:CVC_BUILD_DIR 'mujoco-core-build.log'
 & $py -m pip wheel -v --no-build-isolation --no-deps --no-index --no-cache-dir `
     --wheel-dir $wheelhouse $env:CVC_SOURCE_DIR *>&1 | Tee-Object -FilePath $log
-if ($LASTEXITCODE -ne 0) { throw "${name}: pip wheel failed ($LASTEXITCODE)" }
+if ($LASTEXITCODE -ne 0) {
+    $rc = $LASTEXITCODE
+    Write-MjBuildErrors -Log $log
+    throw "${name}: pip wheel failed ($rc)"
+}
 Assert-MjNoGitFetch -Log $log
 
 $wheel = Get-ChildItem -Path $wheelhouse -Filter '*.whl' -File | Select-Object -First 1

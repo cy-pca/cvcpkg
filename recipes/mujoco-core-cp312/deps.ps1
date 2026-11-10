@@ -98,6 +98,18 @@ function Install-MjTsc {
     Write-Host "mujoco: tsc $(& (Join-Path $bin 'tsc.cmd') --version) for --emit-tsd"
 }
 
+# Write-MjBuildErrors: after a failed build, print the compiler and linker
+# error lines again, last.  Builders keep only the tail of a job's log
+# (build-on-dev shows 80 lines), and a failed pip wheel ends with ~60 lines of
+# Python traceback that push the real error out of it.
+function Write-MjBuildErrors {
+    param([string]$Log)
+    Write-Host "===== mujoco: error lines from $Log ====="
+    Select-String -LiteralPath $Log -Pattern 'error C\d+', 'error LNK\d+', 'fatal error', 'FAILED:', 'out of memory', 'C1060', 'LNK1102', 'heap space' |
+        Where-Object { $_.Line -notmatch 'subprocess-exited-with-error' } |
+        Select-Object -Last 25 | ForEach-Object { Write-Host $_.Line }
+}
+
 # Upstream prints "Using FetchContent for <lib>: <git url>" when no cached
 # tarball was found and it is about to clone.
 function Assert-MjNoGitFetch {

@@ -67,7 +67,13 @@ export MUJOCO_PLUGIN_PATH="${SDK}/plugin"
 
 # ── 3. Pinned sources for the bindings' CMake ───────────────────────────────
 mj_fetch_deps
-_cmake_args="-GNinja -DMUJOCO_CMAKE_DEP_CACHE=${MJ_DEP_CACHE}"
+# IPO off, as upstream's own wheel build does (.github/workflows/build_steps.sh
+# passes -DCMAKE_INTERPROCEDURAL_OPTIMIZATION:BOOL=OFF through MUJOCO_CMAKE_ARGS):
+# setup.py turns it on, and the LTO links of the big extension modules ran
+# out of time or memory on the dev fleet (SIGTERM mid-link, then a pass on the
+# rerun).  The modules wrap libmujoco, which keeps its own LTO.  Our -D comes
+# after setup.py's on the CMake command line, so it wins.
+_cmake_args="-GNinja -DMUJOCO_CMAKE_DEP_CACHE=${MJ_DEP_CACHE} -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF"
 case "${CVC_PLATFORM:-linux}" in
     linux|freebsd|openbsd|netbsd)
         # X11 only (see recipes/mujoco/build.sh).
@@ -84,13 +90,17 @@ export MUJOCO_CMAKE_ARGS="${_cmake_args}"
 WHEELHOUSE="${CVC_BUILD_DIR}/wheelhouse"
 mkdir -p "${WHEELHOUSE}"
 _log="${CVC_BUILD_DIR}/mujoco-core-build.log"
-"${PY_EXE}" -m pip wheel -v \
-    --no-build-isolation \
-    --no-deps \
-    --no-index \
-    --no-cache-dir \
-    --wheel-dir "${WHEELHOUSE}" \
-    "${CVC_SOURCE_DIR}" 2>&1 | tee "${_log}"
+if ! "${PY_EXE}" -m pip wheel -v \
+        --no-build-isolation \
+        --no-deps \
+        --no-index \
+        --no-cache-dir \
+        --wheel-dir "${WHEELHOUSE}" \
+        "${CVC_SOURCE_DIR}" 2>&1 | tee "${_log}"; then
+    mj_print_build_errors "${_log}"
+    echo "${_NAME}: pip wheel failed" >&2
+    exit 1
+fi
 mj_check_no_git_fetch "${_log}"
 
 WHEEL=""
