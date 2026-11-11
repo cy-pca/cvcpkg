@@ -8,15 +8,16 @@
 #   find_package(mujoco REQUIRED)
 #   target_link_libraries(app PRIVATE mujoco::mujoco)
 #
-# libmujoco.a is linked WHOLE_ARCHIVE: MuJoCo's OBJ/STL/gmsh mesh decoders
+# libmujoco.a is linked whole-archive: MuJoCo's OBJ/STL/gmsh mesh decoders
 # register from static initialisers (mjPLUGIN_LIB_INIT) that the linker would
-# otherwise drop, and every mesh asset would then fail to load.  That needs
-# CMake 3.24 or newer in the consuming project.
+# otherwise drop, and every mesh asset would then fail to load.  CMake 3.24+
+# gets $<LINK_LIBRARY:WHOLE_ARCHIVE,...>; older CMake gets the archive wrapped
+# in -Wl,--whole-archive / -Wl,--no-whole-archive, which emscripten's wasm-ld
+# accepts.  Works with CMake 3.16 and newer, upstream MuJoCo's own minimum.
 #
 # mujoco_WASM_THREADS is ON for the wasm-mt bundle (everything compiled with
 # -pthread; link the consumer with -pthread and serve it cross-origin
 # isolated) and OFF for the single-threaded wasm bundle.
-cmake_minimum_required(VERSION 3.24)
 
 set(mujoco_WASM_THREADS @MUJOCO_WASM_THREADS@)
 
@@ -36,11 +37,17 @@ if(NOT TARGET mujoco::mujoco)
     IMPORTED_LOCATION "${_mujoco_prefix}/lib/libmujoco.a"
     INTERFACE_INCLUDE_DIRECTORIES "${_mujoco_prefix}/include")
 
+  if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+    set(_mujoco_whole "$<LINK_LIBRARY:WHOLE_ARCHIVE,mujoco::mujoco_static>")
+  else()
+    set(_mujoco_whole
+      "-Wl,--whole-archive;${_mujoco_prefix}/lib/libmujoco.a;-Wl,--no-whole-archive")
+  endif()
+
   add_library(mujoco::mujoco INTERFACE IMPORTED)
   set_target_properties(mujoco::mujoco PROPERTIES
     INTERFACE_INCLUDE_DIRECTORIES "${_mujoco_prefix}/include"
-    INTERFACE_LINK_LIBRARIES
-      "$<LINK_LIBRARY:WHOLE_ARCHIVE,mujoco::mujoco_static>;${_mujoco_dep_targets}")
+    INTERFACE_LINK_LIBRARIES "${_mujoco_whole};${_mujoco_dep_targets}")
   if(mujoco_WASM_THREADS)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_COMPILE_OPTIONS -pthread)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_LINK_OPTIONS -pthread)
@@ -52,6 +59,7 @@ if(NOT TARGET mujoco::mujoco)
   set_target_properties(mujoco::render_noop PROPERTIES
     IMPORTED_LOCATION "${_mujoco_prefix}/lib/mujoco/librender_noop.a"
     INTERFACE_LINK_LIBRARIES mujoco::mujoco)
+  unset(_mujoco_whole)
   unset(_mujoco_dep_targets)
   unset(_mujoco_dep)
 endif()
