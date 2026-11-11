@@ -72,6 +72,13 @@ depends:
     - python313
 
 build:
+  # Four hours, not the server's two-hour default.  On the Windows fleet both
+  # columns ran side by side and timed out at step 192/198 (populate
+  # 42898665518, jobs #29988/#29989): MSVC's optimiser is very slow on
+  # functions.cc's one huge pybind11 init function.  Locally /O1 and /O2 /Ob1
+  # each used over 3,500 CPU-seconds there (/Od takes 22), and the /GL + /LTCG
+  # build that does finish needs most of an hour on a shared machine.
+  timeout_seconds: 14400
   matrix:
     - platform: linux
       script: build.sh
