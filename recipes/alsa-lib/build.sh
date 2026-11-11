@@ -25,6 +25,8 @@ cd "${CVC_SOURCE_DIR}"
 # relocates the package. relocatable-config-dir.patch instead makes libasound
 # resolve its config tree from its own .so location at runtime (dladdr), so it
 # works at any consumer prefix. See the cvc.2 note in recipe.yaml.
+# relocatable-plugin-and-ucm-dirs.patch does the same for the plugin and UCM
+# directories, falling back to the system's (cvc.3).
 ./configure --prefix="${CVC_INSTALL_DIR}" "${_link[@]}" \
     --disable-python \
     --disable-old-symbols
