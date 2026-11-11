@@ -9,6 +9,8 @@ recipe:
   #   98a70c569c4c1b6da467a20012f766ee1f8dc521
   upstream_version: "2026.11.2"
   # cvc.1: the robots the legged-motion plan needs (humanoids and quadrupeds).
+  # mujoco was added as a build (test) dependency later; the bundle's contents
+  # did not change, so the revision did not either.
   cvc_revision: 1
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
@@ -48,10 +50,15 @@ source:
 patches: []
 
 depends:
-  # No dependencies: the models are data, read by any MuJoCo (the C library,
-  # the Python bindings, the wasm build).  test.sh compiles the scenes with the
-  # mujoco package's `compile` sample when the build prefix has it.
-  build: []
+  # The models are data, read by any MuJoCo (the C library, the Python
+  # bindings, the wasm build), so nothing is needed at run time.  mujoco is a
+  # build dependency only for test.sh, which compiles and steps every scene
+  # with the package's `compile` and `testspeed` samples.  Noarch jobs build on
+  # the fleet's linux/x86_64 reference builder (platform.noarch_build_target),
+  # where mujoco is published.
+  build:
+    - name: mujoco
+      version: "^4.0"
   runtime: []
   host_tools: []
 
