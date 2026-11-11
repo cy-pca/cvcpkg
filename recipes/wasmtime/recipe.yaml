@@ -58,7 +58,9 @@ build:
 
 package:
   files:
-    - bin/wasmtime
+    # The CLI (wasi tests run it) comes from build.sh only; build.ps1 stages the
+    # C API alone, so the Windows bundle has no bin/.
+    - { glob: bin/wasmtime, platforms: [linux, macos] }
     - lib/libwasmtime*
     - lib/wasmtime*
     - lib/cmake/wasmtime/
