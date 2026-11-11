@@ -234,6 +234,15 @@ def _publish_to_server(
         provides = manifest.get("provides", [])
         if not isinstance(provides, list):
             provides = []
+        # Host capabilities the bundle needs (top-level `requires_capabilities`,
+        # beside `provides`; BundleManifest also accepts it under `bundle:`).
+        # Without it the catalog serves a CUDA-only provider such as
+        # libcvc-cuda to hosts that cannot use it.
+        requires_capabilities = manifest.get(
+            "requires_capabilities", bundle.get("requires_capabilities", [])
+        )
+        if not isinstance(requires_capabilities, list):
+            requires_capabilities = []
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
@@ -279,6 +288,10 @@ def _publish_to_server(
             "org": org,
             "required_deps": json.dumps(required_deps),
             "provides": json.dumps(provides),
+            # Small and fixed-size, so it always stays in the query (not in
+            # _BODY_METADATA): a server older than this field ignores it there
+            # as it would anywhere else.
+            "requires_capabilities": json.dumps(requires_capabilities),
         }
 
         try:

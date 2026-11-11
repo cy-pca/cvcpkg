@@ -83,7 +83,11 @@ class TestEndpoint:
             client, admin, {"required_deps": [{"name": "libfoo"}], "provides": ["app-slot"]}
         )
         assert resp.status_code == 200, resp.text
-        assert resp.json()["count"] == {"required_deps": 1, "provides": 1}
+        assert resp.json()["count"] == {
+            "required_deps": 1,
+            "provides": 1,
+            "requires_capabilities": 0,
+        }
         rows = _rows(client)
         assert rows[("linux", "x86_64")]["required_deps"] == [{"name": "libfoo"}]
         assert rows[("linux", "x86_64")]["provides"] == ["app-slot"]
@@ -142,10 +146,27 @@ class TestEndpoint:
 
         resp = _backfill(client, admin, {"required_deps": [], "expect_required_deps": wrong})
         assert resp.status_code == 200, resp.text
-        assert resp.json()["count"] == {"required_deps": 1, "provides": 0}
+        assert resp.json()["count"] == {
+            "required_deps": 1,
+            "provides": 0,
+            "requires_capabilities": 0,
+        }
         rows = _rows(client)
         assert rows[("linux", "x86_64")]["required_deps"] == []
         assert rows[("macos", "arm64")]["required_deps"] == [{"name": "kept"}]
+
+    def test_fills_requires_capabilities_once(self, server_env):
+        # libcvc-cuda was published with provides but no capabilities, so the
+        # resolver served it to hosts without CUDA.
+        client, admin, pub = server_env
+        _publish(client, pub)
+        resp = _backfill(client, admin, {"requires_capabilities": ["cuda"]})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["count"]["requires_capabilities"] == 1
+        assert _rows(client)[("linux", "x86_64")]["requires_capabilities"] == ["cuda"]
+        again = _backfill(client, admin, {"requires_capabilities": ["other"]})
+        assert again.json()["count"]["requires_capabilities"] == 0
+        assert _rows(client)[("linux", "x86_64")]["requires_capabilities"] == ["cuda"]
 
     def test_correction_entries_are_validated(self, server_env):
         client, admin, pub = server_env
@@ -160,6 +181,7 @@ class TestEndpoint:
             {"required_deps": [{"name": ""}]},
             {"required_deps": [{"name": "x", "platforms": "linux"}]},
             {"provides": [""]},
+            {"requires_capabilities": [""]},
         ],
     )
     def test_rejects_malformed_edges(self, server_env, body):
@@ -219,7 +241,7 @@ class TestStore:
                 **VARIANT,
             )
         )
-        assert other_org == {"required_deps": 0, "provides": 0}
+        assert other_org == {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
         counts = asyncio.run(
             db.backfill_deps(
                 "libapp",
@@ -227,17 +249,20 @@ class TestStore:
                 org_slug="",
                 required_deps='[{"name": "libfoo"}]',
                 provides='["slot"]',
+                requires_capabilities='["cuda"]',
                 **VARIANT,
             )
         )
-        assert counts == {"required_deps": 1, "provides": 1}
+        assert counts == {"required_deps": 1, "provides": 1, "requires_capabilities": 1}
         rows = {(b["platform"], b["org"]): b for b in asyncio.run(db.get_catalog_dict())["bundles"]}
         assert rows[("linux", "")]["required_deps"] == [{"name": "libfoo"}]
         assert rows[("linux", "")]["provides"] == ["slot"]
+        assert rows[("linux", "")]["requires_capabilities"] == ["cuda"]
         assert rows[("macos", "")]["required_deps"] == []
+        assert rows[("macos", "")]["requires_capabilities"] == []
 
     def test_leaves_populated_columns_alone(self, db):
-        _add(db, required_deps='[{"name": "kept"}]')
+        _add(db, required_deps='[{"name": "kept"}]', requires_capabilities='["cuda"]')
         counts = asyncio.run(
             db.backfill_deps(
                 "libapp",
@@ -245,12 +270,14 @@ class TestStore:
                 org_slug="",
                 required_deps='[{"name": "libfoo"}]',
                 provides="[]",
+                requires_capabilities='["other"]',
                 **VARIANT,
             )
         )
-        assert counts == {"required_deps": 0, "provides": 0}
+        assert counts == {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
         (row,) = asyncio.run(db.get_catalog_dict())["bundles"]
         assert row["required_deps"] == [{"name": "kept"}]
+        assert row["requires_capabilities"] == ["cuda"]
 
     def test_compare_and_set_replaces_only_an_exact_match(self, db):
         _add(db, required_deps='[{"name": "cmake"}, {"name": "ninja"}]')
@@ -275,8 +302,9 @@ class TestStore:
                 )
             )
 
-        assert correct() == {"required_deps": 1, "provides": 0}
-        assert correct(platform="macos", arch="arm64") == {"required_deps": 0, "provides": 0}
+        nothing = {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
+        assert correct() == {**nothing, "required_deps": 1}
+        assert correct(platform="macos", arch="arm64") == nothing
         rows = {b["platform"]: b for b in asyncio.run(db.get_catalog_dict())["bundles"]}
         assert rows["linux"]["required_deps"] == []
         assert rows["macos"]["required_deps"] == [{"name": "cmake"}]
@@ -304,11 +332,12 @@ def _git(repo, *args):
     )
 
 
-def _recipe(cvc, runtime, provides=()):
+def _recipe(cvc, runtime, provides=(), caps=()):
     return {
         "schema_version": 1,
         "recipe": {"name": "libapp", "upstream_version": "1.0", "cvc_revision": cvc},
         "provides": list(provides),
+        "requires_capabilities": list(caps),
         "depends": {"runtime": runtime},
     }
 
@@ -343,6 +372,7 @@ def _row(version, platform="linux", **kw):
         "org": "",
         "required_deps": [],
         "provides": [],
+        "requires_capabilities": [],
     }
     row.update(kw)
     return row
@@ -364,7 +394,13 @@ class TestScript:
             _row("1.0+cvc.2"),
             _row("1.0+cvc.2", platform="macos"),
             _row("1.0+cvc.3"),
-            _row("1.0+cvc.2", platform="freebsd", required_deps=[{"name": "kept"}], provides=["x"]),
+            _row(
+                "1.0+cvc.2",
+                platform="freebsd",
+                required_deps=[{"name": "kept"}],
+                provides=["x"],
+                requires_capabilities=["y"],
+            ),
             _row("1.0+cvc.2", platform="netbsd", yanked=True),
         ]
         fills = script.plan(rows, script.RecipeHistory(history_repo))
@@ -393,7 +429,11 @@ class TestScript:
         ((path, query, body),) = posted
         assert path == "/v1/admin/packages/libapp/1.0%2Bcvc.1/backfill-deps"
         assert query == {**VARIANT, "org": ""}
-        assert body == {"required_deps": [{"name": "libfoo"}], "provides": []}
+        assert body == {
+            "required_deps": [{"name": "libfoo"}],
+            "provides": [],
+            "requires_capabilities": [],
+        }
 
     def test_apply_reports_errors_and_carries_on(self, script, history_repo):
         fills = script.plan(
@@ -407,6 +447,26 @@ class TestScript:
 
         changed, errors = script.apply(fills, post)
         assert changed == 1 and len(errors) == 1 and "boom" in errors[0]
+
+    def test_plan_fills_requires_capabilities_from_another_repo(self, script, tmp_path):
+        # libcvc keeps its recipes in cvcpkg/recipes, not recipes/.
+        repo = tmp_path / "libcvc"
+        rdir = repo / "cvcpkg" / "recipes" / "libapp"
+        rdir.mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (rdir / "recipe.yaml").write_text(
+            yaml.safe_dump(_recipe(1, [], provides=["libcvc"], caps=["cuda"]))
+        )
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "cuda")
+        row = _row("1.0+cvc.1", org="cvc", required_deps=[{"name": "zlib"}], provides=["libcvc"])
+        assert script.plan([row], script.RecipeHistory(repo)) == [
+            script.Fill(row, "")  # not under the default recipes/
+        ]
+        (fill,) = script.plan([row], script.RecipeHistory(repo, "cvcpkg/recipes"))
+        assert fill.status == "fill"
+        assert (fill.required_deps, fill.provides, fill.requires_capabilities) == ([], [], ["cuda"])
+        assert fill.query()["org"] == "cvc"
 
     def test_derivation_matches_the_publish_path(self):
         # The script must derive exactly what publish records, so it calls the

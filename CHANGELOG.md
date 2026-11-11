@@ -30,6 +30,35 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **The registry keeps and serves each bundle's `requires_capabilities`.** A
+  recipe such as libcvc-cuda declares `provides: [libcvc]` and
+  `requires_capabilities: [cuda]`, and the bundle manifest carries both. The
+  server stored only `provides`, so `/v1/catalog` never served the capability
+  and the resolver's capability filter never fired. A dependency on `libcvc`
+  resolved to libcvc-cuda on hosts without CUDA whenever libcvc-cuda had the
+  higher version. On 2026-11-10 libcvc-cuda 3.7.13+cvc.1 was published two
+  hours before libcvc 3.7.13+cvc.2, and transfix/F2Dock#38's Linux CI installed
+  it in between; CMake configure failed because `cvc::cvc` links
+  `CUDA::cudart_static`.
+  - Migration 037 adds `packages.requires_capabilities` (a JSON list, `[]` by
+    default). `/v1/publish` takes it as a query parameter or multipart field,
+    `/v1/upload/init` as a query parameter or in its JSON body, and populate
+    copies it from upstream. `/v1/catalog` and `/v1/packages` serve it. An
+    entry that is not a non-empty name is a 422.
+  - `cvcpkg publish` sends it from the manifest, always in the query (it is
+    small, and a server without the field ignores it there).
+  - `POST /v1/admin/packages/{name}/{version}/backfill-deps` fills it,
+    fill-only like `provides`, and its `count` gains a `requires_capabilities`
+    key. `scripts/backfill_required_deps.py` derives it from the recipe that
+    built each version and takes `--recipes-path` for recipes kept in another
+    repository (libcvc's are in `cvcpkg/recipes`).
+  - On a host that has the capability, the resolver now ranks the CUDA provider
+    first, as it was written to. A machine with nvcc, or with an NVIDIA GPU and
+    driver, that installs something depending on `libcvc` gets libcvc-cuda even
+    when libcvc is newer; set `CVCPKG_CAPABILITIES=` to opt out. Fleet builds
+    are unaffected: a builder installs a recipe's deps by name, not through the
+    resolver.
+
 - **`/install.sh` retries transient download errors (#584).** It ran curl once per
   request: the registry lookup, the bundle download, and the GitHub fallback's
   release list, binary and `.sha256`. So one bad answer failed the install. On
