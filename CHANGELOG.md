@@ -70,6 +70,101 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     in source (`build-python.sh` sets `$ORIGIN` on libpython; qhull's `build.sh`
     patches the CMakeLists) and not bumped, so their next rebuild passes the gate.
 
+- **The registry keeps and serves each bundle's `requires_capabilities`.** A
+  recipe such as libcvc-cuda declares `provides: [libcvc]` and
+  `requires_capabilities: [cuda]`, and the bundle manifest carries both. The
+  server stored only `provides`, so `/v1/catalog` never served the capability
+  and the resolver's capability filter never fired. A dependency on `libcvc`
+  resolved to libcvc-cuda on hosts without CUDA whenever libcvc-cuda had the
+  higher version. On 2026-11-10 libcvc-cuda 3.7.13+cvc.1 was published two
+  hours before libcvc 3.7.13+cvc.2, and transfix/F2Dock#38's Linux CI installed
+  it in between; CMake configure failed because `cvc::cvc` links
+  `CUDA::cudart_static`.
+  - Migration 037 adds `packages.requires_capabilities` (a JSON list, `[]` by
+    default). `/v1/publish` takes it as a query parameter or multipart field,
+    `/v1/upload/init` as a query parameter or in its JSON body, and populate
+    copies it from upstream. `/v1/catalog` and `/v1/packages` serve it. An
+    entry that is not a non-empty name is a 422.
+  - `cvcpkg publish` sends it from the manifest, always in the query (it is
+    small, and a server without the field ignores it there).
+  - `POST /v1/admin/packages/{name}/{version}/backfill-deps` fills it,
+    fill-only like `provides`, and its `count` gains a `requires_capabilities`
+    key. `scripts/backfill_required_deps.py` derives it from the recipe that
+    built each version and takes `--recipes-path` for recipes kept in another
+    repository (libcvc's are in `cvcpkg/recipes`).
+  - On a host that has the capability, the resolver now ranks the CUDA provider
+    first, as it was written to. A machine with nvcc, or with an NVIDIA GPU and
+    driver, that installs something depending on `libcvc` gets libcvc-cuda even
+    when libcvc is newer; set `CVCPKG_CAPABILITIES=` to opt out. Fleet builds
+    are unaffected: a builder installs a recipe's deps by name, not through the
+    resolver.
+
+- **`/install.sh` retries transient download errors (#584).** It ran curl once per
+  request: the registry lookup, the bundle download, and the GitHub fallback's
+  release list, binary and `.sha256`. So one bad answer failed the install. On
+  2026-11-09, a 504 from GitHub's release CDN for `cvcpkg-macos-arm64.sha256`
+  failed two of libcvc's macOS recipe jobs this way.
+  - Every request passes `--retry 3 --retry-delay 2`. Where curl has them, it
+    also passes `--retry-connrefused` (curl 7.52+) and `--retry-all-errors`
+    (curl 7.71+, which also retries a transfer cut off midway). The script
+    probes for both, so an older curl runs it without them.
+  - The downloads no longer pass `--fail`. With it, the macOS runners' curl
+    reported that 504 as exit 56, a receive error, rather than 22. `--retry`
+    checks the HTTP status only of a transfer that ended 0 or 22, so adding it
+    alone would not have retried the 504. The script now checks the final
+    status itself.
+  - Without `--fail`, a 4xx counts as a finished transfer, which
+    `--retry-all-errors` does not retry. A 404 from the registry still falls
+    back to GitHub at once. A registry that stays down, or keeps failing,
+    still stops the install once the retries are spent.
+
+- **`/install.ps1` retries transient download errors too (#588).** Its five web calls
+  (the registry lookup, the GitHub release list, the bundle or the binary, and
+  the `.sha256`) each ran once.
+  - A new `Invoke-WithRetry` retries each one up to 3 times, 2 s apart, on HTTP
+    408, 429 or 5xx, or when no answer came at all: refused, reset, timed out,
+    or cut off midway. Any other 4xx is rethrown at once, so a 404 still falls
+    back to GitHub. It does not use `-MaximumRetryCount`, which Windows
+    PowerShell 5.1 lacks and which in PowerShell 7 retries every 4xx, 404
+    included.
+  - Each download is now checked against its sha256 inside the retry
+    (`Save-Verified`). Windows PowerShell 5.1's `Invoke-WebRequest -OutFile`
+    reports success for a body cut off midway, so only the checksum catches it.
+    A `.sha256` that holds no whole hash is retried the same way.
+  - A failed download now dies with `download failed: <url> (<reason>)`, as
+    `install.sh` does.
+
+## v2.5.13
+
+**A release so every bundle a builder packs carries its upstream licence texts
+in `share/licenses/<name>/` (#576), with F2Dock's 50-recipe closure bumped to
+republish with them (#582); a fleet job's TMPDIR is short enough for a unix
+socket (#572); and python312 / python313 / python313t ship a byte-compiled
+stdlib again and link nothing from the BSD hosts (#570). No migration.**
+
+- **Builder: every bundle ships its upstream licence texts (#576).** A bundle
+  that is redistributed, inside an application or as a prefix copied
+  elsewhere, has to carry the licence texts of what it contains, and most
+  recipes never installed them. In a macos/arm64 prefix of F2Dock's closure
+  only eigen and libigl had `share/licenses/`.
+  - After every build, cvcpkg copies the source tree's top-level `LICENSE*`,
+    `LICENCE*`, `COPYING*` (gmp's `COPYINGv2` included), `COPYRIGHT*`,
+    `NOTICE*` and `UNLICENSE` files, plus a REUSE `LICENSES/` directory, into
+    `share/licenses/<name>/`, and the build log names them.
+  - New optional `package.license_files`: globs relative to the source root,
+    for texts kept elsewhere. An entry that matches nothing fails the build.
+    A recipe that installs `share/licenses/<name>/` itself is left alone.
+  - `pack --from-prefix` adds the same for a `vendored` recipe, into the
+    staged copy and the manifest only. libcvc and F2Dock publish this way.
+  - Recipe fixes: freetype and levmar name their texts; libiimod installs
+    IMOD's `COPYRIGHT`, `LGPL.txt` and `GPL-3.0.txt` from its pinned commit;
+    mingw-w64-runtime vendors the texts of the runtime DLLs it stages and
+    completes its `license:`.
+  - Published bundles gain the texts only when rebuilt at a new revision.
+
+- **Recipes: F2Dock's closure is bumped to rebuild with them (#582).** 50
+  recipes, each one revision above the highest published on any tuple.
+
 - **python312, python313 and python313t ship a byte-compiled stdlib again
   (python312 cvc.24, python313 cvc.13, python313t cvc.15).** Their bundles built
   on the fleet since 2026-10-19 (FreeBSD, NetBSD, OpenBSD), 2026-11-02 (linux

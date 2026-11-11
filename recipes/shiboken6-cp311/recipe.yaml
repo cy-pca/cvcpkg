@@ -98,6 +98,11 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -std=c++17"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
 
@@ -106,11 +111,11 @@ package:
     # Code generator (used at pyside6 build time) + its CMake export.
     - bin/shiboken6*
     # Runtime C++ support library PySide6 bindings link against.
-    - { glob: "lib/libshiboken6*", platforms: [linux] }
+    - { glob: "lib/libshiboken6*", platforms: [linux, macos] }
     # Importable abi3 Python package, fanned into every interpreter
     # (cp311/cp312/cp313): exposes wrapInstance / getCppPointer.
-    - { glob: "lib/python3.*/site-packages/shiboken6/", platforms: [linux] }
-    - { glob: "lib/python3.*/site-packages/shiboken6_generator/", platforms: [linux] }
+    - { glob: "lib/python3.*/site-packages/shiboken6/", platforms: [linux, macos] }
+    - { glob: "lib/python3.*/site-packages/shiboken6_generator/", platforms: [linux, macos] }
     # CMake config consumed by the `pyside6` recipe: find_package(Shiboken6).
     - lib/cmake/Shiboken6*/
     # Public headers for anything that links libshiboken directly.

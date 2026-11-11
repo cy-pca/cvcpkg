@@ -271,6 +271,48 @@ class TestManifestRequiredDeps:
         simple.assert_not_called()
 
 
+# ── provides / requires_capabilities ride along ─────────────────
+
+
+class TestCapabilitiesAreSent:
+    """libcvc-cuda's manifest says ``requires_capabilities: [cuda]``; until the
+    publish sent it, the catalog served the CUDA build to hosts without CUDA."""
+
+    def test_top_level_capabilities_and_provides_are_sent(self, tmp_path):
+        manifest = _manifest([], provides=["libcvc"], requires_capabilities=["cuda"])
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert json.loads(params["provides"]) == ["libcvc"]
+        assert json.loads(params["requires_capabilities"]) == ["cuda"]
+
+    def test_the_bundle_block_placement_is_read_too(self, tmp_path):
+        # BundleManifest.from_dict falls back to bundle.requires_capabilities.
+        manifest = _manifest([])
+        manifest["bundle"]["requires_capabilities"] = ["cuda"]
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert json.loads(params["requires_capabilities"]) == ["cuda"]
+
+    @pytest.mark.parametrize("value", [None, "cuda"])
+    def test_absent_or_malformed_sends_an_empty_list(self, tmp_path, value):
+        manifest = _manifest([]) if value is None else _manifest([], requires_capabilities=value)
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert params["requires_capabilities"] == "[]"
+
+    def test_a_packed_cuda_recipe_publishes_its_capability(self, tmp_path):
+        recipe = {**RECIPE, "provides": ["demo"], "requires_capabilities": ["cuda"]}
+        recipe_dir = tmp_path / "recipes" / NAME
+        recipe_dir.mkdir(parents=True)
+        (recipe_dir / "recipe.yaml").write_text(yaml.dump(recipe))
+        prefix = tmp_path / "install"
+        (prefix / "lib").mkdir(parents=True)
+        (prefix / "lib" / "libdemo.a").write_bytes(b"fake static lib")
+        archive, _, _ = pack_from_prefix(
+            recipe_dir, prefix, platform="linux", output_dir=tmp_path / "dist"
+        )
+        params = _publish([archive]).call_args[0][2]
+        assert json.loads(params["requires_capabilities"]) == ["cuda"]
+        assert json.loads(params["provides"]) == ["demo"]
+
+
 # ── a skipped publish checks the row it skipped ─────────────────
 
 

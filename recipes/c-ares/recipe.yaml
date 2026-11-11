@@ -5,7 +5,7 @@ recipe:
   # cvc.2: rebuilt so the macOS dylib names itself @rpath/libcares.2.dylib (cvcpkg#284 keeps a
   # compatibility-name id); cvc.1 said @rpath/libcares.2.19.7.dylib, which ties every consumer to
   # one patch release. test.sh checks it.
-  cvc_revision: 2
+  cvc_revision: 3  # licence texts in share/licenses/c-ares/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

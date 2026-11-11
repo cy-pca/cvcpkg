@@ -55,6 +55,25 @@ if (Test-Path Env:CVCPKG_SOURCE_CACHE_DIR) {
     $cache = Join-Path $HOME '.cache/cvcpkg/sources'
 }
 
+# Download $uri to $outFile, retrying every failure. -MaximumRetryCount retries
+# only on an HTTP 304 or 400-599 response, not on a connection that was reset
+# before any response arrived (seen from GitHub runners), so the loop is here.
+$fetchAttempts = 5
+function Get-Download([string]$uri, [string]$outFile) {
+    for ($attempt = 1; $attempt -le $fetchAttempts; $attempt++) {
+        try {
+            Invoke-WebRequest -Uri $uri -OutFile $outFile -UseBasicParsing
+            return
+        } catch {
+            if ($attempt -eq $fetchAttempts) {
+                throw "cuda-toolkit: download failed after $fetchAttempts attempts: ${uri}: $($_.Exception.Message)"
+            }
+            Write-Host "cuda-toolkit: download failed (attempt $attempt of $fetchAttempts): $($_.Exception.Message); retrying in $($attempt * 5) s"
+            Start-Sleep -Seconds ($attempt * 5)
+        }
+    }
+}
+
 $root    = Join-Path $env:CVC_INSTALL_DIR 'cuda'
 $extract = Join-Path $env:CVC_BUILD_DIR 'redist'
 if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
@@ -95,7 +114,7 @@ foreach ($line in $lines) {
     } else {
         $archive = Join-Path $env:CVC_BUILD_DIR $file
         Write-Host "cuda-toolkit: downloading $base/$path"
-        Invoke-WebRequest -Uri "$base/$path" -OutFile $archive -UseBasicParsing -MaximumRetryCount 3
+        Get-Download "$base/$path" $archive
         $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $sha) {
             throw "cuda-toolkit: sha256 mismatch for ${file}: expected $sha, got $actual"

@@ -10,7 +10,7 @@ recipe:
   # CMake refuses a FreeType without FT_CONFIG_OPTION_USE_BROTLI
   # (platform_unix.cmake check_freetype_for_brotli). wasm/wasi/cosmo keep it
   # off: brotli is not built for them.
-  cvc_revision: 4
+  cvc_revision: 5  # licence texts in share/licenses/freetype/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -95,6 +95,9 @@ build:
       script: build-cosmo.sh
 
 package:
+  # LICENSE.TXT says FreeType is under the FTL or the GPLv2, at your option,
+  # and points to the texts in docs/.
+  license_files: [LICENSE.TXT, docs/FTL.TXT, docs/GPLv2.TXT]
   files:
     - lib/libfreetype*
     # MSVC: freetype.lib (import lib) + bin/freetype.dll. Without this spelling

@@ -1,0 +1,21 @@
+cvcpkg: initialize Triangulate's error code before ScalePaths ORs into it.
+
+Clipper2 2.0.1's Triangulate(const PathsD&, int, PathsD&, bool) declares
+`int ec;` and passes it to ScalePaths, which does `error_code |= range_error_i`:
+a read of an uninitialized int. Every other ScalePaths caller starts from
+`int error_code = 0;`. GCC 11 reports this one as -Wmaybe-uninitialized, and
+Clipper2 builds its library with -Werror, so it fails to build with GCC (found
+by cvcpkg's linux builder; MSVC, clang and emscripten don't flag it). Not yet
+reported upstream.
+
+--- a/CPP/Clipper2Lib/src/clipper.triangulation.cpp
++++ b/CPP/Clipper2Lib/src/clipper.triangulation.cpp
+@@ -1202,7 +1202,7 @@ namespace Clipper2Lib
+
+   TriangulateResult Triangulate(const PathsD& pp, int decPlaces, PathsD& solution, bool useDelaunay)
+   {
+-    int ec;
++    int ec = 0;
+     double scale;
+     TriangulateResult result;
+     if (decPlaces <= 0) scale = 1;

@@ -343,6 +343,13 @@ class PackageInfo(BaseModel):
             "provider."
         ),
     )
+    requires_capabilities: list = Field(
+        default_factory=list,
+        description=(
+            "Host capabilities this bundle needs (e.g. ['cuda'] on libcvc-cuda). "
+            "The resolver never picks it on a host that lacks one of them."
+        ),
+    )
 
     @property
     def qualified_name(self) -> str:
@@ -541,6 +548,9 @@ class UploadInitMetadata(BaseModel):
     provides: list[str] | None = Field(
         default=None, description="Virtual slot names this package fills"
     )
+    requires_capabilities: list[str] | None = Field(
+        default=None, description="Host capabilities the bundle needs, e.g. ['cuda']"
+    )
 
 
 # ── Organizations ───────────────────────────────────────────────
@@ -663,6 +673,12 @@ class BackfillDepsRequest(BaseModel):
     )
     provides: list[str] = Field(
         default_factory=list, description="Virtual slots the package fills."
+    )
+    requires_capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Host capabilities the bundle needs (e.g. ['cuda']); fill-only, like provides."
+        ),
     )
     expect_required_deps: list[dict[str, str]] | None = Field(
         default=None,

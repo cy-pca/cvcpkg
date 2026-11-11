@@ -12,7 +12,7 @@ recipe:
   # macOS +cvc.5 dylibs load @rpath/libcares.2.19.3.dylib, the full-version file
   # of the c-ares they were linked with, and abort since c-ares 1.34.8 replaced it
   # (libcares.2.19.7). c-ares +cvc.2 names itself @rpath/libcares.2.dylib.
-  cvc_revision: 6
+  cvc_revision: 7  # licence texts in share/licenses/grpc/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

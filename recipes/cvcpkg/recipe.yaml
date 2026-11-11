@@ -4,10 +4,11 @@ recipe:
   # The latest cvcpkg-v* release.  This recipe cannot pin the commit it lives
   # in, so it pins the release TAG's source tarball and is bumped after each
   # release, like any upstream (docs/operator-runbook.md, "Cutting a release").
-  upstream_version: "2.5.12"
-  # 2.5.12: the release that carries #547 (the pack gate fails a library
-  # nothing declares) to the fleet; the single-file builders self-update from
-  # this package.
+  upstream_version: "2.5.13"
+  # 2.5.13: the release that carries #576 (every bundle ships its upstream
+  # licence texts in share/licenses/<name>/) and #572 (a fleet job's TMPDIR
+  # fits a unix socket) to the fleet; the single-file builders self-update
+  # from this package.
   cvc_revision: 1
 
   maintainer: "cvcpkg group"
@@ -29,8 +30,8 @@ recipe:
 # GitHub assets are (.github/workflows/cvcpkg-standalone.yml).
 source:
   type: tarball
-  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.12.tar.gz
-  sha256: "d2b29bf17c39b78351ecb8dad253415ccb308668d07f5bdc336899406d603746"
+  url: https://github.com/cy-pca/cvcpkg/archive/refs/tags/cvcpkg-v2.5.13.tar.gz
+  sha256: "8f2a910e9dd3f8b674669bc36514c857246e370765748283a66c831f62569b7e"
   strip_components: 1
 
 # Every edge is BUILD-only: PyInstaller copies the interpreter, the stdlib and

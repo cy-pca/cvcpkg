@@ -520,6 +520,20 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == [{"name": "dep1", "version": "^1"}]
 
+    def test_provides_and_requires_capabilities_preserved(self, populate_env):
+        # An edge that imported libcvc-cuda without its capability would serve
+        # it to hosts without CUDA as a provider of libcvc.
+        run, _, monkeypatch = populate_env
+        bundles = [_bundle(name="libcvc-cuda", provides=["libcvc"], requires_capabilities=["cuda"])]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            await app_mod._populate_sync_once()
+            (b,) = (await app_mod._db_packages.get_catalog_dict())["bundles"]
+            return b["provides"], b["requires_capabilities"]
+
+        assert run(_test) == (["libcvc"], ["cuda"])
+
     def test_platform_allowlist(self, populate_env):
         """Only platforms in CVCPKG_POPULATE_PLATFORMS are imported."""
         run, _, monkeypatch = populate_env

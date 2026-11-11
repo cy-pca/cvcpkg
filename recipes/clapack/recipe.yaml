@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: clapack
   upstream_version: "3.2.1"
-  cvc_revision: 5
+  cvc_revision: 6  # licence texts in share/licenses/clapack/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -57,9 +57,9 @@ package:
     - lib/libblas*
     - lib/libf2c*
     - lib/cmake/clapack/
-    - bin/lapack*
-    - bin/blas*
-    - bin/f2c*
+    # No bin/: build.ps1 forces BUILD_SHARED_LIBS=OFF and the wasm / wasi /
+    # cosmo builds are static, so there is never a DLL. The bin/* globs
+    # matched nothing on any platform, and the pack gate refuses that.
     - include/blaswrap.h
     - include/clapack.h
     - include/f2c.h

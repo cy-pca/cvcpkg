@@ -64,7 +64,7 @@ recipe:
   # that ImageMagick's OpenMP threading NEEDs.  build.sh also turns off every
   # optional delegate this recipe does not declare, so the next one a populate
   # prefix happens to hold cannot leak in the same way.
-  cvc_revision: 25
+  cvc_revision: 26  # licence texts in share/licenses/imagemagick/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

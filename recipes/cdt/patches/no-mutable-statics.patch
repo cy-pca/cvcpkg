@@ -1,0 +1,90 @@
+cvcpkg: no mutable process-wide state in CDT's headers.
+
+libcvc keeps no mutable process-wide state (all state lives in objects the caller
+owns), and checks that by scanning object files for writable data. Two things in
+CDT 2.0.1's headers show up there:
+
+- Triangulation.hpp: detail::log2_bc's `static double log2_constant` is never
+  written; it becomes `static const`. (It is compiled only before C++11.)
+- predicates.h (William Lenthe's predicates): Epsilon<T>()'s static,
+  ExpansionBase<T>::Splitter and the Constants<T> error bounds are `const`, but
+  their initialisers call std::exp2 or a function, so every object file got
+  writable copies and guard variables. They are initialised from constant
+  expressions now (numeric_limits<T>::epsilon() / 2, 1ULL << (digits / 2 + 1)),
+  with the same values. The pre-C++11 path is unchanged.
+
+Not reported upstream yet.
+
+--- a/CDT/include/Triangulation.hpp
++++ b/CDT/include/Triangulation.hpp
+@@ -2334,7 +2334,7 @@
+ #ifdef CDT_CXX11_IS_SUPPORTED
+     return std::log2(x);
+ #else
+-    static double log2_constant = std::log(2.0);
++    static const double log2_constant = std::log(2.0);
+     return std::log(static_cast<double>(x)) / log2_constant;
+ #endif
+ }
+--- a/CDT/include/predicates.h
++++ b/CDT/include/predicates.h
+@@ -492,7 +492,7 @@
+ 
+     template <typename T> const T ExpansionBase<T>::Splitter =
+ #ifdef PREDICATES_CXX11_IS_SUPPORTED
+-            static_cast<T>(std::exp2(std::numeric_limits<T>::digits/2 + 1));
++            static_cast<T>(1ULL << (std::numeric_limits<T>::digits/2 + 1)); // cvcpkg: constant-initialised
+ #else
+             static_cast<T>(std::ldexp(T(1), std::numeric_limits<T>::digits/2 + 1));
+ #endif
+@@ -638,7 +638,7 @@
+     {
+         static const T epsilon =
+ #ifdef PREDICATES_CXX11_IS_SUPPORTED
+-            static_cast<T>(std::exp2(-std::numeric_limits<T>::digits));
++            std::numeric_limits<T>::epsilon() / T(2); // cvcpkg: constant-initialised
+ #else
+             static_cast<T>(std::ldexp(T(1), -std::numeric_limits<T>::digits));
+ #endif
+@@ -655,20 +655,27 @@
+             static const T isperrboundA, isperrboundB, isperrboundC;
+     };
+ 
+-    template <typename T> const T Constants<T>::epsilon = Epsilon<T>();
+-    template <typename T> const T Constants<T>::resulterrbound = (T( 3) + T(   8) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::ccwerrboundA   = (T( 3) + T(  16) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::ccwerrboundB   = (T( 2) + T(  12) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::ccwerrboundC   = (T( 9) + T(  64) * Epsilon<T>()) * Epsilon<T>() * Epsilon<T>();
+-    template <typename T> const T Constants<T>::o3derrboundA   = (T( 7) + T(  56) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::o3derrboundB   = (T( 3) + T(  28) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::o3derrboundC   = (T(26) + T( 288) * Epsilon<T>()) * Epsilon<T>() * Epsilon<T>();
+-    template <typename T> const T Constants<T>::iccerrboundA   = (T(10) + T(  96) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::iccerrboundB   = (T( 4) + T(  48) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::iccerrboundC   = (T(44) + T( 576) * Epsilon<T>()) * Epsilon<T>() * Epsilon<T>();
+-    template <typename T> const T Constants<T>::isperrboundA   = (T(16) + T( 224) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::isperrboundB   = (T( 5) + T(  72) * Epsilon<T>()) * Epsilon<T>();
+-    template <typename T> const T Constants<T>::isperrboundC   = (T(71) + T(1408) * Epsilon<T>()) * Epsilon<T>() * Epsilon<T>();
++    // cvcpkg: constant expressions, so these are constant-initialised (no dynamic initialiser
++    // and no guard variable, nothing writable in the object file).
++#ifdef PREDICATES_CXX11_IS_SUPPORTED
++#define PREDICATES_EPSILON(T) (std::numeric_limits<T>::epsilon() / T(2))
++#else
++#define PREDICATES_EPSILON(T) Epsilon<T>()
++#endif
++    template <typename T> const T Constants<T>::epsilon = PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::resulterrbound = (T( 3) + T(   8) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::ccwerrboundA   = (T( 3) + T(  16) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::ccwerrboundB   = (T( 2) + T(  12) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::ccwerrboundC   = (T( 9) + T(  64) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::o3derrboundA   = (T( 7) + T(  56) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::o3derrboundB   = (T( 3) + T(  28) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::o3derrboundC   = (T(26) + T( 288) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::iccerrboundA   = (T(10) + T(  96) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::iccerrboundB   = (T( 4) + T(  48) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::iccerrboundC   = (T(44) + T( 576) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::isperrboundA   = (T(16) + T( 224) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::isperrboundB   = (T( 5) + T(  72) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T);
++    template <typename T> const T Constants<T>::isperrboundC   = (T(71) + T(1408) * PREDICATES_EPSILON(T)) * PREDICATES_EPSILON(T) * PREDICATES_EPSILON(T);
+ 
+     template <typename T> T orient2d(T const ax, T const ay, T const bx, T const by, T const cx, T const cy) {
+         const T acx = ax - cx;

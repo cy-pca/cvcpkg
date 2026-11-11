@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: json-schema-validator
   upstream_version: "2.4.0"
-  cvc_revision: 1
+  cvc_revision: 2  # licence texts in share/licenses/json-schema-validator/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

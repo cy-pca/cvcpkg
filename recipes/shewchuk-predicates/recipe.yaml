@@ -1,0 +1,73 @@
+schema_version: 1
+recipe:
+  name: shewchuk-predicates
+  upstream_version: "1996.05.18"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Shewchuk's adaptive exact geometric predicates (orient2d, orient3d, incircle,
+    insphere; public domain) as a reentrant, header-only C++ header: exactinit()'s
+    globals are constexpr constants, so there is no init call and no mutable
+    state. It backs exact predicates in LGPL libcvc where CGAL's exact kernels
+    (and GMP) cannot (libcvc's VolumeRover ports,
+    docs/roadmap/VOLROVER-LIBRARY-PORTS-ROADMAP.md §1.2). Installs
+    include/shewchuk/predicates.hpp and a CMake package exporting the
+    Shewchuk::predicates INTERFACE target, found with
+    find_package(ShewchukPredicates CONFIG).
+  homepage: https://www.cs.cmu.edu/~quake/robust.html
+  license: "LicenseRef-Public-Domain"
+  tags: [geometry, predicates, exact, header-only, wasm]
+
+source:
+  # Upstream ships a single predicates.c, not a tarball, so the original (unmodified,
+  # sha256 in the README) lives in third-party/shewchuk-predicates/ with the generator and
+  # the header it generates.
+  type: vendored
+  path: third-party/shewchuk-predicates
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+# Header-only: every row copies the header and writes the CMake package.
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: haiku
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    - include/shewchuk/
+    - lib/cmake/ShewchukPredicates/
+    - share/licenses/shewchuk-predicates/
+  cmake_packages:
+    - { name: ShewchukPredicates, targets: ["Shewchuk::predicates"] }
+
+abi:
+  cxx_std: 11

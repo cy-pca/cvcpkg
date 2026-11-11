@@ -157,6 +157,18 @@ class PackageRow(Base):
         server_default="[]",
     )
 
+    # Host capabilities a bundle needs to be usable (JSON-encoded list of
+    # names, e.g. ["cuda"] on libcvc-cuda, which provides libcvc).  The
+    # resolver drops a provider whose capabilities the installing host lacks,
+    # so a plain host asking for libcvc never gets the CUDA build.  Not the
+    # build-job routing column of the same idea (BuildJobRow.required_capabilities).
+    requires_capabilities: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
+
     # Base URL of the upstream this bundle was imported from, or "" when it was
     # published here.  Populate reconciliation follows upstream's yank/nuke
     # decisions, and it must only ever act on rows it imported: an edge hosts

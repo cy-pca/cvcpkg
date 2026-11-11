@@ -1,0 +1,102 @@
+schema_version: 1
+recipe:
+  name: mujoco-menagerie
+  # Menagerie tags a calendar version on its main branch; v2026.11.2 is the
+  # commit pinned below (2026-11-02, "Migrate remaining robots from legacy
+  # joint actuatorfrcrange to actuator forcerange (#359)").
+  #
+  #   $ gh api repos/google-deepmind/mujoco_menagerie/commits/v2026.11.2 --jq .sha
+  #   98a70c569c4c1b6da467a20012f766ee1f8dc521
+  upstream_version: "2026.11.2"
+  # cvc.1: the robots the legged-motion plan needs (humanoids and quadrupeds).
+  # mujoco was added as a build (test) dependency later; the bundle's contents
+  # did not change, so the revision did not either.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/google-deepmind/mujoco_menagerie
+  # Each model directory carries its own LICENSE. Six shipped models are
+  # BSD-3-Clause (unitree_g1, unitree_h1, unitree_go1, unitree_go2,
+  # berkeley_humanoid, boston_dynamics_spot) and booster_t1 is Apache-2.0.
+  # Everything else in the repository, including each model's README.md,
+  # CHANGELOG.md and preview .png, is DeepMind's under Apache-2.0
+  # (top-level README, "License and Disclaimer").
+  license: BSD-3-Clause AND Apache-2.0
+  tags: [data, robotics, simulation, models]
+  description: >-
+    Robot models from MuJoCo Menagerie, Google DeepMind's curated collection
+    of MJCF models (the ones MuJoCo Playground and mjlab train on), pinned to
+    Menagerie v2026.11.2.  Ships the humanoids unitree_g1, unitree_h1,
+    booster_t1 and berkeley_humanoid and the quadrupeds unitree_go1,
+    unitree_go2 and boston_dynamics_spot under share/mujoco-menagerie/<model>/,
+    each directory as upstream lays it out: the robot MJCF, scene*.xml (robot
+    plus floor and lights, the file to load), STL/OBJ meshes in assets/,
+    README.md, CHANGELOG.md and the model's own LICENSE.  The per-model
+    licence texts are also in share/licenses/mujoco-menagerie/.  Every
+    scene*.xml compiles and steps with the mujoco 4.0.0 package (the model
+    READMEs ask for MuJoCo 2.2.2 to 3.1.3 or later).
+
+source:
+  # A GitHub archive of the pinned commit, as carlito-fonts and pocketfft do:
+  # the archive URL names the commit, and the sha256 pins the bytes.  The
+  # archive is the whole repository (about 500 MB, every model); build.sh
+  # copies only the models listed there.
+  type: tarball
+  url: https://github.com/google-deepmind/mujoco_menagerie/archive/98a70c569c4c1b6da467a20012f766ee1f8dc521.tar.gz
+  sha256: "1e47bf05840f983af33eb4dbd05955d0e82c2673107ea679660edf7bbb8c68aa"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # The models are data, read by any MuJoCo (the C library, the Python
+  # bindings, the wasm build), so nothing is needed at run time.  mujoco is a
+  # build dependency only for test.sh, which compiles and steps every scene
+  # with the package's `compile` and `testspeed` samples.  Noarch jobs build on
+  # the fleet's linux/x86_64 reference builder (platform.noarch_build_target),
+  # where mujoco is published.
+  build:
+    - name: mujoco
+      version: "^4.0"
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: XML, meshes, textures and licence texts, the same on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  # One entry per model, so pack fails if build.sh stops installing one.
+  # Keep this list and MODELS in build.sh the same.
+  files:
+    - share/mujoco-menagerie/unitree_g1/
+    - share/mujoco-menagerie/unitree_h1/
+    - share/mujoco-menagerie/unitree_go1/
+    - share/mujoco-menagerie/unitree_go2/
+    - share/mujoco-menagerie/booster_t1/
+    - share/mujoco-menagerie/berkeley_humanoid/
+    - share/mujoco-menagerie/boston_dynamics_spot/
+    - share/licenses/mujoco-menagerie/
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Loading a model"
+    description: >-
+      Load <prefix>/share/mujoco-menagerie/<model>/scene.xml, not the bare
+      robot file: since Menagerie v2026.11.1 the lights live in the scene
+      files.  Mesh paths are relative to the robot XML (compiler
+      meshdir="assets"), so a model directory must stay together.  Some models have extra
+      scenes: scene_mjx.xml (MJX-friendly colliders: unitree_g1, unitree_go2),
+      scene_with_hands.xml (unitree_g1) and scene_arm.xml (Spot with its arm).
+  - title: "Adding a model"
+    description: >-
+      Add its Menagerie directory name to MODELS in build.sh and to
+      package.files, read its LICENSE and README (licence, minimum MuJoCo
+      version), update recipe.license if it brings a new licence, and bump
+      cvc_revision.

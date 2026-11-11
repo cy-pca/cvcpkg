@@ -246,7 +246,8 @@ class TestResponse:
             "revision": cat["revision"],
             "bundles": cat["bundles"],
         }
-        # The fields, in the order clients have always received them.
+        # The fields, in the order clients have always received them; new
+        # ones (requires_capabilities, migration 037) are appended.
         assert list(served["bundles"][0]) == [
             "name",
             "version",
@@ -274,6 +275,7 @@ class TestResponse:
             "org",
             "required_deps",
             "provides",
+            "requires_capabilities",
         ]
         assert [b["version"] for b in served["bundles"]] == ["1.1", "1.0"]
         assert served["bundles"][0]["required_deps"] == ["bzip2>=1"]

@@ -12,7 +12,7 @@ recipe:
   # The Windows build now writes libpng.pc/libpng16.pc (CMake installs none for
   # MSVC; freetype2.pc requires libpng).  No bump: Windows has no cvc.4 or
   # cvc.5 bundle, and no other platform's files change.
-  cvc_revision: 5
+  cvc_revision: 6  # licence texts in share/licenses/libpng/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
