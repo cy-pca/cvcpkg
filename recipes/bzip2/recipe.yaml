@@ -31,7 +31,7 @@ recipe:
   # bundle ships libbz2.dll in DLLs\ and builds its LICENSE.txt from this file,
   # as python.org's does; without it the bzip2 notice was missing there.  Other
   # platforms rebuild unchanged.
-  cvc_revision: 7
+  cvc_revision: 8  # licence texts in share/licenses/bzip2/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

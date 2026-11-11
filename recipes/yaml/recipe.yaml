@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: yaml
   upstream_version: "0.2.5"
-  cvc_revision: 3
+  cvc_revision: 4  # licence texts in share/licenses/yaml/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -74,7 +74,12 @@ package:
   files:
     - lib/libyaml*
     - lib/yaml*
-    - lib/cmake/yaml/
+    # libyaml's CMake installs its package config to cmake/ on Windows
+    # (INSTALL_CMAKE_DIR) and to lib/cmake/yaml/ everywhere else.
+    - glob: lib/cmake/yaml/
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasi, cosmo]
+    - glob: cmake/
+      platforms: [windows]
     # No lib/pkgconfig/yaml*: libyaml's CMake build installs no .pc file.
     - include/yaml.h
   cmake_packages:

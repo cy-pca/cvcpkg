@@ -25,7 +25,7 @@ recipe:
   # <dir prefix="relative">../../share/fonts</dir> on Windows: with MSVC's
   # 128-byte FC_PATH_MAX, a fonts.conf more than 128 characters deep resolved
   # that dir against the current directory.  Unix code is unchanged.
-  cvc_revision: 5
+  cvc_revision: 6  # licence texts in share/licenses/fontconfig/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

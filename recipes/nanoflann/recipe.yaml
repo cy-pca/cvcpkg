@@ -1,0 +1,72 @@
+schema_version: 1
+recipe:
+  name: nanoflann
+  upstream_version: "2.0.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    nanoflann — header-only C++ k-d trees for nearest-neighbour and radius
+    searches (BSD-2-Clause). It replaced CGAL's GPL Spatial Searching in LGPL
+    libcvc (transfix/libcvc#1080), which vendors it today; this package lets
+    libcvc take it from cvcpkg instead. Installed through nanoflann's own CMake
+    install, so the bundle ships nanoflannConfig.cmake exporting the
+    nanoflann::nanoflann INTERFACE target (with Threads::Threads), found with
+    find_package(nanoflann CONFIG). nanoflann holds no mutable process-wide
+    state.
+  homepage: https://github.com/jlblancoc/nanoflann
+  license: BSD-2-Clause
+  tags: [geometry, kd-tree, nearest-neighbour, header-only, wasm]
+
+source:
+  type: tarball
+  url: https://github.com/jlblancoc/nanoflann/archive/refs/tags/2.0.1.tar.gz
+  sha256: "bb3991ad924248d3f20953a951c34878196c11ca112d800acc341c3808443896"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+    - platform: haiku
+      script: build.sh
+    - platform: wasm
+      host_platform: linux
+      script: build.sh
+    - platform: wasm-mt
+      host_platform: linux
+      script: build.sh
+
+package:
+  files:
+    - include/nanoflann.hpp
+    - share/cmake/nanoflann/
+    - lib/pkgconfig/nanoflann.pc
+    - share/licenses/nanoflann/
+  cmake_packages:
+    - { name: nanoflann, targets: ["nanoflann::nanoflann"] }
+
+abi:
+  cxx_std: 11

@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: lerc
   upstream_version: "4.0.0"
-  cvc_revision: 4
+  cvc_revision: 5  # licence texts in share/licenses/lerc/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

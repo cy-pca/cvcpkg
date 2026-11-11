@@ -19,7 +19,10 @@ recipe:
   # 13: FreeBSD/OpenBSD build without the ports dirs env-<bsd>.sh adds. The
   # +cvc.12 OpenBSD libgmpxx.so.11.0 linked the builder's ports libgmp.so.11.1
   # instead of its own libgmp.so.15.0 (see build.sh).
-  cvc_revision: 13
+  # 14 also adds the wasm-mt (emscripten + pthreads) row. Both wasm rows now
+  # set GMP's CFLAGS themselves (see build-wasm.sh), and test.sh runs both
+  # under node. Nothing had been published at 14 when these were added.
+  cvc_revision: 14  # licence texts in share/licenses/gmp/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -101,6 +104,12 @@ build:
     - platform: wasm
       host_platform: windows
       script: build-wasm.ps1
+    # Threaded: the same script, -pthread from env-wasm-mt.sh. Its own platform,
+    # so a wasm-mt consumer gets objects compiled for shared memory.
+    # Linux host only: env-wasm.ps1 has no threaded mode.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
     - platform: wasi
       host_platform: linux
       script: build-wasi.sh

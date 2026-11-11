@@ -14,7 +14,7 @@ recipe:
   # / libcvc, which use the char log4cplus) got LNK2001 on the narrow symbols,
   # while wide-char (Qt UNICODE) consumers still need the U lib. Building both
   # serves both. Published variants are immutable, so the bump ships the change.
-  cvc_revision: 7
+  cvc_revision: 8  # licence texts in share/licenses/log4cplus/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

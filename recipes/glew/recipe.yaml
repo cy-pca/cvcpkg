@@ -4,7 +4,11 @@ recipe:
   upstream_version: "2.2.0"
   # cvc.2: linux builds against cvcpkg's libglvnd and libx11 instead of the
   # build host's GL and X11 (linux/arm64 runners have neither).
-  cvc_revision: 2
+  # cvc.3: lib/cmake/glew names no builder paths. Linux takes GLU, libSM and
+  # libICE from cvcpkg too (cvc.2 exported the builder's
+  # /usr/lib/<triplet>/lib{GLU,SM,ICE}.so), and macOS links "-framework OpenGL"
+  # (cvc.2 exported the builder's Xcode SDK path to OpenGL.framework).
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -35,6 +39,16 @@ depends:
     - name: libglvnd
       platforms: [linux]
     - name: libx11
+      platforms: [linux]
+    # GLEW_LIBRARIES is ${OPENGL_LIBRARIES} ${X11_LIBRARIES}, which also carry
+    # GLU (glew.pc says Requires: glu) and, from FindX11, libSM and libICE.
+    # Without them in the prefix FindOpenGL/FindX11 pick the build host's, and
+    # the exported GLEW::glew names those absolute paths.
+    - name: glu
+      platforms: [linux]
+    - name: libsm
+      platforms: [linux]
+    - name: libice
       platforms: [linux]
   host_tools: []
 

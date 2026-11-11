@@ -8,9 +8,13 @@ so such a package installs WITHOUT its runtime dependencies -- e.g.
 ``cvcpkg install aiomysql-cp311`` resolved aiomysql alone, no python311, no
 pymysql-cp311.  #152 fixed new publishes; this script repairs the old rows.
 
-For every catalog row whose required_deps (or provides) is empty, it finds the
-recipe that built THAT version -- ``recipes/<name>/recipe.yaml`` at the commit
-whose ``upstream_version`` and ``cvc_revision`` match the row, not today's
+The same gap hid ``requires_capabilities`` until migration 037: libcvc-cuda
+(``provides: [libcvc]``, ``requires_capabilities: [cuda]``) reached the catalog
+without its capability, so the resolver picked it on hosts without CUDA.
+
+For every catalog row whose required_deps, provides or requires_capabilities is
+empty, it finds the recipe that built THAT version -- ``recipes/<name>/recipe.yaml``
+at the commit whose ``upstream_version`` and ``cvc_revision`` match the row, not today's
 recipe, whose deps may have moved on -- and derives the edges with
 ``cvcpkg.builder.runtime_dependencies_from_raw``, the same function every
 publish path uses.  Rows whose recipe declares nothing to fill are left alone;
@@ -20,9 +24,14 @@ Dry run by default: prints what it would fill.  ``--apply`` posts each fill to
 the server's admin endpoint ``POST /v1/admin/packages/{name}/{version}/
 backfill-deps``, which only ever writes a column that is still ``[]``.
 
+Recipes kept in another repository are read with ``--repo`` and
+``--recipes-path``, e.g. libcvc's: ``--repo ~/src/libcvc --recipes-path
+cvcpkg/recipes --only libcvc-cuda``.
+
 Usage:
     python scripts/backfill_required_deps.py [--server URL] [--only NAME ...]
-        [--platform P] [--csv FILE] [--apply --token ADMIN_TOKEN]
+        [--platform P] [--repo DIR] [--recipes-path REL] [--csv FILE]
+        [--apply --token ADMIN_TOKEN]
 """
 
 from __future__ import annotations
@@ -51,7 +60,7 @@ DEFAULT_SERVER = "https://cvcpkg.org"
 
 
 class RecipeHistory:
-    """``recipes/<name>/recipe.yaml`` at every version git history holds.
+    """``<recipes_path>/<name>/recipe.yaml`` at every version git history holds.
 
     ``raw(name, version)`` returns the parsed recipe whose ``upstream_version``
     and ``cvc_revision`` match *version* (``X+cvc.N``), preferring the working
@@ -59,8 +68,9 @@ class RecipeHistory:
     ever built that version.
     """
 
-    def __init__(self, repo: Path) -> None:
+    def __init__(self, repo: Path, recipes_path: str = "recipes") -> None:
         self.repo = repo
+        self.recipes_path = recipes_path.strip("/")
         self._by_name: dict[str, dict[tuple[str, int], tuple[str, dict]]] = {}
 
     def _git(self, *args: str) -> str:
@@ -78,7 +88,7 @@ class RecipeHistory:
     def _load(self, name: str) -> dict[tuple[str, int], tuple[str, dict]]:
         if name in self._by_name:
             return self._by_name[name]
-        rel = f"recipes/{name}/recipe.yaml"
+        rel = f"{self.recipes_path}/{name}/recipe.yaml"
         found: dict[tuple[str, int], tuple[str, dict]] = {}
         current = self.repo / rel
         if current.is_file():
@@ -116,12 +126,13 @@ class Fill:
     source: str  # commit the recipe came from, or "working-tree"; "" when not found
     required_deps: list[dict[str, str]] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
+    requires_capabilities: list[str] = field(default_factory=list)
 
     @property
     def status(self) -> str:
         if not self.source:
             return "no-recipe-at-version"
-        if self.required_deps or self.provides:
+        if self.required_deps or self.provides or self.requires_capabilities:
             return "fill"
         return "nothing-to-fill"
 
@@ -152,7 +163,8 @@ def plan(
             continue
         need_deps = not row.get("required_deps")
         need_provides = not row.get("provides")
-        if not (need_deps or need_provides):
+        need_caps = not row.get("requires_capabilities")
+        if not (need_deps or need_provides or need_caps):
             continue
         found = history.raw(row["name"], row["version"])
         if found is None:
@@ -165,6 +177,7 @@ def plan(
                 source,
                 runtime_dependencies_from_raw(raw, row["platform"]) if need_deps else [],
                 [str(p) for p in (raw.get("provides") or [])] if need_provides else [],
+                [str(c) for c in (raw.get("requires_capabilities") or [])] if need_caps else [],
             )
         )
     return fills
@@ -184,7 +197,15 @@ def apply(fills: Iterable[Fill], post: Post) -> tuple[int, list[str]]:
             f"{urllib.parse.quote(f.row['version'], safe='')}/backfill-deps"
         )
         try:
-            resp = post(path, f.query(), {"required_deps": f.required_deps, "provides": f.provides})
+            resp = post(
+                path,
+                f.query(),
+                {
+                    "required_deps": f.required_deps,
+                    "provides": f.provides,
+                    "requires_capabilities": f.requires_capabilities,
+                },
+            )
         except Exception as exc:  # noqa: BLE001 -- report and carry on
             errors.append(f"{f.row['name']} {f.row['version']} {f.query()}: {exc}")
             continue
@@ -220,7 +241,12 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--server", default=DEFAULT_SERVER)
     ap.add_argument("--token", default=os.environ.get("CVCPKG_TOKEN", ""), help="admin token")
-    ap.add_argument("--repo", type=Path, default=REPO, help="cvcpkg checkout (recipe history)")
+    ap.add_argument("--repo", type=Path, default=REPO, help="checkout holding the recipe history")
+    ap.add_argument(
+        "--recipes-path",
+        default="recipes",
+        help="recipe directory inside --repo (libcvc keeps its recipes in cvcpkg/recipes)",
+    )
     ap.add_argument("--only", action="append", default=[], metavar="NAME")
     ap.add_argument("--platform")
     ap.add_argument("--csv", type=Path, help="write the full plan here")
@@ -231,7 +257,10 @@ def main(argv: list[str] | None = None) -> int:
 
     rows = _fetch_catalog(args.server, args.token)
     fills = plan(
-        rows, RecipeHistory(args.repo), only=set(args.only) or None, platform=args.platform
+        rows,
+        RecipeHistory(args.repo, args.recipes_path),
+        only=set(args.only) or None,
+        platform=args.platform,
     )
     by_status: dict[str, int] = {}
     for f in fills:
@@ -243,7 +272,9 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"  fill {f.row['name']} {f.row['version']} {f.row['platform']}/{f.row['arch']}"
                 f" {f.row.get('build_type')}/{f.row.get('link')}: deps={deps}"
-                f" provides={','.join(f.provides) or '-'}  [recipe@{f.source}]"
+                f" provides={','.join(f.provides) or '-'}"
+                f" requires_capabilities={','.join(f.requires_capabilities) or '-'}"
+                f"  [recipe@{f.source}]"
             )
     if args.csv:
         with args.csv.open("w", newline="") as fh:
@@ -260,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
                     "org",
                     "required_deps",
                     "provides",
+                    "requires_capabilities",
                     "recipe_source",
                 ]
             )
@@ -277,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
                         q["org"],
                         " ".join(d["name"] for d in f.required_deps),
                         " ".join(f.provides),
+                        " ".join(f.requires_capabilities),
                         f.source,
                     ]
                 )

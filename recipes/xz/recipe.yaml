@@ -4,7 +4,7 @@ recipe:
   upstream_version: "5.6.4"
   # cvc.6: no NLS on FreeBSD/OpenBSD. The cvc.5 xz and lzmainfo there linked an
   # undeclared libintl (the builder's ports gettext on OpenBSD); see build.sh.
-  cvc_revision: 6
+  cvc_revision: 7  # licence texts in share/licenses/xz/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

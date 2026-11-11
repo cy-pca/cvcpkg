@@ -2,13 +2,14 @@ schema_version: 1
 recipe:
   name: mingw-w64-runtime
   upstream_version: "16.1.0"
-  cvc_revision: 1
+  cvc_revision: 2  # licence texts in share/licenses/mingw-w64-runtime/ (cvcpkg#576)
 
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   homepage: https://winlibs.com/
-  license: "GPL-3.0-or-later WITH GCC-exception-3.1"
+  # One term per DLL family it stages; licenses/README.md maps them.
+  license: "GPL-3.0-or-later WITH GCC-exception-3.1 AND LGPL-2.1-or-later AND MIT AND BSD-3-Clause AND LGPL-3.0-or-later WITH GCC-exception-3.1"
   tags: [library, runtime, windows]
   description: >-
     The redistributable runtime DLLs of cvcpkg's MinGW-w64 GCC toolchain:
@@ -58,4 +59,6 @@ build:
 package:
   files:
     - bin/
+    # Kept in the recipe's licenses/ directory: the archive has none.
+    - share/licenses/mingw-w64-runtime/
   cmake_packages: []

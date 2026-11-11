@@ -263,6 +263,7 @@ def test_migration_029_columns_match_orm(_sqlite_upgrade_head):
     conn = sqlite3.connect(db)
     try:
         for table in (
+            "packages",
             "package_events",
             "builders",
             "sessions",
@@ -538,3 +539,51 @@ def test_migration_036_relabels_noarch_bundles_neutral(tmp_path):
         ).fetchall() == [("release", "shared", 0)]
     finally:
         c.close()
+
+
+def test_migration_037_adds_packages_requires_capabilities(tmp_path):
+    """037 adds the column rows read as '[]' until a backfill fills them, and the
+    downgrade drops it again."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "caps.db"
+    p = _alembic_upgrade(db, "036")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO packages (name, version, platform, arch, sha256, archive_url, provides) "
+        "VALUES ('libcvc-cuda', '3.7.13+cvc.1', 'linux', 'x86_64', 'x', '', '[\"libcvc\"]')"
+    )
+    con.commit()
+    con.close()
+
+    p = _alembic_upgrade(db, "037")
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert con.execute("SELECT provides, requires_capabilities FROM packages").fetchall() == [
+            ('["libcvc"]', "[]")
+        ]
+    finally:
+        con.close()
+
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    p = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "036"],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert "requires_capabilities" not in {
+            r[1] for r in con.execute("PRAGMA table_info(packages)")
+        }
+    finally:
+        con.close()

@@ -8,7 +8,7 @@ recipe:
   # Windows builds expat.pc (EXPAT_BUILD_PKGCONFIG=ON in build.ps1) and its
   # xmlwf.exe now matches package.files; Windows has only cvc.3 published, so
   # its first cvc.4 bundle carries both without a bump.
-  cvc_revision: 4
+  cvc_revision: 5  # licence texts in share/licenses/expat/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

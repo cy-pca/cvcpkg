@@ -7,7 +7,7 @@ recipe:
   # accept 5.0.1 -- consumers must ask with no version, `5.0`, or a range such as
   # `3.4...<6`.  Its config also no longer sets the legacy EIGEN3_* variables.
   upstream_version: "5.0.1"
-  cvc_revision: 1
+  cvc_revision: 2  # licence texts in share/licenses/eigen/ (cvcpkg#576)
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
