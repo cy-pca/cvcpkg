@@ -7,7 +7,10 @@ recipe:
   # without xorgproto.  Builder jobs stopped installing deps' build deps on
   # 2026-10-19, and a fresh xcb-util build then failed "Package 'xproto', required
   # by 'xau', not found" (dev cluster, FreeBSD and NetBSD, cy-pca/cvcpkg#527).
-  cvc_revision: 3
+  # Bumped 3 -> 4: the libraries' RPATH was "RIGIN" -- make read the $ORIGIN that build.sh
+  # put in LDFLAGS as $O + "RIGIN". build.sh now spells it for make
+  # (cvc_make_origin_rpath), so the RPATH is $ORIGIN.
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

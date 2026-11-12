@@ -3594,6 +3594,12 @@ def check_relocatable(
     on a BSD, an ELF NEEDED that only the host's ports or pkgsrc have
     (``/usr/local/lib``, ``/usr/pkg/lib``) fails the pack as well -- OpenBSD's
     ffmpeg-lgpl linked the ports ``libiconv.so.7.1``.
+    An ELF RUNPATH/RPATH entry that is neither absolute nor ``$ORIGIN``-relative
+    fails the pack on every platform, as does an empty one beside others
+    (:func:`cvcpkg.linkage.elf_rpath_entry_problem`): the ``RIGIN`` that an
+    autotools build's ``-Wl,-rpath,$ORIGIN`` becomes when make expands ``$O``
+    shipped in libxext, libxshmfence and openssh, on NetBSD in every package,
+    because no patchelf pass hides it there.
     A runtime dependency whose installed manifest lists no files may own any
     library in *dep_prefixes* that no other manifest lists, so those count as
     shipped for this check.  Runs on the staged tree, after the relocation
@@ -3662,6 +3668,15 @@ def check_relocatable(
             "A library the consumer must supply goes in package.linkage_allow, as "
             "reported (@rpath/libX.dylib, libX.so.N) or a prefix of it."
         )
+    malformed = ""
+    if any(f.malformed for f in result.findings):
+        malformed = (
+            "\nA malformed RUNPATH/RPATH entry is searched from the current directory, "
+            "never from the object. `RIGIN` is a `$ORIGIN` that make expanded: the "
+            "build's LDFLAGS held a bare `-Wl,-rpath,$ORIGIN`, which ./configure copied "
+            "into the Makefiles. Put `$(cvc_make_origin_rpath)` in LDFLAGS instead "
+            "(recipes/_common/rewrite-install-paths.sh) so they spell it `$$ORIGIN`. "
+        )
     raise PackError(
         f"{bundle.get('name', '?')} ({platform}/{bundle.get('arch', '?')}): "
         f"{len(result.findings)} loader path(s) will not exist where the bundle is "
@@ -3673,7 +3688,7 @@ def check_relocatable(
         "prefixes and adds the $ORIGIN entries shipped libraries need, so anything "
         "left is either another build's directory or a library the build host "
         "provides (patchelf / install_name_tool missing also leaves them). See "
-        "src/cvcpkg/linkage.py." + undeclared
+        "src/cvcpkg/linkage.py." + undeclared + malformed
     )
 
 

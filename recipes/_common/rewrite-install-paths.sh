@@ -204,3 +204,38 @@ cvc_relocate_macos_dylibs() {
         echo "── cvc_relocate_macos_dylibs: relocated ${count} dylib(s) to @rpath under ${libdir} ──"
     fi
 }
+
+# cvc_make_origin_rpath [SUBDIR...] — the linker flag(s) giving an object a
+# loader-relative RPATH, spelled for a build that runs through make.
+#
+#   export LDFLAGS="-L${CVC_DEPS_PREFIX}/lib $(cvc_make_origin_rpath)${LDFLAGS:+ ${LDFLAGS}}"
+#
+# prints  -Wl,-rpath,\$$ORIGIN ; with arguments, one flag per entry, `.` being
+# $ORIGIN itself:  cvc_make_origin_rpath ../lib .
+# prints  -Wl,-rpath,\$$ORIGIN/../lib -Wl,-rpath,\$$ORIGIN
+#
+# Why not -Wl,-rpath,\$ORIGIN: ./configure copies LDFLAGS into every Makefile
+# verbatim, and make reads `$ORIGIN` there as `$O` (an unset variable) followed
+# by "RIGIN" -- the library is linked with the RPATH "RIGIN", a directory
+# searched from the process's cwd.  `$$` is make's `$`, and the backslash keeps
+# the shell that runs the recipe line from expanding the `$ORIGIN` make leaves
+# (libtool then relinks with it intact: checked on Linux, FreeBSD and NetBSD).
+# libxshmfence, libXext and openssh shipped "RIGIN" this way.  The pack gate
+# (cvcpkg.linkage.elf_rpath_entry_problem) fails a package that still does.
+#
+# For make-driven builds only (autotools, hand-written Makefiles that pass
+# LDFLAGS to make).  Meson, CMake, waf and a direct compiler command take the
+# plain `-Wl,-rpath,\$ORIGIN` / `$ORIGIN` as written: there the `$$` would
+# be linked literally.
+cvc_make_origin_rpath() {
+    local d out="" sep=""
+    [ "$#" -gt 0 ] || set -- .
+    for d in "$@"; do
+        case "$d" in
+            .) out="${out}${sep}-Wl,-rpath,"'\$$ORIGIN' ;;
+            *) out="${out}${sep}-Wl,-rpath,"'\$$ORIGIN'"/${d#/}" ;;
+        esac
+        sep=" "
+    done
+    printf '%s' "$out"
+}

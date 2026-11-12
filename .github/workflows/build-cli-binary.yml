@@ -43,6 +43,17 @@ jobs:
           # The extras must be PRESENT IN THE BUILD ENV for PyInstaller to
           # bundle them (see packaging/cvcpkg.spec's hiddenimports): the binary
           # is a fixed closure, so anything left out here is missing for good.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Compile PyInstaller's bootloader from source rather than ship the
+            # prebuilt stub every PyInstaller app (malware included) shares:
+            # Defender quarantined cvcpkg 2.5.0/2.5.12/2.5.13 as
+            # Trojan:Win32/Bearfoos.A!ml. See cvcpkg-standalone.yml.
+            PYINSTALLER_COMPILE_BOOTLOADER=1 pip install --verbose --no-cache-dir \
+              --no-binary=PyInstaller pyinstaller > pyi-install.log 2>&1 \
+              || { tail -50 pyi-install.log; exit 1; }
+            grep -q "'build_release' finished successfully" pyi-install.log \
+              || { echo "::error::PyInstaller's bootloader was not compiled from source"; tail -50 pyi-install.log; exit 1; }
+          fi
           if [ "${{ matrix.variant }}" = "combined" ]; then
             pip install -e ".[production,signing,validate]" pyinstaller
           else
@@ -77,6 +88,11 @@ jobs:
             "$PWD/dist/cvcpkg-server$EXT" --version
             "$PWD/dist/cvcpkg-server$EXT" run --help >/dev/null
           fi
+
+      - name: Scan with Microsoft Defender (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/defender-scan.ps1 -CI -Path dist/cvcpkg.exe
 
       - name: Package artifact
         shell: bash

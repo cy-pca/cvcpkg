@@ -25,7 +25,19 @@ recipe:
   # Not bumped for the package.files platform scoping below: it changes only
   # what the Windows pack checks, not what any platform builds, and no
   # Windows bundle of this recipe has been published.
-  cvc_revision: 4
+  # Bumped 4 -> 5: every optional host library is now pinned off. LLVM links
+  # whatever find_library turns up on the builder, so cvc.4's FreeBSD
+  # libLLVM.so.20.1 needed libedit.so.0 from the FreeBSD ports package
+  # (/usr/local/lib; the base system's libedit is libedit.so.8) and would not
+  # load, nor would mesa's llvmpipe or anything else linking it, on a host
+  # without that package. build.sh and build.ps1 now set LLVM_ENABLE_LIBEDIT,
+  # LIBXML2, LIBPFM, FFI, CURL, HTTPLIB and Z3_SOLVER to OFF; zlib and zstd
+  # stay FORCE_ON because they are declared. On FreeBSD and NetBSD build.sh
+  # also drops env-<bsd>.sh's ports/pkgsrc -I/-L dirs, and with them the
+  # -R/usr/pkg/lib that put /usr/pkg/lib ahead of $ORIGIN in every NetBSD
+  # object's RUNPATH. libLLVM keeps its soname and ABI and only loses the
+  # libedit NEEDED entry, so consumers need no rebuild.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

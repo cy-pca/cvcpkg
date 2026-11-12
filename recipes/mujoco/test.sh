@@ -5,7 +5,8 @@
 # (libmujoco + the installed models + RPATH/DLL lookup), checks the three
 # plugins are in bin/mujoco_plugin, then builds and runs smoke/ — a
 # find_package(mujoco) consumer that compiles an MJCF model with an OBJ mesh
-# from an in-memory VFS and steps it.
+# from an in-memory VFS and steps it, configured with OpenGL disabled (the
+# CMake package must work on a host without GL libraries).
 # wasm / wasm-mt: builds and runs the same consumer with emscripten under node
 # (it fails if the mesh decoders were dropped by the static link), then loads
 # the installed JS bindings (share/mujoco/wasm/mujoco.js) with node and steps a
@@ -92,9 +93,16 @@ wasm|wasm-mt)
     if [[ -n "${CVC_DEPS_PREFIX:-}" && -x "${CVC_DEPS_PREFIX}/bin/ninja" ]]; then
         _ninja="${CVC_DEPS_PREFIX}/bin/ninja"
     fi
+    # The consumer is configured as if the host had no OpenGL: a headless
+    # program linking mujoco::mujoco must not need GL libraries.  Upstream's
+    # mujocoConfig.cmake failed here on a Linux host without them (cvc.1) until
+    # config-opengl-optional.patch.  CMAKE_DISABLE_FIND_PACKAGE_OpenGL makes the
+    # check independent of what GL this machine or the build prefix happens to
+    # have, and it also fails if an exported target ever links OpenGL::GL.
     cmake -G Ninja -S "${SMOKE_DIR}" -B "${TMPDIR_T}/b" \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_PREFIX_PATH="${P}" \
+        -DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON \
         ${_ninja:+-DCMAKE_MAKE_PROGRAM="${_ninja}"}
     cmake --build "${TMPDIR_T}/b"
     exe="${TMPDIR_T}/b/mujoco_smoke"

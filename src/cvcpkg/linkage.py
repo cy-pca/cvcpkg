@@ -98,6 +98,7 @@ class Linkage:
     soname: str | None = None
     dt_rpath: bool = False
     weak: tuple[str, ...] = ()
+    blank_rpath: bool = False
 
 
 def read_linkage(path: Path | str) -> Linkage | None:
@@ -218,13 +219,18 @@ def _read_elf(f: BinaryIO) -> Linkage | None:
     # The loader searches DT_RUNPATH and ignores DT_RPATH when both are
     # present; report both — either one shipping a builder path is a defect.
     rpaths: list[str] = []
+    blank = False
     for t, v in tags:
         if t in (_DT_RUNPATH, _DT_RPATH):
-            rpaths.extend(e for e in dyn.string(v).split(":") if e)
+            raw = dyn.string(v)
+            rpaths.extend(e for e in raw.split(":") if e)
+            # A wholly empty string is an emptied search path (see
+            # rewrite_elf_rpath); an empty entry among others is the cwd.
+            blank = blank or (bool(raw) and "" in raw.split(":"))
     soname = next((dyn.string(v) for t, v in tags if t == _DT_SONAME), None)
     present = {t for t, _ in tags}
     dt_rpath = _DT_RPATH in present and _DT_RUNPATH not in present
-    return Linkage("elf", dyn.kind, needed, tuple(rpaths), soname, dt_rpath)
+    return Linkage("elf", dyn.kind, needed, tuple(rpaths), soname, dt_rpath, blank_rpath=blank)
 
 
 def rewrite_elf_rpath(path: Path | str, value: str) -> bool:
@@ -497,6 +503,41 @@ def relative_to_prefixes(value: str, prefixes: Sequence[Path | str]) -> str | No
 def is_relative_entry(value: str) -> bool:
     """True for loader-relative entries: ``$ORIGIN``, ``@rpath``, ``@loader_path`` …"""
     return value.startswith(("$ORIGIN", "${ORIGIN}", "@"))
+
+
+# An ELF search-path entry the loader expands against the object: ``$ORIGIN``
+# (or ``${ORIGIN}``) on its own or as the first path component.
+_ORIGIN_ENTRY = re.compile(r"^\$(\{ORIGIN\}|ORIGIN)(/|$)")
+
+
+def elf_rpath_entry_problem(value: str) -> str | None:
+    """Why an ELF RUNPATH/RPATH entry can never work as shipped, or None.
+
+    The loader resolves an entry that is neither absolute nor ``$ORIGIN``-
+    relative against the process's current directory, so in a package it is
+    never right.  Nearly always it is a ``$ORIGIN`` that something expanded on
+    the way to the linker: ``-Wl,-rpath,$ORIGIN`` in an autotools recipe's
+    ``LDFLAGS`` reaches the Makefile as ``$ORIGIN``, where make reads ``$O`` as
+    an empty variable and links ``RIGIN`` (libxshmfence, libXext, openssh); a
+    shell that expands ``$ORIGIN`` leaves ``$ORIGIN/../lib`` as ``/../lib``.
+    Absolute entries are not judged here (see :func:`builder_path_reason`).
+    """
+    if _ORIGIN_ENTRY.match(value):
+        return None
+    if value.startswith("/"):
+        if value == "/.." or value.startswith("/../"):
+            return (
+                "the $ORIGIN of a loader-relative entry was expanded to nothing on its "
+                "way to the linker; the loader would search the host's directories"
+            )
+        return None
+    head = value.split("/", 1)[0]
+    if head in ("$", "$$") or (len(head) >= 3 and "$ORIGIN".endswith(head)):
+        return "a mangled $ORIGIN (make or the shell expanded part of it before the linker saw it)"
+    return (
+        "a relative path, which the loader searches from the process's current "
+        "directory rather than from the object; use $ORIGIN/... or an absolute path"
+    )
 
 
 def builder_path_reason(
@@ -831,6 +872,9 @@ class Finding:
     field: str  # RUNPATH, NEEDED, LC_RPATH, LC_LOAD_DYLIB, ...
     value: str
     reason: str
+    # A search-path entry that is malformed (see elf_rpath_entry_problem) rather
+    # than pointing into the build machine; the pack error explains how to fix it.
+    malformed: bool = False
 
     def __str__(self) -> str:
         return f"{self.path}: {self.field} {self.value} ({self.reason})"
@@ -878,7 +922,11 @@ def audit_tree(
     ELF (linux, the BSDs, haiku): RUNPATH/RPATH entries, and NEEDED/SONAME
     values that carry a directory, must not point into the build machine (see
     :func:`builder_path_reason`).  Absolute system dirs (``/usr/local/lib`` on
-    FreeBSD, ``/usr/pkg/lib`` on NetBSD) stay legal there.
+    FreeBSD, ``/usr/pkg/lib`` on NetBSD) stay legal there.  Each RUNPATH/RPATH
+    entry must also be well formed: absolute or ``$ORIGIN``-relative, never a
+    bare relative path such as the ``RIGIN`` a make-expanded ``$ORIGIN`` leaves,
+    and never empty beside other entries (see :func:`elf_rpath_entry_problem`).
+    No ``allow`` entry excuses either.
 
     Mach-O (macos): LC_RPATH, LC_*_DYLIB and LC_ID_DYLIB must be loader-relative
     or inside the OS (``/usr/lib``, ``/System``) — a builder path, Homebrew or
@@ -946,7 +994,22 @@ def audit_tree(
         macho = link.format == "macho"
         rp_field = "LC_RPATH" if macho else ("RPATH" if link.dt_rpath else "RUNPATH")
         for e in link.rpaths:
-            check(rel, rp_field, e, macho)
+            problem = None if macho else elf_rpath_entry_problem(e)
+            if problem:
+                result.findings.append(Finding(rel, rp_field, e, problem, malformed=True))
+            else:
+                check(rel, rp_field, e, macho)
+        if link.blank_rpath:
+            result.findings.append(
+                Finding(
+                    rel,
+                    rp_field,
+                    "",
+                    "an empty entry among others: the loader searches the current directory "
+                    "(an unset variable in the link line, or a stray ':')",
+                    malformed=True,
+                )
+            )
         for n in link.needed:
             if macho or "/" in n:
                 check(rel, "LC_LOAD_DYLIB" if macho else "NEEDED", n, macho)

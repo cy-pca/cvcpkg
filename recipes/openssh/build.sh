@@ -7,6 +7,11 @@
 # per-machine at deploy time with ssh-keygen.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Only the helper: this recipe has never taken a platform env script's toolchain.
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/../_common/rewrite-install-paths.sh"    # cvc_make_origin_rpath
+
 : "${CVC_INSTALL_DIR:?CVC_INSTALL_DIR must be set}"
 : "${CVC_SOURCE_DIR:?CVC_SOURCE_DIR must be set}"
 : "${CVC_DEPS_PREFIX:=}"
@@ -28,11 +33,15 @@ CONFIGURE_ARGS=(
 # Link against our openssl/zlib recipes when present, and embed an $ORIGIN
 # RPATH so the programs find libcrypto/libssl/libz next to themselves in any
 # relocated prefix (bin/, sbin/ and libexec/ are one level below <prefix>/lib).
+# The flag goes through make (./configure copies LDFLAGS into the Makefile), so
+# it is spelled for make: a bare `\$ORIGIN` linked every program with the RPATH
+# "RIGIN/../lib:RIGIN" (openssh 10.4.1+cvc.1, all platforms).
 if [[ -n "${CVC_DEPS_PREFIX}" && -d "${CVC_DEPS_PREFIX}/include/openssl" ]]; then
     CONFIGURE_ARGS+=(--with-ssl-dir="${CVC_DEPS_PREFIX}")
     export PKG_CONFIG_PATH="${CVC_DEPS_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
     export LD_LIBRARY_PATH="${CVC_DEPS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-    export LDFLAGS="${LDFLAGS:-} -Wl,-rpath,\$ORIGIN/../lib -Wl,-rpath,\$ORIGIN"
+    _origin_rpath="$(cvc_make_origin_rpath ../lib .)"    # assigned alone so a missing helper stops the build
+    export LDFLAGS="${LDFLAGS:-} ${_origin_rpath}"
 fi
 if [[ -n "${CVC_DEPS_PREFIX}" && -f "${CVC_DEPS_PREFIX}/include/zlib.h" ]]; then
     CONFIGURE_ARGS+=(--with-zlib="${CVC_DEPS_PREFIX}")

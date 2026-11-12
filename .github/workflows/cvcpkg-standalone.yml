@@ -75,10 +75,28 @@ jobs:
           python-version: '3.12'
 
       - name: Install cvcpkg + PyInstaller
+        shell: bash
         working-directory: .
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller==${{ env.PYINSTALLER_VERSION }}
+          if [[ "${{ matrix.os }}" == windows-* ]]; then
+            # Windows: compile PyInstaller's bootloader from source (MSVC is on the
+            # runner) instead of taking the prebuilt one in the wheel. Every
+            # PyInstaller app ships that same prebuilt stub, malware included, and
+            # Microsoft Defender's machine-learned signatures quarantined cvcpkg
+            # 2.5.0, 2.5.12 and 2.5.13 as Trojan:Win32/Bearfoos.A!ml. PyInstaller's
+            # docs give avoiding such false positives as the reason to build it
+            # yourself. --verbose so the log shows waf building it; the grep makes
+            # a silent fallback to the prebuilt stub a red build.
+            PYINSTALLER_COMPILE_BOOTLOADER=1 pip install --verbose --no-cache-dir \
+              --no-binary=PyInstaller pyinstaller==${{ env.PYINSTALLER_VERSION }} > pyi-install.log 2>&1 \
+              || { tail -50 pyi-install.log; exit 1; }
+            grep -E "'build_release' finished successfully|Checking for 'msvc'" pyi-install.log
+            grep -q "'build_release' finished successfully" pyi-install.log \
+              || { echo "::error::PyInstaller's bootloader was not compiled from source"; tail -50 pyi-install.log; exit 1; }
+          else
+            pip install pyinstaller==${{ env.PYINSTALLER_VERSION }}
+          fi
           # [remote,builder,signing,validate]: a standalone binary is a fixed
           # closure, so httpx, websockets, cryptography and jsonschema must be
           # in the build env to be bundled at all. websockets comes via
@@ -129,6 +147,21 @@ jobs:
           python -m PyInstaller.utils.cliutils.archive_viewer -r -b "$BIN" > archive.txt
           grep -Eq '^\s*websockets\.sync\.client$' archive.txt \
             || { echo "::error::websockets is not bundled -- builder run would be long-poll only"; exit 1; }
+
+      - name: Scan with Microsoft Defender (Windows)
+        # A binary Defender flags must never reach a release: it is quarantined
+        # mid-run on users' machines and on the Windows builders. The script
+        # updates the definitions, proves the scanner works (EICAR), and fails on
+        # any detection. defender-watch.yml rescans the latest release daily,
+        # because new definitions can flag a binary that shipped clean.
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        working-directory: .
+        run: |
+          ./scripts/defender-scan.ps1 -CI -Path dist/cvcpkg.exe
+          $v = (Get-Item dist/cvcpkg.exe).VersionInfo
+          if (-not $v.CompanyName -or -not $v.ProductVersion) { throw "cvcpkg.exe has no version resource (packaging/cvcpkg.spec)" }
+          Write-Host "version resource: $($v.CompanyName) / $($v.ProductName) $($v.ProductVersion)"
 
       - name: Rename artifact
         shell: bash

@@ -23,6 +23,10 @@ on:
         description: "Commit to deploy: a sha (7-40 hex) on prod's or master's history; empty = the dispatched ref's HEAD"
         required: false
         type: string
+      base_sha:
+        description: "Previously deployed commit: push only the recipes that changed since it.  Empty = push every recipe (a push to prod supplies its own)"
+        required: false
+        type: string
 
 concurrency:
   group: deploy-prod
@@ -32,13 +36,13 @@ jobs:
   deploy:
     name: Deploy to cvcpkg.org + pkg.tx.wtf
     runs-on: [self-hosted, Linux, cvcpkg-prod]
-    # A normal deploy takes about 25 minutes: the cvcpkg.org deploy step 8-16,
-    # pkg.tx.wtf 1-3, then pushing recipes about 11 (one `recipe push-all`
-    # over ~2,260 recipes).  At 30 a slow server deploy (16 min in run
-    # 38276696779) let the job time out mid recipe push, after the new server
-    # was already live.  At 50 the old one-process-per-recipe push did the
-    # same: 34 min in run 42406565717, and run 42417899248 was cancelled 38
-    # min into it while a populate's push-all ran against the same server.
+    # The servers take 10-16 minutes (cvcpkg.org 8-12, pkg.tx.wtf 2-4).  The
+    # recipe push is last, capped at 30 by its own step, and cannot fail the
+    # job: the 60 is room for a slow server deploy plus that cap.  Until
+    # 2026-11 the push was one `recipe push` process per recipe and could
+    # take all of an hour on its own: 34 min in run 42406565717, and run
+    # 42417899248 was cancelled at the 50-minute limit with the push still
+    # going, after both servers were live and before builders were told.
     timeout-minutes: 60
     outputs:
       sha: ${{ steps.target.outputs.sha }}
@@ -84,6 +88,7 @@ jobs:
 
       # ── Deploy to cvcpkg.org (primary) via SSH ──────────────
       - name: Deploy to cvcpkg.org
+        id: deploy_primary
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
@@ -301,6 +306,7 @@ jobs:
 
       # ── Deploy to pkg.tx.wtf (local mirror) ────────────────
       - name: Deploy to pkg.tx.wtf
+        id: deploy_mirror
         run: |
           set -euo pipefail
           SHA="${{ steps.target.outputs.sha }}"
@@ -443,54 +449,18 @@ jobs:
           $SSH "$REMOTE" "bash /tmp/cvcpkg-mirror-deploy.sh \
             '${RELEASE_TAG}' '${SHORT_SHA}' '${DEPLOY_DIR}' '${CVCPKG_DIR}'"
 
-      # ── Push recipes to the primary server DB ─────────────────
-      # The deploy above bundles recipes into the backend image, but
-      # the DB-backed /v1/recipes/* store (used by builders to fetch
-      # recipes at build time) is not refreshed automatically.  Push
-      # every recipe from the checkout so builders always see the
-      # deployed revision.
-      - name: Push recipes to cvcpkg.org
-        env:
-          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
-        run: |
-          set -euo pipefail
-          export CVCPKG_SERVER_URL=https://cvcpkg.org
-          if [[ -z "${CVCPKG_TOKEN:-}" ]]; then
-            echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
-            exit 0
-          fi
-          python3 -m pip install --quiet --user '.[publish]' || true
-          # Prefer the freshly-checked-out package script over any installed copy.
-          CVCPKG="python3 -m cvcpkg"
-          # One process for the whole set, as populate does: a `recipe push`
-          # per recipe paid a Python start and a cvcpkg import ~2,260 times
-          # and took 34+ minutes; push-all takes about 11.  Exactly this
-          # checkout's recipes (no bundled default, no CWD overlay).  It prints
-          # each failure to stderr; a failed push never fails the deploy,
-          # whose servers are already live by now.
-          out=$(mktemp)
-          log=$(mktemp)
-          rc=0
-          $CVCPKG recipe push-all --no-default-recipes --recipes-dir recipes \
-            >"$out" 2>"$log" || rc=$?
-          sed -n 's/^  \([^ :]*\): \(failed\|error\) \(.*\)$/::warning::recipe push failed: \1: \2 \3/p' "$log"
-          if [[ $rc -ne 0 ]]; then
-            echo "::error::recipe push-all exited $rc"
-            tail -20 "$log"
-          fi
-          grep -h '^cvcpkg: pushed' "$out" || true
-
       # ── Builder WebSocket route, through the public proxy ─────
       # /healthz above runs INSIDE the container, so it cannot see the two
       # things that silently turn the builder socket into a 404: a server
       # image with no WebSocket library, and a reverse proxy that does not
       # forward the Upgrade handshake (docs/deployment-guide.md, "TLS
       # Configuration").  Either way builders drop to long-poll and the
-      # notify-builders step below reaches nobody.  An unauthenticated
+      # notify step below reaches nobody.  An unauthenticated
       # handshake must reach the route and be refused there: 403 (or 401).
-      # 404 means it never arrived.  Failing here skips notify-builders,
+      # 404 means it never arrived.  Failing here skips the notify step below,
       # which could not have reached anyone anyway.
       - name: Check the builder WebSocket route
+        id: route_check
         run: |
           set -uo pipefail
           SERVER="${{ vars.CVCPKG_SERVER_URL }}"
@@ -518,29 +488,31 @@ jobs:
           esac
           exit 1
 
-
-  # ── Notify builders to self-update ──────────────────────────────
-  # Relocated repo (cy-pca/cvcpkg): the legacy per-host SSH update jobs
-  # (BSD / linux-matrix / windows / cuda, run on star-00 and the builder
-  # hosts) are replaced by the server's designed self-update path -- the same
-  # one deploy-dev uses.  POST /v1/admin/update-builders sends every CONNECTED
-  # builder a `builder.update` websocket message; each one `git pull`s its
-  # local checkout, pip-installs the new cvcpkg and restarts.  No inbound SSH
-  # to the fleet is needed, so this runs on the cvcpkg-prod runner (catx-03),
-  # which cannot reach the LAN builders directly anyway.
-  #
-  # Reaches the builders currently connected to the server -- the set that
-  # matters for a deploy; report-fleet below names any platform gone dark.
-  # One-time prerequisite: each builder's checkout must track cy-pca/cvcpkg for
-  # its `git pull` to fetch this repo's code (see the relocation runbook).
-  notify-builders:
-    name: Notify builders to self-update
-    needs: deploy
-    continue-on-error: true
-    runs-on: [self-hosted, Linux, cvcpkg-prod]
-    timeout-minutes: 5
-    steps:
-      - name: POST /v1/admin/update-builders
+      # ── Notify builders to self-update ──────────────────────
+      # Relocated repo (cy-pca/cvcpkg): the legacy per-host SSH update jobs
+      # (BSD / linux-matrix / windows / cuda, run on star-00 and the builder
+      # hosts) are replaced by the server's designed self-update path -- the same
+      # one deploy-dev uses.  POST /v1/admin/update-builders sends every CONNECTED
+      # builder a `builder.update` websocket message; each one `git pull`s its
+      # local checkout, pip-installs the new cvcpkg and restarts.  No inbound SSH
+      # to the fleet is needed, so this runs on the cvcpkg-prod runner (catx-03),
+      # which cannot reach the LAN builders directly anyway.
+      #
+      # Reaches the builders currently connected to the server -- the set that
+      # matters for a deploy; report-fleet below names any platform gone dark.
+      # One-time prerequisite: each builder's checkout must track cy-pca/cvcpkg for
+      # its `git pull` to fetch this repo's code (see the relocation runbook).
+      #
+      # Builders need the new SERVER, not the new recipes (they fetch a recipe
+      # from the server when a job starts), so this runs as soon as the route
+      # check passes and BEFORE the recipe push.  It was a separate job that
+      # needed the whole deploy job, recipe push included, so a push that ran
+      # long skipped it (2026-10-31, 2026-11-07).  A failure here is a warning:
+      # the servers are live.
+      - name: Notify builders to self-update
+        if: ${{ steps.route_check.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 5
         env:
           CVCPKG_ADMIN_TOKEN: ${{ secrets.CVCPKG_ADMIN_TOKEN }}
         run: |
@@ -556,11 +528,93 @@ jobs:
             -H "Authorization: Bearer ${CVCPKG_ADMIN_TOKEN}"
           echo
 
+      # ── Push recipes to the primary server DB ─────────────────
+      # The deploy above bundles recipes into the backend image, but
+      # the DB-backed /v1/recipes/* store (used by builders to fetch
+      # recipes at build time) is not refreshed automatically.  Push
+      # the recipes this deploy changed so builders see the deployed
+      # revision.
+      #
+      # Which ones comes from git (scripts/changed_recipes.py): the recipes
+      # touched between the previously deployed commit -- the push event's
+      # `before`, or the dispatch's base_sha -- and this one.  A deploy
+      # changes a few; the full set is ~2,260 uploads, and pushing it on
+      # every deploy took 22-36 minutes.  It still pushes everything when
+      # there is no usable base commit (a dispatch without base_sha, a
+      # new branch, a commit this checkout lacks) or when recipes/_common
+      # changed, which every bundle carries.  A recipe deleted on prod stays
+      # on the server, as before.
+      #
+      # Runs whenever both servers are up, even if the route check failed, and
+      # never fails the job.  The 30-minute cap is for a full push, which took
+      # 10-15 minutes in populate-server runs before push-all shared one HTTP
+      # client; a changed-only push takes seconds.
+      #
+      # A cancelled or failed push is not retried by the next deploy, which
+      # compares with this one: dispatch deploy-prod with no base_sha to
+      # push everything, or run populate-server (it pushes every recipe).
+      - name: Push recipes to cvcpkg.org
+        id: push_recipes
+        if: ${{ !cancelled() && steps.deploy_mirror.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_PUBLISHER_TOKEN }}
+          BASE_SHA: ${{ github.event.before || inputs.base_sha }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          export CVCPKG_SERVER_URL=https://cvcpkg.org
+          if [[ -z "${CVCPKG_TOKEN:-}" ]]; then
+            echo "::warning::CVCPKG_PUBLISHER_TOKEN not set — skipping recipe push"
+            exit 0
+          fi
+          python3 -m pip install --quiet --user '.[publish]' || true
+          # Prefer the freshly-checked-out package script over any installed copy.
+          CVCPKG="python3 -m cvcpkg"
+
+          # `*` alone means every recipe; otherwise one name per line.  A
+          # helper that cannot run is not a reason to push nothing.
+          picked=$(mktemp)
+          if ! python3 scripts/changed_recipes.py "${BASE_SHA:-}" "$TARGET_SHA" >"$picked"; then
+            echo "::warning::scripts/changed_recipes.py failed; pushing every recipe"
+            echo '*' >"$picked"
+          fi
+          args=(--no-default-recipes --recipes-dir recipes)
+          if [[ "$(head -n 1 "$picked")" == '*' ]]; then
+            echo "Pushing every recipe"
+          else
+            mapfile -t names <"$picked"
+            if (( ${#names[@]} == 0 )); then
+              echo "No recipe changed since ${BASE_SHA:0:12}; nothing to push"
+              exit 0
+            fi
+            echo "Pushing ${#names[@]} changed recipe(s): ${names[*]}"
+            for n in "${names[@]}"; do args+=(--only "$n"); done
+          fi
+
+          # One process for the set, as populate does: a `recipe push` per
+          # recipe paid a Python start and a cvcpkg import every time.
+          # Exactly this checkout's recipes (no bundled default, no CWD
+          # overlay).  It prints each failure to stderr; a failed push never
+          # fails the deploy, whose servers are already live by now.
+          out=$(mktemp)
+          log=$(mktemp)
+          rc=0
+          $CVCPKG recipe push-all "${args[@]}" >"$out" 2>"$log" || rc=$?
+          sed -n 's/^  \([^ :]*\): \(failed\|error\) \(.*\)$/::warning::recipe push failed: \1: \2 \3/p' "$log"
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::recipe push-all exited $rc"
+            tail -20 "$log"
+          fi
+          grep -h '^cvcpkg: pushed' "$out" || true
+          echo "Recipe push step took $((SECONDS / 60))m$((SECONDS % 60))s"
+          exit "$rc"
+
+
   report-fleet:
     name: Fleet report
-    needs:
-      - deploy
-      - notify-builders
+    needs: deploy
     if: always()
     continue-on-error: true
     runs-on: [self-hosted, Linux, cvcpkg-prod]

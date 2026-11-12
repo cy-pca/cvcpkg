@@ -11,7 +11,7 @@ This document describes the automated deployment pipelines for cvcpkg.
 
 ## Production Deployment (`deploy-prod.yml`)
 
-**Trigger:** Push to `prod` branch or manual `workflow_dispatch` (optional `sha` input, defaults to the dispatched ref's HEAD). The workflow checks out and deploys exactly that commit; it must be on `prod` or `master`.
+**Trigger:** Push to `prod` branch or manual `workflow_dispatch` (optional `sha` input, defaults to the dispatched ref's HEAD; optional `base_sha`, the previously deployed commit, to push only the recipes changed since it). The workflow checks out and deploys exactly that commit; it must be on `prod` or `master`.
 
 **Runner:** `[self-hosted, Linux, cvcpkg-prod]` (catx-03)
 
@@ -22,8 +22,11 @@ The `deploy` job:
 0. **Resolve and check out the target SHA** — a short SHA is resolved to the full commit, a commit on neither `prod` nor `master` is refused, and the workspace is moved to it before anything is synced (the `sha` input used to be only the image label while the dispatched ref's HEAD was deployed)
 1. **Deploy to cvcpkg.org** — SSH to the primary host (`vars.PROD_SERVER_SSH`): reap stale build dirs and prune Docker, rsync the checkout, back up the database, rebuild the backend container, run migrations (`cvcpkg-server migrate upgrade head`), health-check `/healthz`
 2. **Deploy to pkg.tx.wtf** — same flow, executed locally on the runner host
-3. **Push recipes to cvcpkg.org** — refresh the DB-backed `/v1/recipes/*` store so builders fetch the deployed recipe revision (needs `CVCPKG_PUBLISHER_TOKEN`)
-4. **Check the builder WebSocket route** — an unauthenticated RFC 6455 handshake to `/v1/builders/0/ws` through the public URL must be refused by the route (`403`/`401`). A `404` means the reverse proxy is not forwarding WebSocket upgrades (or the image lacks `websockets`): builders cannot connect and `notify-builders` would reach none of them, so the job fails. See [deployment-guide.md](deployment-guide.md#checking-the-websocket-route).
+3. **Check the builder WebSocket route** — an unauthenticated RFC 6455 handshake to `/v1/builders/0/ws` through the public URL must be refused by the route (`403`/`401`). A `404` means the reverse proxy is not forwarding WebSocket upgrades (or the image lacks `websockets`): builders cannot connect and the notify step would reach none of them, so the job fails. See [deployment-guide.md](deployment-guide.md#checking-the-websocket-route).
+4. **Notify builders to self-update** — `POST /v1/admin/update-builders` (needs `CVCPKG_ADMIN_TOKEN`): every connected builder pulls its checkout, reinstalls cvcpkg and restarts. It runs as soon as the route check passes, before the recipe push, because builders need the new server, not the new recipes. A failure is a warning.
+5. **Push recipes to cvcpkg.org** — refresh the DB-backed `/v1/recipes/*` store so builders fetch the deployed recipe revision (needs `CVCPKG_PUBLISHER_TOKEN`). It runs whenever both servers are up, is capped at 30 minutes, and never fails the job. It pushes the recipes that changed between the previously deployed commit and this one (`scripts/changed_recipes.py`; the previous commit is the push event's `before`, or the `base_sha` dispatch input) with `cvcpkg recipe push-all --only NAME ...`. It pushes every recipe when `recipes/_common` changed, or when there is no base commit: a dispatch without `base_sha`, a new branch, or a commit the checkout lacks. A failed or cancelled push is not retried by the next deploy (which compares with this one): dispatch deploy-prod without `base_sha`, or run populate-server, to push everything.
+
+The `report-fleet` job then lists any builder or platform that is offline.
 
 > **Extras matter on every host these pipelines touch.** A bare
 > `pip install .` now gets the core client only (`click` + `PyYAML`). Each
@@ -42,19 +45,6 @@ git push origin master:prod
 # Or deploy (or roll back to) a specific commit on prod or master:
 gh workflow run deploy-prod -f sha=abc1234
 ```
-
-### Builder Update Jobs
-
-After the server deploy succeeds, four follow-up jobs update cvcpkg on the builder fleet and restart the builder services:
-
-| Job | Runs on | Updates |
-|-----|---------|---------|
-| `update-linux-builders` | matrix: `star-00`, `star-01`, `lat`, `rebota` | The runner host itself: `pip install .`, sweep stale build dirs, restart the `cvcpkg-builder` systemd service |
-| `update-bsd-builders` | `star-00` | FreeBSD/NetBSD/OpenBSD guests over SSH (`vars.BSD_BUILDER_SSH_HOSTS`) — star-00 shares their LAN; the `cvcpkg-prod` runner cannot reach them |
-| `update-windows-builder` | `star-00` | The Windows builder over SSH (`vars.WINDOWS_BUILDER_SSH`); restarts its `cvcpkg-builder` scheduled task |
-| `update-cuda-builder` | `star-00` | The CUDA/GPU builder (prettyhatemachine) over SSH (`vars.CUDA_BUILDER_SSH`); restarts its systemd unit |
-
-The Linux, Windows, and CUDA jobs are `continue-on-error`: an unreachable builder produces a warning, not a failed deploy. The BSD job is deliberately stricter at the *step* level — each BSD step fails loudly (a red step / error annotation) when no host could be updated or a stopped builder did not come back up, unlike the other jobs' failures, which are reduced to warnings. The job itself still carries no `continue-on-error`, but every one of its steps does, so — unlike a truly failing job — a BSD fleet failure never turns the overall deploy run red; it surfaces only as a red step inside a green job.
 
 ## Dev/Test Deployment (`deploy-dev.yml`)
 
