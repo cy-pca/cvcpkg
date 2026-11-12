@@ -428,7 +428,26 @@ jobs:
           done
 
           # postgres is a pulled image; backend was built by the loop above.
-          docker compose -f docker-compose.test.yml up -d postgres backend
+          #
+          # But the tagged images can vanish from the shared daemon minutes after
+          # they were built (see the two steps below). Run 43124818457 lost
+          # cvcpkg-test-backend while Playwright built. A plain `up` then rebuilt
+          # it on the DEFAULT builder and died with `failed to solve: lease "...":
+          # not found`. So `up --no-build` (compose never builds here), and before
+          # each try rebuild a missing backend on cvcpkg-ci with build_svc.
+          for attempt in 1 2 3; do
+            if ! docker image inspect cvcpkg-test-backend >/dev/null 2>&1; then
+              echo "::warning::cvcpkg-test-backend vanished after it was built; rebuilding it on cvcpkg-ci"
+              build_svc backend || exit 1
+            fi
+            docker compose -f docker-compose.test.yml up -d --no-build postgres backend && break
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::postgres + backend did not start after 3 attempts"
+              exit 1
+            fi
+            echo "::warning::compose up failed (attempt $attempt/3); retrying"
+            sleep 10
+          done
           echo "Waiting for backend health..."
           timeout 120 bash -c 'until curl -sf http://127.0.0.1:8421/healthz; do sleep 2; done'
           echo ""

@@ -124,6 +124,53 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+
+def _windows_version_info():
+    """A PE version resource for cvcpkg.exe (Windows only).
+
+    Antivirus machine-learning models score an exe with no publisher, product or
+    version metadata as more suspicious, and a one-file PyInstaller exe already
+    looks like a self-extracting dropper.  Microsoft Defender quarantined the
+    2.5.0, 2.5.12 and 2.5.13 Windows binaries as Trojan:Win32/Bearfoos.A!ml; see
+    .github/workflows/cvcpkg-standalone.yml for the other mitigations.
+    """
+    import re
+    from importlib.metadata import version as _dist_version
+
+    from PyInstaller.utils.win32.versioninfo import (
+        FixedFileInfo,
+        StringFileInfo,
+        StringStruct,
+        StringTable,
+        VarFileInfo,
+        VarStruct,
+        VSVersionInfo,
+    )
+
+    ver = _dist_version("cvcpkg")
+    nums = [int(n) for n in re.findall(r"\d+", ver)[:4]]
+    nums += [0] * (4 - len(nums))
+    owner = "CyberPC Angel, LLC"
+    strings = [
+        StringStruct("CompanyName", owner),
+        StringStruct("FileDescription", "cvcpkg - cross-OS science package manager"),
+        StringStruct("FileVersion", ver),
+        StringStruct("InternalName", "cvcpkg"),
+        StringStruct("LegalCopyright", f"Copyright (c) 2026 {owner}. MIT License."),
+        StringStruct("OriginalFilename", "cvcpkg.exe"),
+        StringStruct("ProductName", "cvcpkg"),
+        StringStruct("ProductVersion", ver),
+        StringStruct("Comments", "https://github.com/cy-pca/cvcpkg"),
+    ]
+    return VSVersionInfo(
+        ffi=FixedFileInfo(filevers=tuple(nums), prodvers=tuple(nums)),
+        kids=[
+            StringFileInfo([StringTable("040904B0", strings)]),
+            VarFileInfo([VarStruct("Translation", [0x0409, 1200])]),
+        ],
+    )
+
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -141,4 +188,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    version=_windows_version_info() if sys.platform == "win32" else None,
 )
