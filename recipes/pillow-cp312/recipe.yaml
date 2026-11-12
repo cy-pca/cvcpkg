@@ -10,7 +10,12 @@ recipe:
   # PNG-less Pillow would have shipped green.  The grl-snam scene tooling
   # reads navmask.png rasters through PIL; codec support is the entire point.
   # 12.3.0 is a new upstream version, so the revision restarts at 1.
-  cvc_revision: 1
+  # Bumped 1 -> 2: add wasm and wasm-mt columns (build-wasm.sh: a crossenv
+  # setup.py build with emcc, each extension linked closed over its codec
+  # libraries and given a namespace of its own by _common/wasm_pyext.py, listed
+  # in share/python-wasm/pillow-cp312.inittab). New platforms only: the native
+  # columns rebuild identically and needn't be repopulated.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -27,6 +32,9 @@ recipe:
     no auditwheel-vendored pillow.libs/ copy.  Hand-converted from the
     generated recipe (native-library edges, feature pinning and the rpath pass
     are things the generator cannot infer from [build-system] requires).
+    On wasm and wasm-mt each extension is one relocatable object with its codec
+    libraries linked in, listed in share/python-wasm/pillow-cp312.inittab for a
+    host that links Python statically (ariglx-web).
 
 # From-source sdist (NOT source.type python_wheel): cvcpkg fetches + sha256-
 # verifies this tarball and extracts it (strip_components) to CVC_SOURCE_DIR;
@@ -96,6 +104,9 @@ build:
   # linux/macos/windows only — matching the columns actually built and
   # verified.  The BSDs are NOT claimed: nothing has built Pillow there yet,
   # and an unverified platform column is a phantom claim.
+  # wasm/wasm-mt: cross-built on a linux host (a native python3.12 runs
+  # setup.py, emcc compiles); build-wasm.sh links a probe host and runs the
+  # codec round-trips under node before it passes.
   matrix:
     - platform: linux
       script: build.sh
@@ -103,6 +114,16 @@ build:
       script: build.sh
     - platform: windows
       script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # Threaded flavor for the wasm-mt closure: env-wasm.sh prepends -pthread
+    # to CFLAGS/LDFLAGS on the CVC_WASM_THREADS hook.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+      env:
+        CVC_WASM_THREADS: "1"
 
 package:
   # From-source build linking prefix libraries: the payload is PIL/ + its
@@ -112,7 +133,8 @@ package:
   # entry that matches nothing, so the unscoped Windows Lib/ globs broke
   # `cvcpkg pack` on linux.
   files:
-    - { glob: "lib/python3.12/site-packages/PIL/", platforms: [linux, macos] }
-    - { glob: "lib/python3.12/site-packages/pillow-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/PIL/", platforms: [linux, macos, wasm, wasm-mt] }
+    - { glob: "lib/python3.12/site-packages/pillow-*.dist-info/", platforms: [linux, macos, wasm, wasm-mt] }
+    - { glob: "share/python-wasm/pillow-cp312.inittab", platforms: [wasm, wasm-mt] }
     - { glob: "Lib/site-packages/PIL/", platforms: [windows] }
     - { glob: "Lib/site-packages/*.dist-info/", platforms: [windows] }
