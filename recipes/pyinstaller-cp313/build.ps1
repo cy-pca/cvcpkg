@@ -28,6 +28,11 @@ New-Item -ItemType Directory -Force -Path $wheelhouse | Out-Null
 $prebuilt = Join-Path $env:CVC_SOURCE_DIR 'PyInstaller\bootloader\Windows-64bit-intel\run.exe'
 $prebuiltHash = if (Test-Path $prebuilt) { (Get-FileHash $prebuilt).Hash } else { $null }
 $env:PYINSTALLER_COMPILE_BOOTLOADER = '1'
+# env-windows.ps1 sets CC=cl and CXX=cl for every recipe. waf's msvc tool finds
+# CL.exe on its own, but then takes CC/CXX literally and rejects the bare name
+# ("Program ['cl'] is not executable" in bootloader/build/config.log), so the
+# bootloader configure fails. Unset them for this build.
+Remove-Item Env:CC, Env:CXX -ErrorAction SilentlyContinue
 
 # --no-index/--no-deps keep pip inside cvcpkg's graph; --no-build-isolation
 # imports the hatchling backend from the closure rather than fetching it.
