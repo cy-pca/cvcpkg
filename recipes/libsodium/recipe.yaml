@@ -1,0 +1,109 @@
+schema_version: 1
+recipe:
+  name: libsodium
+  upstream_version: "1.0.22"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://libsodium.org/
+  license: ISC
+  tags: [libraries, crypto, security, wasm]
+  description: >-
+    libsodium -- a portable, easy-to-use crypto library (NaCl's API and
+    more): X25519/Ed25519, XChaCha20-Poly1305 and XSalsa20-Poly1305,
+    BLAKE2b, Argon2id, sealed boxes.  For libcvc's host-side end-to-end
+    encryption (TX.WTF's X3DH + Double Ratchet DMs) on every platform its
+    hosts ship on: linux, macos, windows, and the browser (wasm, wasm-mt).
+  # The tarball is upstream's 2026-04-09 release.  Its minisign signature
+  # (libsodium-1.0.22.tar.gz.minisig) verifies against upstream's published
+  # key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3, and
+  # download.libsodium.org and the GitHub release serve the same bytes.
+  #
+  # Every platform installs the same consumer surface:
+  #   - include/sodium.h and include/sodium/*.h (public headers only);
+  #   - lib/pkgconfig/libsodium.pc;
+  #   - lib/cmake/sodium/sodiumConfig.cmake: the target sodium::sodium,
+  #     which carries SODIUM_STATIC for a static library.  On Windows that
+  #     define is what tells the headers not to dllimport, and Windows has
+  #     no pkg-config.
+  #
+  # linux, macos: upstream's ./configure (asm and runtime CPU dispatch on).
+  # windows: MSVC through CMake (msvc/CMakeLists.txt here), because cvcpkg's
+  #   own MSVC has no MSBuild to run upstream's .vcxproj.  The CMake project
+  #   compiles the same 141 sources, with the same defines the vs2022
+  #   project uses.  Shared builds make bin/libsodium.dll and its import
+  #   library lib/libsodium.lib.  Static builds make lib/libsodium.lib with
+  #   the static CRT, as cvcpkg's other Windows static bundles do.
+  # wasm, wasm-mt: emconfigure, static, with no asm and no SSP, as upstream's
+  #   dist-build/emscripten.sh does.  wasm-mt also passes -pthread (from
+  #   env-wasm-mt.sh) and --with-pthreads.  Randomness comes from the
+  #   JavaScript runtime (crypto.getRandomValues) through randombytes.c's
+  #   emscripten implementation, which is set up on the thread that runs
+  #   randombytes_stir().  A wasm-mt consumer drawing randomness on other
+  #   threads installs a getentropy() implementation first (build-wasm.sh,
+  #   check.c).
+
+source:
+  # Built from the source package libsodium-src, which pins the upstream tarball
+  # (https://download.libsodium.org/libsodium/releases/libsodium-1.0.22.tar.gz).
+  type: package
+  package: libsodium-src
+
+patches: []
+
+depends:
+  build:
+    - name: libsodium-src
+      version: "==1.0.22"
+    # linux, macos: upstream's ./configure with the system compiler and make;
+    # libsodium has no dependencies of its own.
+    # Windows: MSVC through CMake + Ninja (build.ps1, msvc/CMakeLists.txt).
+    - name: cmake
+      platforms: [windows]
+    - name: ninja
+      platforms: [windows]
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+    - platform: wasm
+      host_platform: linux
+      script: build-wasm.sh
+    # wasm on a Windows host too, through Git Bash (env-wasm.ps1), so a
+    # browser build of libcvc on a Windows machine gets it from source.
+    - platform: wasm
+      host_platform: windows
+      script: build-wasm.ps1
+    # Threaded: the same script; env-wasm-mt.sh adds -pthread to every compile
+    # and link.  Linux host only: env-wasm.ps1 has no threaded mode.
+    - platform: wasm-mt
+      host_platform: linux
+      script: build-wasm.sh
+
+package:
+  files:
+    - include/sodium.h
+    - include/sodium/
+    - lib/pkgconfig/libsodium.pc
+    - lib/cmake/sodium/sodiumConfig.cmake
+    - lib/libsodium*                  # .so/.dylib/.a; libsodium.lib on Windows
+    - { glob: "bin/libsodium.dll", platforms: [windows] }
+  cmake_packages:
+    - { name: sodium, targets: ["sodium::sodium"] }
+  pkg_config:
+    - libsodium
+
+test:
+  script: test.sh
