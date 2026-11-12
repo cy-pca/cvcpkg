@@ -43,6 +43,8 @@ depends:
       platforms: [linux, macos]
     - name: ninja
       platforms: [linux, macos]
+  # Explicit, or the build tools above become every consumer's required_deps.
+  runtime: []
   host_tools: []
 
 build:
