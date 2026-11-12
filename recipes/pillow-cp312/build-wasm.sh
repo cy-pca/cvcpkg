@@ -12,8 +12,9 @@
 #     share/python-wasm/pillow-cp312.inittab: PIL's private libtiff, libwebp and zlib copies
 #     become local, so they can't clash with another package's or the host's.
 #   - the wheel carries a wasm platform tag, so native pip can't install it: it is extracted.
-#   - gates: the manifest, no undefined codec symbol, and a probe host that runs PIL's codec
-#     round-trips under node.
+#   - gates: the manifest, no undefined codec symbol, the codec archives' target_features
+#     (wasm-mt: no member that disallows shared memory), and a probe host that runs PIL's
+#     codec round-trips under node.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
@@ -147,6 +148,18 @@ while IFS="$(printf '\t')" read -r _dotted _sym _rel; do
 done < "${_MANIFEST}"
 [ "${_open}" = 0 ] || { echo "pillow(wasm): FATAL — an extension isn't linked closed" >&2; exit 1; }
 "${PY_NATIVE}" -I "${_PYEXT}" check "${_MANIFEST}"
+# The closure archives' target_features (wasm_features.py). The relocatable link keeps only the
+# '+' entries, so a member's '-shared-mem' (built without -pthread, its atomics or thread-locals
+# lowered) is gone from the extension's object, and the probe's -pthread link can't refuse it.
+# wasm-mt fails on such a member; plain wasm records what each archive carries.
+_SHM=""
+if [ -n "${_TFLAG}" ]; then _SHM="--shared-memory"; fi
+# shellcheck disable=SC2086
+"${PY_NATIVE}" -I "${SCRIPT_DIR}/wasm_features.py" ${_SHM} --libdir "${DEPS}/lib" \
+  --libs="${_CLOSURE}" || {
+    echo "pillow(wasm): FATAL — a codec archive can't go into a module with shared memory" >&2
+    exit 1
+}
 
 # The probe: the smallest host that links the localized objects with libpython and its modules'
 # libraries (ariadne_python.cmake's list), undefined symbols as errors, then runs PIL's codec

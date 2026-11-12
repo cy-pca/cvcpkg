@@ -79,8 +79,12 @@ depends:
     - name: bzip2
   runtime:
     - name: python312
-    # The compiled extensions link these by soname and resolve them from the
-    # merged prefix at import (see the $ORIGIN RUNPATH pass in build.sh).
+    # On linux, macos and windows the compiled extensions link these by soname
+    # and resolve them from the merged prefix at import (see the $ORIGIN
+    # RUNPATH pass in build.sh). On wasm and wasm-mt each extension has them
+    # linked in, so nothing needs them at import, but keep the edges on every
+    # platform: a runtime edge is what puts them in CVC_DEPS_PREFIX, the only
+    # prefix build-wasm.sh links from (the build prefix holds host tools).
     - name: zlib
     - name: libjpeg-turbo
     - name: tiff
