@@ -17,7 +17,12 @@ recipe:
   # Not (yet) here: the BSDs (upstream does not test them), Studio and the
   # Filament renderer, OpenUSD.  The Python bindings are the mujoco-core-cpXYZ
   # recipes, which build from the PyPI sdist against this package.
-  cvc_revision: 1
+  #
+  # cvc.2: the installed mujocoConfig.cmake looks for OpenGL quietly
+  # (config-opengl-optional.patch).  Upstream's find_dependency(OpenGL) made
+  # find_package(mujoco) fail on a Linux host without GL libraries, though no
+  # exported target links GL.  Same binaries; only the CMake package changed.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -46,7 +51,12 @@ source:
   sha256: "bf85305af56458ab5b752767925a3bebd713d86a694838774ed634ffa8e78197"
   strip_components: 1
 
-patches: []
+patches:
+  # cmake/mujocoConfig.cmake.in: find_package(OpenGL QUIET) in place of
+  # find_dependency(OpenGL).  No target in mujocoTargets.cmake links OpenGL
+  # (libmujoco loads GL at run time through glad), so a headless consumer must
+  # not need GL libraries to configure.  The wasm bundles do not use this file.
+  - config-opengl-optional.patch
 
 depends:
   build:
@@ -54,7 +64,8 @@ depends:
     - ninja
     # GLFW (compiled statically into simulate/basic from deps.lock) needs the
     # X11 and GL headers; it dlopen()s the libraries at run time, so these are
-    # build-only.  Same set as recipes/glfw, minus the Wayland backend.
+    # build-only.  Same set as recipes/glfw, minus the Wayland backend.  The
+    # installed CMake package does not need them either (see patches).
     - name: libglvnd
       platforms: [linux]
     - name: libx11
