@@ -10,7 +10,10 @@ recipe:
   # only runtime deps beneath a recipe's own, and gtk4 on OpenBSD then failed
   # "Dependency 'cairo' is required but not found" (job 22760). The bump also
   # republishes libxcb with pthread-stubs in its catalog required_deps.
-  cvc_revision: 4
+  # Bumped 4 -> 5: the libraries' RPATH was "RIGIN" -- make read the $ORIGIN that build.sh
+  # put in LDFLAGS as $O + "RIGIN". build.sh now spells it for make
+  # (cvc_make_origin_rpath), so the RPATH is $ORIGIN.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

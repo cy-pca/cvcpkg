@@ -11,6 +11,7 @@ from cvcpkg.linkage import (
     _Sonames,
     audit_tree,
     builder_path_reason,
+    elf_rpath_entry_problem,
     host_package_libraries,
     index_files,
     is_system_soname,
@@ -282,6 +283,107 @@ def test_audit_allowlist_never_excuses_builder_paths(tmp_path):
     assert audit_tree(tmp_path, "macos", allow=["/Library/Frameworks/Vendor.framework/"]).ok
     macho(tmp_path / "bin" / "w", rpaths=["/tmp/cvcpkg-x-abcd1234/lib"])
     assert not audit_tree(tmp_path, "macos", allow=["/tmp/", "/Library/Frameworks/"]).ok
+
+
+# ── malformed RUNPATH/RPATH entries ─────────────────────────────
+#
+# libxshmfence, libXxf86vm (netbsd), libXext (freebsd) and openssh (every
+# platform) shipped the RUNPATH "RIGIN": an autotools recipe's
+# `-Wl,-rpath,$ORIGIN` in LDFLAGS, read by make as `$O` + "RIGIN".
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "$ORIGIN",
+        "$ORIGIN/../lib",
+        "${ORIGIN}",
+        "${ORIGIN}/../lib",
+        "/usr/pkg/lib",
+        "/usr/local/lib",
+        "/opt/x/lib",
+        "/lib",
+    ],
+)
+def test_wellformed_elf_entries_have_no_problem(entry):
+    assert elf_rpath_entry_problem(entry) is None
+
+
+@pytest.mark.parametrize(
+    "entry,why",
+    [
+        ("RIGIN", "mangled $ORIGIN"),
+        ("RIGIN/../lib", "mangled $ORIGIN"),
+        ("ORIGIN", "mangled $ORIGIN"),
+        ("IGIN/..", "mangled $ORIGIN"),
+        ("$", "mangled $ORIGIN"),
+        ("/../lib", "expanded to nothing"),
+        ("/..", "expanded to nothing"),
+        ("lib", "relative path"),
+        ("../lib", "relative path"),
+        (".", "relative path"),
+        ("$ORIGINAL", "relative path"),  # not the $ORIGIN token
+        ("foo/$ORIGIN", "relative path"),
+    ],
+)
+def test_malformed_elf_entries_are_reported(entry, why):
+    assert why in elf_rpath_entry_problem(entry)
+
+
+@pytest.mark.parametrize("plat", ["linux", "freebsd", "netbsd", "openbsd", "haiku"])
+def test_audit_elf_mangled_origin_fails_on_every_platform(tmp_path, plat):
+    # libxshmfence on netbsd-build-2: `readelf -d` showed RIGIN:/usr/pkg/lib.
+    elf(tmp_path / "lib" / "libxshmfence.so.1", kind="dyn", runpath="RIGIN:/usr/pkg/lib")
+    # openssh on linux: the executables' two entries.
+    elf(tmp_path / "bin" / "ssh", runpath="RIGIN/../lib:RIGIN")
+    res = audit_tree(tmp_path, plat)
+    assert not res.ok
+    assert ("lib/libxshmfence.so.1", "RUNPATH", "RIGIN") in _fields(res)
+    assert ("bin/ssh", "RUNPATH", "RIGIN/../lib") in _fields(res)
+    assert ("bin/ssh", "RUNPATH", "RIGIN") in _fields(res)
+    assert all(f.malformed and "$ORIGIN" in f.reason for f in res.findings)
+    assert len(res.findings) == 3  # /usr/pkg/lib itself is legal
+
+
+def test_audit_elf_mangled_dt_rpath_is_reported_as_rpath(tmp_path):
+    elf(tmp_path / "bin" / "aserver", rpath="RIGIN:$ORIGIN/../lib")  # alsa-lib on linux
+    (f,) = audit_tree(tmp_path, "linux").findings
+    assert (f.path, f.field, f.value) == ("bin/aserver", "RPATH", "RIGIN")
+
+
+def test_audit_elf_relative_entries_are_not_excused_by_allow(tmp_path):
+    elf(tmp_path / "bin" / "x", runpath="lib:RIGIN")
+    res = audit_tree(tmp_path, "linux", allow=["lib", "RIGIN", "/"])
+    assert {f.value for f in res.findings} == {"lib", "RIGIN"}
+
+
+def test_audit_elf_fixed_origin_entries_pass(tmp_path):
+    elf(tmp_path / "lib" / "libxext.so.6", kind="dyn", runpath="$ORIGIN:/usr/pkg/lib")
+    elf(tmp_path / "bin" / "ssh", runpath="$ORIGIN/../lib:$ORIGIN")
+    elf(tmp_path / "bin" / "static-ish", runpath="")  # emptied on purpose (openbsd)
+    for plat in ("linux", "freebsd", "netbsd", "openbsd"):
+        assert audit_tree(tmp_path, plat).ok, plat
+
+
+def test_audit_elf_empty_entry_beside_others_fails(tmp_path):
+    # An unset variable in the link line (`-rpath $X:/usr/lib`) or a stray ':'
+    # makes an empty entry, which the loader reads as the current directory.
+    for name, value in (("a", ":/usr/lib"), ("b", "/usr/lib:"), ("c", "$ORIGIN::/usr/lib")):
+        elf(tmp_path / "bin" / name, runpath=value)
+    assert read_linkage(tmp_path / "bin" / "c").blank_rpath
+    res = audit_tree(tmp_path, "linux")
+    assert {f.path for f in res.findings} == {"bin/a", "bin/b", "bin/c"}
+    assert all(f.value == "" and "current directory" in f.reason for f in res.findings)
+    # A wholly empty string, and a plain one, are not blank.
+    assert not read_linkage(elf(tmp_path / "e", runpath="")).blank_rpath
+    assert not read_linkage(elf(tmp_path / "f", runpath="$ORIGIN:/usr/lib")).blank_rpath
+
+
+def test_audit_macho_relative_rpaths_are_not_judged(tmp_path):
+    # `$ORIGIN` is junk on macOS but shared build scripts have always left it
+    # there; only the ELF loader's entries are held to the rule.
+    macho(tmp_path / "lib" / "libx.dylib", filetype="dylib", rpaths=["RIGIN", "$ORIGIN"])
+    assert audit_tree(tmp_path, "macos").ok
 
 
 def test_audit_skips_platforms_without_loader_paths(tmp_path):

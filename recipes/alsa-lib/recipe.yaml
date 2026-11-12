@@ -11,7 +11,10 @@ recipe:
   # relocatable-config-dir.patch resolves the config tree relative to the loaded
   # libasound.so via dladdr (<origin>/../share/alsa), mirroring upstream's own
   # dlmisc.c plugin-dir logic, so it "just works" wherever the prefix lands.
-  cvc_revision: 2
+  # Bumped 2 -> 3: bin/aserver's RUNPATH was "RIGIN:$ORIGIN/../lib" -- make read the $ORIGIN that build.sh
+  # put in LDFLAGS as $O + "RIGIN". build.sh now spells it for make
+  # (cvc_make_origin_rpath), so the RPATH is $ORIGIN.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

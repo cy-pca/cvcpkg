@@ -434,6 +434,28 @@ def test_stage_bundle_refuses_builder_runpath(tmp_path):
     assert "cmake (linux/x86_64)" in msg
 
 
+def test_stage_bundle_refuses_make_mangled_origin(tmp_path):
+    # An autotools recipe's `-Wl,-rpath,$ORIGIN` in LDFLAGS: make read `$O`.
+    inst = tmp_path / "install"
+    elf(inst / "lib" / "libxshmfence.so.1", kind="dyn", runpath="RIGIN:/usr/pkg/lib")
+    with pytest.raises(PackError) as exc:
+        stage_bundle(inst, {"bundle": _bundle("netbsd")}, tmp_path / "staging")
+    msg = str(exc.value)
+    assert "lib/libxshmfence.so.1: RUNPATH RIGIN" in msg
+    assert "mangled $ORIGIN" in msg
+    assert "cvc_make_origin_rpath" in msg  # tells the recipe author what to write
+
+
+def test_stage_bundle_refuses_mangled_executable_rpath(tmp_path):
+    # The pack-time $ORIGIN pass only rewrites lib/**/*.so: openssh's and
+    # alsa-lib's executables kept RIGIN on Linux.
+    inst = tmp_path / "install"
+    elf(inst / "lib" / "libasound.so.2", kind="dyn", runpath="$ORIGIN", soname="libasound.so.2")
+    elf(inst / "bin" / "aserver", runpath="RIGIN:$ORIGIN/../lib")
+    with pytest.raises(PackError, match="bin/aserver: RUNPATH RIGIN"):
+        stage_bundle(inst, {"bundle": _bundle("linux")}, tmp_path / "staging")
+
+
 def test_stage_bundle_accepts_relocatable_tree(tmp_path, capsys):
     inst = tmp_path / "install"
     elf(inst / "bin" / "cmake", needed=["libcurl.so.4.8.0"], runpath="$ORIGIN/../lib")
