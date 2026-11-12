@@ -28,7 +28,39 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.14
+
+**A release so Microsoft Defender stops quarantining the Windows binary (#609),
+the registry keeps and serves each bundle's `requires_capabilities` (#603,
+migration 037), and `/install.sh` and `/install.ps1` retry transient download
+errors (#584, #588). It also ships the recipes merged since 2.5.13, among them
+MuJoCo 4.0.0 with its Python bindings, the viewer's GLFW and OpenGL bindings,
+and the Menagerie robot models.**
+
+- **The Windows binary is built to stay out of Microsoft Defender's way, and a
+  flagged build cannot ship (#609).** Defender quarantined
+  `cvcpkg-windows-x86_64.exe` 2.5.0, 2.5.12 and 2.5.13 as
+  `Trojan:Win32/Bearfoos.A!ml`, deleting it mid-run on users' machines and on
+  a Windows builder. Its event log showed static machine-learned signatures that
+  came and went with definitions updates (1.463.178, .204 and .229 flagged them;
+  .242 and later do not), raised when the exe was started. 2.5.13 shipped clean
+  and was flagged two days later.
+  - Windows builds compile PyInstaller's bootloader from source with MSVC instead
+    of shipping the prebuilt stub that every PyInstaller app, malware included,
+    shares. The build fails if the bootloader was not compiled.
+  - `cvcpkg.exe` carries a PE version resource: company, product, version,
+    description, copyright.
+  - `scripts/defender-scan.ps1` gates the Windows jobs of `cvcpkg-standalone`
+    and `build-cli-binary`: it updates the definitions, proves the scanner works
+    on the EICAR test file, drops the hosted runner's `C:\`/`D:\` scan
+    exclusions (which otherwise make every file look clean), and fails on any
+    detection.
+  - `defender-watch.yml` rescans the latest release's Windows binary every day,
+    so a definitions update that flags a shipped release shows up as a red run.
+  - cvcpkg CI's Docker integration job runs `compose up --no-build` and rebuilds
+    a backend image that vanished from the shared daemon on its isolated
+    builder, instead of failing on the default builder's
+    `lease "...": not found`.
 
 - **The pack gate rejects an RPATH that cannot work; 31 autotools recipes are
   fixed and 20 of them rebuild.** An autotools recipe that exported
@@ -156,6 +188,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     A `.sha256` that holds no whole hash is retried the same way.
   - A failed download now dies with `download failed: <url> (<reason>)`, as
     `install.sh` does.
+
+- **Recipes merged since 2.5.13 (#579, #587, #590-#602, #604-#606, #610).**
+  - MuJoCo 4.0.0 (native, wasm and wasm-mt) and mujoco-core-cp312/cp313
+    (#595, #604, #605, #606); mujoco 4.0.0+cvc.2, whose `find_package(mujoco)`
+    works without OpenGL (#610); mujoco-menagerie 2026.11.2, the Menagerie robot
+    models (#598, #602); pyGLFW (glfw-cp312/cp313) and PyOpenGL
+    (pyopengl-cp311 to cp313t) for `mujoco.viewer` and `mujoco.Renderer`
+    (#599).
+  - `_common/env-linux.sh` exports `CMAKE_PREFIX_PATH` `:`-separated, so CMake
+    searches the deps prefix when the build prefix is separate (#601). The
+    wasm smoke tests find emsdk on the fleet (#594).
+  - New: cdt 2.0.1, shewchuk-predicates and nanoflann 2.0.1 (#597); gmp and
+    mpfr for wasm-mt (#592); shiboken6-cp311 and vtk-python-cp311 on macOS
+    (#590, #591).
+  - Fixes: glew cvc.3 exports no builder paths (#587); clapack, libiimod and
+    yaml declare their MSVC install layouts (#593, #596); cuda-toolkit retries
+    a download whose connection was reset (#600); glfw builds X11 only on
+    FreeBSD (#599); llvm20 cvc.5 links no optional host library into libLLVM
+    (#579).
 
 ## v2.5.13
 
