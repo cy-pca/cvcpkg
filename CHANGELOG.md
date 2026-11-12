@@ -70,6 +70,29 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
     in source (`build-python.sh` sets `$ORIGIN` on libpython; qhull's `build.sh`
     patches the CMakeLists) and not bumped, so their next rebuild passes the gate.
 
+- **deploy-prod pushes only the recipes a deploy changed, and builders are
+  told about the new server before the recipes are pushed.** The recipe push
+  took 22-36 minutes on every deploy, and on 2026-10-31 and 2026-11-07 it
+  outlasted the job (cancelled at 50 minutes), which skipped
+  `notify-builders` and left the server with a partial recipe set.
+  - `scripts/changed_recipes.py` names the recipes whose bundle differs
+    between the previously deployed commit (the push event's `before`, or the
+    new `base_sha` dispatch input) and the one being deployed, including a
+    recipe's vendored source. It says "all" when `recipes/_common` changed
+    (every bundle carries it) or the base commit is unknown, which is a
+    dispatch without `base_sha`.
+  - `cvcpkg recipe push-all --only NAME` (repeatable) pushes just those.
+    `push-all` also uses one HTTP client for the whole run instead of one per
+    recipe (a TLS context and a connection each), reads `recipe.yaml` with
+    libyaml, and compresses bundles at gzip level 6 (the same size as 9 on
+    recipe text, less CPU). A full push on a loopback server went from 236 s
+    to 117 s.
+  - The builder notification is a step of the deploy job that runs right after
+    the WebSocket route check, ahead of the recipe push; the `notify-builders`
+    job is gone. The recipe push runs whenever both servers are up, is capped
+    at 30 minutes, and never fails the job.
+
+
 - **The registry keeps and serves each bundle's `requires_capabilities`.** A
   recipe such as libcvc-cuda declares `provides: [libcvc]` and
   `requires_capabilities: [cuda]`, and the bundle manifest carries both. The

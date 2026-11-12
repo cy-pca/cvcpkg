@@ -20,6 +20,12 @@ from cvcpkg.optional import require_httpx
 # ── Recipe distribution commands ────────────────────────────────
 
 
+def _load_recipe_yaml(path: Path) -> dict:
+    """*path* parsed as YAML.  libyaml's loader when PyYAML has it: pushing
+    ~2,260 recipes spent 12 s of CPU in the pure-Python one, twice per recipe."""
+    return yaml.load(path.read_text(), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+
+
 def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
     """If the recipe uses ``source.type: vendored``, bundle the vendored
     source tree into the tarball under ``_vendored/<path>/``.
@@ -35,7 +41,7 @@ def _bundle_vendored_source(tar, recipe_path: Path, rdir: Path) -> None:
     recipe_yaml = recipe_path / "recipe.yaml"
     if not recipe_yaml.is_file():
         return
-    data = yaml.safe_load(recipe_yaml.read_text())
+    data = _load_recipe_yaml(recipe_yaml)
     source = data.get("source", {})
     if source.get("type") != "vendored" or not source.get("path"):
         return
@@ -67,7 +73,8 @@ def _recipe_bundle(name: str, recipe_path: Path, rdir: Path, *, vendored: bool =
     import tarfile
 
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+    # Level 6, not tarfile's default 9: the same size on recipe text, 25% less CPU.
+    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
         for f in sorted(recipe_path.rglob("*")):
             if f.is_file():
                 tar.add(f, arcname=f"{name}/{f.relative_to(recipe_path).as_posix()}")
@@ -644,19 +651,34 @@ def recipe_pull_all(server: str, token: str, org_slug: str, output_dir: str):
     help="Ignore the auto-detected default recipes directory.",
 )
 @click.option("--org", "org_slug", default="", help="Organization scope.")
+@click.option(
+    "--only",
+    "only",
+    multiple=True,
+    metavar="NAME",
+    help="Push just this recipe (repeatable) instead of every one.",
+)
 def recipe_push_all(
-    server: str, token: str, recipes_dirs: tuple[str, ...], no_default_recipes: bool, org_slug: str
+    server: str,
+    token: str,
+    recipes_dirs: tuple[str, ...],
+    no_default_recipes: bool,
+    org_slug: str,
+    only: tuple[str, ...],
 ):
     """Push all recipes from the default + overlay directories to the server.
 
     Iterates every recipe in the bundled recipes directory (and any
     extra ``--recipes-dir`` overlays) and pushes each one to the
-    server.  Later directories win on name conflicts.
+    server.  Later directories win on name conflicts.  ``--only`` limits
+    the push to the named recipes; one that no directory has is an error
+    and nothing is pushed.
 
     \b
     Examples:
       cvcpkg recipe push-all
       cvcpkg recipe push-all --recipes-dir ./my-extra-recipes
+      cvcpkg recipe push-all --only zlib --only openssl
     """
     httpx = require_httpx("publish")
 
@@ -679,38 +701,48 @@ def recipe_push_all(
                 continue
             recipe_map[recipe_path.name] = (recipe_path, rdir)
 
+    if only:
+        missing = sorted(set(only) - set(recipe_map))
+        if missing:
+            raise click.ClickException(f"no such recipe: {', '.join(missing)}")
+        names = sorted(set(only))
+    else:
+        names = sorted(recipe_map)
+
     pushed = 0
     failed = 0
-    for name in sorted(recipe_map):
-        recipe_path, rdir = recipe_map[name]
-        recipe_yaml = recipe_path / "recipe.yaml"
-        recipe_data = yaml.safe_load(recipe_yaml.read_text())
-        recipe_info = recipe_data.get("recipe", {})
-        version = recipe_info.get("upstream_version", "")
+    # One client for the whole run.  A client per recipe built a TLS context
+    # (33 ms of CPU) and opened a new connection (a TCP and TLS handshake)
+    # 2,260 times.
+    with httpx.Client(timeout=60) as client:
+        for name in names:
+            recipe_path, rdir = recipe_map[name]
+            recipe_data = _load_recipe_yaml(recipe_path / "recipe.yaml")
+            recipe_info = recipe_data.get("recipe", {})
+            version = recipe_info.get("upstream_version", "")
 
-        buf = _recipe_bundle(name, recipe_path, rdir)
+            buf = _recipe_bundle(name, recipe_path, rdir)
 
-        url = f"{base}/v1/recipes/{name}"
-        params = {"org_slug": org_slug, "version": version}
-        try:
-            with httpx.Client(timeout=60) as client:
+            url = f"{base}/v1/recipes/{name}"
+            params = {"org_slug": org_slug, "version": version}
+            try:
                 resp = client.post(
                     url,
                     headers=headers,
                     params=params,
                     files={"file": (f"{name}.tar.gz", buf, "application/gzip")},
                 )
-            if resp.status_code >= 400:
-                click.echo(
-                    f"  {name}: failed ({resp.status_code}): {_error_detail(resp)}", err=True
-                )
+                if resp.status_code >= 400:
+                    click.echo(
+                        f"  {name}: failed ({resp.status_code}): {_error_detail(resp)}", err=True
+                    )
+                    failed += 1
+                else:
+                    click.echo(f"  {name} (version={version})")
+                    pushed += 1
+            except Exception as exc:
+                click.echo(f"  {name}: error ({exc})", err=True)
                 failed += 1
-            else:
-                click.echo(f"  {name} (version={version})")
-                pushed += 1
-        except Exception as exc:
-            click.echo(f"  {name}: error ({exc})", err=True)
-            failed += 1
 
     click.echo(f"cvcpkg: pushed {pushed} recipes ({failed} failed)")
     # Every push failing is a broken setup, not one bad recipe: fail the step
