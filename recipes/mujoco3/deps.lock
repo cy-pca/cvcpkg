@@ -1,0 +1,24 @@
+# recipes/mujoco3/deps.lock — the third-party sources MuJoCo 3.17.0's CMake would
+# otherwise `git fetch` at configure time, pinned to the exact commits upstream
+# pins in cmake/MujocoDependencies.cmake, cmake/third_party_deps/lodepng.cmake
+# and simulate/cmake/SimulateDependencies.cmake (glfw, for simulate + samples).
+#
+# Format: <library-name> <git-commit> <sha256-of-archive> <archive-url>
+#
+# deps.sh / deps.ps1 download each archive, check its sha256 and store it as
+# <library-name>-<git-commit>.tar.gz in a directory passed to CMake as
+# MUJOCO_CMAKE_DEP_CACHE: upstream's FindOrFetch then extracts that tarball
+# instead of cloning.  MarchingCubeCpp is the one dependency that does not go
+# through FindOrFetch (a bare FetchContent_Declare with a git download command),
+# so it is extracted and handed over as FETCHCONTENT_SOURCE_DIR_MARCHINGCUBECPP.
+#
+# Bumping MuJoCo: re-read those three CMake files, update every commit here,
+# and recompute each sha256 (curl -fsSL <url> | sha256sum).
+lodepng 22561883dd63fd1850f18e1f6adac321e4f609b0 f18bb3b6fb7e0cf8500fd84a46d9047b609a346be2e21609d20893d547182830 https://github.com/lvandeve/lodepng/archive/22561883dd63fd1850f18e1f6adac321e4f609b0.tar.gz
+marchingcubecpp f03a1b3ec29b1d7d865691ca8aea4f1eb2c2873d 227c10b2cffe886454b92a0e9ef9f0c9e8e001d00ea156cc37c8fc43055c9ca6 https://github.com/aparis69/MarchingCubeCpp/archive/f03a1b3ec29b1d7d865691ca8aea4f1eb2c2873d.tar.gz
+qhull d1c2fc0caa5f644f3a0f220290d4a868c68ed4f6 421177cc21a7dcb4c1bbc51f65bc16f21d1f157814116bb5c341d694e23d154d https://github.com/qhull/qhull/archive/d1c2fc0caa5f644f3a0f220290d4a868c68ed4f6.tar.gz
+tinyxml2 e6caeae85799003f4ca74ff26ee16a789bc2af48 ab1a6700074ab4d468e46535545bb33aa4a74d794ab514fac64cc297fc7a2545 https://github.com/leethomason/tinyxml2/archive/e6caeae85799003f4ca74ff26ee16a789bc2af48.tar.gz
+tinyobjloader 2945a967c5303b2c8c14174117c45f3302591150 988cc315f69c9319499fcb20e4feb54e058ea99d1b69d18e9a05984ce884f49c https://github.com/tinyobjloader/tinyobjloader/archive/2945a967c5303b2c8c14174117c45f3302591150.tar.gz
+ccd 7931e764a19ef6b21b443376c699bbc9c6d4fba8 479994a86d32e2effcaad64204142000ee6b6b291fd1859ac6710aee8d00a482 https://github.com/danfis/libccd/archive/7931e764a19ef6b21b443376c699bbc9c6d4fba8.tar.gz
+miniz 77d0dce8627735138c51770d1799a1ef48f2117d baa14349e7c5efb4a493a03af7d2f29d0ef45d87d488567fe5360edb33f8b7ba https://github.com/richgel999/miniz/archive/77d0dce8627735138c51770d1799a1ef48f2117d.tar.gz
+glfw3 7b6aead9fb88b3623e3b3725ebb42670cbe4c579 169d49096e339caabbc12e1762273c5cb9130a535a282ba46cf5c14ab6e55694 https://github.com/glfw/glfw/archive/7b6aead9fb88b3623e3b3725ebb42670cbe4c579.tar.gz
