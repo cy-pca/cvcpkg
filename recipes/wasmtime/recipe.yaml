@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: wasmtime
   upstream_version: "45.0.0"
-  cvc_revision: 1
+  cvc_revision: 2
   maintainer: "Bytecode Alliance"
   homepage: https://wasmtime.dev/
   license: Apache-2.0
@@ -34,7 +34,17 @@ source:
 patches: []
 
 depends:
-  build: []
+  build:
+    # build.sh gives upstream's libwasmtime.so the SONAME it lacks.
+    - name: patchelf
+      platforms: [linux]
+    # test.sh builds a find_package(wasmtime) consumer.
+    - name: cmake
+      platforms: [linux, macos]
+    - name: ninja
+      platforms: [linux, macos]
+  # Explicit, or the build tools above become every consumer's required_deps.
+  runtime: []
   host_tools: []
 
 build:
@@ -50,7 +60,9 @@ build:
 
 package:
   files:
-    - bin/wasmtime
+    # The CLI (wasi tests run it) comes from build.sh only; build.ps1 stages the
+    # C API alone, so the Windows bundle has no bin/.
+    - { glob: bin/wasmtime, platforms: [linux, macos] }
     - lib/libwasmtime*
     - lib/wasmtime*
     - lib/cmake/wasmtime/
@@ -60,6 +72,9 @@ package:
     - include/wasi.h
   cmake_packages:
     - { name: wasmtime, targets: ["wasmtime::wasmtime"] }
+
+test:
+  script: test.sh
 
 toolchain:
   note: >-
@@ -73,3 +88,15 @@ notes:
       Downloads pre-compiled release artifacts from GitHub Releases.
       The build script stages headers, libraries, and generates a CMake
       config file.  No compilation occurs.
+  - title: "libwasmtime.so is linked by name (cvc.2)"
+    platforms: [linux, macos]
+    description: >-
+      Upstream's Linux libwasmtime.so has no SONAME, and cvc.1's
+      wasmtime::wasmtime was an UNKNOWN imported target, so every consumer
+      recorded the path it linked the library from (e.g.
+      ../wt/lib/libwasmtime.so) as DT_NEEDED and failed to load once
+      installed.  build.sh now sets the SONAME libwasmtime.so with cvcpkg's
+      patchelf, and wasmtime::wasmtime is a SHARED imported target with
+      IMPORTED_SONAME in a shared bundle, or a STATIC one over libwasmtime.a
+      in a static bundle.  The macOS dylib already names itself
+      @rpath/libwasmtime.dylib and is unchanged.
