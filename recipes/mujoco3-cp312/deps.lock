@@ -1,0 +1,18 @@
+# recipes/mujoco3-cp312/deps.lock — the sources the mujoco 3.17.0 sdist's
+# CMake would otherwise `git fetch` while pip builds the wheel, pinned
+# to the commits upstream pins in mujoco/CMakeLists.txt (abseil, Eigen,
+# pybind11), mujoco/simulate/cmake/SimulateDependencies.cmake (glfw) and
+# mujoco/cmake/third_party_deps/lodepng.cmake.  Same format and mechanism as
+# recipes/mujoco3/deps.lock (see that file); deps.sh / deps.ps1 here are copies
+# of recipes/mujoco's.  Only Eigen differs from recipes/mujoco-core-cp312's.
+#
+# Eigen's archive comes from GitLab, which does not promise byte-stable
+# archives the way GitHub does for commit tarballs: if GitLab ever regenerates
+# it, the sha256 check fails loudly and the line needs a new checksum.
+#
+# Format: <library-name> <git-commit> <sha256-of-archive> <archive-url>
+abseil-cpp 2065f4ded0558c6f89fee67c8e5228feb4eb960e 7f4240fe135c0b0dcdd2efa664f1393b1da7e25031e17560515f452182aa0c5e https://github.com/abseil/abseil-cpp/archive/2065f4ded0558c6f89fee67c8e5228feb4eb960e.tar.gz
+eigen b1f8b0c3b8db9c3711349144acf951226700ddb4 f4ec04c0a006fc213065c266eda6543078b8c71e60ffd65fc45a79daf447f049 https://gitlab.com/libeigen/eigen/-/archive/b1f8b0c3b8db9c3711349144acf951226700ddb4/eigen-b1f8b0c3b8db9c3711349144acf951226700ddb4.tar.gz
+pybind11 97bf890db679505a14dfe547a5e77bb2bd05dc90 6368877d3f241f283e010d858af27a6934ac45f7cbb5c68d2518b11bf64a113f https://github.com/pybind/pybind11/archive/97bf890db679505a14dfe547a5e77bb2bd05dc90.tar.gz
+glfw3 7b6aead9fb88b3623e3b3725ebb42670cbe4c579 169d49096e339caabbc12e1762273c5cb9130a535a282ba46cf5c14ab6e55694 https://github.com/glfw/glfw/archive/7b6aead9fb88b3623e3b3725ebb42670cbe4c579.tar.gz
+lodepng 22561883dd63fd1850f18e1f6adac321e4f609b0 f18bb3b6fb7e0cf8500fd84a46d9047b609a346be2e21609d20893d547182830 https://github.com/lvandeve/lodepng/archive/22561883dd63fd1850f18e1f6adac321e4f609b0.tar.gz

@@ -51,6 +51,11 @@ source:
   sha256: "bf85305af56458ab5b752767925a3bebd713d86a694838774ed634ffa8e78197"
   strip_components: 1
 
+# mujoco3 (MuJoCo 3.17.0, for projects that still need MuJoCo 3) installs the
+# same files; declared on both sides.  Metadata only: no rebuild, no bump.
+conflicts:
+  - mujoco3
+
 patches:
   # cmake/mujocoConfig.cmake.in: find_package(OpenGL QUIET) in place of
   # find_dependency(OpenGL).  No target in mujocoTargets.cmake links OpenGL

@@ -1,0 +1,18 @@
+--- a/cmake/mujocoConfig.cmake.in
++++ b/cmake/mujocoConfig.cmake.in
+@@ -14,8 +14,14 @@
+ 
+ @PACKAGE_INIT@
+ 
++# cvcpkg: no target in mujocoTargets.cmake links OpenGL.  libmujoco's renderer
++# loads GL at run time (glad), and simulate links GLFW into the executable, so
++# a consumer of mujoco::mujoco needs no GL libraries to configure.  Upstream's
++# find_dependency(OpenGL) failed every find_package(mujoco) on a Linux host
++# without them.  Look for OpenGL quietly instead: OpenGL::GL is still defined
++# wherever GL is installed, as before.
+ include(CMakeFindDependencyMacro)
+-find_dependency(OpenGL)
++find_package(OpenGL QUIET)
+ 
+ if(NOT TARGET mujoco AND NOT @PROJECT_NAME@_BINARY_DIR)
+   include("${CMAKE_CURRENT_LIST_DIR}/mujocoTargets.cmake")

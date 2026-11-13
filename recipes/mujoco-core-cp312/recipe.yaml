@@ -35,6 +35,11 @@ python:
   interpreter: python312
   abi: cp312
 
+# mujoco3-cp312 (MuJoCo 3.17.0's bindings) installs site-packages/mujoco/ too;
+# declared on both sides.  Metadata only: no rebuild, no bump.
+conflicts:
+  - mujoco3-cp312
+
 patches: []
 
 depends:

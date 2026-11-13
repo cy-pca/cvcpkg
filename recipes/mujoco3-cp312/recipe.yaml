@@ -1,0 +1,105 @@
+schema_version: 1
+recipe:
+  name: mujoco3-cp312
+  upstream_version: "3.17.0"
+  # cvc.1: first packaging, a copy of mujoco-core-cp312 (MuJoCo 4) built from
+  # the PyPI `mujoco` 3.17.0 sdist against the mujoco3 recipe.  For projects
+  # with models or policies trained on MuJoCo 3; see recipes/mujoco3.
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/mujoco/3.17.0/
+  license: Apache-2.0
+  tags: [python, source, physics, robotics, simulation]
+  description: >-
+    MuJoCo 3.17.0 Python bindings (PyPI mujoco 3.17.0; `import mujoco`) for
+    CPython 3.12, for projects whose models or trained policies need MuJoCo 3
+    (new work should use mujoco-core-cp312, MuJoCo 4) — MjModel/MjData, every
+    mj_* function, mjSpec model editing, rollout and batch simulation, with
+    numpy views of the simulation state.  Built FROM SOURCE: the PyPI sdist is
+    compiled with the prefix's CPython 3.12 against cvcpkg's `mujoco3` C
+    library, which is bundled into the package as in upstream's wheels (no
+    runtime dependency on the mujoco3 recipe).  The Studio/Filament renderer
+    is not built.  mujoco.viewer and mujoco.Renderer additionally need the
+    glfw-cp312 and pyopengl-cp312 packages.  x86_64 builds require AVX.
+    Conflicts with mujoco-core-cp312: both install site-packages/mujoco/.
+
+source:
+  type: tarball
+  url: https://files.pythonhosted.org/packages/40/10/dde0a84f2c4552729540c3e19431177e6e1b4c20dc536e19169e575d0e94/mujoco-3.17.0.tar.gz
+  sha256: "5e49c15905e7a39eaa1efb1cae809a81c5f5c2439467f23e7e6e383624d957be"
+  strip_components: 1
+
+python:
+  interpreter: python312
+  abi: cp312
+
+# Both install site-packages/mujoco/; declared on both sides.
+conflicts:
+  - mujoco-core-cp312
+
+patches: []
+
+depends:
+  build:
+    - name: python312
+    - name: numpy-cp312
+    # PEP-517 backend (pyproject [build-system] requires = ["setuptools"]);
+    # --no-build-isolation means it must already be in the build prefix.
+    - name: setuptools-cp312
+    # The C library setup.py builds against (MUJOCO_PATH), bundled into the wheel.
+    - name: mujoco3
+      version: "==3.17.0"
+    - cmake
+    - ninja
+    # GLFW (compiled into the _simulate extension from deps.lock) needs the X11
+    # and GL headers on Linux; see recipes/mujoco3.
+    - name: libglvnd
+      platforms: [linux]
+    - name: libx11
+      platforms: [linux]
+    - name: libxrandr
+      platforms: [linux]
+    - name: libxinerama
+      platforms: [linux]
+    - name: libxcursor
+      platforms: [linux]
+    - name: libxi
+      platforms: [linux]
+    - name: libxext
+      platforms: [linux]
+  runtime:
+    - name: python312
+    - name: numpy-cp312
+    # mujoco/__init__.py: from typing_extensions import TypeAlias
+    - name: typing-extensions-cp312
+  host_tools:
+    - python312
+
+build:
+  # Four hours, not the server's two-hour default.  On the Windows fleet both
+  # columns ran side by side and timed out at step 192/198 (populate
+  # 42898665518, jobs #29988/#29989): MSVC's optimiser is very slow on
+  # functions.cc's one huge pybind11 init function.  Locally /O1 and /O2 /Ob1
+  # each used over 3,500 CPU-seconds there (/Od takes 22), and the /GL + /LTCG
+  # build that does finish needs most of an hour on a shared machine.
+  timeout_seconds: 14400
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/python3.12/site-packages/mujoco/", platforms: [linux, macos] }
+    - { glob: "lib/python3.12/site-packages/mujoco-*.dist-info/", platforms: [linux, macos] }
+    - { glob: "bin/mjpython", platforms: [macos] }
+    - { glob: "Lib/site-packages/mujoco/", platforms: [windows] }
+    - { glob: "Lib/site-packages/mujoco-*.dist-info/", platforms: [windows] }
+    - share/licenses/mujoco3-cp312/
