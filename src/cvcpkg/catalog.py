@@ -407,9 +407,42 @@ def catalog_entries(
                 org=b.get("org", ""),
                 provides=b.get("provides", []),
                 requires_capabilities=b.get("requires_capabilities", []),
+                # Absent from catalogs served before migration 038 (and from
+                # rows not yet backfilled): read as "declares nothing".
+                conflicts=b.get("conflicts") or [],
             )
         )
     return _prefer_exact_noarch_variant(entries, build_type=build_type, link=link)
+
+
+def exclusive_with(
+    relations: dict[str, tuple[list[str] | tuple[str, ...], list[str] | tuple[str, ...]]],
+) -> dict[str, set[str]]:
+    """Which of the packages in *relations* may not share a prefix.
+
+    *relations* maps a package name to ``(conflicts, provides)``: the package
+    names it declares conflicting and the slots it fills, as a catalog entry or
+    an installed manifest records them.  A conflict declared by either side
+    counts for both, so a one-sided declaration still fires whichever package
+    is installed first; two packages filling the same slot exclude each other.
+    Returns ``{name: {names it excludes}}`` over the names in *relations* only.
+    """
+    names = set(relations)
+    out: dict[str, set[str]] = {}
+    by_slot: dict[str, set[str]] = {}
+    for name, (conflicts, provides) in relations.items():
+        for other in conflicts or ():
+            if other in names and other != name:
+                out.setdefault(name, set()).add(other)
+                out.setdefault(other, set()).add(name)
+        for slot in provides or ():
+            by_slot.setdefault(slot, set()).add(name)
+    for providers in by_slot.values():
+        for a in providers:
+            others = providers - {a}
+            if others:
+                out.setdefault(a, set()).update(others)
+    return out
 
 
 def _prefer_exact_noarch_variant(

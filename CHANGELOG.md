@@ -28,6 +28,29 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **`cvcpkg install` enforces `conflicts:` and `provides:` from the catalog.**
+  It used to read those declarations only from local recipe dirs, normally the
+  recipes bundled in the client, so a package newer than the client got no
+  check. On 2026-11-13, with client 2.5.6, `cvcpkg install mujoco` into a
+  prefix holding `mujoco3` (cy-pca/cvcpkg#614, which declares the pair on both
+  sides) silently overwrote it. No released client bundles `mujoco3`.
+  - The builder writes the recipe's `conflicts` into the bundle manifest, next
+    to `provides`, and `cvcpkg publish` sends it in the query.
+  - Migration 038 adds `packages.conflicts` (a JSON list, `[]` by default).
+    `/v1/publish` takes it as a query parameter or multipart field,
+    `/v1/upload/init` as a query parameter or in its JSON body, and populate
+    copies it from upstream. `/v1/catalog` and `/v1/packages` serve it. An
+    entry that is not a non-empty name is a 422.
+  - The install check combines the catalog entries of what it installs with
+    the installed manifests and catalog entries of what the prefix already
+    holds, plus the local recipes as before. A declaration on either side, or
+    two packages filling one `provides` slot, refuses the pair.
+  - `POST /v1/admin/packages/{name}/{version}/backfill-deps` fills `conflicts`
+    (fill-only), and `scripts/backfill_required_deps.py` derives it from the
+    recipe that built each row, for rows published before migration 038.
+
 ## v2.5.14
 
 **A release so Microsoft Defender stops quarantining the Windows binary (#609),

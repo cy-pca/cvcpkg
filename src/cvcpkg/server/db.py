@@ -169,6 +169,17 @@ class PackageRow(Base):
         server_default="[]",
     )
 
+    # Packages this bundle may not share a prefix with (JSON-encoded list of
+    # names: its recipe's conflicts:, e.g. ["mujoco"] on mujoco3).  Served in
+    # the catalog so `cvcpkg install` refuses the pair whatever recipes the
+    # client bundles (migration 038).
+    conflicts: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="[]",
+        server_default="[]",
+    )
+
     # Base URL of the upstream this bundle was imported from, or "" when it was
     # published here.  Populate reconciliation follows upstream's yank/nuke
     # decisions, and it must only ever act on rows it imported: an edge hosts

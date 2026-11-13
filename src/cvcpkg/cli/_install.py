@@ -733,6 +733,10 @@ def install(
         list(picked.keys()) + list(source_only),
         prefix_path,
         rdirs,
+        # The catalog's own conflicts/provides, so a package newer than the
+        # recipes this client bundles is still checked.
+        picked=picked if not catalog_failed else None,
+        entries=entries if not catalog_failed else None,
     )
 
     # ── Download and extract each resolved bundle ──
@@ -998,48 +1002,126 @@ def _activation_hint(plat: str, prefix: Path) -> str:
     return f"source {prefix}/bin/activate"
 
 
+def _installed_exclusivity(
+    prefix_path: Path | None,
+    name: str,
+    version: str,
+    entries: list[CatalogEntry],
+) -> tuple[list[str], list[str]]:
+    """``(conflicts, provides)`` of a package already in the prefix.
+
+    The union of what its installed manifest records (bundles built since the
+    manifest carries ``conflicts``; ``provides`` for much longer) and what the
+    catalog says about the installed version, or about the newest version when
+    the installed one is no longer listed.  A package built from source has no
+    catalog entry, so its manifest is all there is.
+    """
+    import yaml
+
+    from cvcpkg.semver import version_sort_key
+
+    conflicts: set[str] = set()
+    provides: set[str] = set()
+    if prefix_path is not None:
+        mpath = prefix_path / "share" / "libcvc-deps" / name / "manifest.yaml"
+        if mpath.is_file():
+            try:
+                data = yaml.safe_load(mpath.read_text(encoding="utf-8")) or {}
+            except Exception:
+                data = {}
+            if isinstance(data, dict):
+                contents = data.get("contents") or {}
+                conflicts.update(str(c) for c in data.get("conflicts") or [] if c)
+                provides.update(
+                    str(s) for s in (data.get("provides") or contents.get("provides") or []) if s
+                )
+    same_name = [e for e in entries if e.name == name]
+    exact = [e for e in same_name if e.version == version]
+    chosen = (
+        exact
+        or sorted(
+            same_name, key=lambda e: version_sort_key(e.version, e.cvc_revision), reverse=True
+        )[:1]
+    )
+    for e in chosen:
+        conflicts.update(e.conflicts or [])
+        provides.update(e.provides or [])
+    return sorted(conflicts), sorted(provides)
+
+
 def _check_conflicts(
     installing: list[str],
     prefix_path: Path | None,
     recipe_dirs: list[Path] | None,
+    picked: dict[str, CatalogEntry] | None = None,
+    entries: list[CatalogEntry] | None = None,
 ) -> None:
-    """Raise ConflictError when any package in *installing* conflicts with
-    another package being installed or with an already-installed package.
+    """Raise when any package in *installing* conflicts with another package
+    being installed or with an already-installed package.
 
-    Skips the check silently when *recipe_dirs* is not provided.
+    Two sources of declarations, combined:
+
+    * the catalog: *picked* (the resolved entries) and *entries* (every entry
+      for this platform tuple) carry each bundle's ``conflicts`` and
+      ``provides``; packages already in the prefix are described by their
+      installed manifests and their catalog entries.  This works whatever
+      recipes the client bundles, and a declaration on either side fires;
+    * local recipes in *recipe_dirs* (the bundled recipes, a checkout, or
+      ``--recipes-dir``), which also cover packages built from source.
+
+    Skips the check when neither source is available.
     """
-    if not recipe_dirs or not installing:
+    if not installing or (not recipe_dirs and picked is None):
         return
 
-    from cvcpkg.builder import collect_recipe_conflicts
+    from cvcpkg.catalog import exclusive_with
     from cvcpkg.lockfile import Lockfile
-
-    conflict_map = collect_recipe_conflicts(installing, recipe_dirs)
-    if not conflict_map:
-        return
 
     installing_set = set(installing)
 
-    # Also check what is already installed in the prefix lockfile.
-    installed_names: set[str] = set()
+    # What is already installed in the prefix (lockfile).
+    installed: dict[str, str] = {}
     if prefix_path is not None:
         lock_path = prefix_path / "share" / "libcvc-deps" / "lockfile.yaml"
         if lock_path.is_file():
             try:
                 existing_lock = Lockfile.read(lock_path)
-                installed_names = {b.name for b in existing_lock.bundles}
+                installed = {b.name: b.version for b in existing_lock.bundles}
             except Exception:
                 pass
 
-    for pkg, pkg_conflicts in conflict_map.items():
-        for conflict in pkg_conflicts:
+    conflict_map: dict[str, set[str]] = {}
+    if recipe_dirs:
+        from cvcpkg.builder import collect_recipe_conflicts
+
+        for pkg, others in collect_recipe_conflicts(installing, recipe_dirs).items():
+            conflict_map.setdefault(pkg, set()).update(others)
+
+    if picked is not None:
+        relations: dict[str, tuple[list[str], list[str]]] = {
+            name: (list(entry.conflicts or []), list(entry.provides or []))
+            for name, entry in picked.items()
+        }
+        for name, version in installed.items():
+            if name not in relations:
+                relations[name] = _installed_exclusivity(prefix_path, name, version, entries or [])
+        for pkg, others in exclusive_with(relations).items():
+            if pkg in installing_set:
+                conflict_map.setdefault(pkg, set()).update(others)
+
+    for pkg in sorted(conflict_map):
+        if pkg not in installing_set:
+            continue
+        for conflict in sorted(conflict_map[pkg]):
+            if conflict == pkg:
+                continue
             if conflict in installing_set:
                 raise click.ClickException(
                     f"{pkg!r} conflicts with co-requested package {conflict!r}.\n"
                     f"You cannot install both at the same time.\n"
                     f"Remove {conflict!r} from the install request and retry."
                 )
-            if conflict in installed_names:
+            if conflict in installed:
                 prefix_str = str(prefix_path) if prefix_path else "<prefix>"
                 raise click.ClickException(
                     f"{pkg!r} conflicts with installed package {conflict!r}.\n"

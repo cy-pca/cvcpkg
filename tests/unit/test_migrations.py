@@ -587,3 +587,47 @@ def test_migration_037_adds_packages_requires_capabilities(tmp_path):
         }
     finally:
         con.close()
+
+
+def test_migration_038_adds_packages_conflicts(tmp_path):
+    """038 adds the column rows read as '[]' until a backfill fills them, and the
+    downgrade drops it again."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "conflicts.db"
+    p = _alembic_upgrade(db, "037")
+    assert p.returncode == 0, p.stderr
+
+    con = sqlite3.connect(db)
+    con.execute(
+        "INSERT INTO packages (name, version, platform, arch, sha256, archive_url) "
+        "VALUES ('mujoco3', '3.17.0+cvc.1', 'linux', 'x86_64', 'x', '')"
+    )
+    con.commit()
+    con.close()
+
+    p = _alembic_upgrade(db, "038")
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert con.execute("SELECT name, conflicts FROM packages").fetchall() == [("mujoco3", "[]")]
+    finally:
+        con.close()
+
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    p = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "037"],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert "conflicts" not in {r[1] for r in con.execute("PRAGMA table_info(packages)")}
+    finally:
+        con.close()

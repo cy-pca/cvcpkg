@@ -3169,6 +3169,10 @@ def generate_manifest(
             if recipe.requires_capabilities
             else {}
         ),
+        # The recipe's ``conflicts:``, so the catalog (via publish) and the
+        # installed prefix both know what may not share a prefix with this
+        # bundle without needing the recipe.
+        **({"conflicts": list(recipe.conflicts)} if recipe.conflicts else {}),
         "integrity": {
             "sha256": "",
             "size_bytes": 0,

@@ -10,10 +10,13 @@ pymysql-cp311.  #152 fixed new publishes; this script repairs the old rows.
 
 The same gap hid ``requires_capabilities`` until migration 037: libcvc-cuda
 (``provides: [libcvc]``, ``requires_capabilities: [cuda]``) reached the catalog
-without its capability, so the resolver picked it on hosts without CUDA.
+without its capability, so the resolver picked it on hosts without CUDA.  And
+``conflicts`` until migration 038: ``mujoco`` and ``mujoco3`` declare each other,
+but the catalog never said so, so ``cvcpkg install`` only refused the pair when
+the client happened to bundle both recipes.
 
-For every catalog row whose required_deps, provides or requires_capabilities is
-empty, it finds the recipe that built THAT version -- ``recipes/<name>/recipe.yaml``
+For every catalog row whose required_deps, provides, requires_capabilities or
+conflicts is empty, it finds the recipe that built THAT version -- ``recipes/<name>/recipe.yaml``
 at the commit whose ``upstream_version`` and ``cvc_revision`` match the row, not today's
 recipe, whose deps may have moved on -- and derives the edges with
 ``cvcpkg.builder.runtime_dependencies_from_raw``, the same function every
@@ -127,12 +130,13 @@ class Fill:
     required_deps: list[dict[str, str]] = field(default_factory=list)
     provides: list[str] = field(default_factory=list)
     requires_capabilities: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
 
     @property
     def status(self) -> str:
         if not self.source:
             return "no-recipe-at-version"
-        if self.required_deps or self.provides or self.requires_capabilities:
+        if self.required_deps or self.provides or self.requires_capabilities or self.conflicts:
             return "fill"
         return "nothing-to-fill"
 
@@ -164,7 +168,8 @@ def plan(
         need_deps = not row.get("required_deps")
         need_provides = not row.get("provides")
         need_caps = not row.get("requires_capabilities")
-        if not (need_deps or need_provides or need_caps):
+        need_conflicts = not row.get("conflicts")
+        if not (need_deps or need_provides or need_caps or need_conflicts):
             continue
         found = history.raw(row["name"], row["version"])
         if found is None:
@@ -178,6 +183,7 @@ def plan(
                 runtime_dependencies_from_raw(raw, row["platform"]) if need_deps else [],
                 [str(p) for p in (raw.get("provides") or [])] if need_provides else [],
                 [str(c) for c in (raw.get("requires_capabilities") or [])] if need_caps else [],
+                [str(c) for c in (raw.get("conflicts") or [])] if need_conflicts else [],
             )
         )
     return fills
@@ -204,6 +210,7 @@ def apply(fills: Iterable[Fill], post: Post) -> tuple[int, list[str]]:
                     "required_deps": f.required_deps,
                     "provides": f.provides,
                     "requires_capabilities": f.requires_capabilities,
+                    "conflicts": f.conflicts,
                 },
             )
         except Exception as exc:  # noqa: BLE001 -- report and carry on
@@ -274,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                 f" {f.row.get('build_type')}/{f.row.get('link')}: deps={deps}"
                 f" provides={','.join(f.provides) or '-'}"
                 f" requires_capabilities={','.join(f.requires_capabilities) or '-'}"
+                f" conflicts={','.join(f.conflicts) or '-'}"
                 f"  [recipe@{f.source}]"
             )
     if args.csv:
@@ -292,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
                     "required_deps",
                     "provides",
                     "requires_capabilities",
+                    "conflicts",
                     "recipe_source",
                 ]
             )
@@ -310,6 +319,7 @@ def main(argv: list[str] | None = None) -> int:
                         " ".join(d["name"] for d in f.required_deps),
                         " ".join(f.provides),
                         " ".join(f.requires_capabilities),
+                        " ".join(f.conflicts),
                         f.source,
                     ]
                 )

@@ -87,6 +87,7 @@ class TestEndpoint:
             "required_deps": 1,
             "provides": 1,
             "requires_capabilities": 0,
+            "conflicts": 0,
         }
         rows = _rows(client)
         assert rows[("linux", "x86_64")]["required_deps"] == [{"name": "libfoo"}]
@@ -150,6 +151,7 @@ class TestEndpoint:
             "required_deps": 1,
             "provides": 0,
             "requires_capabilities": 0,
+            "conflicts": 0,
         }
         rows = _rows(client)
         assert rows[("linux", "x86_64")]["required_deps"] == []
@@ -241,7 +243,12 @@ class TestStore:
                 **VARIANT,
             )
         )
-        assert other_org == {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
+        assert other_org == {
+            "required_deps": 0,
+            "provides": 0,
+            "requires_capabilities": 0,
+            "conflicts": 0,
+        }
         counts = asyncio.run(
             db.backfill_deps(
                 "libapp",
@@ -253,7 +260,12 @@ class TestStore:
                 **VARIANT,
             )
         )
-        assert counts == {"required_deps": 1, "provides": 1, "requires_capabilities": 1}
+        assert counts == {
+            "required_deps": 1,
+            "provides": 1,
+            "requires_capabilities": 1,
+            "conflicts": 0,
+        }
         rows = {(b["platform"], b["org"]): b for b in asyncio.run(db.get_catalog_dict())["bundles"]}
         assert rows[("linux", "")]["required_deps"] == [{"name": "libfoo"}]
         assert rows[("linux", "")]["provides"] == ["slot"]
@@ -274,7 +286,12 @@ class TestStore:
                 **VARIANT,
             )
         )
-        assert counts == {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
+        assert counts == {
+            "required_deps": 0,
+            "provides": 0,
+            "requires_capabilities": 0,
+            "conflicts": 0,
+        }
         (row,) = asyncio.run(db.get_catalog_dict())["bundles"]
         assert row["required_deps"] == [{"name": "kept"}]
         assert row["requires_capabilities"] == ["cuda"]
@@ -302,7 +319,7 @@ class TestStore:
                 )
             )
 
-        nothing = {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
+        nothing = {"required_deps": 0, "provides": 0, "requires_capabilities": 0, "conflicts": 0}
         assert correct() == {**nothing, "required_deps": 1}
         assert correct(platform="macos", arch="arm64") == nothing
         rows = {b["platform"]: b for b in asyncio.run(db.get_catalog_dict())["bundles"]}
@@ -332,12 +349,13 @@ def _git(repo, *args):
     )
 
 
-def _recipe(cvc, runtime, provides=(), caps=()):
+def _recipe(cvc, runtime, provides=(), caps=(), conflicts=()):
     return {
         "schema_version": 1,
         "recipe": {"name": "libapp", "upstream_version": "1.0", "cvc_revision": cvc},
         "provides": list(provides),
         "requires_capabilities": list(caps),
+        "conflicts": list(conflicts),
         "depends": {"runtime": runtime},
     }
 
@@ -373,6 +391,7 @@ def _row(version, platform="linux", **kw):
         "required_deps": [],
         "provides": [],
         "requires_capabilities": [],
+        "conflicts": [],
     }
     row.update(kw)
     return row
@@ -400,6 +419,7 @@ class TestScript:
                 required_deps=[{"name": "kept"}],
                 provides=["x"],
                 requires_capabilities=["y"],
+                conflicts=["z"],
             ),
             _row("1.0+cvc.2", platform="netbsd", yanked=True),
         ]
@@ -433,6 +453,7 @@ class TestScript:
             "required_deps": [{"name": "libfoo"}],
             "provides": [],
             "requires_capabilities": [],
+            "conflicts": [],
         }
 
     def test_apply_reports_errors_and_carries_on(self, script, history_repo):
@@ -467,6 +488,24 @@ class TestScript:
         assert fill.status == "fill"
         assert (fill.required_deps, fill.provides, fill.requires_capabilities) == ([], [], ["cuda"])
         assert fill.query()["org"] == "cvc"
+
+    def test_plan_fills_conflicts_from_the_recipe(self, script, tmp_path):
+        # mujoco/mujoco3 rows predate migration 038 and record no conflicts.
+        repo = tmp_path / "repo"
+        rdir = repo / "recipes" / "libapp"
+        rdir.mkdir(parents=True)
+        _git(repo, "init", "-q")
+        (rdir / "recipe.yaml").write_text(yaml.safe_dump(_recipe(1, [], conflicts=["libapp3"])))
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "conflicts")
+        row = _row("1.0+cvc.1", required_deps=[{"name": "zlib"}])
+        (fill,) = script.plan([row], script.RecipeHistory(repo))
+        assert fill.status == "fill"
+        assert (fill.required_deps, fill.provides, fill.conflicts) == ([], [], ["libapp3"])
+        # Fill-only: a row that records conflicts gets nothing more.
+        row["conflicts"] = ["libapp3"]
+        (again,) = script.plan([row], script.RecipeHistory(repo))
+        assert (again.conflicts, again.status) == ([], "nothing-to-fill")
 
     def test_derivation_matches_the_publish_path(self):
         # The script must derive exactly what publish records, so it calls the
