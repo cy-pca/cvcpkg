@@ -350,6 +350,14 @@ class PackageInfo(BaseModel):
             "The resolver never picks it on a host that lacks one of them."
         ),
     )
+    conflicts: list = Field(
+        default_factory=list,
+        description=(
+            "Packages this bundle may not share a prefix with (its recipe's "
+            "conflicts:, e.g. ['mujoco'] on mujoco3). cvcpkg install refuses "
+            "the pair, whichever is installed first."
+        ),
+    )
 
     @property
     def qualified_name(self) -> str:
@@ -551,6 +559,9 @@ class UploadInitMetadata(BaseModel):
     requires_capabilities: list[str] | None = Field(
         default=None, description="Host capabilities the bundle needs, e.g. ['cuda']"
     )
+    conflicts: list[str] | None = Field(
+        default=None, description="Packages this one may not share a prefix with"
+    )
 
 
 # ── Organizations ───────────────────────────────────────────────
@@ -678,6 +689,13 @@ class BackfillDepsRequest(BaseModel):
         default_factory=list,
         description=(
             "Host capabilities the bundle needs (e.g. ['cuda']); fill-only, like provides."
+        ),
+    )
+    conflicts: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Packages the bundle may not share a prefix with (its recipe's "
+            "conflicts:); fill-only, like provides."
         ),
     )
     expect_required_deps: list[dict[str, str]] | None = Field(

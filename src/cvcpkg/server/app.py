@@ -372,18 +372,35 @@ def _json_list_param(field: str, query_value: str, body_value: object) -> str:
     return raw
 
 
+def _name_list_param(field: str, query_value: str, body_value: object) -> str:
+    """*field* as stored: a JSON list of non-empty names.
+
+    Stricter than ``_json_list_param``, for lists the client compares by name.
+    """
+    raw = _json_list_param(field, query_value, body_value)
+    names = json.loads(raw)
+    if not all(isinstance(n, str) and n for n in names):
+        raise HTTPException(422, f"{field} entries must be non-empty names")
+    return raw
+
+
 def _capability_list_param(query_value: str, body_value: object) -> str:
     """``requires_capabilities`` as stored: a JSON list of non-empty names.
 
-    Stricter than ``_json_list_param``: the resolver compares these names with
-    the host's capability set, so an entry that is not a string can never be
-    met and would hide the bundle from every host.
+    The resolver compares these names with the host's capability set, so an
+    entry that is not a string can never be met and would hide the bundle from
+    every host.
     """
-    raw = _json_list_param("requires_capabilities", query_value, body_value)
-    caps = json.loads(raw)
-    if not all(isinstance(c, str) and c for c in caps):
-        raise HTTPException(422, "requires_capabilities entries must be non-empty names")
-    return raw
+    return _name_list_param("requires_capabilities", query_value, body_value)
+
+
+def _conflicts_list_param(query_value: str, body_value: object) -> str:
+    """``conflicts`` as stored: a JSON list of non-empty package names.
+
+    ``cvcpkg install`` compares them with the names it installs and the names
+    already in the prefix; an entry that is not a name could never match.
+    """
+    return _name_list_param("conflicts", query_value, body_value)
 
 
 def _edge_public_publish_warning(org: str) -> str:
@@ -739,6 +756,7 @@ class UploadSession:
     required_deps: str = "[]"
     provides: str = "[]"
     requires_capabilities: str = "[]"
+    conflicts: str = "[]"
     org: str = ""
     hasher: hashlib._Hash = field(default_factory=lambda: hashlib.sha256())
     bytes_received: int = 0
@@ -2416,6 +2434,7 @@ async def _populate_sync_once() -> int:
                     required_deps=json.dumps(b.get("required_deps") or []),
                     provides=json.dumps(b.get("provides") or []),
                     requires_capabilities=json.dumps(b.get("requires_capabilities") or []),
+                    conflicts=json.dumps(b.get("conflicts") or []),
                     # Provenance, so reconciliation may later follow upstream's
                     # yank/nuke decisions for this row -- and only this row.
                     origin_upstream=upstream,
@@ -4440,6 +4459,7 @@ def create_app(
             required_deps=b.get("required_deps") or [],
             provides=b.get("provides") or [],
             requires_capabilities=b.get("requires_capabilities") or [],
+            conflicts=b.get("conflicts") or [],
         )
 
     @app.get("/v1/packages/{name}/latest", response_model=PackageInfo, tags=["packages"])
@@ -5034,6 +5054,10 @@ def create_app(
             "[]",
             description="JSON-encoded list of host capabilities the bundle needs, e.g. ['cuda']",
         ),
+        conflicts: str = Query(
+            "[]",
+            description="JSON-encoded list of packages this one may not share a prefix with",
+        ),
         required_deps_form: str | None = Form(
             None,
             alias="required_deps",
@@ -5051,6 +5075,11 @@ def create_app(
                 "requires_capabilities as a multipart field; wins over the query parameter"
             ),
         ),
+        conflicts_form: str | None = Form(
+            None,
+            alias="conflicts",
+            description="conflicts as a multipart field; wins over the query parameter",
+        ),
         actor: TokenRecord = Depends(
             require_role(TokenRole.publisher, TokenRole.admin, allow_grace=True)
         ),
@@ -5065,6 +5094,7 @@ def create_app(
         requires_capabilities = _capability_list_param(
             requires_capabilities, requires_capabilities_form
         )
+        conflicts = _conflicts_list_param(conflicts, conflicts_form)
         edge_warning = _edge_public_publish_warning(org)
         if edge_warning:
             logger.warning("publish %s==%s (public): %s", name, version, edge_warning)
@@ -5248,6 +5278,7 @@ def create_app(
                         required_deps=required_deps,
                         provides=provides,
                         requires_capabilities=requires_capabilities,
+                        conflicts=conflicts,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish of the same
@@ -5291,6 +5322,7 @@ def create_app(
                 "required_deps": json.loads(required_deps),
                 "provides": json.loads(provides),
                 "requires_capabilities": json.loads(requires_capabilities),
+                "conflicts": json.loads(conflicts),
             }
             async with _audit_txn(
                 AuditAction.publish,
@@ -5359,6 +5391,9 @@ def create_app(
         requires_capabilities: str = Query(
             "[]", description="JSON-encoded host capabilities the bundle needs"
         ),
+        conflicts: str = Query(
+            "[]", description="JSON-encoded packages this one may not share a prefix with"
+        ),
         org: str = Query(
             "",
             description="Organization slug. Empty for official/public packages.",
@@ -5386,6 +5421,7 @@ def create_app(
         requires_capabilities = _capability_list_param(
             requires_capabilities, metadata.requires_capabilities if metadata else None
         )
+        conflicts = _conflicts_list_param(conflicts, metadata.conflicts if metadata else None)
         # Strict-mode edges reject here (fail before the upload); non-strict
         # edges accept and surface the divergence warning at /complete.
         _edge_public_publish_warning(org)
@@ -5478,6 +5514,7 @@ def create_app(
             required_deps=required_deps,
             provides=provides,
             requires_capabilities=requires_capabilities,
+            conflicts=conflicts,
             actor_name=actor.name,
             temp_path=tmp_path,
             total_size=total_size,
@@ -5721,6 +5758,7 @@ def create_app(
                         required_deps=session.required_deps,
                         provides=session.provides,
                         requires_capabilities=session.requires_capabilities,
+                        conflicts=session.conflicts,
                     )
                 except ValueError as exc:
                     # Lost the race to a concurrent publish — roll back,
@@ -5763,6 +5801,7 @@ def create_app(
                 "required_deps": json.loads(session.required_deps),
                 "provides": json.loads(session.provides),
                 "requires_capabilities": json.loads(session.requires_capabilities),
+                "conflicts": json.loads(session.conflicts),
             }
             async with _audit_txn(
                 AuditAction.publish, actor.name, _publish_target, _publish_detail
@@ -5971,12 +6010,14 @@ def create_app(
         actor: TokenRecord = Depends(require_role(TokenRole.admin)),
     ):
         """Fill one published variant's EMPTY required_deps / provides /
-        requires_capabilities.
+        requires_capabilities / conflicts.
 
         Rows published before #152 reached the catalog with no edges, so the
         resolver installs them without their runtime dependencies; rows
         published before migration 037 lack requires_capabilities, so the
-        resolver picks a CUDA-only provider on hosts without CUDA.  This fills
+        resolver picks a CUDA-only provider on hosts without CUDA; rows
+        published before migration 038 lack conflicts, so ``cvcpkg install``
+        lets a conflicting pair share a prefix.  This fills
         a column only while it is still ``[]`` -- a row that records its edges
         is never rewritten -- and addresses exactly one variant: every key is
         required, so no request can touch more than the variant it names.
@@ -5995,9 +6036,12 @@ def create_app(
             raise HTTPException(422, "provides entries must be non-empty names")
         if any(not c for c in body.requires_capabilities):
             raise HTTPException(422, "requires_capabilities entries must be non-empty names")
+        if any(not c for c in body.conflicts):
+            raise HTTPException(422, "conflicts entries must be non-empty names")
         required_json = json.dumps(body.required_deps)
         provides_json = json.dumps(body.provides)
         caps_json = json.dumps(body.requires_capabilities)
+        conflicts_json = json.dumps(body.conflicts)
         expect_json = (
             None if body.expect_required_deps is None else json.dumps(body.expect_required_deps)
         )
@@ -6011,6 +6055,7 @@ def create_app(
             target,
             f"required_deps={required_json} provides={provides_json}"
             + (f" requires_capabilities={caps_json}" if body.requires_capabilities else "")
+            + (f" conflicts={conflicts_json}" if body.conflicts else "")
             + ("" if expect_json is None else f" expect_required_deps={expect_json}"),
         ):
             if _use_db:
@@ -6025,11 +6070,17 @@ def create_app(
                     required_deps=required_json,
                     provides=provides_json,
                     requires_capabilities=caps_json,
+                    conflicts=conflicts_json,
                     expect_required_deps=expect_json,
                 )
             else:
                 state = _get_state()
-                counts = {"required_deps": 0, "provides": 0, "requires_capabilities": 0}
+                counts = {
+                    "required_deps": 0,
+                    "provides": 0,
+                    "requires_capabilities": 0,
+                    "conflicts": 0,
+                }
                 for b in state.index.get("bundles", []):
                     if (
                         b.get("name"),
@@ -6054,6 +6105,9 @@ def create_app(
                     if body.requires_capabilities and not b.get("requires_capabilities"):
                         b["requires_capabilities"] = body.requires_capabilities
                         counts["requires_capabilities"] += 1
+                    if body.conflicts and not b.get("conflicts"):
+                        b["conflicts"] = body.conflicts
+                        counts["conflicts"] += 1
                 state.save_index()
         return {"message": f"backfilled {target}", "count": counts}
 

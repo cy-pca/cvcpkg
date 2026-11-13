@@ -243,6 +243,12 @@ def _publish_to_server(
         )
         if not isinstance(requires_capabilities, list):
             requires_capabilities = []
+        # Packages that may not share a prefix with this one (top-level
+        # `conflicts`, the recipe's conflicts: list).  The catalog serves it
+        # so `cvcpkg install` can refuse the pair without the recipe.
+        conflicts = manifest.get("conflicts", bundle.get("conflicts", []))
+        if not isinstance(conflicts, list):
+            conflicts = []
 
         if not name or not version:
             raise click.ClickException(f"{p.name}: manifest missing name or version")
@@ -292,6 +298,8 @@ def _publish_to_server(
             # _BODY_METADATA): a server older than this field ignores it there
             # as it would anywhere else.
             "requires_capabilities": json.dumps(requires_capabilities),
+            # Query too, for the same reasons; an older server ignores it.
+            "conflicts": json.dumps(conflicts),
         }
 
         try:

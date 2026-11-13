@@ -82,6 +82,9 @@ class BundleManifest:
     provides: list[str] = field(default_factory=list)
     # host capabilities that must all be present for this bundle to be selectable
     requires_capabilities: list[str] = field(default_factory=list)
+    # packages that must never share a prefix with this one (the recipe's
+    # ``conflicts:``; ``provides`` slots are the other source of exclusivity)
+    conflicts: list[str] = field(default_factory=list)
 
     # integrity
     sha256: str = ""
@@ -170,6 +173,7 @@ class BundleManifest:
                 requires_capabilities=d.get(
                     "requires_capabilities", b.get("requires_capabilities", [])
                 ),
+                conflicts=d.get("conflicts", b.get("conflicts", [])) or [],
                 sha256=integrity.get("sha256", ""),
                 size_bytes=integrity.get("size_bytes", 0),
                 built_at=integrity.get("built_at", meta.get("built_at", "")),
@@ -219,6 +223,10 @@ class CatalogEntry:
     # Host capabilities that must ALL be present for this bundle to be
     # selectable (e.g. ``[cuda]``).  Empty = universally selectable.
     requires_capabilities: list[str] = field(default_factory=list)
+    # Packages this bundle must never share a prefix with (its recipe's
+    # ``conflicts:``).  With ``provides`` it lets ``cvcpkg install`` enforce
+    # mutual exclusion from the catalog alone, whatever recipes the client has.
+    conflicts: list[str] = field(default_factory=list)
     # True when the server serving this entry is a mirror whose upstream has
     # retired the bundle, but whose operator unyanked it locally.  Resolution
     # skips these by default: upstream is authoritative.  ``--trust-mirror``
@@ -274,6 +282,7 @@ class ReleaseIndex:
                     upstream_yanked=bool(e.get("upstream_yanked", False)),
                     provides=e.get("provides", []),
                     requires_capabilities=e.get("requires_capabilities", []),
+                    conflicts=e.get("conflicts", []) or [],
                 )
                 for e in d.get("bundles", [])
             ],

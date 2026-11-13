@@ -534,6 +534,20 @@ class TestPopulateSyncOnce:
 
         assert run(_test) == (["libcvc"], ["cuda"])
 
+    def test_conflicts_preserved(self, populate_env):
+        # An edge that imported mujoco3 without its conflicts would let
+        # `cvcpkg install mujoco` overwrite it in the same prefix.
+        run, _, monkeypatch = populate_env
+        bundles = [_bundle(name="mujoco3", conflicts=["mujoco"])]
+        monkeypatch.setattr("httpx.AsyncClient", lambda **kw: _FakeAsyncClient(bundles))
+
+        async def _test():
+            await app_mod._populate_sync_once()
+            (b,) = (await app_mod._db_packages.get_catalog_dict())["bundles"]
+            return b["conflicts"]
+
+        assert run(_test) == ["mujoco"]
+
     def test_platform_allowlist(self, populate_env):
         """Only platforms in CVCPKG_POPULATE_PLATFORMS are imported."""
         run, _, monkeypatch = populate_env

@@ -70,6 +70,33 @@ failure mode, because neither side names the other.
 Symmetry across the shipped catalog is enforced by
 `tests/unit/test_mutual_exclusion.py::TestShippedRecipes::test_shipped_conflicts_are_symmetric`.
 
+## Where `cvcpkg install` gets the declarations
+
+`cvcpkg install` checks every package it is about to install against the other
+packages in the request and against what the prefix's lockfile says is already
+installed. It combines two sources:
+
+- **The catalog.** Each bundle's manifest carries its recipe's `conflicts` and
+  `provides`, `cvcpkg publish` sends both, and `/v1/catalog` serves them
+  (`provides` since migration 026, `conflicts` since migration 038). For a
+  package already in the prefix, the check reads its installed manifest
+  (`share/libcvc-deps/<name>/manifest.yaml`) and its catalog entry. This works
+  whatever recipes the client bundles, so a package published after the client
+  was released is still checked, and so is a package built from source, through
+  its manifest.
+- **Local recipes:** the recipes bundled in the client, a checkout, or
+  `--recipes-dir`. This was the only source before migration 038. A client
+  whose bundled recipes predate a package (for example `mujoco3`, added after
+  cvcpkg 2.5.14) found nothing and let the pair share a prefix.
+
+From catalog data a declaration on either side counts, so a one-sided
+`conflicts:` fires whichever package is installed first. Declare it on both
+sides anyway: the recipe check and older clients still read only the recipes
+of the packages being installed. Rows published before migration 038 serve
+`conflicts: []` until `scripts/backfill_required_deps.py` (or the
+`backfill-deps` admin endpoint it calls) fills them from the recipe that built
+each version.
+
 ## Computed: file overlaps
 
 `cvcpkg.file_conflicts` works off the file lists already recorded in bundle

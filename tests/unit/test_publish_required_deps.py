@@ -400,3 +400,43 @@ def test_find_variant_returns_the_live_matching_row():
     with mock.patch("httpx.Client", return_value=_server_with([yanked, other_arch])):
         assert _find_variant("https://srv", {}, NAME, *VARIANT) is None
         assert _variant_exists("https://srv", {}, NAME, *VARIANT) is False
+
+
+# ── conflicts ride along ────────────────────────────────────────
+
+
+class TestConflictsAreSent:
+    """mujoco3's manifest says ``conflicts: [mujoco]``; the catalog can only
+    serve it, and old clients only enforce it, if the publish sends it."""
+
+    def test_top_level_conflicts_are_sent(self, tmp_path):
+        manifest = _manifest([], conflicts=["mujoco"])
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert json.loads(params["conflicts"]) == ["mujoco"]
+
+    def test_the_bundle_block_placement_is_read_too(self, tmp_path):
+        manifest = _manifest([])
+        manifest["bundle"]["conflicts"] = ["mujoco"]
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert json.loads(params["conflicts"]) == ["mujoco"]
+
+    @pytest.mark.parametrize("value", [None, "mujoco"])
+    def test_absent_or_malformed_sends_an_empty_list(self, tmp_path, value):
+        manifest = _manifest([]) if value is None else _manifest([], conflicts=value)
+        params = _publish([_bundle(tmp_path, manifest)]).call_args[0][2]
+        assert params["conflicts"] == "[]"
+
+    def test_a_packed_recipe_publishes_its_conflicts(self, tmp_path):
+        # The builder writes the recipe's conflicts: into the bundle manifest.
+        recipe = {**RECIPE, "conflicts": ["other-demo"]}
+        recipe_dir = tmp_path / "recipes" / NAME
+        recipe_dir.mkdir(parents=True)
+        (recipe_dir / "recipe.yaml").write_text(yaml.dump(recipe))
+        prefix = tmp_path / "install"
+        (prefix / "lib").mkdir(parents=True)
+        (prefix / "lib" / "libdemo.a").write_bytes(b"fake static lib")
+        archive, _, _ = pack_from_prefix(
+            recipe_dir, prefix, platform="linux", output_dir=tmp_path / "dist"
+        )
+        params = _publish([archive]).call_args[0][2]
+        assert json.loads(params["conflicts"]) == ["other-demo"]
