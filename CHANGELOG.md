@@ -50,6 +50,21 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - `POST /v1/admin/packages/{name}/{version}/backfill-deps` fills `conflicts`
     (fill-only), and `scripts/backfill_required_deps.py` derives it from the
     recipe that built each row, for rows published before migration 038.
+- **Backfilling an edge server.** The dev server's populate sync imports each
+  row from cvcpkg.org once and never revisits it. So its rows imported before
+  cvcpkg.org's backfill still serve `requires_capabilities: []` (#603) and
+  `conflicts: []` (#615).
+  - `scripts/backfill_required_deps.py --from-server URL` copies each empty
+    column from upstream's row with the same coordinate and sha256, instead of
+    deriving it from recipe history. It needs no recipe checkout, so it also
+    covers libcvc's packages.
+  - A row upstream lacks is reported as `not-on-source`, and one whose bytes
+    differ as `differs-from-source`. Neither is filled.
+  - `--expect N` makes `--apply` refuse unless the plan still holds the dry
+    run's N fills.
+  - The `backfill-deps-dev.yml` workflow (dispatch only, on the star-01 runner,
+    with `CVCPKG_DEV_ADMIN_TOKEN`) runs it against dev: a dry run by default,
+    and `apply` with `expect`.
 
 ## v2.5.14
 

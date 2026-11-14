@@ -95,7 +95,10 @@ sides anyway: the recipe check and older clients still read only the recipes
 of the packages being installed. Rows published before migration 038 serve
 `conflicts: []` until `scripts/backfill_required_deps.py` (or the
 `backfill-deps` admin endpoint it calls) fills them from the recipe that built
-each version.
+each version. An edge server such as dev never re-imports a row it holds, so
+after cvcpkg.org is backfilled, the `backfill-deps-dev.yml` workflow copies
+the filled columns to dev's matching rows
+(`backfill_required_deps.py --from-server https://cvcpkg.org`).
 
 ## Computed: file overlaps
 
