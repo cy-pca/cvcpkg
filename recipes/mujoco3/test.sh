@@ -6,7 +6,9 @@
 # plugins are in bin/mujoco_plugin, then builds and runs smoke/ — a
 # find_package(mujoco) consumer that compiles an MJCF model with an OBJ mesh
 # from an in-memory VFS and steps it, configured with OpenGL disabled (the
-# CMake package must work on a host without GL libraries).
+# CMake package must work on a host without GL libraries) and with no C++
+# standard of its own (mujoco::mujoco must require C++17), then smoke/c — a
+# C-only consumer, which that C++17 requirement must not break.
 # wasm / wasm-mt: builds and runs the same consumer with emscripten under node
 # (it fails if the mesh decoders were dropped by the static link), then loads
 # the installed JS bindings (share/mujoco/wasm/mujoco.js) with node and steps a
@@ -112,6 +114,22 @@ wasm|wasm-mt)
     DYLD_LIBRARY_PATH="${P}/lib:${DYLD_LIBRARY_PATH:-}" \
         "${exe}"
     echo "  OK: native find_package(mujoco) consumer built + ran"
+
+    # A project that enables only C: MuJoCo's API is C, and the cxx_std_17
+    # that mujoco::mujoco requires (config-cxx17.patch) must not stop it.
+    cmake -G Ninja -S "${SMOKE_DIR}/c" -B "${TMPDIR_T}/c" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH="${P}" \
+        -DCMAKE_DISABLE_FIND_PACKAGE_OpenGL=ON \
+        ${_ninja:+-DCMAKE_MAKE_PROGRAM="${_ninja}"}
+    cmake --build "${TMPDIR_T}/c"
+    exe="${TMPDIR_T}/c/mujoco_smoke_c"
+    [[ -x "${exe}.exe" ]] && exe="${exe}.exe"
+    PATH="${P}/bin:${PATH}" \
+    LD_LIBRARY_PATH="${P}/lib:${LD_LIBRARY_PATH:-}" \
+    DYLD_LIBRARY_PATH="${P}/lib:${DYLD_LIBRARY_PATH:-}" \
+        "${exe}"
+    echo "  OK: C-only find_package(mujoco) consumer built + ran"
     ;;
 esac
 
