@@ -52,6 +52,18 @@ if(NOT TARGET mujoco::mujoco)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_COMPILE_OPTIONS -pthread)
     set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_LINK_OPTIONS -pthread)
   endif()
+  # The headers need C++17 when included from C++ (mjspec.h uses std::byte),
+  # as in the native package (config-cxx17.patch).  CMake 3.22 and newer skip
+  # a feature of a language the project has not enabled; older CMake stops
+  # with "Cannot use features from non-enabled language CXX", so there the
+  # feature is added only when CXX is enabled.
+  get_property(_mujoco_langs GLOBAL PROPERTY ENABLED_LANGUAGES)
+  list(FIND _mujoco_langs CXX _mujoco_cxx)
+  if(_mujoco_cxx GREATER -1 OR NOT CMAKE_VERSION VERSION_LESS 3.22)
+    set_property(TARGET mujoco::mujoco APPEND PROPERTY INTERFACE_COMPILE_FEATURES cxx_std_17)
+  endif()
+  unset(_mujoco_cxx)
+  unset(_mujoco_langs)
 
   # Optional: no-op mjr_* rendering functions (the browser has no MuJoCo GL
   # renderer), for code shared with native builds that calls mjr_*.

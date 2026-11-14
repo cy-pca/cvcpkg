@@ -1,0 +1,32 @@
+--- a/cmake/mujocoConfig.cmake.in
++++ b/cmake/mujocoConfig.cmake.in
+@@ -25,6 +25,29 @@ find_package(OpenGL QUIET)
+ 
+ if(NOT TARGET mujoco AND NOT @PROJECT_NAME@_BINARY_DIR)
+   include("${CMAKE_CURRENT_LIST_DIR}/mujocoTargets.cmake")
++
++  # cvcpkg: MuJoCo's headers need C++17 when included from C++ (mjspec.h uses
++  # std::byte), but upstream's exported target names no C++ standard, so a C++
++  # consumer on a compiler that defaults to C++14 (MSVC) failed to compile
++  # until it set C++17 itself.  Require it through the target: compile feature
++  # cxx_std_17, which never lowers a newer standard the consumer asks for.
++  # CMake 3.22 and newer skip a feature of a language the project has not
++  # enabled, so C-only consumers are unaffected; older CMake stops with
++  # "Cannot use features from non-enabled language CXX", so there the feature
++  # is added only when CXX is enabled.
++  get_property(_mujoco_langs GLOBAL PROPERTY ENABLED_LANGUAGES)
++  get_target_property(_mujoco_features mujoco::mujoco INTERFACE_COMPILE_FEATURES)
++  list(FIND _mujoco_langs CXX _mujoco_cxx)
++  list(FIND _mujoco_features cxx_std_17 _mujoco_has17)
++  if(_mujoco_has17 EQUAL -1
++      AND (_mujoco_cxx GREATER -1 OR NOT CMAKE_VERSION VERSION_LESS 3.22))
++    set_property(TARGET mujoco::mujoco APPEND PROPERTY
++      INTERFACE_COMPILE_FEATURES cxx_std_17)
++  endif()
++  unset(_mujoco_has17)
++  unset(_mujoco_cxx)
++  unset(_mujoco_features)
++  unset(_mujoco_langs)
+ endif()
+ 
+ check_required_components(mujoco)

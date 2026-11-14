@@ -22,7 +22,13 @@ recipe:
   # (config-opengl-optional.patch).  Upstream's find_dependency(OpenGL) made
   # find_package(mujoco) fail on a Linux host without GL libraries, though no
   # exported target links GL.  Same binaries; only the CMake package changed.
-  cvc_revision: 2
+  #
+  # cvc.3: mujoco::mujoco requires C++17 (compile feature cxx_std_17) in the
+  # native (config-cxx17.patch) and wasm (wasm/mujocoConfig.cmake.in) CMake
+  # packages.  The headers need it from C++ (mjspec.h uses std::byte), and an
+  # MSVC consumer, C++14 by default, failed to compile until it set C++17
+  # itself.  Same binaries; only the CMake packages changed.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -62,6 +68,11 @@ patches:
   # (libmujoco loads GL at run time through glad), so a headless consumer must
   # not need GL libraries to configure.  The wasm bundles do not use this file.
   - config-opengl-optional.patch
+  # Same file, after the patch above: mujoco::mujoco gets compile feature
+  # cxx_std_17, since the headers need C++17 from C++ and upstream's target
+  # names no standard.  Skipped only on CMake < 3.22 in a project without CXX,
+  # where a CXX feature is an error.  wasm/mujocoConfig.cmake.in does the same.
+  - config-cxx17.patch
 
 depends:
   build:
