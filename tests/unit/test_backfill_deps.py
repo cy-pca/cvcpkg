@@ -14,6 +14,7 @@ import asyncio
 import io
 import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -562,6 +563,35 @@ class TestScript:
         assert posted == []
         assert script.main([*base, "--apply", "--token", "t", "--expect", "1"]) == 0
         assert [b["requires_capabilities"] for b in posted] == [["cuda"]]
+
+    def test_fills_a_noarch_row_under_the_variant_it_is_stored_as(
+        self, script, server_env, monkeypatch
+    ):
+        # A noarch bundle is stored once, as none/none (migration 036).  The
+        # default catalog lists it four times, as release/debug x shared/static,
+        # and a backfill addressed to any of those matches nothing: dev's
+        # first run filled none of its 1,220 noarch rows.
+        client, admin, pub = server_env
+        _publish(client, pub, platform="any", arch="noarch")
+
+        def urlopen(req, timeout):
+            url = urllib.parse.urlsplit(req.full_url)
+            path = url.path + (f"?{url.query}" if url.query else "")
+            headers = dict(req.header_items())
+            if req.data is None:
+                resp = client.get(path, headers=headers)
+            else:
+                resp = client.post(path, content=req.data, headers=headers)
+            assert resp.status_code == 200, resp.text
+            return io.BytesIO(resp.content)
+
+        monkeypatch.setattr(script.urllib.request, "urlopen", urlopen)
+        rows = script._fetch_catalog("http://srv", "")
+        assert [(r["build_type"], r["link"]) for r in rows] == [("none", "none")]
+        up = [{**r, "required_deps": [{"name": "libfoo"}]} for r in rows]
+        fills = script.plan_from_catalog(rows, up, "https://up")
+        assert script.apply(fills, script._http_post("http://srv", admin)) == (1, [])
+        assert _rows(client)[("any", "noarch")]["required_deps"] == [{"name": "libfoo"}]
 
     def test_derivation_matches_the_publish_path(self):
         # The script must derive exactly what publish records, so it calls the

@@ -65,6 +65,12 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - The `backfill-deps-dev.yml` workflow (dispatch only, on the star-01 runner,
     with `CVCPKG_DEV_ADMIN_TOKEN`) runs it against dev: a dry run by default,
     and `apply` with `expect`.
+  - The script reads each catalog with `X-Cvcpkg-Neutral-Variants`, so a
+    noarch bundle appears once, as the `none/none` row it is stored as
+    (migration 036). Without the header the catalog lists it four times, as
+    release/debug × shared/static. A backfill addressed to one of those
+    matched no live row, so dev's first apply filled none of its 1,220
+    noarch rows.
 
 ## v2.5.14
 

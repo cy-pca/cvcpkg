@@ -69,6 +69,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 from cvcpkg.builder import runtime_dependencies_from_raw  # noqa: E402
+from cvcpkg.platform import NEUTRAL_VARIANTS_HEADER  # noqa: E402
 from cvcpkg.revisions import base_version, revision_of  # noqa: E402
 
 DEFAULT_SERVER = "https://cvcpkg.org"
@@ -319,7 +320,16 @@ def _http_post(server: str, token: str) -> Post:
 
 
 def _fetch_catalog(server: str, token: str) -> list[dict]:
-    req = urllib.request.Request(f"{server.rstrip('/')}/v1/catalog")
+    """*server*'s catalog with each row under the variant it is stored as.
+
+    A noarch bundle is stored once, as none/none (migration 036).  Without
+    ``X-Cvcpkg-Neutral-Variants`` the catalog lists it four times, as
+    release/debug x shared/static, and a backfill addressed to one of those
+    matches no live row: it fills nothing, or one of the yanked rows 036 left.
+    """
+    req = urllib.request.Request(
+        f"{server.rstrip('/')}/v1/catalog", headers={NEUTRAL_VARIANTS_HEADER: "1"}
+    )
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310
