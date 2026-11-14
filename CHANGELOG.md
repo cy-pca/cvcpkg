@@ -28,7 +28,14 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
-## Unreleased
+## v2.5.15
+
+**A release so `cvcpkg install` refuses packages that cannot share a prefix
+using catalog data, not only the recipes the client bundles (#615, migration
+038). It also ships the recipes merged since 2.5.14: MuJoCo 3.17.0 beside 4.0.0,
+libsodium, a wasmtime linkage fix and Pillow for the browser.** The registry
+side has run on cvcpkg.org since 2026-11-13, and the rows of the six recipes
+that declare `conflicts` are backfilled; this release brings the client side.
 
 - **`cvcpkg install` enforces `conflicts:` and `provides:` from the catalog.**
   It used to read those declarations only from local recipe dirs, normally the
@@ -50,6 +57,21 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - `POST /v1/admin/packages/{name}/{version}/backfill-deps` fills `conflicts`
     (fill-only), and `scripts/backfill_required_deps.py` derives it from the
     recipe that built each row, for rows published before migration 038.
+
+- **Recipes.**
+  - `mujoco3` and `mujoco3-cp312` (#614): MuJoCo 3.17.0, the last 3.x release,
+    next to `mujoco` 4.0.0 (the way `llvm18` and `llvm20` sit next to `llvm`),
+    for models and policies trained on 3.x. Each declares `conflicts:` with its
+    4.0 counterpart, both ways, since the two install the same files.
+  - `libsodium` 1.0.22 and `libsodium-src` (#612) on linux, macos, windows,
+    wasm and wasm-mt.
+  - `wasmtime` 45.0.0+cvc.2 (#607): upstream's Linux `libwasmtime.so` has no
+    `DT_SONAME`, so consumers recorded its build path as `DT_NEEDED`. The build
+    sets the SONAME with cvcpkg's `patchelf`, and the CMake config makes a
+    `SHARED IMPORTED` (or `STATIC IMPORTED`) target, so consumers link it by
+    name.
+  - `pillow-cp312` 12.3.0+cvc.2 (#613): wasm and wasm-mt columns, so a host
+    that links Python statically can import PIL in the browser.
 
 ## v2.5.14
 
