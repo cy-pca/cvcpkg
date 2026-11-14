@@ -1,0 +1,106 @@
+name: Backfill catalog columns (dev)
+
+# The dev server imports each package from cvcpkg.org once (its populate sync,
+# CVCPKG_POPULATE_UPSTREAM) and never revisits a row it holds.  Rows it imported
+# before cvcpkg.org was backfilled therefore keep `[]` in required_deps /
+# provides / requires_capabilities / conflicts: libcvc-cuda without
+# requires_capabilities=[cuda] (cy-pca/cvcpkg#603, migration 037), mujoco
+# without its conflicts (#615, migration 038).
+#
+# This runs scripts/backfill_required_deps.py --from-server <upstream> against
+# dev: each empty column takes the value of upstream's row with the same
+# coordinate and sha256, i.e. the same build.  The admin endpoint only ever
+# writes a column that is still `[]`.  It needs no recipe checkout, so it also
+# covers packages whose recipes live elsewhere (libcvc's).
+#
+# `apply` defaults false: a dry run prints the plan and its fill count.  An
+# apply run needs `expect` = that count and refuses if the plan differs.
+# Dev only: the runner resolves the dev server itself.
+#
+# Required repo secret:
+#   CVCPKG_DEV_ADMIN_TOKEN — admin token for the dev server (backfill-deps is
+#   admin-only), as deploy-dev, populate-dev and repair-overwritten-archives
+#   use.  Not CVCPKG_ADMIN_TOKEN: that one is cvcpkg.org's, and dev answers it
+#   with 401.  Upstream's catalog is read anonymously.
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually post the fills (false = dry run, just report)"
+        required: true
+        type: boolean
+        default: false
+      expect:
+        description: "REQUIRED for apply: the dry run's fill count"
+        required: false
+        default: ""
+        type: string
+      only:
+        description: "Space-separated package names to limit to (empty = every row)"
+        required: false
+        default: ""
+        type: string
+      upstream:
+        description: "Server to copy the columns from"
+        required: false
+        default: "https://cvcpkg.org"
+        type: string
+
+concurrency:
+  group: backfill-deps-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    name: backfill (apply=${{ inputs.apply }})
+    runs-on: [self-hosted, Linux, star-01]
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cvcpkg
+        # The script imports cvcpkg.builder (and yaml) for its recipe mode.
+        run: pip install --user .
+
+      - name: Resolve dev server URL
+        id: dev
+        run: |
+          set -euo pipefail
+          IP=$(incus list cvcpkg-server -c4 -fcsv | tr -d '"' | tr ',' '\n' | awk '{print $1}' | grep -E '^10\.' | head -1)
+          test -n "$IP" || { echo "::error::could not resolve dev cvcpkg-server IP"; exit 1; }
+          echo "url=http://${IP}:8420" >> "$GITHUB_OUTPUT"
+          echo "Dev server: http://${IP}:8420"
+
+      - name: Backfill
+        env:
+          CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
+          SERVER: ${{ steps.dev.outputs.url }}
+          UPSTREAM: ${{ inputs.upstream }}
+          APPLY: ${{ inputs.apply }}
+          EXPECT: ${{ inputs.expect }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          set -euo pipefail
+          args=(--server "$SERVER" --from-server "$UPSTREAM" --csv backfill-plan.csv)
+          for name in $ONLY; do args+=(--only "$name"); done
+          if [[ "$APPLY" == "true" ]]; then
+            [[ "$EXPECT" =~ ^[0-9]+$ ]] || { echo "::error::apply needs expect = the dry run's fill count"; exit 1; }
+            args+=(--apply --expect "$EXPECT")
+          fi
+          python3 scripts/backfill_required_deps.py "${args[@]}"
+
+      - name: Upload the plan
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-plan
+          path: backfill-plan.csv
+          if-no-files-found: ignore

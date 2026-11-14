@@ -507,6 +507,62 @@ class TestScript:
         (again,) = script.plan([row], script.RecipeHistory(repo))
         assert (again.conflicts, again.status) == ([], "nothing-to-fill")
 
+    def test_plan_from_catalog_copies_the_same_build(self, script):
+        # An edge imported these rows before upstream was backfilled.
+        up = [
+            _row(
+                "1.0+cvc.1",
+                sha256="aa",
+                required_deps=[{"name": "zlib", "version": "^1"}],
+                provides=["libcvc"],
+                requires_capabilities=["cuda"],
+            ),
+            _row("1.0+cvc.1", platform="windows", sha256="cc", requires_capabilities=["cuda"]),
+            _row("1.0+cvc.1", platform="macos", sha256="dd"),
+            _row("1.0+cvc.1", platform="freebsd", requires_capabilities=["cuda"]),
+        ]
+        rows = [
+            _row("1.0+cvc.1", sha256="aa", provides=["kept"]),
+            _row("1.0+cvc.1", platform="windows", sha256="bb"),
+            _row("1.0+cvc.1", platform="macos", sha256="dd"),
+            _row("1.0+cvc.1", platform="freebsd"),  # upstream records no sha256 here
+            _row("1.0+cvc.1", org="cvc", sha256="aa"),  # another org's row
+            _row("1.0+cvc.1", platform="netbsd", yanked=True),
+        ]
+        fills = script.plan_from_catalog(rows, up, "https://up")
+        got = {(f.row["platform"], f.row["org"]): f for f in fills}
+        linux = got[("linux", "")]
+        assert (linux.status, linux.source) == ("fill", "https://up")
+        assert linux.required_deps == [{"name": "zlib", "version": "^1"}]
+        assert linux.provides == []  # the edge row already records provides
+        assert (linux.requires_capabilities, linux.conflicts) == (["cuda"], [])
+        assert got[("windows", "")].status == "differs-from-source"
+        assert got[("macos", "")].status == "nothing-to-fill"  # upstream is empty too
+        assert got[("freebsd", "")].requires_capabilities == ["cuda"]
+        assert got[("linux", "cvc")].status == "not-on-source"
+        assert ("netbsd", "") not in got  # yanked
+
+    def test_apply_refuses_when_the_plan_moved(self, script, monkeypatch, capsys):
+        catalogs = {
+            "http://edge": [_row("1.0+cvc.1", sha256="aa")],
+            "http://up": [_row("1.0+cvc.1", sha256="aa", requires_capabilities=["cuda"])],
+        }
+        monkeypatch.setattr(script, "_fetch_catalog", lambda server, token: catalogs[server])
+        posted = []
+
+        def http_post(server, token):
+            assert (server, token) == ("http://edge", "t")
+            return lambda path, query, body: posted.append(body) or {"count": {"x": 1}}
+
+        monkeypatch.setattr(script, "_http_post", http_post)
+        base = ["--server", "http://edge", "--from-server", "http://up"]
+        assert script.main(base) == 0
+        assert "pass --apply --expect 1" in capsys.readouterr().out
+        assert script.main([*base, "--apply", "--token", "t", "--expect", "2"]) == 2
+        assert posted == []
+        assert script.main([*base, "--apply", "--token", "t", "--expect", "1"]) == 0
+        assert [b["requires_capabilities"] for b in posted] == [["cuda"]]
+
     def test_derivation_matches_the_publish_path(self):
         # The script must derive exactly what publish records, so it calls the
         # same helper the publish paths' runtime_dependencies() delegates to.
