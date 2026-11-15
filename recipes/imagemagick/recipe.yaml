@@ -90,7 +90,12 @@ depends:
     # the builder installs only the runtime deps beneath a recipe's own.  (A
     # host_tools entry is a plain name; pkg-config is published for windows too.)
     - pkg-config
-  build:
+  # runtime, not build: libMagick* and magick link every library below, so
+  # they ship with the bundle.  This block was depends.build until 2026-11-15,
+  # and publish recorded it as the bundle's runtime deps only because a recipe
+  # with no runtime key falls back to its build deps; the published
+  # required_deps are unchanged.
+  runtime:
     # Full delegate set — a hermetic ImageMagick built entirely against cvcpkg
     # codecs (no fall-through to the build host's system libraries). build.sh
     # exposes the deps prefix and enables each delegate (--with-jpeg/png/webp/…);

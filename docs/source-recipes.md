@@ -97,6 +97,7 @@ prefix, so the consumer finds the staged tree at
 depends:
   build:
     - mathsrc          # the source recipe
+  runtime: []          # what the built package loads at run time
 build:
   matrix:
     - platform: linux
@@ -131,6 +132,9 @@ depends:
   build:
     - name: libxcb-src        # required: this edge is what installs the tree
       version: "==1.17.0"     # the upstream version the recipe was written for
+  runtime:                    # required beside build (cvcpkg validate)
+    - libxau
+    - libxdmcp
 ```
 
 The source recipe `libxcb-src` holds what the tarball recipe used to: the URL,

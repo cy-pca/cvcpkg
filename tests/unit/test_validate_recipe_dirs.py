@@ -52,6 +52,8 @@ def _write_recipe(
         lines.append("  build:")
         for dep in build_deps:
             lines.append(f"    - name: {dep}")
+        # Build deps without a runtime key fail validation (the fallback check).
+        lines.append("  runtime: []")
     lines.append("build: {matrix: [{platform: linux, script: build.sh}]}")
     if archive_format is not None:
         lines.append(f"package: {{files: ['bin/x'], archive_format: {archive_format}}}")

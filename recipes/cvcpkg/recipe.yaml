@@ -101,6 +101,10 @@ depends:
     - { name: pycparser-cp312, platforms: [macos] }
     - { name: typing-extensions-cp312, platforms: [macos] }
     - { name: yaml, platforms: [macos] }
+  # Nothing: see the note above the block.  Declared explicitly: without a
+  # runtime key, publish records every build dep above as the bundle's runtime
+  # deps, so installing cvcpkg would pull in python312, pyinstaller and the rest.
+  runtime: []
   host_tools:
     - python312
 
