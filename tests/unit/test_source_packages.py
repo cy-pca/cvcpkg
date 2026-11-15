@@ -38,7 +38,8 @@ def _recipe(tmp_path: Path, source: dict, build_deps: list | None = None) -> Rec
         "schema_version": 1,
         "recipe": {"name": "libfoo", "upstream_version": "1.2.0", "cvc_revision": 1},
         "source": source,
-        "depends": {"build": build_deps or []},
+        # runtime: build deps without it fail validation (the fallback check).
+        "depends": {"build": build_deps or [], "runtime": []},
         "build": {"matrix": [{"platform": "linux", "script": "build.sh"}]},
         "package": {"files": ["lib/"]},
     }

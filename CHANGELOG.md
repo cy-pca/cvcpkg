@@ -28,6 +28,61 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ---
 
+## Unreleased
+
+- **The backfill no longer derives `required_deps` from `depends.build`.**
+  For a recipe with no `depends.runtime` key, `runtime_dependencies_from_raw`
+  falls back to `depends.build`. That yields host tools and source packages
+  (cmake, ninja, pkg-config, `f2c-src`), not runtime deps. In 2026-10 an
+  unfiltered apply wrote them into 218 correctly empty rows and had to be
+  undone (#223). On wasm/wasi/cosmo those rows broke `cvcpkg install` (#575).
+  - `scripts/backfill_required_deps.py`'s recipe mode now leaves such a row's
+    `required_deps` empty. It reports the row as `no-runtime-key`, with the
+    held-back list in the log and in a new `held_back_deps` CSV column.
+  - The row's other columns still fill.
+  - A cvcpkg.org dry run before this change planned 107 such fills.
+  - Publishing still records the fallback; the next entry stops the recipes
+    here from relying on it.
+  - Merged after the 2.5.15 tag, so not in that release (#620).
+
+- **`cvcpkg validate` requires `depends.runtime` beside `depends.build`.**
+  A recipe with a non-empty `depends.build` and no `depends.runtime` key
+  publishes its build deps as the bundle's runtime deps (the fallback in
+  `runtime_dependencies`). cvcpkg.org's rows of seven recipes recorded build
+  tools and source packages that way, so installing one pulled in the build's
+  toolchain:
+  - f2c `f2c-src`, gperf `gperf-src` and perl `perl-src`;
+  - xkbcommon its `-src`, meson, ninja, pkg-config, bison, wayland and
+    wayland-protocols, and wayland-protocols its `-src`, meson, ninja,
+    pkg-config and wayland;
+  - cvcpkg python312, poetry-core-cp312, pyinstaller-cp312 and the rest of
+    what it freezes.
+
+  The changes:
+  - Those six recipes declare `runtime: []`: none needs anything at run time,
+    in any published version. imagemagick's codec libraries move from
+    `depends.build` to `depends.runtime`, the list its rows already record.
+  - `cvcpkg validate` (and `packaging/validate.py`) fails a recipe with
+    `depends.build` and no `depends.runtime`; `runtime: []` passes. A
+    downstream recipe that relies on the fallback needs the key before it
+    validates with this client.
+  - Packing such a recipe warns, naming the deps the bundle records. Publish
+    keeps the fallback, so a downstream recipe whose build deps really are the
+    libraries it links publishes as before.
+  - The docs' and registry pages' recipe examples declare `runtime` too.
+  - Published rows keep their `required_deps` until corrected with
+    `expect_required_deps`. A cvcpkg.org dry run on 2026-11-15 found 239 to
+    correct, 142 of them the latest for their variant:
+    - 149 are the six recipes' rows, including all six cvcpkg 2.5.14+cvc.1
+      rows;
+    - 90 are rows of older versions of 22 other recipes, published before
+      those recipes had `depends.runtime`. They record cmake and ninja, or
+      nasm, make or pkg-config (zlib, zstd, xz and libjpeg-turbo's legacy
+      `wasm`/`x86_64` rows among them).
+
+    The correction removes only names that are build-only for the package
+    and adds nothing.
+
 ## v2.5.15
 
 **A release so `cvcpkg install` refuses packages that cannot share a prefix
@@ -78,18 +133,6 @@ that declare `conflicts` are backfilled; this release brings the client side.
     release/debug × shared/static. A backfill addressed to one of those
     matched no live row, so dev's first apply filled none of its 1,220
     noarch rows.
-- **The backfill no longer derives `required_deps` from `depends.build`.**
-  For a recipe with no `depends.runtime` key, `runtime_dependencies_from_raw`
-  falls back to `depends.build`. That yields host tools and source packages
-  (cmake, ninja, pkg-config, `f2c-src`), not runtime deps. In 2026-10 an
-  unfiltered apply wrote them into 218 correctly empty rows and had to be
-  undone (#223). On wasm/wasi/cosmo those rows broke `cvcpkg install` (#575).
-  - `scripts/backfill_required_deps.py`'s recipe mode now leaves such a row's
-    `required_deps` empty. It reports the row as `no-runtime-key`, with the
-    held-back list in the log and in a new `held_back_deps` CSV column.
-  - The row's other columns still fill.
-  - A cvcpkg.org dry run before this change planned 107 such fills.
-  - Publishing is unchanged: it still records the fallback.
 
 - **Recipes.**
   - `mujoco3` and `mujoco3-cp312` (#614): MuJoCo 3.17.0, the last 3.x release,

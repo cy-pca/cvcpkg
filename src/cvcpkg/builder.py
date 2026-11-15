@@ -3046,8 +3046,29 @@ def runtime_dependencies(recipe: Recipe, platform: str) -> list[dict[str, str]]:
     Uses ``depends.runtime``, falling back to ``depends.build`` for recipes
     that haven't adopted the runtime/build split yet.  A dep whose
     ``platforms:`` list excludes *platform* is dropped.
+
+    The fallback is kept for recipes outside this repo, where a build-only
+    recipe may rely on it for deps it really links, but it is wrong whenever
+    the build deps are tools or source packages: published rows recorded
+    ``f2c-src``, ``meson`` and ``pyinstaller-cp312`` as runtime deps through
+    it.  ``cvcpkg validate`` therefore requires ``depends.runtime`` beside a
+    non-empty ``depends.build`` (:func:`falls_back_to_build_deps`), and
+    :func:`generate_manifest` warns when a pack still takes the fallback.
     """
     return runtime_dependencies_from_raw(recipe.raw, platform)
+
+
+def falls_back_to_build_deps(raw: dict[str, Any]) -> bool:
+    """True when :func:`runtime_dependencies` would read ``depends.build``.
+
+    That is a recipe with a non-empty ``depends.build`` and no
+    ``depends.runtime`` key.  ``runtime: []`` counts as declared: it says the
+    package needs nothing at run time.
+    """
+    depends_block = (raw or {}).get("depends") or {}
+    if not isinstance(depends_block, dict):
+        return False
+    return bool(depends_block.get("build")) and "runtime" not in depends_block
 
 
 def runtime_dependencies_from_raw(raw: dict[str, Any], platform: str) -> list[dict[str, str]]:
@@ -3125,6 +3146,15 @@ def generate_manifest(
     pkg_config = recipe.raw.get("package", {}).get("pkg_config", [])
     abi = recipe.raw.get("abi", {})
     dep_list = runtime_dependencies(recipe, platform)
+    if falls_back_to_build_deps(recipe.raw):
+        names = ", ".join(d["name"] for d in dep_list) or "nothing on this platform"
+        print(
+            f"cvcpkg: warning: recipe '{recipe.name}' has depends.build but no "
+            f"depends.runtime, so this bundle records its build deps as runtime "
+            f"deps ({names}); declare depends.runtime ([] when it needs nothing "
+            f"at run time) -- cvcpkg validate requires it",
+            file=sys.stderr,
+        )
 
     recipe_block = recipe.raw.get("recipe", {})
     description = recipe_block.get("description", "")

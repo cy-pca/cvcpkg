@@ -2357,7 +2357,9 @@ def _quickstart(qs: QuickStartProfile, *, name: str, org: str = "") -> tuple[str
                 _QsStep(
                     "Build a recipe from it (in that recipe's <code>recipe.yaml</code>):",
                     f"source:\n  type: package\n  package: {name}\n"
-                    f"depends:\n  build:\n    - name: {name}{pin}",
+                    f"depends:\n  build:\n    - name: {name}{pin}\n"
+                    # cvcpkg validate requires runtime beside build.
+                    "  runtime: []  # what the package needs at run time",
                 )
             )
         steps.append(
@@ -5503,6 +5505,7 @@ cvcpkg init myapp</code></pre></div>
     - name: hdf5
     - name: qt6
     - name: vtk
+  runtime: []   # what myapp loads at run time
   host_tools:
     - cmake
     - ninja</code></pre></div>
@@ -5832,6 +5835,8 @@ depends:
     - name: zlib      # build-time dependency
     - name: boost
       version: "&gt;=1.86"
+  runtime:            # what mylib links at run time
+    - name: zlib
   host_tools:
     - cmake
     - ninja

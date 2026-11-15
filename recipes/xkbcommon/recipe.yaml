@@ -64,6 +64,11 @@ depends:
     - name: wayland-protocols
       version: "^1.38"
       platforms: [linux, freebsd]
+  # libxkbcommon links only libc (no x11, no xkbregistry, no tools; see
+  # build.sh), and finds its XKB data relative to itself.  Declared explicitly:
+  # without a runtime key, publish records the build deps above as the
+  # bundle's runtime deps.
+  runtime: []
   host_tools: []
 
 build:

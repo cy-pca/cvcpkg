@@ -176,7 +176,12 @@ its own recipes with `cvcpkg validate ./cvcpkg/recipes/<name>` or
   the build prefix and are stripped on install unless `--keep-build-prefix`.
   A build-only tool filed under `runtime` will wrongly ship; a linked library
   filed under `build` will wrongly not ship. `platforms: [linux, macos]` on a
-  dep scopes it.
+  dep scopes it. A recipe with a non-empty `depends.build` must also have a
+  `depends.runtime` key, `runtime: []` when the package needs nothing at run
+  time, and `cvcpkg validate` fails without it. When the key is missing,
+  publish records the build deps as the bundle's runtime deps, so every
+  install pulls in the build's tools and source packages. (Published rows of
+  f2c listed `f2c-src`, and xkbcommon's listed meson, ninja and bison.)
 - **`package.files`** — glob patterns DECLARING what the bundle ships. They do
   **not** select it: `stage_bundle` archives the entire `$CVC_INSTALL_DIR` tree,
   so anything the build installs ships whether or not it is listed here. To keep

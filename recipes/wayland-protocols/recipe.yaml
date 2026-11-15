@@ -36,6 +36,10 @@ depends:
     # wayland cannot be a runtime dep; it is only needed to build/validate.
     - name: wayland
       version: "^1.23"
+  # Protocol XML and a .pc file: nothing to load at run time.  Declared
+  # explicitly: without a runtime key, publish records the build deps above
+  # (meson, ninja, wayland, ...) as the bundle's runtime deps.
+  runtime: []
   host_tools: []
 
 build:

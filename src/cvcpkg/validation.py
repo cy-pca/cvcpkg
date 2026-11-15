@@ -19,6 +19,8 @@ module and keeps working for this repo's CI.
 Checks performed:
   * recipe.yaml conforms to the recipe JSON-Schema;
   * every referenced build script and patch file exists;
+  * a non-empty ``depends.build`` has a ``depends.runtime`` beside it (else
+    publish records the build deps as runtime deps);
   * the minted version ``<upstream_version>+cvc.<rev>`` is orderable SemVer
     (an unparseable version silently loses every "pick the newest" comparison);
   * cross-recipe dependencies resolve — each ``depends.{build,runtime,
@@ -277,6 +279,20 @@ def validate_recipe_dir(recipe_dir: Path, *, schema: dict | None = None) -> list
                 f"{recipe_file}: source.package {pkg!r} is not in depends.build; "
                 "list it there so its staged tree is installed before this recipe builds"
             )
+
+    # depends.build needs a depends.runtime beside it.  Without one, publish
+    # records the build deps as the bundle's runtime deps (the fallback in
+    # builder.runtime_dependencies), so every install pulls in the build's
+    # tools and source packages: cvcpkg.org's rows for f2c listed f2c-src,
+    # xkbcommon's meson/ninja/bison, cvcpkg's own python312 and pyinstaller.
+    # Only an explicit key says what the package needs at run time.
+    deps_block = doc.get("depends") or {}
+    if isinstance(deps_block, dict) and deps_block.get("build") and "runtime" not in deps_block:
+        errors.append(
+            f"{recipe_file}: depends.build is set but depends.runtime is missing, so "
+            "publish would record the build deps as runtime deps; add depends.runtime "
+            "with what the package needs at run time ([] if nothing)"
+        )
 
     # Referenced patches must exist.
     for patch in doc.get("patches") or []:
