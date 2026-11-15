@@ -23,6 +23,14 @@ recipe, whose deps may have moved on -- and derives the edges with
 publish path uses.  Rows whose recipe declares nothing to fill are left alone;
 rows whose version no recipe in history matches are reported, not guessed.
 
+A recipe with no ``depends.runtime`` key never fills ``required_deps``: for it
+that function falls back to ``depends.build``, which yields host tools (cmake,
+ninja, pkg-config, ...) and source packages (``f2c-src``), not runtime deps.
+On 2026-10-12 an unfiltered apply wrote those into 218 rows that are correctly
+empty, and #223 had to undo it; on wasm/wasi/cosmo they broke ``cvcpkg
+install`` (#575).  Such a row is reported as ``no-runtime-key``, with what the
+fallback would have given, and its other columns are still filled.
+
 Dry run by default: prints what it would fill.  ``--apply`` posts each fill to
 the server's admin endpoint ``POST /v1/admin/packages/{name}/{version}/
 backfill-deps``, which only ever writes a column that is still ``[]``.
@@ -147,6 +155,9 @@ class Fill:
     requires_capabilities: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     missing: str = "no-recipe-at-version"
+    # What the depends.build fallback would have put in required_deps, for a
+    # recipe with no depends.runtime key; never posted.
+    held_back: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def status(self) -> str:
@@ -154,6 +165,8 @@ class Fill:
             return self.missing
         if self.required_deps or self.provides or self.requires_capabilities or self.conflicts:
             return "fill"
+        if self.held_back:
+            return "no-runtime-key"
         return "nothing-to-fill"
 
     def query(self) -> dict[str, str]:
@@ -186,17 +199,31 @@ def plan(
             fills.append(Fill(row, ""))
             continue
         source, raw = found
+        deps = runtime_dependencies_from_raw(raw, row["platform"]) if need_deps else []
+        held_back: list[dict[str, str]] = []
+        if not declares_runtime_deps(raw):
+            deps, held_back = [], deps
         fills.append(
             Fill(
                 row,
                 source,
-                runtime_dependencies_from_raw(raw, row["platform"]) if need_deps else [],
+                deps,
                 [str(p) for p in (raw.get("provides") or [])] if need_provides else [],
                 [str(c) for c in (raw.get("requires_capabilities") or [])] if need_caps else [],
                 [str(c) for c in (raw.get("conflicts") or [])] if need_conflicts else [],
+                held_back=held_back,
             )
         )
     return fills
+
+
+def declares_runtime_deps(raw: dict) -> bool:
+    """Whether *raw* has a ``depends.runtime`` key, even an empty one.
+
+    Without it ``runtime_dependencies_from_raw`` falls back to
+    ``depends.build``, which is no evidence of what the bundle needs at run time.
+    """
+    return "runtime" in ((raw or {}).get("depends") or {})
 
 
 def _empty_columns(
@@ -398,7 +425,19 @@ def main(argv: list[str] | None = None) -> int:
                 f" provides={','.join(f.provides) or '-'}"
                 f" requires_capabilities={','.join(f.requires_capabilities) or '-'}"
                 f" conflicts={','.join(f.conflicts) or '-'}"
-                f"  [{origin}]"
+                + (
+                    f" held_back={','.join(d['name'] for d in f.held_back)} (no depends.runtime)"
+                    if f.held_back
+                    else ""
+                )
+                + f"  [{origin}]"
+            )
+        elif f.held_back:
+            print(
+                f"  no-runtime-key {f.row['name']} {f.row['version']}"
+                f" {f.row['platform']}/{f.row['arch']}"
+                f" {f.row.get('build_type')}/{f.row.get('link')}: required_deps left empty, not"
+                f" {','.join(d['name'] for d in f.held_back)} (depends.build)  [recipe@{f.source}]"
             )
         elif f.status == "differs-from-source":
             print(
@@ -423,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
                     "requires_capabilities",
                     "conflicts",
                     "recipe_source",
+                    "held_back_deps",
                 ]
             )
             for f in fills:
@@ -442,6 +482,7 @@ def main(argv: list[str] | None = None) -> int:
                         " ".join(f.requires_capabilities),
                         " ".join(f.conflicts),
                         f.source,
+                        " ".join(d["name"] for d in f.held_back),
                     ]
                 )
         print(f"wrote {args.csv}")

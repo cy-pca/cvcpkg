@@ -78,6 +78,18 @@ that declare `conflicts` are backfilled; this release brings the client side.
     release/debug × shared/static. A backfill addressed to one of those
     matched no live row, so dev's first apply filled none of its 1,220
     noarch rows.
+- **The backfill no longer derives `required_deps` from `depends.build`.**
+  For a recipe with no `depends.runtime` key, `runtime_dependencies_from_raw`
+  falls back to `depends.build`. That yields host tools and source packages
+  (cmake, ninja, pkg-config, `f2c-src`), not runtime deps. In 2026-10 an
+  unfiltered apply wrote them into 218 correctly empty rows and had to be
+  undone (#223). On wasm/wasi/cosmo those rows broke `cvcpkg install` (#575).
+  - `scripts/backfill_required_deps.py`'s recipe mode now leaves such a row's
+    `required_deps` empty. It reports the row as `no-runtime-key`, with the
+    held-back list in the log and in a new `held_back_deps` CSV column.
+  - The row's other columns still fill.
+  - A cvcpkg.org dry run before this change planned 107 such fills.
+  - Publishing is unchanged: it still records the fallback.
 
 - **Recipes.**
   - `mujoco3` and `mujoco3-cp312` (#614): MuJoCo 3.17.0, the last 3.x release,

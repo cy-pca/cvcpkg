@@ -508,6 +508,70 @@ class TestScript:
         (again,) = script.plan([row], script.RecipeHistory(repo))
         assert (again.conflicts, again.status) == ([], "nothing-to-fill")
 
+    def test_never_fills_required_deps_from_the_depends_build_fallback(
+        self, script, tmp_path, monkeypatch, capsys
+    ):
+        # A recipe with no depends.runtime key: runtime_dependencies_from_raw
+        # falls back to depends.build, i.e. host tools and source packages.  An
+        # unfiltered apply of those on 2026-10-12 had to be undone (#223, #575).
+        repo = tmp_path / "repo"
+        rdir = repo / "recipes" / "libapp"
+        rdir.mkdir(parents=True)
+        _git(repo, "init", "-q")
+        pre_split = _recipe(1, [], conflicts=["libapp3"])
+        pre_split["depends"] = {"build": ["cmake", {"name": "libapp-src", "version": "==1.0"}]}
+        (rdir / "recipe.yaml").write_text(yaml.safe_dump(pre_split))
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "cvc.1: depends.build only")
+        bare = _recipe(2, [])
+        bare["depends"] = {"build": ["ninja"]}
+        (rdir / "recipe.yaml").write_text(yaml.safe_dump(bare))
+        _git(repo, "commit", "-qam", "cvc.2: depends.build only, nothing else")
+        explicit = _recipe(3, [])  # depends: {runtime: []}: says "none" outright
+        explicit["depends"]["build"] = ["cmake"]
+        (rdir / "recipe.yaml").write_text(yaml.safe_dump(explicit))
+        _git(repo, "commit", "-qam", "cvc.3: runtime: []")
+        history = script.RecipeHistory(repo)
+        assert script.declares_runtime_deps(history.raw("libapp", "1.0+cvc.3")[1])
+        assert not script.declares_runtime_deps(history.raw("libapp", "1.0+cvc.1")[1])
+
+        rows = [_row("1.0+cvc.1"), _row("1.0+cvc.2"), _row("1.0+cvc.3")]
+        got = {f.row["version"]: f for f in script.plan(rows, history)}
+        v1, v2, v3 = got["1.0+cvc.1"], got["1.0+cvc.2"], got["1.0+cvc.3"]
+        # The other columns still fill; required_deps does not.
+        assert (v1.status, v1.required_deps, v1.conflicts) == ("fill", [], ["libapp3"])
+        assert v1.held_back == [{"name": "cmake"}, {"name": "libapp-src", "version": "==1.0"}]
+        assert (v2.status, v2.required_deps) == ("no-runtime-key", [])
+        assert v2.held_back == [{"name": "ninja"}]
+        assert (v3.status, v3.held_back) == ("nothing-to-fill", [])
+
+        posted = []
+        assert script.apply(
+            got.values(), lambda path, query, body: posted.append(body) or {"count": {"c": 1}}
+        ) == (1, [])
+        assert posted == [
+            {
+                "required_deps": [],
+                "provides": [],
+                "requires_capabilities": [],
+                "conflicts": ["libapp3"],
+            }
+        ]
+
+        # main() says what it held back, in the log and the CSV.
+        monkeypatch.setattr(script, "_fetch_catalog", lambda server, token: rows)
+        out_csv = tmp_path / "plan.csv"
+        assert (
+            script.main(["--server", "http://s", "--repo", str(repo), "--csv", str(out_csv)]) == 0
+        )
+        out = capsys.readouterr().out
+        assert "no-runtime-key libapp 1.0+cvc.2" in out and "not ninja (depends.build)" in out
+        assert "held_back=cmake,libapp-src (no depends.runtime)" in out
+        assert "pass --apply --expect 1" in out
+        text = out_csv.read_text()
+        assert "held_back_deps" in text.splitlines()[0]
+        assert "no-runtime-key,libapp,1.0+cvc.2" in text
+
     def test_plan_from_catalog_copies_the_same_build(self, script):
         # An edge imported these rows before upstream was backfilled.
         up = [
