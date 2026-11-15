@@ -84,6 +84,10 @@ that declare `conflicts` are backfilled; this release brings the client side.
     next to `mujoco` 4.0.0 (the way `llvm18` and `llvm20` sit next to `llvm`),
     for models and policies trained on 3.x. Each declares `conflicts:` with its
     4.0 counterpart, both ways, since the two install the same files.
+  - `mujoco` 4.0.0+cvc.3 and `mujoco3` 3.17.0+cvc.2 (#618): `mujoco::mujoco`
+    carries the compile feature `cxx_std_17`, because `mjspec.h` uses
+    `std::byte` and MSVC defaults to C++14. Only the CMake packages change.
+    (Added after the tag: #618 merged while the release PR was open.)
   - `libsodium` 1.0.22 and `libsodium-src` (#612) on linux, macos, windows,
     wasm and wasm-mt.
   - `wasmtime` 45.0.0+cvc.2 (#607): upstream's Linux `libwasmtime.so` has no
