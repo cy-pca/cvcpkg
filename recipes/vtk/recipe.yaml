@@ -12,7 +12,11 @@ recipe:
   # Bumped 3 -> 4: the wasm builds use cvcpkg's libxml2, libtiff, liblzma and
   # freetype instead of VTK's bundled copies (see build-wasm.sh). Other
   # platforms rebuild unchanged.
-  cvc_revision: 4
+  # Bumped 4 -> 5: vtk-gpu-volume-finish-every-render.patch adds the opt-in
+  # vtkGPUVolumeRayCastMapper::FinishEveryRender (default on, so VTK renders as
+  # before) and vtkSmartVolumeMapper's; libcvc turns it off per mapper. The
+  # headers and libraries change on every platform.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -50,6 +54,11 @@ patches:
   # NetBSD: the bundled IOSS calls statfs(2), which NetBSD replaced with
   # statvfs(2).
   - vtk-ioss-netbsd-statvfs.patch
+  # vtkGPUVolumeRayCastMapper::FinishEveryRender (and vtkSmartVolumeMapper's): opt-in, off
+  # lets a render that does not adjust its sample distance return without glFinish, so the
+  # CPU and the GPU overlap. Default on: VTK's behaviour is unchanged. Written for upstream
+  # (see the patch header).
+  - vtk-gpu-volume-finish-every-render.patch
 
 depends:
   build:

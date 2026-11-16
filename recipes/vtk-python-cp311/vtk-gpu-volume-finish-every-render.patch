@@ -1,0 +1,174 @@
+vtkGPUVolumeRayCastMapper: FinishEveryRender, to skip the glFinish of an untimed render
+
+vtkOpenGLGPUVolumeRayCastMapper::GPURender ends every render with glFinish(),
+so that the timer in vtkGPUVolumeRayCastMapper::Render measures the GPU's
+work. That time is used in one place: with AutoAdjustSampleDistances on, it
+chooses the next render's image sample distance. (It also becomes the volume's
+EstimatedRenderTime, in vtkVolume::RenderVolumetricGeometry.)
+
+Every other render pays for the wait too. The CPU stops until the GPU has run
+everything queued so far (the scene's opaque geometry, then the ray cast), and
+the GPU then idles while the CPU prepares the rest of the frame and the next:
+the two times add up instead of overlapping. In an application that renders
+continuously (libcvc's terrain_lab: a terrain, water and its nearest clouds as
+GPU ray-cast volumes, 1280x720 on an Intel Arc iGPU, Windows), the wait was
+45-48 % of the main thread's samples, about 25 ms of a 45 ms frame. Without it
+the frame took 18 ms, and the images were byte-identical.
+
+This adds vtkGPUVolumeRayCastMapper::FinishEveryRender. On, the default,
+nothing changes. Off, a render waits only when AutoAdjustSampleDistances is on,
+the one case that uses its time; any other render returns once its work is
+queued, and its TimeToDraw is the CPU's part only.
+
+vtkSmartVolumeMapper gets the same property and forwards it to the GPU mapper
+it renders with, beside the AutoAdjustSampleDistances it already sets per
+render from the render window's desired update rate. So with FinishEveryRender
+off, an interactive render (a drag) still waits and adjusts its quality as
+before, and a still render does not wait.
+
+It is opt-in because TimeToDraw and EstimatedRenderTime change meaning when it
+is off, and code outside the mapper (vtkLODProp3D, an application's own time
+budget) may rely on them measuring the GPU.
+
+--- a/Rendering/Volume/vtkGPUVolumeRayCastMapper.h
++++ b/Rendering/Volume/vtkGPUVolumeRayCastMapper.h
+@@ -49,6 +49,28 @@
+ 
+   ///@{
+   /**
++   * If FinishEveryRender is on, every render waits for the GPU to finish its
++   * work (glFinish in the OpenGL implementation) before it returns, so that
++   * the time it takes (TimeToDraw, and the volume's EstimatedRenderTime with
++   * it) measures the GPU's work.
++   *
++   * If it is off, only a render with AutoAdjustSampleDistances on waits, since
++   * only that render uses its own time (to choose the next render's image
++   * sample distance). Any other render returns as soon as its work is queued,
++   * so the GPU can ray cast while the CPU prepares the rest of the frame, and
++   * its TimeToDraw is the CPU's part only. Turn it off when nothing needs the
++   * draw time of a still render: an application that renders continuously and
++   * paces its own frames, say.
++   *
++   * On by default.
++   */
++  vtkSetMacro(FinishEveryRender, vtkTypeBool);
++  vtkGetMacro(FinishEveryRender, vtkTypeBool);
++  vtkBooleanMacro(FinishEveryRender, vtkTypeBool);
++  ///@}
++
++  ///@{
++  /**
+    * Compute the sample distance from the data spacing.  When the number of
+    * voxels is 8, the sample distance will be roughly 1/200 the average voxel
+    * size. The distance will grow proportionally to numVoxels^(1/3). Off by default.
+@@ -521,6 +543,7 @@
+ 
+   vtkTypeBool LockSampleDistanceToInputSpacing;
+   vtkTypeBool AutoAdjustSampleDistances;
++  vtkTypeBool FinishEveryRender;
+   float ImageSampleDistance;
+   float MinimumImageSampleDistance;
+   float MaximumImageSampleDistance;
+--- a/Rendering/Volume/vtkGPUVolumeRayCastMapper.cxx
++++ b/Rendering/Volume/vtkGPUVolumeRayCastMapper.cxx
+@@ -35,6 +35,7 @@
+   : LockSampleDistanceToInputSpacing(0)
+ {
+   this->AutoAdjustSampleDistances = 1;
++  this->FinishEveryRender = 1;
+   this->ImageSampleDistance = 1.0;
+   this->MinimumImageSampleDistance = 1.0;
+   this->MaximumImageSampleDistance = 10.0;
+@@ -594,6 +595,7 @@
+   this->Superclass::PrintSelf(os, indent);
+ 
+   os << indent << "AutoAdjustSampleDistances: " << this->AutoAdjustSampleDistances << endl;
++  os << indent << "FinishEveryRender: " << this->FinishEveryRender << endl;
+   os << indent << "MinimumImageSampleDistance: " << this->MinimumImageSampleDistance << endl;
+   os << indent << "MaximumImageSampleDistance: " << this->MaximumImageSampleDistance << endl;
+   os << indent << "ImageSampleDistance: " << this->ImageSampleDistance << endl;
+--- a/Rendering/VolumeOpenGL2/vtkOpenGLGPUVolumeRayCastMapper.cxx
++++ b/Rendering/VolumeOpenGL2/vtkOpenGLGPUVolumeRayCastMapper.cxx
+@@ -3306,7 +3306,13 @@
+     }
+   }
+ 
+-  glFinish();
++  // Wait for the GPU, so that the timer around this render (TimeToDraw) measures its work: always
++  // when FinishEveryRender is on, else only when this render's time chooses the next render's
++  // sample distance (AutoAdjustSampleDistances). Otherwise return with the work queued.
++  if (this->FinishEveryRender || this->AutoAdjustSampleDistances)
++  {
++    glFinish();
++  }
+ 
+   // Restore the previous scattering blending settings
+   this->VolumetricScatteringBlending = previousVolumetricScatteringBlending;
+--- a/Rendering/VolumeOpenGL2/vtkSmartVolumeMapper.h
++++ b/Rendering/VolumeOpenGL2/vtkSmartVolumeMapper.h
+@@ -292,6 +292,22 @@
+ 
+   ///@{
+   /**
++   * If FinishEveryRender is on, every render by the GPU mapper waits for the
++   * GPU to finish its work, so that its time measures the GPU's work. If it is
++   * off, only a render that adjusts its sample distance by its time waits: an
++   * interactive render while InteractiveAdjustSampleDistances is on, or any
++   * render while AutoAdjustSampleDistances is on and
++   * InteractiveAdjustSampleDistances off. Forwarded to the internal GPU mapper
++   * at each render; see vtkGPUVolumeRayCastMapper::SetFinishEveryRender.
++   * Initial value is 1 (on).
++   */
++  vtkSetMacro(FinishEveryRender, vtkTypeBool);
++  vtkGetMacro(FinishEveryRender, vtkTypeBool);
++  vtkBooleanMacro(FinishEveryRender, vtkTypeBool);
++  ///@}
++
++  ///@{
++  /**
+    * Set/Get the distance between samples used for rendering
+    * when AutoAdjustSampleDistances is off, or when this mapper
+    * has more than 1 second allocated to it for rendering.
+@@ -527,6 +543,12 @@
+   vtkTypeBool AutoAdjustSampleDistances;
+ 
+   /**
++   * Whether every render by the GPU mapper waits for the GPU to finish
++   * (vtkGPUVolumeRayCastMapper::FinishEveryRender), forwarded at each render.
++   */
++  vtkTypeBool FinishEveryRender;
++
++  /**
+    * If the DesiredUpdateRate of the vtkRenderWindow causing the Render is at
+    * or above this value, the render is considered interactive. Otherwise it is
+    * considered still.
+--- a/Rendering/VolumeOpenGL2/vtkSmartVolumeMapper.cxx
++++ b/Rendering/VolumeOpenGL2/vtkSmartVolumeMapper.cxx
+@@ -64,6 +64,9 @@
+   this->AutoAdjustSampleDistances = 1;
+   this->SampleDistance = -1.0;
+ 
++  // Every GPU render waits for the GPU (see SetFinishEveryRender)
++  this->FinishEveryRender = 1;
++
+   // Create all the mappers we might need
+   this->RayCastMapper = vtkFixedPointVolumeRayCastMapper::New();
+ 
+@@ -238,6 +241,9 @@
+       {
+         usedMapper->SetAutoAdjustSampleDistances(this->AutoAdjustSampleDistances);
+       }
++      // With FinishEveryRender off, the GPU mapper waits for the GPU only when it adjusts its
++      // sample distance (set just above), as an interactive render does.
++      usedMapper->SetFinishEveryRender(this->FinishEveryRender);
+       usedMapper->Render(ren, vol);
+       break;
+     case vtkSmartVolumeMapper::OSPRayRenderMode:
+@@ -933,6 +939,7 @@
+   os << "MaxMemoryInBytes:" << this->MaxMemoryInBytes << endl;
+   os << "MaxMemoryFraction:" << this->MaxMemoryFraction << endl;
+   os << "AutoAdjustSampleDistances: " << this->AutoAdjustSampleDistances << endl;
++  os << indent << "FinishEveryRender: " << this->FinishEveryRender << endl;
+   os << indent << "SampleDistance: " << this->SampleDistance << endl;
+ }
+ 
