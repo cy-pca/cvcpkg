@@ -5,8 +5,7 @@ $ErrorActionPreference = 'Stop'
 # Not $scriptDir: env-wasm.ps1 (dot-sourced) sets its own to _common.
 $recipeDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . "$recipeDir\..\_common\env-wasm.ps1"
-
-$env:CXXFLAGS = "-fexceptions $env:CXXFLAGS"
+# The rtc:: API throws; env-wasm.ps1's EMCC_CFLAGS builds it with -fwasm-exceptions.
 
 & cmake -G Ninja -S $env:CVC_SOURCE_DIR -B $env:CVC_BUILD_DIR `
     "-DCMAKE_BUILD_TYPE=$cmakeBuildType" '-DCMAKE_POLICY_VERSION_MINIMUM=3.5' `

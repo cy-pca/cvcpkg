@@ -163,14 +163,14 @@ if [ -n "${_TFLAG}" ]; then _SHM="--shared-memory"; fi
 
 # The probe: the smallest host that links the localized objects with libpython and its modules'
 # libraries (ariadne_python.cmake's list), undefined symbols as errors, then runs PIL's codec
-# round-trips under node. -fexceptions matches the hosts' JS exception handling. What runs node
+# round-trips under node. env-wasm.sh's EMCC_CFLAGS gives it the hosts' wasm exceptions. What runs node
 # (the link, the probe) writes to a file, shown after: node sets O_NONBLOCK on an inherited pipe,
 # and a builder's log pipe then fails a later write with EAGAIN.
 _PROBE="${CVC_BUILD_DIR}/probe"; mkdir -p "${_PROBE}"
 "${PY_NATIVE}" -I "${_PYEXT}" registrar --function pil_probe_register \
   --cpp "${_PROBE}/registrar.cpp" --objects "${_PROBE}/objects.txt" "${_MANIFEST}"
 # shellcheck disable=SC2086
-em++ ${_TFLAG} -fexceptions -O1 -I"${DEPS}/include/python3.12" \
+em++ ${_TFLAG} -O1 -I"${DEPS}/include/python3.12" \
   -c "${_PROBE}/registrar.cpp" -o "${_PROBE}/registrar.o"
 # shellcheck disable=SC2086
 emcc ${_TFLAG} -O1 -I"${DEPS}/include/python3.12" \
@@ -183,7 +183,7 @@ for _l in ffi sqlite3 ssl crypto bz2 lzma z mpdec expat; do
     if [ -f "${DEPS}/lib/lib${_l}.a" ]; then printf '"%s"\n' "${DEPS}/lib/lib${_l}.a" >> "${_LINK}"; fi
 done
 # shellcheck disable=SC2086
-if ! em++ ${_TFLAG} -fexceptions -O1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sINITIAL_MEMORY=64mb \
+if ! em++ ${_TFLAG} -O1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sINITIAL_MEMORY=64mb \
        -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=8mb -Wno-pthreads-mem-growth \
        -o "${_PROBE}/wasm_probe.js" "${_PROBE}/wasm_probe.o" "${_PROBE}/registrar.o" "@${_LINK}" \
        > "${_PROBE}/link.log" 2>&1; then

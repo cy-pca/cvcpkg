@@ -63,6 +63,20 @@ if [[ "${CVC_WASM_THREADS:-0}" == "1" ]]; then
     echo "── CVC_WASM_THREADS=1: building with -pthread ──"
 fi
 
+# Wasm exceptions: every emcc/em++ call, compile and link, gets -fwasm-exceptions.
+# C++ then throws and catches with wasm's own exception handling, and C's
+# setjmp/longjmp is wasm's (SUPPORT_LONGJMP=wasm), with no JS invoke_* frames.
+# That is what lets the hosts suspend under JSPI (libcvc
+# docs/roadmap/WASM_JSPI_EXCEPTIONS.md).
+# - The flag goes in EMCC_CFLAGS, not CFLAGS, because only emcc reads it. A
+#   native host tool that a recipe builds alongside (CPython's build python,
+#   protoc) never sees a flag that gcc rejects. emcc keeps it out of its own
+#   system libraries too.
+# - These objects can't be mixed with JS-exception or JS-longjmp ones, so the
+#   whole closure is built this way, and the pack refuses an archive that isn't
+#   (cvcpkg.wasm_eh).
+export EMCC_CFLAGS="-fwasm-exceptions${EMCC_CFLAGS:+ ${EMCC_CFLAGS}}"
+
 # Re-define cvc_cmake_build to inject the Emscripten toolchain file.
 cvc_cmake_build() {
     local _find_root_path_args=()

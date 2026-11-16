@@ -27,7 +27,11 @@ recipe:
   # linked an undeclared libiconv there: the OpenBSD build host's ports
   # libiconv.so.7.1 from /usr/local, and on macOS cvcpkg's from a shared prefix
   # (@rpath/libiconv.2.dylib).  build.sh now names the declared copy.
-  cvc_revision: 10  # licence texts in share/licenses/boost/ (cvcpkg#576)
+  # cvc.10: licence texts in share/licenses/boost/ (cvcpkg#576)
+  # cvc.11: wasm and wasm-mt rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS setjmp/longjmp, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

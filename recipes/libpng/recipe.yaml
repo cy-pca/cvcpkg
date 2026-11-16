@@ -12,7 +12,11 @@ recipe:
   # The Windows build now writes libpng.pc/libpng16.pc (CMake installs none for
   # MSVC; freetype2.pc requires libpng).  No bump: Windows has no cvc.4 or
   # cvc.5 bundle, and no other platform's files change.
-  cvc_revision: 6  # licence texts in share/licenses/libpng/ (cvcpkg#576)
+  # cvc.6: licence texts in share/licenses/libpng/ (cvcpkg#576)
+  # cvc.7: wasm and wasm-mt rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS setjmp/longjmp, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

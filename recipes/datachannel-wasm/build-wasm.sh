@@ -4,15 +4,14 @@
 # Upstream's CMakeLists builds the static library but installs nothing, so the
 # build runs there and the install is done here: the library, the public
 # headers (wasm/include/rtc), the two JS libraries and the package config
-# beside this script.  -fexceptions: the rtc:: API reports errors by throwing,
-# and libcvc's wasm build catches them (it compiles with -fexceptions too).
+# beside this script.  The rtc:: API reports errors by throwing, and libcvc's
+# wasm build catches them: env-wasm.sh's EMCC_CFLAGS builds both with
+# -fwasm-exceptions.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/../_common/env-wasm.sh"
-
-export CXXFLAGS="-fexceptions ${CXXFLAGS:-}"
 
 emcmake cmake -G Ninja \
     -S "${CVC_SOURCE_DIR}" \

@@ -8,7 +8,10 @@ recipe:
   # cvc.2: FreeBSD's bin/lua and bin/luac link the declared readline instead of
   # -ledit, which cvc.1 resolved to the builder's ports libedit.so.0 (see
   # build.sh).  The other platforms rebuild unchanged.
-  cvc_revision: 2
+  # cvc.3: wasm rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS setjmp/longjmp, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
