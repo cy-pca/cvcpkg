@@ -1,0 +1,68 @@
+schema_version: 1
+recipe:
+  name: leveldb
+  upstream_version: "1.23"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    LevelDB -- Google's embedded, ordered key-value store (LSM tree), as a C++
+    library with a C API. The hash database of the AirDC++ web client
+    (airdcpp-webclient, cy-pca/sublevels). Built without Snappy compression.
+  homepage: https://github.com/google/leveldb
+  license: BSD-3-Clause
+  tags: [database, storage, libraries]
+
+source:
+  type: tarball
+  url: https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz
+  sha256: "9a37f8a6174f09bd622bc723b55881dc541cd50747cbd08831c2a82d620f6d76"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/leveldb/
+    - lib/libleveldb*
+    - lib/leveldb*
+    - lib/cmake/leveldb/
+  cmake_packages:
+    - { name: leveldb, targets: ["leveldb::leveldb"] }
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "No Snappy, crc32c or tcmalloc"
+    description: >-
+      LevelDB's CMake probes the build host for libsnappy, libcrc32c and
+      libtcmalloc and links whatever it finds, which would tie the bundle to
+      the host's copies. build.sh and build.ps1 answer all three probes "no"
+      (cvcpkg has no snappy recipe yet), so blocks are stored uncompressed and
+      CRC32C is LevelDB's portable implementation. A database written by a
+      Snappy-enabled LevelDB that holds compressed blocks cannot be read by
+      this build; a new one, or one written uncompressed, can.
+  - title: "Tested platforms"
+    description: >-
+      Built and checked on linux-x86_64 only when the recipe was written; the
+      macos and windows entries use upstream's CMake build unchanged.
