@@ -163,9 +163,7 @@ def test_check_reports_each_archive_once_and_notes_what_it_cannot_read(tmp_path)
     (tmp_path / "lib" / "libthin.a").write_bytes(b"!<thin>\n")
     (tmp_path / "lib" / "python.wasm").write_bytes(JS_EH)  # a linked module, not an object
     problems, notes = check_wasm_exceptions(tmp_path)
-    assert problems == [
-        "lib/libpng16.a: 1 member(s) (png.c.o) use emscripten_longjmp, invoke_vii"
-    ]
+    assert problems == ["lib/libpng16.a: 1 member(s) (png.c.o) use emscripten_longjmp, invoke_vii"]
     assert notes == ["lib/libthin.a: not checked (a thin archive (its members live elsewhere))"]
 
 

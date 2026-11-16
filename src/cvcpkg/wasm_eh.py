@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 CyberPC Angel, LLC
+
 """Which objects in a wasm install tree use Emscripten's JS exceptions or JS longjmp.
 
 Every wasm and wasm-mt package is built with ``-fwasm-exceptions``: wasm's own
