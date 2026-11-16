@@ -76,6 +76,12 @@ patches:
   # names no standard.  Skipped only on CMake < 3.22 in a project without CXX,
   # where a CXX feature is an error.  wasm/mujocoConfig.cmake.in does the same.
   - config-cxx17.patch
+  # wasm/CMakeLists.txt (the Embind bindings, built only under EMSCRIPTEN):
+  # drop "-s DISABLE_EXCEPTION_CATCHING=0" from the link flags. Every wasm
+  # package builds with -fwasm-exceptions (_common/env-wasm.sh), which emcc
+  # refuses to combine with that setting. Upstream's -fexceptions stays, and
+  # loses to -fwasm-exceptions, so val::throw_() still throws.
+  - wasm-exceptions.patch
 
 depends:
   build:

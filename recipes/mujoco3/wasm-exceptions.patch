@@ -1,0 +1,10 @@
+--- a/wasm/CMakeLists.txt
++++ b/wasm/CMakeLists.txt
+@@ -39,7 +39,6 @@
+     "-s FORCE_FILESYSTEM=1"
+     "-s EXPORTED_RUNTIME_METHODS=['ccall','cwrap','FS','MEMFS']"
+     "-s EXPORT_NAME=loadMujoco"
+-    "-s DISABLE_EXCEPTION_CATCHING=0"
+     "-fexceptions"
+     "-gsource-map"
+     "-g"

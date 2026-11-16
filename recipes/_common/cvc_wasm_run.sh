@@ -53,6 +53,15 @@ if [[ "${CVC_PLATFORM:-}" == "wasm" || "${CVC_PLATFORM:-}" == "wasm-mt" ]]; then
         mkdir -p "${EM_CACHE}"
         echo "cvcpkg: emsdk cache is read-only for $(id -un); using EM_CACHE=${EM_CACHE}" >&2
     fi
+    # A test compiles and links against the bundle the way the bundle was built:
+    # with wasm exceptions, which env-wasm.sh passes through EMCC_CFLAGS. A test
+    # runs outside that environment. Without the flag, its program uses JS
+    # longjmp and can't link the bundle's wasm-longjmp objects (lua's embed
+    # test: "undefined symbol: __wasm_longjmp").
+    case " ${EMCC_CFLAGS:-} " in
+        *" -fwasm-exceptions "*) ;;
+        *) export EMCC_CFLAGS="-fwasm-exceptions${EMCC_CFLAGS:+ ${EMCC_CFLAGS}}" ;;
+    esac
 
     # The node that runs the programs: the emsdk's own (EMSDK_NODE, which
     # emsdk_env.sh sets), else whatever node is on PATH. On the fleet emsdk_env.sh
