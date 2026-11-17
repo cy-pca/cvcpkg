@@ -1,0 +1,67 @@
+schema_version: 1
+recipe:
+  name: websocketpp
+  upstream_version: "0.8.2"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    WebSocket++ -- a header-only C++ WebSocket (RFC 6455) client and server
+    library on Asio (Boost.Asio or standalone). The web server of the AirDC++
+    web client (airdcpp-webclient, cy-pca/sublevels). Headers and the CMake
+    package config (websocketpp::websocketpp); no library.
+  homepage: https://github.com/zaphoyd/websocketpp
+  # COPYING: the library is BSD-3-Clause; its bundled base64, md5 and sha1 code is
+  # Zlib / BSD-style (listed in the same file).
+  license: BSD-3-Clause
+  tags: [networking, websocket, cpp, header-only]
+
+source:
+  type: tarball
+  url: https://github.com/zaphoyd/websocketpp/archive/refs/tags/0.8.2.tar.gz
+  sha256: "6ce889d85ecdc2d8fa07408d6787e7352510750daa66b5ad44aacb47bea76755"
+  strip_components: 1
+
+patches:
+  - cxx20-cdtor-names.patch
+
+# Header-only: the headers include Boost.Asio (or standalone Asio) and, with TLS, OpenSSL, but
+# nothing links here. A consumer declares the boost/openssl it compiles against itself.
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/websocketpp/
+    - lib/cmake/websocketpp/
+  cmake_packages:
+    - { name: websocketpp, targets: ["websocketpp::websocketpp"] }
+
+abi:
+  cxx_std: 11
+
+notes:
+  - title: "Boost 1.87 removed what 0.8.2 uses"
+    description: >-
+      0.8.2 uses Boost.Asio's io_service and related names, which Boost 1.87
+      removed. It builds against cvcpkg's boost 1.86; a move to Boost 1.87+
+      needs a newer websocketpp (none released yet) or more patches.
+  - title: "Tested platforms"
+    description: >-
+      Built and used by airdcpp-webclient on linux-x86_64 when the recipe was
+      written. The macos and windows entries run the same CMake install.

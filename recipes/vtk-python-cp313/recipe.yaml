@@ -5,7 +5,10 @@ recipe:
   # Deliberately NOT bumped for the -cpXX matrix change (python: block added):
   # build-environment-only edit — the packed artifact and its runtime manifest
   # are byte-identical to the published bundle.
-  cvc_revision: 1
+  # cvc.2: vtk-gpu-volume-finish-every-render.patch, as the base `vtk` recipe
+  # (cvc.5), so the wrappers are generated from the same headers as the C++
+  # libraries they load and expose Set/GetFinishEveryRender.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -35,7 +38,12 @@ python:
   interpreter: python313
   abi: cp313
 
-patches: []
+patches:
+  # vtkGPUVolumeRayCastMapper::FinishEveryRender (and vtkSmartVolumeMapper's): opt-in, off
+  # lets a render that does not adjust its sample distance return without glFinish, so the
+  # CPU and the GPU overlap. Default on: VTK's behaviour is unchanged. Written for upstream
+  # (see the patch header).
+  - vtk-gpu-volume-finish-every-render.patch
 
 depends:
   build:
