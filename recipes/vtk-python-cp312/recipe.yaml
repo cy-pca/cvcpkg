@@ -143,6 +143,12 @@ depends:
     - python312
 
 build:
+  # It rebuilds all of VTK with the Python wrapping, more than the vtk recipe's own
+  # build: on linux and windows it ran past the server's 2h default twice (populate
+  # dag populate-20261118-022056, "exceeded 7200s timeout", building from the start).
+  # 4h, as vtk. A build-metadata change, not a cvc_revision bump: it changes no
+  # bundle.
+  timeout_seconds: 14400
   # cvcGL + VTK Python are consumed on linux + windows (the pycvc-gl platforms;
   # no macOS VTK bundle yet). Add macos when the vtk package gains a macOS build
   # that pycvc-gl consumes.
