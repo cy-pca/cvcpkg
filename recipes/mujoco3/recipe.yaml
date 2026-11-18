@@ -23,7 +23,10 @@ recipe:
   # packages, as in `mujoco` cvc.3.  The headers need it from C++ (mjspec.h
   # uses std::byte), and an MSVC consumer, C++14 by default, failed to compile
   # until it set C++17 itself.  Same binaries; only the CMake packages changed.
-  cvc_revision: 2
+  # cvc.3: wasm and wasm-mt rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS exceptions, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 3
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -66,6 +69,12 @@ patches:
   # names no standard.  Skipped only on CMake < 3.22 in a project without CXX,
   # where a CXX feature is an error.  wasm/mujocoConfig.cmake.in does the same.
   - config-cxx17.patch
+  # wasm/CMakeLists.txt (the Embind bindings, built only under EMSCRIPTEN):
+  # drop "-s DISABLE_EXCEPTION_CATCHING=0" from the link flags. Every wasm
+  # package builds with -fwasm-exceptions (_common/env-wasm.sh), which emcc
+  # refuses to combine with that setting. Upstream's -fexceptions stays, and
+  # loses to -fwasm-exceptions, so val::throw_() still throws.
+  - wasm-exceptions.patch
 
 depends:
   build:

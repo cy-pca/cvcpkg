@@ -31,6 +31,11 @@ if (-not (Test-Path $emsdkEnv)) {
     . $emsdkEnv
 }
 
+# Wasm exceptions: every emcc/em++ call, compile and link, gets -fwasm-exceptions, as env-wasm.sh
+# does (see the comment there). It goes in EMCC_CFLAGS, which only emcc reads, so a native host tool
+# never sees it. The pack refuses an archive built with JS exceptions or JS longjmp (cvcpkg.wasm_eh).
+$env:EMCC_CFLAGS = ("-fwasm-exceptions " + $env:EMCC_CFLAGS).Trim()
+
 # Wasm builds are always static.
 $env:CVC_LINK = 'static'
 $buildSharedLibs = 'OFF'

@@ -42,6 +42,11 @@ on:
         required: false
         type: boolean
         default: false
+      recipes:
+        description: "Recipe names to build, space- or comma-separated (default: every recipe)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: populate-dev
@@ -93,13 +98,33 @@ jobs:
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
         run: |
           set -euo pipefail
+          # With the `recipes` input set, build exactly those (validated against
+          # the tree, so a typo fails loudly), as populate-server.yml does; their
+          # unpublished deps are still pulled in by submit-dag's auto-deps.
+          # Otherwise every recipe.
+          REQUESTED="$(echo '${{ inputs.recipes }}' | tr ',' ' ' | xargs || true)"
           RECIPES=()
-          for dir in recipes/*/; do
-            name="$(basename "$dir")"
-            [[ "$name" == _* || "$name" == .* ]] && continue
-            [[ -f "$dir/recipe.yaml" ]] || continue
-            RECIPES+=("$name")
-          done
+          if [[ -n "$REQUESTED" ]]; then
+            MISSING=()
+            for name in $REQUESTED; do
+              if [[ -f "recipes/$name/recipe.yaml" ]]; then
+                RECIPES+=("$name")
+              else
+                MISSING+=("$name")
+              fi
+            done
+            if (( ${#MISSING[@]} )); then
+              echo "::error::no such recipe(s): ${MISSING[*]}"
+              exit 1
+            fi
+          else
+            for dir in recipes/*/; do
+              name="$(basename "$dir")"
+              [[ "$name" == _* || "$name" == .* ]] && continue
+              [[ -f "$dir/recipe.yaml" ]] || continue
+              RECIPES+=("$name")
+            done
+          fi
           DAG_ID="populate-dev-$(date +%Y%m%d-%H%M%S)"
           echo "dag_id=$DAG_ID" >> "$GITHUB_OUTPUT"
           echo "Submitting ${#RECIPES[@]} recipes for ${{ inputs.platforms }}"

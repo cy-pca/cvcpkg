@@ -2,7 +2,11 @@ schema_version: 1
 recipe:
   name: libjpeg-turbo
   upstream_version: "3.1.0"
-  cvc_revision: 4  # licence texts in share/licenses/libjpeg-turbo/ (cvcpkg#576)
+  # cvc.4: licence texts in share/licenses/libjpeg-turbo/ (cvcpkg#576)
+  # cvc.5: wasm and wasm-mt rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS setjmp/longjmp, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 5
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"

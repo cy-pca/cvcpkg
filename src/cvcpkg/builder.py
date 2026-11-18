@@ -3410,6 +3410,35 @@ def enforce_declared_files(
     )
 
 
+def enforce_wasm_exceptions(install_dir: Path, platform: str, recipe_name: str) -> None:
+    """Refuse to pack a wasm or wasm-mt bundle with JS exceptions or JS longjmp in it.
+
+    Every wasm package is built with ``-fwasm-exceptions`` (``EMCC_CFLAGS`` in
+    ``_common/env-wasm.sh``). An object built with Emscripten's JS exception
+    handling or JS longjmp can't link into a program built like that, and the
+    reverse fails too. So one stale package breaks every consumer's link (see
+    :mod:`cvcpkg.wasm_eh`).
+    """
+    if platform not in ("wasm", "wasm-mt"):
+        return
+    from cvcpkg.wasm_eh import check_wasm_exceptions
+
+    problems, notes = check_wasm_exceptions(install_dir)
+    for note in notes:
+        print(f"cvcpkg: wasm exceptions -- {note}")
+    if not problems:
+        return
+    listed = "\n  ".join(problems)
+    raise BuildError(
+        f"{recipe_name}: this {platform} bundle has objects built with Emscripten's JS "
+        f"exception handling or JS setjmp/longjmp:\n  {listed}\n"
+        "cvcpkg builds every wasm package with -fwasm-exceptions, and these objects can't "
+        "link with ones built that way. env-wasm.sh passes the flag through EMCC_CFLAGS, so "
+        "look for a build step that clears EMCC_CFLAGS, or one that passes "
+        "-sSUPPORT_LONGJMP=emscripten or -sDISABLE_EXCEPTION_CATCHING=0."
+    )
+
+
 def check_noarch_wheels(install_dir: Path) -> list[str]:
     """The wheels installed under *install_dir* that are not ``*-none-any``.
 
@@ -4796,6 +4825,7 @@ def pack_recipe(
         strict=strict_globs,
     )
     enforce_noarch_wheels(ctx.install_dir, pkg_platform, ctx.recipe.name)
+    enforce_wasm_exceptions(ctx.install_dir, pkg_platform, ctx.recipe.name)
 
     manifest = generate_manifest(
         ctx.recipe,
@@ -4978,6 +5008,7 @@ def pack_from_prefix(
         strict=strict_globs,
     )
     enforce_noarch_wheels(prefix, platform, recipe.name)
+    enforce_wasm_exceptions(prefix, platform, recipe.name)
 
     manifest = generate_manifest(
         recipe,

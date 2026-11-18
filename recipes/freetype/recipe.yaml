@@ -10,7 +10,11 @@ recipe:
   # CMake refuses a FreeType without FT_CONFIG_OPTION_USE_BROTLI
   # (platform_unix.cmake check_freetype_for_brotli). wasm/wasi/cosmo keep it
   # off: brotli is not built for them.
-  cvc_revision: 5  # licence texts in share/licenses/freetype/ (cvcpkg#576)
+  # cvc.5: licence texts in share/licenses/freetype/ (cvcpkg#576)
+  # cvc.6: wasm and wasm-mt rebuilt with -fwasm-exceptions (EMCC_CFLAGS in _common/env-wasm.sh).
+  #   The published wasm objects use Emscripten's JS setjmp/longjmp, which can't link with
+  #   wasm-exceptions code.
+  cvc_revision: 6
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
