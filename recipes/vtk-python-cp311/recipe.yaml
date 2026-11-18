@@ -106,7 +106,10 @@ package:
   files:
     # Python wrapping libraries (libvtkWrappingPythonCore, libvtkPythonInterpreter,
     # libvtkPythonContext2D) — linux/macOS .so, windows import .lib + bin .dll.
-    - lib/libvtk*Python*
+    # The lib/libvtk*Python* glob is the Unix name; MSVC names them vtk*Python*.lib
+    # (the .lib entry below), so on windows it matched nothing and strict globs failed
+    # the pack (2026-11-18). Scoped as cp312 and cp313 have it.
+    - { glob: "lib/libvtk*Python*", platforms: [linux, macos] }
     - lib/vtk*Python*.lib
     - bin/vtk*Python*
     # The importable Python package (site-packages layout differs per platform).
