@@ -1287,6 +1287,23 @@ class DbPackageIndex:
             "arch": row.arch or "",
         }
 
+    async def get_archive_sha256(self, archive_name: str) -> str:
+        """sha256 of the archive stored as *archive_name*, "" when no row has it.
+
+        The live row's when a yanked one shares the name, as in
+        :meth:`get_archive_coords`.  A download's ETag.
+        """
+        async with get_session() as session:
+            sha256 = (
+                await session.execute(
+                    select(PackageRow.sha256)
+                    .where(_archive_name_is(archive_name))
+                    .order_by(PackageRow.yanked.asc(), PackageRow.id.desc())
+                    .limit(1)
+                )
+            ).scalar()
+        return sha256 or ""
+
     async def get_archive_is_yanked(self, archive_name: str) -> bool | None:
         """Yank state of the package owning *archive_name*, None if no row.
 

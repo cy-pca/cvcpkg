@@ -58,7 +58,7 @@ curl http://localhost:8420/healthz
 | `CVCPKG_ORG_STORAGE_LIMIT_BYTES` | `10GiB` | Storage quota given to each new organization. Accepts `50GB`. |
 | `CVCPKG_YANK_RETENTION_DAYS` | `0` | Purge a yanked bundle's row and archive this many days after its yank; `0` never purges. Goes by yank age, not by use. |
 | `CVCPKG_YANK_GC_INTERVAL` | `21600` | Seconds between yank-retention GC runs. |
-| `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins |
+| `CVCPKG_CORS_ORIGINS` | *(empty)* | Comma-separated allowed CORS origins, for every endpoint and with `Authorization`. Any origin may already GET or HEAD the public reads (`/v1/catalog`, `/v1/packages...`, `/v1/download/...`) without credentials. |
 | `CVCPKG_LOG_JSON` | *(empty)* | Set `1` for structured JSON logs |
 | `CVCPKG_OIDC_ISSUER` | *(empty)* | OIDC provider, e.g. `https://tx.wtf`. **All four of ISSUER/CLIENT_ID/CLIENT_SECRET/REDIRECT_URL must be set together**; with any missing, `/admin/oidc/login` answers 404 and the dashboard keeps bearer-token login. |
 | `CVCPKG_OIDC_CLIENT_ID` | *(empty)* | Relying-party client id issued by the provider |
