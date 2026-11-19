@@ -59,6 +59,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from starlette.datastructures import Headers, MutableHeaders
 
 from cvcpkg import __version__
 from cvcpkg.platform import (
@@ -2173,6 +2174,75 @@ class _GZipExceptArchives:
             await self.gzip(scope, receive, send)
 
 
+class _PublicReadCORS:
+    """Cross-origin GET and HEAD of the public package reads, from any origin.
+
+    The catalog, the package listings and the archive downloads are what a
+    browser client reads: the libcvc web gallery fetches a document's data
+    packages from here.  On those paths a GET or HEAD answers
+    ``Access-Control-Allow-Origin: *``, and their preflight is answered here.
+
+    * GET and HEAD only.  Publishing, yanking and deleting (POST and DELETE
+      under /v1/packages) keep the allowlist (``CVCPKG_CORS_ORIGINS``).
+    * No credentials.  The wildcard rules them out, and the preflight does not
+      allow ``Authorization``, so a page elsewhere reads only what an anonymous
+      client may: a private org's packages stay hidden.
+    * An allowlisted origin is left to CORSMiddleware, as before.
+    * The header goes out with or without an Origin header, so a response a
+      shared cache stored for a non-browser client is one a browser may read.
+    """
+
+    _ALLOW_HEADERS = "Accept, If-None-Match, If-Modified-Since, Range, X-Cvcpkg-Version"
+    _EXPOSE_HEADERS = "ETag, Content-Length, Content-Disposition"
+
+    def __init__(self, app, allowlisted=()) -> None:
+        self.app = app
+        self.allowlisted = frozenset(allowlisted)
+
+    @staticmethod
+    def is_public_read(path: str) -> bool:
+        return path in ("/v1/catalog", "/v1/packages") or path.startswith(
+            ("/v1/packages/", "/v1/download/")
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or not self.is_public_read(scope.get("path", "")):
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        origin = headers.get("origin")
+        if origin is not None and origin in self.allowlisted:
+            await self.app(scope, receive, send)
+            return
+        method = scope["method"]
+        wanted = headers.get("access-control-request-method", "").upper()
+        if method == "OPTIONS" and origin is not None and wanted in ("GET", "HEAD"):
+            preflight = Response(
+                status_code=204,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, HEAD",
+                    "Access-Control-Allow-Headers": self._ALLOW_HEADERS,
+                    "Access-Control-Max-Age": "86400",
+                },
+            )
+            await preflight(scope, receive, send)
+            return
+        if method not in ("GET", "HEAD"):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_readable(message) -> None:
+            if message["type"] == "http.response.start":
+                out = MutableHeaders(scope=message)
+                if "access-control-allow-origin" not in out:
+                    out["Access-Control-Allow-Origin"] = "*"
+                    out["Access-Control-Expose-Headers"] = self._EXPOSE_HEADERS
+            await send(message)
+
+        await self.app(scope, receive, send_readable)
+
+
 def _safe_archive_filename(
     name: str, version: str, platform: str, arch: str, build_type: str, link: str
 ) -> str:
@@ -2930,6 +3000,8 @@ def create_app(
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    # Outside it: any origin may GET the public reads (see _PublicReadCORS).
+    app.add_middleware(_PublicReadCORS, allowlisted=CORS_ALLOWED_ORIGINS)
     # Compress large responses -- chiefly /v1/catalog, which every `cvcpkg install` fetches. The
     # catalog cache + ETag/304 above handle repeat and unchanged-client fetches, but a COLD client
     # (every fresh CI job) still pulled the full ~6 MB body UNCOMPRESSED; gzip takes that to a few
@@ -4871,9 +4943,27 @@ def create_app(
             caller.role == TokenRole.admin or await _db_orgs.is_member(org, caller.name)
         )
 
+    async def _archive_cache_headers(caller: TokenRecord | None, safe_name: str) -> dict[str, str]:
+        """A download's cache headers: its sha256 as a strong ETag, revalidated each time.
+
+        Not ``immutable``.  A name keeps its bytes for as long as a row has it,
+        yanked rows included (a publish that would reuse it gets a sha-qualified
+        name), but a nuke deletes the rows, and a later publish of the variant
+        can store new bytes under the name.  A client holding the old bytes for
+        a year would keep the nuked build.  Revalidating costs a bodiless 304;
+        the bytes still cross the wire once.
+        """
+        headers = {"Cache-Control": "private, no-cache" if caller else "no-cache"}
+        if _use_db and _db_packages is not None:
+            sha256 = await _db_packages.get_archive_sha256(safe_name)
+            if sha256:
+                headers["ETag"] = f'"{sha256}"'
+        return headers
+
     @app.head("/v1/download/{filename}", tags=["packages"])
     async def head_download_archive(
         filename: str,
+        request: Request,
         caller: TokenRecord | None = Depends(optional_token),
     ):
         """HEAD support so clients can check size before downloading."""
@@ -4894,7 +4984,11 @@ def create_app(
             raise HTTPException(404, f"archive not found: {safe_name}")
         if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
-        headers = {"Content-Type": "application/octet-stream"}
+        cache = await _archive_cache_headers(caller, safe_name)
+        tag = cache.get("ETag")
+        if tag and etag_matches(request.headers.get("if-none-match", ""), tag):
+            return Response(status_code=304, headers=cache)
+        headers = {"Content-Type": "application/octet-stream", **cache}
         archive_size = archive_store.size(state.storage_uri, safe_name)
         if archive_size >= 0:
             headers["Content-Length"] = str(archive_size)
@@ -4945,6 +5039,13 @@ def create_app(
         # never confirms a private archive's existence to an outsider.
         if not await _archive_is_visible(caller, safe_name):
             raise HTTPException(404, f"archive not found: {safe_name}")
+
+        # A client that holds these bytes (its If-None-Match names the sha256)
+        # gets a bodiless 304, and it is not counted as a download.
+        cache = await _archive_cache_headers(caller, safe_name)
+        tag = cache.get("ETag")
+        if tag and etag_matches(request.headers.get("if-none-match", ""), tag):
+            return Response(status_code=304, headers=cache)
 
         # Record download event for analytics
         if _use_db and _db_downloads is not None:
@@ -5000,7 +5101,7 @@ def create_app(
                 while chunk := f.read(1 << 20):
                     yield chunk
 
-        headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
+        headers = {"Content-Disposition": f'attachment; filename="{safe_name}"', **cache}
         if archive_size >= 0:
             headers["Content-Length"] = str(archive_size)
         return StreamingResponse(
