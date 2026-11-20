@@ -666,6 +666,13 @@ def _fetch_tarball(source: SourceSpec, dest: Path) -> Path:
         cached = cache_dir / f"{key}{_suffix}"
         shutil.copy2(str(archive_path), str(cached))
 
+    # A zip whose URL does not end in .zip (a NuGet .nupkg, a .whl, a download
+    # endpoint with no suffix) is still a zip: the URL only picked the cache
+    # file's name, the content decides how it is opened.  wtl's .nupkg source
+    # went to tarfile and failed with "not a gzip file".
+    if not _is_zip and zipfile.is_zipfile(archive_path):
+        _is_zip = True
+
     # Extract
     source_dir = dest / "src"
     source_dir.mkdir()

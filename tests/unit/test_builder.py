@@ -1374,6 +1374,35 @@ class TestSourceCacheFetchTarball:
         assert _sha256_file(cached) == sha
 
 
+class TestFetchTarballZipByContent:
+    """A zip source is opened as a zip whatever its URL's suffix (wtl's .nupkg)."""
+
+    def test_nupkg_url_extracts_as_zip(self, tmp_path, monkeypatch):
+        import io
+        import zipfile
+
+        monkeypatch.setenv("CVCPKG_SOURCE_CACHE_DIR", "")
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("lib/native/include/atlapp.h", "#define _WTL_VER 0x1000\n")
+        pkg = tmp_path / "wtl.10.0.10320.nupkg"
+        pkg.write_bytes(buf.getvalue())
+        source = SourceSpec.from_dict(
+            {
+                "type": "tarball",
+                "url": pkg.as_uri(),
+                "sha256": hashlib.sha256(buf.getvalue()).hexdigest(),
+                "strip_components": 0,
+            }
+        )
+        dest = tmp_path / "work"
+        dest.mkdir()
+        from cvcpkg.builder import _fetch_tarball
+
+        src_dir = _fetch_tarball(source, dest)
+        assert (src_dir / "lib" / "native" / "include" / "atlapp.h").read_text().startswith("#define")
+
+
 # ── _file_list ──────────────────────────────────────────────────
 
 
