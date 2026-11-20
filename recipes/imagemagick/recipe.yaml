@@ -202,10 +202,13 @@ build:
 
 package:
   files:
-    # The Unix builds (autotools) install headers under include/ImageMagick-7/
-    # and no CMake package; the flat include/Magick*, lib/cmake/ImageMagick/ and
-    # share/imagemagick/ layout is the Windows/wasm builds', so those entries are
-    # scoped (strict globs failed linux on them, 2026-10-14).
+    # The autotools builds -- Unix, and wasm on either host (build-wasm.sh and
+    # build-wasm.ps1 both run configure + make install) -- install headers under
+    # include/ImageMagick-7/, share/ImageMagick-7/ and no CMake package. The flat
+    # include/Magick* and share/imagemagick/ layout is the Windows installer's
+    # alone, so those entries are scoped to windows. Strict globs failed linux
+    # on them on 2026-10-14, and wasm on the 2026-11-16 dev rebuild, which had
+    # them scoped to wasm as well. No build ships lib/cmake/ImageMagick/.
     # Windows repackages the official installer (build.ps1): CORE_RL_*.lib and
     # the canonical aliases below, flat include/Magick*, no pkg-config, no CMake
     # package and (7.1.2) no legacy convert.exe; the windows populate of
@@ -216,13 +219,12 @@ package:
     - lib/Magick++.lib
     - lib/MagickCore.lib
     - lib/MagickWand.lib
-    - { glob: "lib/cmake/ImageMagick/", platforms: [wasm, wasm-mt, wasi] }
     - { glob: "lib/pkgconfig/Magick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
     - { glob: "lib/pkgconfig/ImageMagick*", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
-    - { glob: "include/Magick++/", platforms: [windows, wasm, wasm-mt, wasi] }
-    - { glob: "include/Magick++.h", platforms: [windows, wasm, wasm-mt, wasi] }
-    - { glob: "include/MagickCore/", platforms: [windows, wasm, wasm-mt, wasi] }
-    - { glob: "include/MagickWand/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "include/Magick++/", platforms: [windows] }
+    - { glob: "include/Magick++.h", platforms: [windows] }
+    - { glob: "include/MagickCore/", platforms: [windows] }
+    - { glob: "include/MagickWand/", platforms: [windows] }
     - { glob: "include/ImageMagick*/", platforms: [linux, macos, freebsd, openbsd, netbsd, wasm, wasm-mt, wasi] }
     - bin/magick*
     - bin/Magick*
@@ -230,7 +232,7 @@ package:
     - bin/IM_MOD_RL_*.dll
     - bin/FILTER_*.dll
     - share/ImageMagick*/
-    - { glob: "share/imagemagick/", platforms: [windows, wasm, wasm-mt, wasi] }
+    - { glob: "share/imagemagick/", platforms: [windows] }
   cmake_packages:
     - { name: ImageMagick, targets: ["ImageMagick::Magick++"] }
 
