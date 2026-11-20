@@ -1,0 +1,40 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -57,9 +57,8 @@
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHs-c-")
+   add_definitions(-D_HAS_EXCEPTIONS=0)
+ 
+-  # Disable RTTI.
+-  string(REGEX REPLACE "/GR" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /GR-")
++  # cvcpkg: RTTI stays on, so a consumer built with RTTI can subclass
++  # snappy::Source / snappy::Sink (their typeinfo is emitted here).
+ 
+   # Support static MSVC runtime when building static library.
+   option(SNAPPY_MSVC_STATIC_RUNTIME "Link to static MSVC runtime (/MT or /MTd)" OFF)
+@@ -86,12 +85,7 @@
+     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wextra")
+   endif(NOT CMAKE_CXX_FLAGS MATCHES "-Wextra")
+ 
+-  # Use -Werror for clang only.
+-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+-    if(NOT CMAKE_CXX_FLAGS MATCHES "-Werror")
+-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+-    endif(NOT CMAKE_CXX_FLAGS MATCHES "-Werror")
+-  endif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
++  # cvcpkg: no -Werror, so a newer Clang's new warnings do not fail the build.
+ 
+   # Disable sign comparison warnings. Matches upcoming Bazel setup.
+   if(NOT CMAKE_CXX_FLAGS MATCHES "-Wno-sign-compare")
+@@ -102,9 +96,8 @@
+   string(REGEX REPLACE "-fexceptions" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-exceptions")
+ 
+-  # Disable RTTI.
+-  string(REGEX REPLACE "-frtti" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
++  # cvcpkg: RTTI stays on, so a consumer built with RTTI can subclass
++  # snappy::Source / snappy::Sink (their typeinfo is emitted here).
+ endif(MSVC)
+ 
+ # BUILD_SHARED_LIBS is a standard CMake variable, but we declare it here to make
