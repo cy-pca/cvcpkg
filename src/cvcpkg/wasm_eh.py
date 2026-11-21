@@ -24,9 +24,19 @@ functions that implement those modes in JS (see :data:`JS_EH_IMPORT`):
 - ``emscripten_longjmp`` (JS longjmp).
 
 In a relocatable wasm object every undefined function is an import, so the
-import section is all that has to be read. This module reads it directly from
-``ar`` archives and ``.o`` files, with no llvm-nm, so a pack checks the tree on
-any host.
+import section is all that has to be read. This module reads it directly, with
+no llvm-nm, so a pack checks the tree on any host. It reads whatever a
+consumer links or loads:
+- ``ar`` archives;
+- relocatable objects (a ``linking`` section);
+- side modules (a ``dylink.0`` section);
+- LLVM bitcode.
+
+It tells them by their magic and sections, not their names. A Python
+extension built by emcc ``-shared``
+(``numpy/_core/_multiarray_umath.cpython-312-wasm32-emscripten.so``) is a
+relocatable object, and the ``.so`` hosts link it statically. A linked
+module (``python.wasm``) is skipped: nothing links it.
 
 An LTO member (``-flto``) is LLVM bitcode, and its exceptions and longjmp are
 lowered only at the consumer's link. setjmp is then lowered the consumer's way.
@@ -115,6 +125,32 @@ def function_imports(obj: bytes) -> list[str]:
     return []
 
 
+def wasm_kind(obj: bytes) -> str:
+    """Return ``"object"``, ``"side module"`` or ``"module"``.
+
+    A relocatable object has a ``linking`` custom section. A side module has a
+    ``dylink.0`` section (``dylink`` before emsdk 2.0.28). Anything else is a
+    linked module, which no consumer links.
+    """
+    if obj[:4] != _WASM_MAGIC:
+        raise WasmParseError("not a wasm object")
+    pos = 8
+    while pos < len(obj):
+        section, pos = obj[pos], pos + 1
+        size, pos = _leb(obj, pos)
+        end = pos + size
+        if end > len(obj):
+            raise WasmParseError("truncated section")
+        if section == 0:
+            name, _ = _name(obj, pos)
+            if name == "linking":
+                return "object"
+            if name in ("dylink.0", "dylink"):
+                return "side module"
+        pos = end
+    return "module"
+
+
 def _imports_in(sec: bytes) -> list[str]:
     names: list[str] = []
     count, pos = _leb(sec, 0)
@@ -190,42 +226,62 @@ def js_eh_members(path: Path) -> dict[str, set[str]]:
     Returns ``{member: {the imports, or the bitcode's personality, that show
     it}}``. Members that are neither wasm nor bitcode are ignored.
     """
-    data = path.read_bytes()
+    return _js_eh_in(path.name, path.read_bytes())
+
+
+def _js_eh_in(name: str, data: bytes) -> dict[str, set[str]]:
     if data[:4] in (_WASM_MAGIC, _BITCODE_MAGIC):
-        members: Iterator[tuple[str, bytes]] = iter([(path.name, data)])
+        members: Iterator[tuple[str, bytes]] = iter([(name, data)])
     else:
         members = archive_members(data)
     found: dict[str, set[str]] = {}
-    for name, body in members:
+    for member, body in members:
         hits = _member_hits(body)
         if hits:
-            found[name] = hits
+            found[member] = hits
     return found
 
 
-def check_wasm_exceptions(install_dir: Path) -> tuple[list[str], list[str]]:
-    """Check every static archive and object under *install_dir*.
+def _head(path: Path) -> bytes:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(8)
+    except OSError:
+        return b""
 
-    Returns ``(problems, notes)``: one problem line per archive or object that
-    uses JS exceptions or JS longjmp, and a note for each archive that couldn't
-    be read (a thin archive, a malformed one). Symlinks are not followed, so an
-    archive linked under a second name is checked once.
+
+def check_wasm_exceptions(install_dir: Path) -> tuple[list[str], list[str]]:
+    """Check every archive, object, side module and bitcode file under *install_dir*.
+
+    Files are picked by their magic, whatever their names: ``.a``, ``.o``,
+    ``.so`` and any other. Linked wasm modules are skipped.
+
+    Returns ``(problems, notes)``: one problem line per file that uses JS
+    exceptions or JS longjmp, and a note for each that couldn't be read (a thin
+    archive, a malformed one). Symlinks are not followed, so a file linked under
+    a second name is checked once.
     """
     problems: list[str] = []
     notes: list[str] = []
     for root, _dirs, files in os.walk(install_dir):
         for f in sorted(files):
-            if not f.endswith((".a", ".o")):
-                continue
             path = Path(root) / f
             if path.is_symlink():
                 continue
+            head = _head(path)
+            if head[:8] not in (_AR_MAGIC, _AR_THIN_MAGIC) and head[:4] not in (
+                _WASM_MAGIC,
+                _BITCODE_MAGIC,
+            ):
+                continue
             rel = path.relative_to(install_dir).as_posix()
             try:
-                found = js_eh_members(path)
-            except WasmParseError as exc:
-                if f.endswith(".a"):
-                    notes.append(f"{rel}: not checked ({exc})")
+                data = path.read_bytes()
+                if data[:4] == _WASM_MAGIC and wasm_kind(data) == "module":
+                    continue
+                found = _js_eh_in(f, data)
+            except (OSError, WasmParseError) as exc:
+                notes.append(f"{rel}: not checked ({exc})")
                 continue
             if not found:
                 continue

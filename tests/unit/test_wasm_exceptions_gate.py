@@ -22,6 +22,7 @@ from cvcpkg.wasm_eh import (
     check_wasm_exceptions,
     function_imports,
     js_eh_members,
+    wasm_kind,
 )
 
 
@@ -43,9 +44,12 @@ def _section(sid: int, body: bytes) -> bytes:
     return bytes([sid]) + _leb(len(body)) + body
 
 
-def wasm_object(*functions: str, other_imports: bool = True) -> bytes:
-    """A relocatable wasm object importing *functions* (and, by default, one
-    import of each other kind, as real objects have)."""
+def wasm_object(*functions: str, other_imports: bool = True, kind: str = "object") -> bytes:
+    """A wasm file importing *functions* (and, by default, one import of each
+    other kind, as real objects have).
+
+    *kind* ``"object"`` is relocatable (a ``linking`` section), ``"side module"``
+    has a leading ``dylink.0`` section, and ``"module"`` is linked (neither)."""
     types = _section(1, _leb(1) + b"\x60\x00\x00")
     entries = [_str("env") + _str(f) + b"\x00" + _leb(0) for f in functions]
     if other_imports:
@@ -58,8 +62,12 @@ def wasm_object(*functions: str, other_imports: bool = True) -> bytes:
         ]
     imports = _section(2, _leb(len(entries)) + b"".join(entries))
     code = _section(10, _leb(0))
-    custom = _section(0, _str("linking") + b"\x02")
-    return b"\0asm\x01\0\0\0" + types + imports + code + custom
+    header = b"\0asm\x01\0\0\0"
+    if kind == "side module":
+        return header + _section(0, _str("dylink.0") + b"\x01\x00") + types + imports + code
+    if kind == "module":
+        return header + types + imports + code + _section(0, _str("name"))
+    return header + types + imports + code + _section(0, _str("linking") + b"\x02")
 
 
 def _ar_header(name: str, size: int) -> bytes:
@@ -161,10 +169,47 @@ def test_check_reports_each_archive_once_and_notes_what_it_cannot_read(tmp_path)
     (tmp_path / "lib" / "libz.a").write_bytes(gnu_archive({"adler32.c.o": CLEAN}))
     (tmp_path / "lib" / "liblto.a").write_bytes(gnu_archive({"x.o": BITCODE_WASM_EH}))
     (tmp_path / "lib" / "libthin.a").write_bytes(b"!<thin>\n")
-    (tmp_path / "lib" / "python.wasm").write_bytes(JS_EH)  # a linked module, not an object
+    # A linked module, which nothing links: skipped even though it uses JS exceptions.
+    (tmp_path / "lib" / "python.wasm").write_bytes(
+        wasm_object("__resumeException", "invoke_ii", kind="module")
+    )
     problems, notes = check_wasm_exceptions(tmp_path)
     assert problems == ["lib/libpng16.a: 1 member(s) (png.c.o) use emscripten_longjmp, invoke_vii"]
     assert notes == ["lib/libthin.a: not checked (a thin archive (its members live elsewhere))"]
+
+
+def test_wasm_kind_tells_objects_side_modules_and_linked_modules_apart():
+    assert wasm_kind(CLEAN) == "object"
+    assert wasm_kind(wasm_object("memcpy", kind="side module")) == "side module"
+    assert wasm_kind(wasm_object("memcpy", kind="module")) == "module"
+    with pytest.raises(WasmParseError):
+        wasm_kind(b"\x7fELF" + b"\0" * 60)
+
+
+def test_files_are_picked_by_magic_not_by_name(tmp_path):
+    # numpy-cp312 2.4.6+cvc.6 (wasm): its extensions are emcc -shared relocatable objects named
+    # *.so, which a host links statically. They used JS exceptions, and ariglx's link failed on
+    # __resumeException while the .a/.o-only gate had passed the bundle.
+    core = tmp_path / "lib" / "python3.12" / "site-packages" / "numpy" / "_core"
+    core.mkdir(parents=True)
+    (core / "_multiarray_umath.cpython-312-wasm32-emscripten.so").write_bytes(JS_EH)
+    (core / "_simd.cpython-312-wasm32-emscripten.so").write_bytes(CLEAN)
+    (core / "_native.cpython-312-x86_64-linux-gnu.so").write_bytes(b"\x7fELF" + b"\0" * 60)
+    (core / "__init__.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "lib" / "side.wasm").write_bytes(
+        wasm_object("invoke_vi", "emscripten_longjmp", kind="side module")
+    )
+    (tmp_path / "lib" / "libfoo.a.1").write_bytes(gnu_archive({"x.o": BITCODE_JS_EH}))
+    (tmp_path / "lib" / "broken.so").write_bytes(b"\0asm\x01\0\0\0\x01\x7f")
+    problems, notes = check_wasm_exceptions(tmp_path)
+    assert problems == [
+        "lib/libfoo.a.1: 1 member(s) (x.o) use __gxx_personality_v0 (LTO bitcode)",
+        "lib/python3.12/site-packages/numpy/_core/_multiarray_umath.cpython-312-wasm32-emscripten"
+        ".so: 1 member(s) (_multiarray_umath.cpython-312-wasm32-emscripten.so) use "
+        "__cxa_find_matching_catch_2, __resumeException, invoke_ii",
+        "lib/side.wasm: 1 member(s) (side.wasm) use emscripten_longjmp, invoke_vi",
+    ]
+    assert notes == ["lib/broken.so: not checked (truncated section)"]
 
 
 def test_only_wasm_packs_are_checked(tmp_path):
