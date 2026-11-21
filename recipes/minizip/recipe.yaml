@@ -1,0 +1,79 @@
+schema_version: 1
+recipe:
+  name: minizip
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Classic minizip (MiniZip64 1.1, zlib's contrib/minizip from zlib 1.3.1): the zip/unzip C API
+    of <minizip/zip.h> and <minizip/unzip.h>, as a library with the CMake package and target of
+    vcpkg's minizip port (unofficial-minizip, unofficial::minizip::minizip), bzip2 support on.
+    The zip support of the AirDC++ Windows client (airdcpp-windows, cy-pca/airdcpp-windows).
+    Not minizip-ng, which is a different API.
+  homepage: https://github.com/madler/zlib/tree/develop/contrib/minizip
+  # minizip's sources carry the zlib-style licence of Gilles Vollant and Mathias Svensson; zlib's
+  # LICENSE (the zlib licence) is copied to share/licenses/minizip/.
+  license: Zlib
+  tags: [compression, zip, libraries]
+
+# The zlib release cvcpkg's zlib is built from; minizip ships inside it.
+source:
+  type: tarball
+  url: https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+  sha256: "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime:
+    - name: zlib
+      version: "^1.3"
+    - name: bzip2
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/minizip/
+    - lib/libminizip*
+    # MSVC: minizip.lib (import or static) + bin/minizip.dll.
+    - { glob: "lib/minizip*", platforms: [windows] }
+    - { glob: "bin/minizip*", platforms: [windows] }
+    - share/unofficial-minizip/
+  cmake_packages:
+    - { name: unofficial-minizip, targets: ["unofficial::minizip::minizip"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 11
+
+notes:
+  - title: "Why a separate recipe"
+    description: >-
+      zlib builds only libz; contrib/minizip has no CMake build of its own, and cvcpkg's
+      minizip-ng is built with its compatibility layer off. This recipe's CMakeLists.txt builds
+      ioapi.c, unzip.c, zip.c and mztools.c (plus iowin32.c on Windows) and installs them under
+      vcpkg's names, so a project that does find_package(unofficial-minizip) builds unchanged.
+  - title: "Tested platforms"
+    description: >-
+      linux-x86_64 (test.sh writes a zip and reads it back through the CMake package) and
+      windows-x86_64 (in cy-pca/airdcpp-windows's CI, linked into AirDC.exe) when the recipe was
+      written. macos uses the same CMake build unchanged.

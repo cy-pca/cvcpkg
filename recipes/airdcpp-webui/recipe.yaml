@@ -1,0 +1,54 @@
+schema_version: 1
+recipe:
+  name: airdcpp-webui
+  upstream_version: "2.14.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    The AirDC++ Web UI 2.14.0: the browser front end (built HTML, JavaScript and assets) that
+    the AirDC++ web client's and the AirDC++ Windows client's built-in web servers serve, in
+    share/airdcpp-webui/. The same files as upstream's npm package airdcpp-webui (its dist/),
+    which the AirDC++ builds bundle. Platform-independent.
+  homepage: https://github.com/airdcpp-web/airdcpp-webui
+  license: MIT
+  tags: [web, ui, direct-connect, data]
+
+# The published npm package (the registry's tarball, sha256-pinned); its dist/ is the built UI.
+# Its sha512 integrity on registry.npmjs.org was checked against this file when the pin was written.
+source:
+  type: tarball
+  url: https://registry.npmjs.org/airdcpp-webui/-/airdcpp-webui-2.14.0.tgz
+  sha256: "5240dc788f5b6988d0766e084b572652b4495402b7bc3516cc14651dc81a84a7"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/airdcpp-webui/
+    - share/licenses/airdcpp-webui/
+
+test:
+  script: test.sh
+
+notes:
+  - title: "Not built here"
+    description: >-
+      The UI is built upstream (webpack) and published to npm; this recipe repackages that
+      package's dist/ unchanged, as upstream's own INSTALL_WEB_UI step and its
+      web-resources-update script do. Consumers copy or point at share/airdcpp-webui/:
+      airdcpp-webclient passes it as --web-resources, airdcpp-windows copies it to
+      bin/Web-resources/.

@@ -1,0 +1,56 @@
+schema_version: 1
+recipe:
+  name: wtl
+  upstream_version: "10.0.10320"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    WTL 10.0.10320, the Windows Template Library: header-only C++ classes on top of ATL for
+    Win32 GUI applications (frames, dialogs, controls, GDI). Headers in include/wtl/ and a CMake
+    package (WTL, target WTL::WTL). The GUI toolkit of the AirDC++ Windows client
+    (airdcpp-windows, cy-pca/airdcpp-windows). Needs MSVC's ATL to compile against.
+  homepage: https://sourceforge.net/projects/wtl/
+  license: MS-PL
+  tags: [gui, windows, header-only, libraries]
+
+# The SourceForge release archive, the same file vcpkg's wtl port pins (its sha512 matches). Its
+# headers are byte-for-byte those of nuget.org's wtl 10.0.10320 package (line endings aside).
+source:
+  type: tarball
+  url: https://downloads.sourceforge.net/project/wtl/WTL%2010/WTL%2010.0.10320%20Release/WTL10_10320_Release.zip
+  sha256: "13de5cd7ed41454b8f287e9bcc4525234c6ac8c85905e4d4fe1a0776709fd78f"
+  strip_components: 0
+
+patches: []
+
+depends:
+  build: []
+  runtime: []
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/wtl/
+    - share/cmake/WTL/
+    - share/licenses/wtl/
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 11
+
+notes:
+  - title: "Include path"
+    description: >-
+      The headers are in include/wtl/, not the prefix's include/, so they never shadow
+      anything else there. WTL::WTL adds that directory; without CMake, add <prefix>\include\wtl
+      to the include path (WTL's own documentation includes them as <atlapp.h>, <atlctrls.h>, ...).
