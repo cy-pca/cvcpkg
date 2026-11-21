@@ -1,0 +1,78 @@
+schema_version: 1
+recipe:
+  name: snappy
+  upstream_version: "1.3.1"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: >-
+    Snappy -- Google's fast compression/decompression library, as a C++
+    library with a C API. LevelDB's block compressor (leveldb), so databases
+    written by a Snappy-enabled LevelDB, such as an AirDC++ hash database,
+    can be read.
+  homepage: https://github.com/google/snappy
+  license: BSD-3-Clause
+  tags: [compression, libraries]
+
+source:
+  type: tarball
+  url: https://github.com/google/snappy/archive/refs/tags/1.3.1.tar.gz
+  sha256: "893f708a0bf4b5529d555ffcee390e940e932fcf90261f682604475a76cd0247"
+  strip_components: 1
+
+patches:
+  - rtti-no-werror.patch
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - include/snappy.h
+    - include/snappy-c.h
+    - include/snappy-sinksource.h
+    - include/snappy-stubs-public.h
+    - lib/libsnappy*
+    - lib/snappy*
+    - { glob: "bin/snappy*.dll", platforms: [windows] }
+    - lib/cmake/Snappy/
+  cmake_packages:
+    - { name: Snappy, targets: ["Snappy::snappy"] }
+
+test:
+  script: test.sh
+
+abi:
+  cxx_std: 17
+
+notes:
+  - title: "RTTI on, no -Werror"
+    description: >-
+      Upstream's CMakeLists.txt compiles with -fno-rtti (/GR- on MSVC), so a
+      consumer built with RTTI that subclasses snappy::Source or snappy::Sink
+      fails to link (no typeinfo for the base class), and adds -Werror under
+      Clang, so a newer Clang's new warnings fail the build.
+      rtti-no-werror.patch removes both; exceptions stay off as upstream has
+      them. Snappy's own tests and benchmarks are not built (they need the
+      googletest and benchmark submodules the release tarball leaves empty).
+  - title: "Tested platforms"
+    description: >-
+      Built and checked on linux-x86_64 only when the recipe was written; the
+      macos and windows entries use upstream's CMake build unchanged apart
+      from the patch.

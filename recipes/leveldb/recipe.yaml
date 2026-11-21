@@ -2,14 +2,18 @@ schema_version: 1
 recipe:
   name: leveldb
   upstream_version: "1.23"
-  cvc_revision: 1
+  # cvc.2: built with Snappy (the snappy recipe), so a database written by a
+  # Snappy-enabled LevelDB, such as an official AirDC++ install's HashData,
+  # can be read; cvc.1 stored blocks uncompressed and could not.
+  cvc_revision: 2
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
   description: >-
     LevelDB -- Google's embedded, ordered key-value store (LSM tree), as a C++
     library with a C API. The hash database of the AirDC++ web client
-    (airdcpp-webclient, cy-pca/sublevels). Built without Snappy compression.
+    (airdcpp-webclient, cy-pca/sublevels). Blocks are Snappy-compressed, as
+    in upstream's default build.
   homepage: https://github.com/google/leveldb
   license: BSD-3-Clause
   tags: [database, storage, libraries]
@@ -20,13 +24,15 @@ source:
   sha256: "9a37f8a6174f09bd622bc723b55881dc541cd50747cbd08831c2a82d620f6d76"
   strip_components: 1
 
-patches: []
+patches:
+  - cmake-dependencies.patch
 
 depends:
   build:
     - cmake
     - ninja
-  runtime: []
+  runtime:
+    - snappy
   host_tools: []
 
 build:
@@ -45,24 +51,35 @@ package:
     - include/leveldb/
     - lib/libleveldb*
     - lib/leveldb*
+    - { glob: "bin/leveldb*.dll", platforms: [windows] }
     - lib/cmake/leveldb/
   cmake_packages:
     - { name: leveldb, targets: ["leveldb::leveldb"] }
+
+test:
+  script: test.sh
 
 abi:
   cxx_std: 17
 
 notes:
-  - title: "No Snappy, crc32c or tcmalloc"
+  - title: "Snappy from cvcpkg; no crc32c or tcmalloc"
     description: >-
       LevelDB's CMake probes the build host for libsnappy, libcrc32c and
       libtcmalloc and links whatever it finds, which would tie the bundle to
-      the host's copies. build.sh and build.ps1 answer all three probes "no"
-      (cvcpkg has no snappy recipe yet), so blocks are stored uncompressed and
-      CRC32C is LevelDB's portable implementation. A database written by a
-      Snappy-enabled LevelDB that holds compressed blocks cannot be read by
-      this build; a new one, or one written uncompressed, can.
+      the host's copies. cmake-dependencies.patch replaces the snappy probe
+      with find_package(Snappy CONFIG REQUIRED), so the build links the cvcpkg
+      snappy as Snappy::snappy, and leveldbConfig.cmake finds it (and
+      Threads, which upstream's config also left out, so find_package(leveldb)
+      failed unless the consumer had found Threads first) for consumers with
+      find_dependency. build.sh and build.ps1 still answer the
+      crc32c and tcmalloc probes "no", so CRC32C is LevelDB's portable
+      implementation. Blocks are Snappy-compressed by default
+      (Options::compression), so databases written by a Snappy-enabled
+      LevelDB, such as an official AirDC++ install's HashData, can be read;
+      cvc.1 had no Snappy and could not read their compressed blocks.
   - title: "Tested platforms"
     description: >-
-      Built and checked on linux-x86_64 only when the recipe was written; the
-      macos and windows entries use upstream's CMake build unchanged.
+      Built and checked on linux-x86_64 only (test.sh writes and reads back a
+      Snappy-compressed database); the macos and windows entries use
+      upstream's CMake build with the same patch.

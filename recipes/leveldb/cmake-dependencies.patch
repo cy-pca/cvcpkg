@@ -1,0 +1,40 @@
+--- a/cmake/leveldbConfig.cmake.in
++++ b/cmake/leveldbConfig.cmake.in
+@@ -4,6 +4,12 @@
+ 
+ @PACKAGE_INIT@
+ 
++# cvcpkg: leveldb::leveldb links Threads::Threads and Snappy::snappy, which
++# upstream's config leaves to the consumer to find.
++include(CMakeFindDependencyMacro)
++find_dependency(Threads)
++find_dependency(Snappy 1.1 CONFIG)
++
+ include("${CMAKE_CURRENT_LIST_DIR}/leveldbTargets.cmake")
+ 
+ check_required_components(leveldb)
+\ No newline at end of file
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -39,7 +39,11 @@
+ 
+ include(CheckLibraryExists)
+ check_library_exists(crc32c crc32c_value "" HAVE_CRC32C)
+-check_library_exists(snappy snappy_compress "" HAVE_SNAPPY)
++# cvcpkg: Snappy is required, and found by its CMake package (Snappy::snappy)
++# rather than probed as a bare -lsnappy, so the build links the cvcpkg snappy
++# and the exported leveldb::leveldb carries the dependency to consumers.
++find_package(Snappy 1.1 CONFIG REQUIRED)
++set(HAVE_SNAPPY 1)
+ check_library_exists(tcmalloc malloc "" HAVE_TCMALLOC)
+ 
+ include(CheckCXXSymbolExists)
+@@ -271,7 +275,7 @@
+   target_link_libraries(leveldb crc32c)
+ endif(HAVE_CRC32C)
+ if(HAVE_SNAPPY)
+-  target_link_libraries(leveldb snappy)
++  target_link_libraries(leveldb Snappy::snappy)
+ endif(HAVE_SNAPPY)
+ if(HAVE_TCMALLOC)
+   target_link_libraries(leveldb tcmalloc)
