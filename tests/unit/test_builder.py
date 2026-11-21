@@ -1400,7 +1400,8 @@ class TestFetchTarballZipByContent:
         from cvcpkg.builder import _fetch_tarball
 
         src_dir = _fetch_tarball(source, dest)
-        assert (src_dir / "lib" / "native" / "include" / "atlapp.h").read_text().startswith("#define")
+        header = src_dir / "lib" / "native" / "include" / "atlapp.h"
+        assert header.read_text().startswith("#define")
 
 
 # ── _file_list ──────────────────────────────────────────────────

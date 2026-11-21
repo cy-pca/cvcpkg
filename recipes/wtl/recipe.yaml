@@ -15,12 +15,12 @@ recipe:
   license: MS-PL
   tags: [gui, windows, header-only, libraries]
 
-# nuget.org's package of the SourceForge release 10.0.10320, published by Microsoft and the WTL
-# team; the same headers as WTL10_10320_Release.zip, without SourceForge's download redirects.
+# The SourceForge release archive, the same file vcpkg's wtl port pins (its sha512 matches). Its
+# headers are byte-for-byte those of nuget.org's wtl 10.0.10320 package (line endings aside).
 source:
   type: tarball
-  url: https://api.nuget.org/v3-flatcontainer/wtl/10.0.10320/wtl.10.0.10320.nupkg
-  sha256: "28670adb25c05772a4b5d7c598c98b1567587b377d689a792845b026768f4d3a"
+  url: https://downloads.sourceforge.net/project/wtl/WTL%2010/WTL%2010.0.10320%20Release/WTL10_10320_Release.zip
+  sha256: "13de5cd7ed41454b8f287e9bcc4525234c6ac8c85905e4d4fe1a0776709fd78f"
   strip_components: 0
 
 patches: []

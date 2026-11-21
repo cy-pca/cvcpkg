@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 foreach ($name in 'CVC_SOURCE_DIR', 'CVC_INSTALL_DIR') {
     if (-not [Environment]::GetEnvironmentVariable($name)) { throw "$name must be set" }
 }
-$src = Join-Path $env:CVC_SOURCE_DIR 'lib\native\include'
+$src = Join-Path $env:CVC_SOURCE_DIR 'Include'
 if (-not (Test-Path (Join-Path $src 'atlapp.h'))) { throw "WTL headers not found in $src" }
 
 $inc = Join-Path $env:CVC_INSTALL_DIR 'include\wtl'
@@ -12,7 +12,7 @@ Copy-Item -Force (Join-Path $src '*.h') $inc
 
 $lic = Join-Path $env:CVC_INSTALL_DIR 'share\licenses\wtl'
 New-Item -ItemType Directory -Force -Path $lic | Out-Null
-Copy-Item -Force (Join-Path $env:CVC_SOURCE_DIR 'license\license.txt') (Join-Path $lic 'LICENSE')
+Copy-Item -Force (Join-Path $env:CVC_SOURCE_DIR 'MS-PL.txt') (Join-Path $lic 'LICENSE')
 
 $cm = Join-Path $env:CVC_INSTALL_DIR 'share\cmake\WTL'
 New-Item -ItemType Directory -Force -Path $cm | Out-Null
