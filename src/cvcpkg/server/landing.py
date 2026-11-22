@@ -705,12 +705,19 @@ _LANDING_JS = r"""
 // Server-driven search. The full package list may reach 10s of thousands of
 // entries, so we never load it into memory — every filter change fires a
 // debounced request to /v1/search and re-renders from the response.
+//
+// The request asks for group=package: the server pages whole packages (one
+// summary row each, in `groups`), best match first, so PAGE_SIZE is a count of
+// packages and every "Load more" adds exactly that many.  Paging bundle rows
+// instead let one package with hundreds of builds fill a page by itself.
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 
 let recipeNames = [];
 let recipeMeta = {};
-let currentSort = { key: 'name', dir: 'asc' };
+// key '' = the server's order: best match first.  A column click sorts the
+// loaded rows locally (asc, desc, then back to best match).
+let currentSort = { key: '', dir: 'asc' };
 
 // Filter/search state — kept in sync with URL for shareable links.
 let state = {
@@ -724,8 +731,8 @@ let state = {
   offset: 0,
 };
 
-// Accumulated pages so "Load more" appends rather than replaces.
-let loadedPackages = [];
+// Accumulated package groups so "Load more" appends rather than replaces.
+let loadedGroups = [];
 let lastResponse = null;
 let searchSeq = 0;      // race guard for out-of-order responses
 let searchTimer = null; // debounce handle
@@ -748,10 +755,22 @@ function _buildSearchQuery(overrides) {
   if (s.build_type) params.set('build_type', s.build_type);
   if (s.release) params.set('release', s.release);
   if (s.tag) params.set('tag', s.tag);
+  params.set('group', 'package');
   params.set('limit', String(PAGE_SIZE));
   params.set('offset', String(s.offset || 0));
   params.set('facets', 'true');
   return params.toString();
+}
+
+function _groupKey(g) {
+  return (g.org || '') + '/' + g.name;
+}
+
+function _enrichGroup(g) {
+  const m = recipeMeta[g.name];
+  if (!m) return;
+  if (!g.license && m.license) g.license = m.license;
+  if (!g.description && m.description) g.description = m.description;
 }
 
 async function runSearch(opts) {
@@ -759,7 +778,7 @@ async function runSearch(opts) {
   const append = !!opts.append;
   if (!append) {
     state.offset = 0;
-    loadedPackages = [];
+    loadedGroups = [];
   }
   const seq = ++searchSeq;
   const url = '/v1/search?' + _buildSearchQuery();
@@ -779,6 +798,13 @@ async function runSearch(opts) {
     data = await resp.json();
   } catch (err) {
     if (seq !== searchSeq) return; // stale
+    const more = document.getElementById('load-more');
+    if (append && more) {
+      // Keep the rows already shown; let the visitor retry the page.
+      more.disabled = false;
+      more.textContent = 'Load more failed (' + (err.message || String(err)) + ') — retry';
+      return;
+    }
     tbody.innerHTML =
       '<tr><td colspan="6" class="has-text-centered has-text-grey-light">'
       + 'Search failed: ' + esc(err.message || String(err)) + '</td></tr>';
@@ -786,15 +812,16 @@ async function runSearch(opts) {
   }
   if (seq !== searchSeq) return; // a newer request already fired
   lastResponse = data;
-  const pkgs = data.packages || [];
-  // Enrich with recipe metadata (license/description fallback).
-  pkgs.forEach(p => {
-    const m = recipeMeta[p.name];
-    if (!m) return;
-    if (!p.license && m.license) p.license = m.license;
-    if (!p.description && m.description) p.description = m.description;
+  // Append the new page, skipping any package already shown (the catalog can
+  // change between pages, shifting a package across the page boundary).
+  const seen = new Set(loadedGroups.map(_groupKey));
+  (data.groups || []).forEach(g => {
+    const key = _groupKey(g);
+    if (seen.has(key)) return;
+    seen.add(key);
+    _enrichGroup(g);  // recipe metadata: license/description fallback
+    loadedGroups.push(g);
   });
-  loadedPackages = loadedPackages.concat(pkgs);
   // Render the results FIRST so that a later step throwing can never leave the
   // table stuck on its loading spinner (see below).  updateStatsFromResponse
   // and updateFilterOptions are both no-ops on pages that lack their targets.
@@ -857,54 +884,30 @@ function updateFilterOptions(facets) {
   _syncSelect('tag-filter', facets.tags || [], state.tag);
 }
 
-function groupBundlesByName(pkgs) {
-  const groups = {};
-  pkgs.forEach(p => {
-    const key = p.org ? p.org + '/' + p.name : p.name;
-    if (!groups[key]) {
-      groups[key] = {
-        name: p.name,
-        org: p.org || '',
-        displayName: key,
-        version: p.version,
-        builds: [],
-        platforms: new Set(),
-        archs: new Set(),
-        totalSize: 0,
-      };
-    }
-    const g = groups[key];
-    g.builds.push(p);
-    if (p.platform) g.platforms.add(p.platform);
-    if (p.arch) g.archs.add(p.arch);
-    g.totalSize += p.size_bytes || 0;
+// Locally sorted copy of the loaded groups; with no column chosen, the server's
+// order (best match first) as loaded.
+function _sortedGroups() {
+  const rows = loadedGroups.slice();
+  const key = currentSort.key;
+  if (!key) return rows;
+  const sign = currentSort.dir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    if (key === 'builds') return sign * ((a.builds || 0) - (b.builds || 0));
+    if (key === 'totalSize') return sign * ((a.size_bytes || 0) - (b.size_bytes || 0));
+    const va = (a[key] || '').toLowerCase();
+    const vb = (b[key] || '').toLowerCase();
+    return va < vb ? -sign : va > vb ? sign : 0;
   });
-  return Object.values(groups);
+  return rows;
 }
 
 function renderResults(data) {
-  const grouped = groupBundlesByName(loadedPackages);
-  grouped.sort((a, b) => {
-    let va, vb;
-    if (currentSort.key === 'builds') {
-      va = a.builds.length; vb = b.builds.length;
-      return currentSort.dir === 'asc' ? va - vb : vb - va;
-    }
-    if (currentSort.key === 'totalSize') {
-      va = a.totalSize; vb = b.totalSize;
-      return currentSort.dir === 'asc' ? va - vb : vb - va;
-    }
-    va = (a[currentSort.key] || '').toLowerCase();
-    vb = (b[currentSort.key] || '').toLowerCase();
-    if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
-    if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
-    return 0;
-  });
+  const grouped = _sortedGroups();
 
   const totalBuilds = data.total || 0;
   const totalPackages = data.package_count || 0;
-  const shownBuilds = loadedPackages.length;
-  const shownPackages = grouped.length;
+  const shownBuilds = loadedGroups.reduce((n, g) => n + (g.builds || 0), 0);
+  const shownPackages = loadedGroups.length;
   const countEl = document.getElementById('pkg-count');
   if (shownPackages < totalPackages) {
     countEl.textContent =
@@ -949,10 +952,10 @@ function renderResults(data) {
           </a>
         </td>
         <td><code>${esc(g.version)}</code></td>
-        <td>${[...g.platforms].sort().map(p => platformTag(p)).join(' ')}</td>
-        <td>${[...g.archs].sort().map(a => '<span class="tag is-small is-dark is-rounded ml-1">' + esc(a) + '</span>').join(' ')}</td>
-        <td><span class="tag is-dark is-rounded">${g.builds.length}</span></td>
-        <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.totalSize)}</span></td>
+        <td>${(g.platforms || []).map(p => platformTag(p)).join(' ')}</td>
+        <td>${(g.archs || []).map(a => '<span class="tag is-small is-dark is-rounded ml-1">' + esc(a) + '</span>').join(' ')}</td>
+        <td><span class="tag is-dark is-rounded">${g.builds || 0}</span></td>
+        <td><span class="is-family-monospace is-size-7 has-text-grey-light">${fmtSize(g.size_bytes || 0)}</span></td>
       </tr>
     `}).join('');
   }
@@ -982,10 +985,13 @@ function renderResults(data) {
 }
 
 function sortBy(key) {
-  if (currentSort.key === key) {
-    currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
-  } else {
+  // asc -> desc -> back to the server's best-match order.
+  if (currentSort.key !== key) {
     currentSort = { key, dir: 'asc' };
+  } else if (currentSort.dir === 'asc') {
+    currentSort.dir = 'desc';
+  } else {
+    currentSort = { key: '', dir: 'asc' };
   }
   // Sort locally over already-loaded pages — no refetch.
   if (lastResponse) renderResults(lastResponse);
@@ -1023,13 +1029,8 @@ async function ensureRecipeMeta() {
 function loadRecipeMetaInBackground() {
   if (_recipeMetaLoaded) return;  // already loaded; runSearch enriches inline
   ensureRecipeMeta().then(() => {
-    if (!lastResponse || !loadedPackages.length) return;
-    loadedPackages.forEach(p => {
-      const m = recipeMeta[p.name];
-      if (!m) return;
-      if (!p.license && m.license) p.license = m.license;
-      if (!p.description && m.description) p.description = m.description;
-    });
+    if (!lastResponse || !loadedGroups.length) return;
+    loadedGroups.forEach(_enrichGroup);
     renderResults(lastResponse);
   });
 }
@@ -1089,7 +1090,7 @@ async function init() {
 function loadMore() {
   const btn = document.getElementById('load-more');
   if (btn) btn.disabled = true;
-  state.offset = loadedPackages.length;
+  state.offset = loadedGroups.length;
   runSearch({ append: true });
 }
 """

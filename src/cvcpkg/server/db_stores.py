@@ -22,7 +22,7 @@ from cvcpkg.optional import require_sqlalchemy
 # See cvcpkg.server.db: this module is also reachable before db.py is imported.
 require_sqlalchemy()
 
-from sqlalchemy import and_, distinct, or_, select, update
+from sqlalchemy import String, and_, case, distinct, literal_column, or_, select, update
 from sqlalchemy import func as sa_func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
@@ -79,6 +79,15 @@ from cvcpkg.server.models import (
     TokenRole,
     UserProfileResponse,
     WebhookInfo,
+)
+from cvcpkg.server.search_rank import (
+    RANK_EXACT,
+    RANK_NAME,
+    RANK_OTHER,
+    RANK_PREFIX,
+    RANK_TAG,
+    normalize_query,
+    summarize_group,
 )
 
 # ── HMAC key management ────────────────────────────────────────
@@ -1236,6 +1245,124 @@ def _variant_select(
     return sel
 
 
+def _search_filters(
+    *,
+    name: str = "",
+    platform: str = "",
+    release: str = "",
+    search: str = "",
+    org_slug: str = "",
+    include_yanked: bool = False,
+    recipe_version: str = "",
+    arch: str = "",
+    build_type: str = "",
+    link: str = "",
+    caller_token_name: str | None = None,
+    tag: str = "",
+    live_only: bool = False,
+) -> list:
+    """WHERE clauses for a catalog search over ``packages``.
+
+    ``get_bundles``, ``get_search_facets`` and ``search_package_groups`` share
+    them, so a page, its facets and its totals always count the same rows.
+    *tag* (one tag, matched whole and case-insensitively against the
+    comma-separated column) and *live_only* (no release tag) are used only by
+    ``search_package_groups``; the other two leave them to their callers.
+    """
+    filters: list = []
+    if caller_token_name is not None:
+        # Visibility filter (opt-in): public base packages, packages in public
+        # orgs, and -- for a named caller -- packages in private orgs the caller
+        # is a member of.  Callers that pass None (the default) get no
+        # filtering (internal/admin paths).
+        visible = or_(
+            PackageRow.org_slug == "",
+            PackageRow.org_slug.in_(
+                select(OrganizationRow.slug).where(
+                    OrganizationRow.is_private == False  # noqa: E712
+                )
+            ),
+        )
+        if caller_token_name:
+            member_orgs = (
+                select(OrganizationRow.slug)
+                .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
+                .where(OrgMemberRow.token_name == caller_token_name)
+            )
+            visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
+        filters.append(visible)
+    if not include_yanked:
+        filters.append(PackageRow.yanked == False)  # noqa: E712
+    if name:
+        filters.append(PackageRow.name == name)
+    if platform:
+        filters.append(PackageRow.platform == platform)
+    if release:
+        filters.append(PackageRow.release_tag == release)
+    if live_only:
+        filters.append(PackageRow.release_tag == "")
+    if search:
+        like_pat = f"%{search}%"
+        filters.append(
+            or_(
+                PackageRow.name.ilike(like_pat),
+                PackageRow.version.ilike(like_pat),
+                PackageRow.platform.ilike(like_pat),
+                PackageRow.arch.ilike(like_pat),
+                PackageRow.build_type.ilike(like_pat),
+                PackageRow.link.ilike(like_pat),
+                PackageRow.description.ilike(like_pat),
+                PackageRow.tags.ilike(like_pat),
+                PackageRow.maintainer.ilike(like_pat),
+                PackageRow.license.ilike(like_pat),
+                PackageRow.release_tag.ilike(like_pat),
+                PackageRow.org_slug.ilike(like_pat),
+            )
+        )
+    if org_slug:
+        filters.append(PackageRow.org_slug == org_slug)
+    if recipe_version:
+        filters.append(PackageRow.recipe_version == recipe_version)
+    if arch:
+        filters.append(PackageRow.arch == arch)
+    if build_type:
+        filters.append(PackageRow.build_type == build_type)
+    if link:
+        filters.append(PackageRow.link == link)
+    if tag.strip():
+        # ",a,b,c," contains ",<tag>," -- spaces dropped on both sides, since
+        # the column is written both "a,b" and "a, b".
+        needle = _like_escape(tag.strip().lower().replace(" ", ""))
+        comma = literal_column("','", String)
+        haystack = comma.concat(sa_func.replace(sa_func.lower(PackageRow.tags), " ", "")).concat(
+            comma
+        )
+        filters.append(haystack.like(f"%,{needle},%", escape="\\"))
+    return filters
+
+
+def _relevance_rank(search: str):
+    """SQL for :func:`cvcpkg.server.search_rank.relevance_rank` of one row."""
+
+    # The tiers are inline SQL integers, not bound parameters, so no driver
+    # has to infer a parameter's type inside CASE/MIN.
+    def tier(rank: int):
+        return literal_column(str(int(rank)))
+
+    q = normalize_query(search)
+    if not q:
+        return tier(RANK_EXACT)
+    esc = _like_escape(q)
+    lname = sa_func.lower(PackageRow.name)
+    return case(
+        (lname == q, tier(RANK_EXACT)),
+        (lname.like(f"{esc}%", escape="\\"), tier(RANK_PREFIX)),
+        (lname.like(f"%{esc}%", escape="\\"), tier(RANK_NAME)),
+        (sa_func.lower(PackageRow.tags).like(f"%{esc}%", escape="\\"), tier(RANK_TAG)),
+        else_=tier(RANK_OTHER),
+    )
+
+
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
 
@@ -1337,85 +1464,57 @@ class DbPackageIndex:
         link: str = "",
         caller_token_name: str | None = None,
         order: str = "version",
+        relevance: bool = False,
     ) -> tuple[list[PackageInfo], int]:
+        """Matching bundle rows, a page of them, and how many match in all.
+
+        Rows come grouped by package, packages by name.  With *relevance* and a
+        *search*, packages come best match first instead (tiers in
+        :mod:`cvcpkg.server.search_rank`), so ``search="vtk"`` lists the
+        ``vtk`` package ahead of packages that merely mention VTK.
+        """
+        filters = _search_filters(
+            name=name,
+            platform=platform,
+            release=release,
+            search=search,
+            org_slug=org_slug,
+            include_yanked=include_yanked,
+            recipe_version=recipe_version,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+            caller_token_name=caller_token_name,
+        )
         async with get_session() as session:
-            q = select(PackageRow, TokenRow.email.label("publisher_email")).outerjoin(
-                TokenRow, PackageRow.published_by == TokenRow.name
+            q = (
+                select(PackageRow, TokenRow.email.label("publisher_email"))
+                .outerjoin(TokenRow, PackageRow.published_by == TokenRow.name)
+                .where(*filters)
             )
-            count_q = select(sa_func.count(PackageRow.id))
-            if not include_yanked:
-                q = q.where(PackageRow.yanked == False)  # noqa: E712
-                count_q = count_q.where(PackageRow.yanked == False)  # noqa: E712
-            if name:
-                q = q.where(PackageRow.name == name)
-                count_q = count_q.where(PackageRow.name == name)
-            if platform:
-                q = q.where(PackageRow.platform == platform)
-                count_q = count_q.where(PackageRow.platform == platform)
-            if release:
-                q = q.where(PackageRow.release_tag == release)
-                count_q = count_q.where(PackageRow.release_tag == release)
-            if search:
-                like_pat = f"%{search}%"
-                search_filter = or_(
-                    PackageRow.name.ilike(like_pat),
-                    PackageRow.version.ilike(like_pat),
-                    PackageRow.platform.ilike(like_pat),
-                    PackageRow.arch.ilike(like_pat),
-                    PackageRow.build_type.ilike(like_pat),
-                    PackageRow.link.ilike(like_pat),
-                    PackageRow.description.ilike(like_pat),
-                    PackageRow.tags.ilike(like_pat),
-                    PackageRow.maintainer.ilike(like_pat),
-                    PackageRow.license.ilike(like_pat),
-                    PackageRow.release_tag.ilike(like_pat),
-                    PackageRow.org_slug.ilike(like_pat),
-                )
-                q = q.where(search_filter)
-                count_q = count_q.where(search_filter)
-            if org_slug:
-                q = q.where(PackageRow.org_slug == org_slug)
-                count_q = count_q.where(PackageRow.org_slug == org_slug)
-            if caller_token_name is not None:
-                # Visibility filter (opt-in): public base packages, packages in
-                # public orgs, and — for a named caller — packages in private
-                # orgs the caller is a member of.  Callers that pass None (the
-                # default) get no filtering (internal/admin paths).
-                visible = or_(
-                    PackageRow.org_slug == "",
-                    PackageRow.org_slug.in_(
-                        select(OrganizationRow.slug).where(
-                            OrganizationRow.is_private == False  # noqa: E712
-                        )
-                    ),
-                )
-                if caller_token_name:
-                    member_orgs = (
-                        select(OrganizationRow.slug)
-                        .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
-                        .where(OrgMemberRow.token_name == caller_token_name)
-                    )
-                    visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
-                q = q.where(visible)
-                count_q = count_q.where(visible)
-            if recipe_version:
-                q = q.where(PackageRow.recipe_version == recipe_version)
-                count_q = count_q.where(PackageRow.recipe_version == recipe_version)
-            if arch:
-                q = q.where(PackageRow.arch == arch)
-                count_q = count_q.where(PackageRow.arch == arch)
-            if build_type:
-                q = q.where(PackageRow.build_type == build_type)
-                count_q = count_q.where(PackageRow.build_type == build_type)
-            if link:
-                q = q.where(PackageRow.link == link)
-                count_q = count_q.where(PackageRow.link == link)
+            count_q = select(sa_func.count(PackageRow.id)).where(*filters)
 
             total_result = await session.execute(count_q)
             total = total_result.scalar() or 0
 
+            if relevance and normalize_query(search):
+                # A package ranks at its best row's tier, so its rows stay
+                # together even when only some of them matched by tag.
+                package_rank = sa_func.min(_relevance_rank(search)).over(
+                    partition_by=(PackageRow.org_slug, PackageRow.name)
+                )
+                ordering = (
+                    package_rank,
+                    sa_func.lower(PackageRow.name),
+                    PackageRow.name,
+                    PackageRow.org_slug,
+                )
+            else:
+                ordering = (PackageRow.name,)
+            # published_at can tie (a batch publish); the id keeps pages from
+            # repeating or skipping rows across a tie.
             q = (
-                q.order_by(PackageRow.name, PackageRow.published_at.desc())
+                q.order_by(*ordering, PackageRow.published_at.desc(), PackageRow.id.desc())
                 .offset(offset)
                 .limit(limit)
             )
@@ -1498,63 +1597,21 @@ class DbPackageIndex:
         list of ``(value, count)`` tuples ordered by descending count.
         ``max_buckets`` caps the per-facet list length.
         """
-        base_filters = []
-        if caller_token_name is not None:
-            # Visibility (mirrors get_bundles): public base + public orgs +
-            # private orgs the caller is a member of.  Keeps private packages —
-            # and private org names — out of facet buckets and totals.
-            visible = or_(
-                PackageRow.org_slug == "",
-                PackageRow.org_slug.in_(
-                    select(OrganizationRow.slug).where(
-                        OrganizationRow.is_private == False  # noqa: E712
-                    )
-                ),
-            )
-            if caller_token_name:
-                member_orgs = (
-                    select(OrganizationRow.slug)
-                    .join(OrgMemberRow, OrgMemberRow.org_id == OrganizationRow.id)
-                    .where(OrgMemberRow.token_name == caller_token_name)
-                )
-                visible = or_(visible, PackageRow.org_slug.in_(member_orgs))
-            base_filters.append(visible)
-        if not include_yanked:
-            base_filters.append(PackageRow.yanked == False)  # noqa: E712
-        if name:
-            base_filters.append(PackageRow.name == name)
-        if platform:
-            base_filters.append(PackageRow.platform == platform)
-        if release:
-            base_filters.append(PackageRow.release_tag == release)
-        if search:
-            like_pat = f"%{search}%"
-            base_filters.append(
-                or_(
-                    PackageRow.name.ilike(like_pat),
-                    PackageRow.version.ilike(like_pat),
-                    PackageRow.platform.ilike(like_pat),
-                    PackageRow.arch.ilike(like_pat),
-                    PackageRow.build_type.ilike(like_pat),
-                    PackageRow.link.ilike(like_pat),
-                    PackageRow.description.ilike(like_pat),
-                    PackageRow.tags.ilike(like_pat),
-                    PackageRow.maintainer.ilike(like_pat),
-                    PackageRow.license.ilike(like_pat),
-                    PackageRow.release_tag.ilike(like_pat),
-                    PackageRow.org_slug.ilike(like_pat),
-                )
-            )
-        if org_slug:
-            base_filters.append(PackageRow.org_slug == org_slug)
-        if recipe_version:
-            base_filters.append(PackageRow.recipe_version == recipe_version)
-        if arch:
-            base_filters.append(PackageRow.arch == arch)
-        if build_type:
-            base_filters.append(PackageRow.build_type == build_type)
-        if link:
-            base_filters.append(PackageRow.link == link)
+        # Visibility keeps private packages -- and private org names -- out of
+        # facet buckets and totals, exactly as it does for get_bundles.
+        base_filters = _search_filters(
+            name=name,
+            platform=platform,
+            release=release,
+            search=search,
+            org_slug=org_slug,
+            include_yanked=include_yanked,
+            recipe_version=recipe_version,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+            caller_token_name=caller_token_name,
+        )
 
         facet_cols = {
             "platforms": PackageRow.platform,
@@ -1621,6 +1678,110 @@ class DbPackageIndex:
             ]
 
             return facets, total_bundles, distinct_names, total_size
+
+    async def search_package_groups(
+        self,
+        *,
+        search: str = "",
+        platform: str = "",
+        release: str = "",
+        live_only: bool = False,
+        tag: str = "",
+        org_slug: str = "",
+        include_yanked: bool = False,
+        recipe_version: str = "",
+        arch: str = "",
+        build_type: str = "",
+        link: str = "",
+        caller_token_name: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int, int, int]:
+        """One page of matching packages, best match first, and the totals.
+
+        Pages count packages (org/name), not bundle rows, so a page of *limit*
+        holds *limit* packages however many builds each one has.  Returns
+        ``(groups, package_count, build_count, total_size_bytes)``, each group
+        a :func:`~cvcpkg.server.search_rank.summarize_group` dict.
+        """
+        filters = _search_filters(
+            platform=platform,
+            release=release,
+            search=search,
+            org_slug=org_slug,
+            include_yanked=include_yanked,
+            recipe_version=recipe_version,
+            arch=arch,
+            build_type=build_type,
+            link=link,
+            caller_token_name=caller_token_name,
+            tag=tag,
+            live_only=live_only,
+        )
+        per_package = (
+            select(
+                PackageRow.org_slug.label("org"),
+                PackageRow.name.label("name"),
+                sa_func.min(_relevance_rank(search)).label("rank"),
+                sa_func.count(PackageRow.id).label("builds"),
+                sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0).label("size"),
+            )
+            .where(*filters)
+            .group_by(PackageRow.org_slug, PackageRow.name)
+            .subquery()
+        )
+        async with get_session() as session:
+            totals = (
+                await session.execute(
+                    select(
+                        sa_func.count(),
+                        sa_func.coalesce(sa_func.sum(per_package.c.builds), 0),
+                        sa_func.coalesce(sa_func.sum(per_package.c.size), 0),
+                    ).select_from(per_package)
+                )
+            ).one()
+            package_count, build_count, total_size = (int(v or 0) for v in totals)
+            if not limit or offset >= package_count:
+                return [], package_count, build_count, total_size
+
+            page = (
+                await session.execute(
+                    select(per_package)
+                    .order_by(
+                        per_package.c.rank,
+                        sa_func.lower(per_package.c.name),
+                        per_package.c.name,
+                        per_package.c.org,
+                    )
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).all()
+            detail = await session.execute(
+                select(
+                    PackageRow.org_slug,
+                    PackageRow.name,
+                    PackageRow.version,
+                    PackageRow.platform,
+                    PackageRow.arch,
+                ).where(*filters, PackageRow.name.in_(sorted({r.name for r in page})))
+            )
+            builds: dict[tuple[str, str], list[dict]] = {}
+            for org, pkg_name, version, plat, arch_ in detail.all():
+                builds.setdefault((org or "", pkg_name), []).append(
+                    {"version": version, "platform": plat, "arch": arch_}
+                )
+        groups = [
+            summarize_group(
+                r.name,
+                r.org or "",
+                builds.get((r.org or "", r.name), ()),
+                build_count=int(r.builds),
+                size_bytes=int(r.size),
+            )
+            for r in page
+        ]
+        return groups, package_count, build_count, total_size
 
     @staticmethod
     def _visible_catalog(stmt, private_orgs: Collection[str] | None, include_yanked: bool):

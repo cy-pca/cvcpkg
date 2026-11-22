@@ -126,7 +126,9 @@ jobs:
   # competing writer's row lock, then re-checks its predicate) -- SQLite, which
   # the matrix above runs, serializes whole transactions instead and cannot
   # show a regression there.  These modules run on SQLite above too; here
-  # CVCPKG_TEST_POSTGRES_URL adds their Postgres parametrization.
+  # CVCPKG_TEST_POSTGRES_URL adds their Postgres parametrization.  The search
+  # ranking/paging tests ride along: their SQL (a window MIN in ORDER BY, a
+  # grouped subquery) is the kind that can pass on SQLite and fail on Postgres.
   test-postgres:
     name: Test (Postgres, build-job state machine)
     if: >-
@@ -166,6 +168,7 @@ jobs:
         run: |
           set -o pipefail
           poetry run pytest -v --tb=short -rs \
+            tests/unit/test_search_relevance.py \
             tests/unit/test_build_job_races.py \
             tests/unit/test_build_job_endpoint_hardening.py \
             tests/unit/test_builder_ws_job_auth.py | tee pg-tests.log

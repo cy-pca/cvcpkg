@@ -129,6 +129,7 @@ from cvcpkg.server.models import (
     RegistrationRequest,
     RegistrationResponse,
     SearchFacets,
+    SearchPackageGroup,
     SearchResponse,
     TagCreateRequest,
     TagInfo,
@@ -161,6 +162,7 @@ from cvcpkg.server import sessions as _sessions_mod
 from cvcpkg.server.oidc import OidcConfig as _OidcConfig
 from cvcpkg.server.oidc import load_providers as _oidc_load_providers
 from cvcpkg.server.oidc import validate_registry as _oidc_validate_registry
+from cvcpkg.server.search_rank import group_sort_key, relevance_rank, summarize_group
 
 # ── State ───────────────────────────────────────────────────────
 
@@ -826,6 +828,26 @@ def _local_search_filter(bundles: list[dict], search: str) -> list[dict]:
                 out.append(b)
                 break
     return out
+
+
+def _local_rank_bundles(bundles: list[dict], q: str) -> list[dict]:
+    """*bundles* grouped by package (org/name), best match for *q* first.
+
+    The file-index twin of the DB backend's relevance order (tiers in
+    :mod:`cvcpkg.server.search_rank`); a package ranks at its best bundle's
+    tier, and the sort is stable, so bundles keep their order within one.
+    """
+    best: dict[tuple[str, str], int] = {}
+    for b in bundles:
+        key = (b.get("org") or "", b.get("name") or "")
+        rank = relevance_rank(key[1], b.get("tags") or "", q)
+        best[key] = min(rank, best.get(key, rank))
+
+    def _order(b: dict) -> tuple:
+        org, name = b.get("org") or "", b.get("name") or ""
+        return group_sort_key(best[(org, name)], name, org)
+
+    return sorted(bundles, key=_order)
 
 
 def _local_compute_facets(
@@ -4279,15 +4301,47 @@ def create_app(
             alias="facets",
             description="Compute facet buckets over the filtered result set.",
         ),
+        group: str = Query(
+            "build",
+            pattern="^(build|package)$",
+            description=(
+                "What limit and offset count. 'build' (the default) pages bundle "
+                "rows in `packages`; 'package' pages one summary per package "
+                "(org/name) in `groups` and leaves `packages` empty."
+            ),
+        ),
         caller: TokenRecord | None = Depends(optional_token),
     ):
         """Search the package catalog with optional facets.
 
-        Designed to back the landing-page search box: server-side text
-        matching + filters + pagination + aggregated facet buckets so the
-        client never needs to hold the full catalog in memory.
+        Designed to back the search page: server-side text matching + filters +
+        pagination + aggregated facet buckets so the client never needs to hold
+        the full catalog in memory.  With a query, packages come best match
+        first: the package named *q*, then names starting with it, names
+        containing it, tags containing it, and last the packages that only
+        mention it (``cvcpkg.server.search_rank``).  The search page asks for
+        ``group=package`` so that each "Load more" adds whole packages.
         """
+        q = q.strip()
         db_release = "" if release == "live" else release
+        by_package = group == "package"
+
+        def _facets_model(raw_facets: dict) -> SearchFacets:
+            return SearchFacets(
+                **{
+                    key: [FacetBucket(value=v, count=c) for v, c in raw_facets[key]]
+                    for key in (
+                        "platforms",
+                        "archs",
+                        "build_types",
+                        "links",
+                        "releases",
+                        "orgs",
+                        "tags",
+                        "licenses",
+                    )
+                }
+            )
 
         def _apply_tag_filter(pkgs: list[PackageInfo]) -> list[PackageInfo]:
             if not tag:
@@ -4300,6 +4354,53 @@ def create_app(
             ]
 
         # Mirror mode: serve from the sync-maintained index, like /v1/packages.
+        if _use_db and not MIRROR_MODE and by_package:
+            groups, package_count, total, total_size_bytes = (
+                await _db_packages.search_package_groups(
+                    search=q,
+                    platform=platform,
+                    release=db_release,
+                    live_only=(release == "live"),
+                    tag=tag,
+                    org_slug=org,
+                    include_yanked=include_yanked,
+                    recipe_version=recipe_version,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    caller_token_name=(caller.name if caller else ""),
+                    limit=limit,
+                    offset=offset,
+                )
+            )
+            facets_model = SearchFacets()
+            if include_facets:
+                raw_facets, _, _, _ = await _db_packages.get_search_facets(
+                    platform=platform,
+                    release=db_release,
+                    search=q,
+                    include_yanked=include_yanked,
+                    recipe_version=recipe_version,
+                    arch=arch,
+                    build_type=build_type,
+                    link=link,
+                    org_slug=org,
+                    caller_token_name=(caller.name if caller else ""),
+                )
+                facets_model = _facets_model(raw_facets)
+            return SearchResponse(
+                total=total,
+                package_count=package_count,
+                total_size_bytes=total_size_bytes,
+                packages=[],
+                groups=[SearchPackageGroup(**g) for g in groups],
+                group=group,
+                limit=limit,
+                offset=offset,
+                query=q,
+                facets=facets_model,
+            )
+
         if _use_db and not MIRROR_MODE:
             packages, total = await _db_packages.get_bundles(
                 platform=platform,
@@ -4314,6 +4415,7 @@ def create_app(
                 link=link,
                 org_slug=org,
                 caller_token_name=(caller.name if caller else ""),
+                relevance=True,
             )
             if release == "live":
                 packages = [p for p in packages if not p.release_tag]
@@ -4336,6 +4438,7 @@ def create_app(
                     link=link,
                     org_slug=org,
                     caller_token_name=(caller.name if caller else ""),
+                    relevance=True,
                 )
                 more = _apply_tag_filter(more)
                 total = len(more)
@@ -4372,18 +4475,7 @@ def create_app(
                     package_count = distinct_names
                     total = total_bundles
                     total_size_bytes = total_size
-                facets_model = SearchFacets(
-                    platforms=[FacetBucket(value=v, count=c) for v, c in raw_facets["platforms"]],
-                    archs=[FacetBucket(value=v, count=c) for v, c in raw_facets["archs"]],
-                    build_types=[
-                        FacetBucket(value=v, count=c) for v, c in raw_facets["build_types"]
-                    ],
-                    links=[FacetBucket(value=v, count=c) for v, c in raw_facets["links"]],
-                    releases=[FacetBucket(value=v, count=c) for v, c in raw_facets["releases"]],
-                    orgs=[FacetBucket(value=v, count=c) for v, c in raw_facets["orgs"]],
-                    tags=[FacetBucket(value=v, count=c) for v, c in raw_facets["tags"]],
-                    licenses=[FacetBucket(value=v, count=c) for v, c in raw_facets["licenses"]],
-                )
+                facets_model = _facets_model(raw_facets)
             else:
                 package_count = len({p.name for p in packages})
                 total_size_bytes = sum(p.size_bytes for p in packages)
@@ -4433,32 +4525,39 @@ def create_app(
             ]
         if q:
             bundles = _local_search_filter(bundles, q)
+        if q or by_package:
+            bundles = _local_rank_bundles(bundles, q)
 
         total = len(bundles)
         package_count = len({b.get("name", "") for b in bundles})
         total_size_bytes = sum(int(b.get("size_bytes") or 0) for b in bundles)
-        page = bundles[offset : offset + limit] if limit else []
-        packages = [_index_package_info(b) for b in page]
+        packages: list[PackageInfo] = []
+        groups: list[SearchPackageGroup] = []
+        if by_package:
+            by_key: dict[tuple[str, str], list[dict]] = {}
+            for b in bundles:
+                by_key.setdefault((b.get("org") or "", b.get("name") or ""), []).append(b)
+            package_count = len(by_key)
+            page_keys = list(by_key)[offset : offset + limit] if limit else []
+            groups = [
+                SearchPackageGroup(**summarize_group(name, org, by_key[(org, name)]))
+                for org, name in page_keys
+            ]
+        else:
+            page = bundles[offset : offset + limit] if limit else []
+            packages = [_index_package_info(b) for b in page]
 
         facets_model = SearchFacets()
         if include_facets:
-            raw_facets = _local_compute_facets(bundles)
-            facets_model = SearchFacets(
-                platforms=[FacetBucket(value=v, count=c) for v, c in raw_facets["platforms"]],
-                archs=[FacetBucket(value=v, count=c) for v, c in raw_facets["archs"]],
-                build_types=[FacetBucket(value=v, count=c) for v, c in raw_facets["build_types"]],
-                links=[FacetBucket(value=v, count=c) for v, c in raw_facets["links"]],
-                releases=[FacetBucket(value=v, count=c) for v, c in raw_facets["releases"]],
-                orgs=[FacetBucket(value=v, count=c) for v, c in raw_facets["orgs"]],
-                tags=[FacetBucket(value=v, count=c) for v, c in raw_facets["tags"]],
-                licenses=[FacetBucket(value=v, count=c) for v, c in raw_facets["licenses"]],
-            )
+            facets_model = _facets_model(_local_compute_facets(bundles))
 
         return SearchResponse(
             total=total,
             package_count=package_count,
             total_size_bytes=total_size_bytes,
             packages=packages,
+            groups=groups,
+            group=group,
             limit=limit,
             offset=offset,
             query=q,

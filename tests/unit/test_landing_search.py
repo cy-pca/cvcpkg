@@ -75,6 +75,28 @@ class TestSearchPageIsLazy:
         assert "ensureRecipeMeta" in landing._LANDING_JS
 
 
+class TestSearchPagesByPackage:
+    """ "Load more" adds whole packages, and the server's best-match order shows.
+
+    The page used to fetch 100 bundle rows a page and count packages, so one
+    package with hundreds of builds filled a page alone; and it re-sorted every
+    result by name, burying the package named in the query.
+    """
+
+    def test_requests_package_pages(self):
+        assert "params.set('group', 'package')" in landing._LANDING_JS
+        assert "data.groups" in landing._LANDING_JS
+
+    def test_load_more_offsets_by_packages_loaded(self):
+        assert "state.offset = loadedGroups.length;" in landing._LANDING_JS
+        assert "loadedPackages" not in landing._LANDING_JS
+
+    def test_default_order_is_the_servers(self):
+        # No column sorted until the visitor picks one.
+        assert "let currentSort = { key: '', dir: 'asc' };" in landing._LANDING_JS
+        assert "if (!key) return rows;" in landing._LANDING_JS
+
+
 @pytest.mark.parametrize(
     "name",
     ["cvcpkg-icon.png", "cvcpkg-banner.png", "cvcpkg-hero.png", "cvcpkg-icon-180.png"],
