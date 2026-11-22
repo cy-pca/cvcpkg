@@ -179,7 +179,12 @@ List all variants/versions for a specific component.
 ### `GET /v1/search`
 
 Search the catalog with filters, pagination, and aggregated facet buckets
-— this is what backs the landing-page search box.
+— this is what backs the search page.
+
+With a `q`, packages come best match first: the package named `q`, then
+names starting with it, names containing it, tags containing it, and last
+the packages where only another field (description, maintainer, ...)
+matches. Ties go by name. `q` is trimmed and matched case-insensitively.
 
 **Auth**: None (a token, if sent, widens results to private orgs the
 caller belongs to).
@@ -198,15 +203,23 @@ caller belongs to).
 | `tag` | string | `""` | Filter by a single tag name |
 | `recipe_version` | string | `""` | Filter by recipe version |
 | `include_yanked` | bool | `false` | Include yanked packages |
-| `limit` | int | `50` | Page size (0–200) |
-| `offset` | int | `0` | Offset for pagination |
+| `limit` | int | `50` | Page size (0–200), in units of `group` |
+| `offset` | int | `0` | Offset for pagination, in units of `group` |
 | `facets` | bool | `true` | Compute facet buckets over the filtered result set |
+| `group` | string | `"build"` | `build`: page bundle rows in `packages`. `package`: page packages (org/name) in `groups`, one summary each, and leave `packages` empty |
 
-**Response** `200 OK`: `total`, `package_count` (distinct names),
-`total_size_bytes`, `packages` (same shape as `GET /v1/packages`),
-`limit`, `offset`, `query`, and `facets` with bucket lists for
-`platforms`, `archs`, `build_types`, `links`, `releases`, `orgs`,
-`tags`, and `licenses`.
+**Response** `200 OK`: `total` (matching bundle rows), `package_count`
+(distinct packages), `total_size_bytes`, `packages` (same shape as
+`GET /v1/packages`), `groups`, `group`, `limit`, `offset`, `query`, and
+`facets` with bucket lists for `platforms`, `archs`, `build_types`,
+`links`, `releases`, `orgs`, `tags`, and `licenses`.
+
+Each entry of `groups` (with `group=package`) is `{name, org, version,
+platforms, archs, builds, size_bytes}`: the newest matching version, the
+sorted platforms and architectures, and the number and total size of the
+matching bundle rows. A page of `limit` packages is full however many
+builds each one has, which is why the search page asks for
+`group=package`.
 
 ### `GET /v1/deps`
 

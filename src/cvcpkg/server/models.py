@@ -408,6 +408,18 @@ class SearchFacets(BaseModel):
     licenses: list[FacetBucket] = Field(default_factory=list)
 
 
+class SearchPackageGroup(BaseModel):
+    """One package (org/name) of a ``group=package`` search, summarized."""
+
+    name: str
+    org: str = ""
+    version: str = Field(default="", description="Newest matching version.")
+    platforms: list[str] = Field(default_factory=list)
+    archs: list[str] = Field(default_factory=list)
+    builds: int = Field(default=0, description="Number of matching bundle rows.")
+    size_bytes: int = Field(default=0, description="Sum of the matching rows' size_bytes.")
+
+
 class SearchResponse(BaseModel):
     """Response for the ``/v1/search`` endpoint."""
 
@@ -420,7 +432,17 @@ class SearchResponse(BaseModel):
         default=0,
         description="Sum of size_bytes across the entire matching result set.",
     )
-    packages: list[PackageInfo]
+    packages: list[PackageInfo] = Field(
+        description="The page of matching bundle rows (empty when group=package)."
+    )
+    groups: list[SearchPackageGroup] = Field(
+        default_factory=list,
+        description="The page of matching packages, best match first (group=package only).",
+    )
+    group: str = Field(
+        default="build",
+        description="What limit and offset count: 'build' rows or 'package' groups.",
+    )
     limit: int = 0
     offset: int = 0
     query: str = ""

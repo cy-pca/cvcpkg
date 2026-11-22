@@ -649,6 +649,7 @@ _READS = {
         "get_archive_sha256",
         "get_bundles",
         "get_search_facets",
+        "search_package_groups",
         "catalog_scope",
         "catalog_rows",
         "get_catalog_dict",
