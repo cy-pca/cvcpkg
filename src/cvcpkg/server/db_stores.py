@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from collections import Counter
 from collections.abc import Collection
 from pathlib import Path
 
@@ -1245,6 +1246,64 @@ def _variant_select(
     return sel
 
 
+# The columns a free-text search (``/v1/search?q=``) matches, each with
+# ``ILIKE '%q%'``.  Migration 039 indexes them joined by spaces, in this order.
+_SEARCH_COLUMNS = (
+    PackageRow.name,
+    PackageRow.version,
+    PackageRow.platform,
+    PackageRow.arch,
+    PackageRow.build_type,
+    PackageRow.link,
+    PackageRow.description,
+    PackageRow.tags,
+    PackageRow.maintainer,
+    PackageRow.license,
+    PackageRow.release_tag,
+    PackageRow.org_slug,
+)
+
+
+def _search_text():
+    """``_SEARCH_COLUMNS`` joined by spaces, as one SQL string expression.
+
+    On Postgres, migration 039's pg_trgm index ``ix_packages_search_trgm``
+    covers exactly this expression (``name || ' ' || version || ... ||
+    org_slug``), so ``_search_text().ilike('%q%')`` is answered from the index
+    instead of by reading every row.  The planner matches an index to a query
+    by expression, so this and the migration must stay the same, which
+    ``test_search_relevance`` checks.  The columns are all NOT NULL, so no
+    COALESCE is needed.
+    """
+    space = literal_column("' '", String)
+    text = _SEARCH_COLUMNS[0]
+    for col in _SEARCH_COLUMNS[1:]:
+        text = text.concat(space).concat(col)
+    return text
+
+
+def _search_match(search: str) -> list:
+    """The WHERE clauses for free-text *search*, case-insensitive substring.
+
+    A row matches when one of ``_SEARCH_COLUMNS`` contains *search*.  The
+    first clause, the same pattern against the columns joined, is redundant:
+    a column that contains *search* puts it in the joined text too.  Postgres
+    can answer it from the trigram index, though, and then checks the
+    per-column clause only on the rows the index found instead of on every
+    row of the table.
+
+    A backslash is the default LIKE escape, and an odd run of them at the end
+    escapes the closing ``%`` and anchors the pattern there.  The joined
+    clause would then no longer follow from the per-column one, so such a
+    search skips it.
+    """
+    like_pat = f"%{search}%"
+    per_column = or_(*(col.ilike(like_pat) for col in _SEARCH_COLUMNS))
+    if "\\" in search:
+        return [per_column]
+    return [_search_text().ilike(like_pat), per_column]
+
+
 def _search_filters(
     *,
     name: str = "",
@@ -1302,23 +1361,7 @@ def _search_filters(
     if live_only:
         filters.append(PackageRow.release_tag == "")
     if search:
-        like_pat = f"%{search}%"
-        filters.append(
-            or_(
-                PackageRow.name.ilike(like_pat),
-                PackageRow.version.ilike(like_pat),
-                PackageRow.platform.ilike(like_pat),
-                PackageRow.arch.ilike(like_pat),
-                PackageRow.build_type.ilike(like_pat),
-                PackageRow.link.ilike(like_pat),
-                PackageRow.description.ilike(like_pat),
-                PackageRow.tags.ilike(like_pat),
-                PackageRow.maintainer.ilike(like_pat),
-                PackageRow.license.ilike(like_pat),
-                PackageRow.release_tag.ilike(like_pat),
-                PackageRow.org_slug.ilike(like_pat),
-            )
-        )
+        filters.extend(_search_match(search))
     if org_slug:
         filters.append(PackageRow.org_slug == org_slug)
     if recipe_version:
@@ -1623,61 +1666,47 @@ class DbPackageIndex:
             "licenses": PackageRow.license,
         }
 
+        # One query for the matching rows' facet columns, counted here.  It was
+        # one query per total and per facet, eleven in all, and each of them
+        # evaluated the search filter over the whole table again: most of a
+        # search's time on cvcpkg.org.
         async with get_session() as session:
-            total_q = select(sa_func.count(PackageRow.id))
-            for f in base_filters:
-                total_q = total_q.where(f)
-            total_res = await session.execute(total_q)
-            total_bundles = int(total_res.scalar() or 0)
+            rows = (
+                await session.execute(
+                    select(
+                        PackageRow.name,
+                        PackageRow.size_bytes,
+                        PackageRow.tags,
+                        *facet_cols.values(),
+                    ).where(*base_filters)
+                )
+            ).all()
 
-            distinct_names_q = select(sa_func.count(distinct(PackageRow.name)))
-            for f in base_filters:
-                distinct_names_q = distinct_names_q.where(f)
-            distinct_res = await session.execute(distinct_names_q)
-            distinct_names = int(distinct_res.scalar() or 0)
-
-            size_q = select(sa_func.coalesce(sa_func.sum(PackageRow.size_bytes), 0))
-            for f in base_filters:
-                size_q = size_q.where(f)
-            size_res = await session.execute(size_q)
-            total_size = int(size_res.scalar() or 0)
-
-            facets: dict[str, list[tuple[str, int]]] = {}
+        def buckets(pairs: set[tuple[str, str]]) -> list[tuple[str, int]]:
             # Facet counts are number of distinct package names per bucket, not
             # bundle counts — a package built for many arch/link/build_type
             # combos should still count as one within a platform bucket.
-            name_count = sa_func.count(distinct(PackageRow.name))
-            for key, col in facet_cols.items():
-                q = select(col, name_count)
-                for f in base_filters:
-                    q = q.where(f)
-                q = q.group_by(col).order_by(name_count.desc(), col.asc()).limit(max_buckets)
-                rows = await session.execute(q)
-                facets[key] = [
-                    (str(val or ""), int(cnt)) for val, cnt in rows.all() if (val or "") != ""
-                ]
+            # Most packages first, ties by value; an empty value is no bucket,
+            # but it still takes one of max_buckets, as in the old SQL LIMIT.
+            counts = Counter(val for val, _name in pairs)
+            ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            return [(val, n) for val, n in ranked[:max_buckets] if val != ""]
 
-            # Tags is a comma-separated string column; aggregate in Python.
-            # Count distinct package names per tag, not bundle rows.
-            tag_q = select(PackageRow.name, PackageRow.tags)
-            for f in base_filters:
-                tag_q = tag_q.where(f)
-            tag_rows = await session.execute(tag_q)
-            tag_names: dict[str, set[str]] = {}
-            for pkg_name, raw in tag_rows.all():
-                if not raw:
-                    continue
-                for tag in raw.split(","):
-                    t = tag.strip()
-                    if not t:
-                        continue
-                    tag_names.setdefault(t, set()).add(pkg_name)
-            tag_counts = {t: len(names) for t, names in tag_names.items()}
-            facets["tags"] = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))[
-                :max_buckets
-            ]
-
-            return facets, total_bundles, distinct_names, total_size
+        # (value, package name) sets, built in C: all ~19k rows of cvcpkg.org's
+        # catalog (a search with no query) count in ~40 ms.
+        facets = {
+            key: buckets({(str(r[i] or ""), r[0]) for r in rows})
+            for i, key in enumerate(facet_cols, start=3)
+        }
+        # Tags is a comma-separated string column, one bucket per tag.  A
+        # package's builds mostly share one tags string, so split each once.
+        tag_strings = {(r[0], r[2] or "") for r in rows}
+        facets["tags"] = buckets(
+            {(t.strip(), name) for name, raw in tag_strings for t in raw.split(",") if t.strip()}
+        )
+        total_size = sum(int(r[1] or 0) for r in rows)
+        distinct_names = len({r[0] for r in rows})
+        return facets, len(rows), distinct_names, total_size
 
     async def search_package_groups(
         self,
