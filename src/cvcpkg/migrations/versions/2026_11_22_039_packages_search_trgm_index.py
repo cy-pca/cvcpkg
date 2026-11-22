@@ -9,7 +9,9 @@ Create Date: 2026-11-22
 
 ``/v1/search?q=`` matches ``ILIKE '%q%'`` against 12 columns of ``packages``.
 An unanchored LIKE can use no btree, so every query a search ran evaluated
-those 12 ILIKEs on every row: ~19k rows on cvcpkg.org.
+those 12 ILIKEs on every row.  On cvcpkg.org on 2026-11-22 that was a
+sequential scan of 13,692 rows (13 MB, all in shared buffers) taking 175-315
+ms of CPU per query, and a search ran 12-14 such queries: 2.8-3.7 s.
 
 This is a GIN trigram index over the 12 columns joined by spaces.
 ``db_stores._search_match`` adds the same pattern against that expression as an

@@ -1692,8 +1692,9 @@ class DbPackageIndex:
             ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
             return [(val, n) for val, n in ranked[:max_buckets] if val != ""]
 
-        # (value, package name) sets, built in C: all ~19k rows of cvcpkg.org's
-        # catalog (a search with no query) count in ~40 ms.
+        # (value, package name) sets, built in C: 19k rows count in ~40 ms on
+        # a workstation, more than cvcpkg.org's ~11k live ones (a search with
+        # no query).
         facets = {
             key: buckets({(str(r[i] or ""), r[0]) for r in rows})
             for i, key in enumerate(facet_cols, start=3)

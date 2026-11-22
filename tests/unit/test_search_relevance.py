@@ -295,6 +295,7 @@ class TestSearchIndex:
         as the per-column ILIKEs alone, wildcards and all."""
         from alembic.migration import MigrationContext
         from alembic.operations import Operations
+        from sqlalchemy import func as sa_func
         from sqlalchemy import or_, select
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -309,9 +310,11 @@ class TestSearchIndex:
             with Operations.context(MigrationContext.configure(sync_conn)):
                 mig.upgrade()
 
-        def ids_sql(dialect, where):
-            stmt = select(PackageRow.id).where(*where).order_by(PackageRow.id)
+        def sql(dialect, stmt):
             return str(stmt.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
+
+        def ids_sql(dialect, where):
+            return sql(dialect, select(PackageRow.id).where(*where).order_by(PackageRow.id))
 
         async def check():
             engine = create_async_engine(PG_URL)
@@ -319,17 +322,27 @@ class TestSearchIndex:
                 async with engine.begin() as conn:
                     await conn.run_sync(upgrade)
                 async with engine.begin() as conn:
+                    indexes = await conn.exec_driver_sql(
+                        "SELECT indexname FROM pg_indexes WHERE tablename = 'packages'"
+                    )
+                    assert mig.INDEX in indexes.scalars().all()
+                    # A dozen rows: left alone, the planner scans, or walks the
+                    # primary key for an ORDER BY id (CI's first run of this
+                    # test).  With both off, a bitmap scan of the trigram
+                    # index is the one way left to read packages, and the
+                    # planner can take it only if the filter's expression is
+                    # the indexed one.
                     await conn.exec_driver_sql("SET LOCAL enable_seqscan = off")
+                    await conn.exec_driver_sql("SET LOCAL enable_indexscan = off")
+                    count = select(sa_func.count()).select_from(PackageRow)
+                    filters = _search_filters(search="vtk", caller_token_name="")
                     plan = "\n".join(
                         r[0]
                         for r in await conn.exec_driver_sql(
-                            "EXPLAIN "
-                            + ids_sql(
-                                conn.dialect, _search_filters(search="vtk", caller_token_name="")
-                            )
+                            "EXPLAIN " + sql(conn.dialect, count.where(*filters))
                         )
                     )
-                    assert mig.INDEX in plan, plan
+                    assert f"Bitmap Index Scan on {mig.INDEX}" in plan, plan
                     for q in ("vtk", "VTK", "graph", "9.4", "zz", "%", "_", "a_i", "vtk\\"):
                         like = f"%{q}%"
                         per_column = [or_(*(c.ilike(like) for c in _SEARCH_COLUMNS))]
