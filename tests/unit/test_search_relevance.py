@@ -14,7 +14,10 @@ package, or a few, apparently at random.  These pin the fix on both backends
 
 from __future__ import annotations
 
+import asyncio
+import importlib.util
 import io
+from pathlib import Path
 
 import pytest
 
@@ -33,7 +36,7 @@ from cvcpkg.server.search_rank import (
     relevance_rank,
     summarize_group,
 )
-from tests.unit._build_job_backends import BACKENDS, server_on
+from tests.unit._build_job_backends import BACKENDS, PG_URL, server_on
 
 
 @pytest.fixture(params=["file", *BACKENDS])
@@ -230,3 +233,125 @@ class TestRankHelpers:
         assert got["version"] == "9.10.0"
         assert got["platforms"] == ["linux", "windows"]
         assert got["builds"] == 2 and got["size_bytes"] == 12
+
+
+def _migration_039():
+    """Migration 039's module (the search trigram index), loaded from its file."""
+    versions = Path(__file__).resolve().parents[2] / "src" / "cvcpkg" / "migrations" / "versions"
+    (path,) = versions.glob("*_039_*.py")
+    spec = importlib.util.spec_from_file_location("_mig_039", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestSearchIndex:
+    """The free-text filter runs on Postgres from migration 039's trigram index,
+    and a search's facets come from one query: what made ``/v1/search?q=`` take
+    3-5 s on cvcpkg.org was 14 statements that each read every row."""
+
+    def test_the_index_covers_the_expression_the_filter_uses(self):
+        """The planner matches an index to a query by expression, so the
+        migration's and the filter's must be the same, column for column."""
+        from sqlalchemy.dialects import postgresql
+
+        from cvcpkg.server.db_stores import _search_text
+
+        compiled = str(_search_text().compile(dialect=postgresql.dialect()))
+        assert compiled.replace("packages.", "") == _migration_039().SEARCH_TEXT
+
+    def test_a_trailing_backslash_keeps_only_the_per_column_match(self):
+        """A search ending in a backslash escapes LIKE's closing ``%`` and anchors
+        the pattern at the end, where the joined text no longer follows from one
+        column."""
+        from cvcpkg.server.db_stores import _search_match
+
+        assert len(_search_match("vtk")) == 2
+        assert len(_search_match("vtk\\")) == 1
+
+    @pytest.mark.parametrize("backend", BACKENDS)
+    def test_facets_count_packages_per_value(self, backend, tmp_path, monkeypatch):
+        with server_on(backend, tmp_path, monkeypatch, {"pub": "publisher"}) as (client, raw):
+            _seed(client, raw["pub"])
+            data = _search(client, q="vtk")
+            by_package = _search(client, q="vtk", group="package", limit=0)
+        facets = {k: {b["value"]: b["count"] for b in v} for k, v in data["facets"].items()}
+        assert facets["platforms"] == {"linux": 6, "macos": 2, "windows": 1}
+        assert facets["archs"] == {"x86_64": 6, "arm64": 1}
+        assert facets["links"] == {"shared": 6}
+        assert facets["tags"] == {"graphics": 1, "vtk-bridge": 1}
+        assert facets["releases"] == {} and facets["orgs"] == {}
+        # Most packages first, then by value.
+        assert [b["value"] for b in data["facets"]["platforms"]] == ["linux", "macos", "windows"]
+        assert data["package_count"] == len(VTK_ORDER)
+        # The build listing's totals (from the facet query) agree with the
+        # package listing's (from its own grouped query).
+        assert data["total"] == by_package["total"] == 13
+        assert data["total_size_bytes"] == by_package["total_size_bytes"] > 0
+
+    @pytest.mark.skipif(not PG_URL, reason="set CVCPKG_TEST_POSTGRES_URL to run against Postgres")
+    def test_postgres_answers_the_filter_from_the_index(self, tmp_path, monkeypatch):
+        """With 039 applied, the filter is an index scan and finds the same rows
+        as the per-column ILIKEs alone, wildcards and all."""
+        from alembic.migration import MigrationContext
+        from alembic.operations import Operations
+        from sqlalchemy import func as sa_func
+        from sqlalchemy import or_, select
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from cvcpkg.server.db import PackageRow
+        from cvcpkg.server.db_stores import _SEARCH_COLUMNS, _search_filters
+
+        with server_on("postgres", tmp_path, monkeypatch, {"pub": "publisher"}) as (client, raw):
+            _seed(client, raw["pub"])
+        mig = _migration_039()
+
+        def upgrade(sync_conn):
+            with Operations.context(MigrationContext.configure(sync_conn)):
+                mig.upgrade()
+
+        def sql(dialect, stmt):
+            return str(stmt.compile(dialect=dialect, compile_kwargs={"literal_binds": True}))
+
+        def ids_sql(dialect, where):
+            return sql(dialect, select(PackageRow.id).where(*where).order_by(PackageRow.id))
+
+        async def check():
+            engine = create_async_engine(PG_URL)
+            try:
+                async with engine.begin() as conn:
+                    await conn.run_sync(upgrade)
+                async with engine.begin() as conn:
+                    indexes = await conn.exec_driver_sql(
+                        "SELECT indexname FROM pg_indexes WHERE tablename = 'packages'"
+                    )
+                    assert mig.INDEX in indexes.scalars().all()
+                    # A dozen rows: left alone, the planner scans, or walks the
+                    # primary key for an ORDER BY id (CI's first run of this
+                    # test).  With both off, a bitmap scan of the trigram
+                    # index is the one way left to read packages, and the
+                    # planner can take it only if the filter's expression is
+                    # the indexed one.
+                    await conn.exec_driver_sql("SET LOCAL enable_seqscan = off")
+                    await conn.exec_driver_sql("SET LOCAL enable_indexscan = off")
+                    count = select(sa_func.count()).select_from(PackageRow)
+                    filters = _search_filters(search="vtk", caller_token_name="")
+                    plan = "\n".join(
+                        r[0]
+                        for r in await conn.exec_driver_sql(
+                            "EXPLAIN " + sql(conn.dialect, count.where(*filters))
+                        )
+                    )
+                    assert f"Bitmap Index Scan on {mig.INDEX}" in plan, plan
+                    for q in ("vtk", "VTK", "graph", "9.4", "zz", "%", "_", "a_i", "vtk\\"):
+                        like = f"%{q}%"
+                        per_column = [or_(*(c.ilike(like) for c in _SEARCH_COLUMNS))]
+                        got = await conn.exec_driver_sql(
+                            ids_sql(conn.dialect, _search_filters(search=q, include_yanked=True))
+                        )
+                        want = await conn.exec_driver_sql(ids_sql(conn.dialect, per_column))
+                        assert got.scalars().all() == want.scalars().all(), q
+            finally:
+                await engine.dispose()
+
+        asyncio.run(check())
