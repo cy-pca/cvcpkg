@@ -20,7 +20,11 @@ recipe:
   # in _common/env-wasm.sh). The published cvc.5 wasm objects use Emscripten's
   # JS exceptions and JS setjmp/longjmp, which can't link with wasm-exceptions
   # code.
-  cvc_revision: 6
+  # Bumped 6 -> 7: vtk-renderer-lighting-uniforms-every-render.patch adds the
+  # opt-in vtkOpenGLRenderer::UpdateLightingUniformsEveryRender (default off, so
+  # VTK renders as before); libcvc turns it on for its viewports' renderers. The
+  # headers and libraries change on every platform.
+  cvc_revision: 7
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -63,6 +67,12 @@ patches:
   # CPU and the GPU overlap. Default on: VTK's behaviour is unchanged. Written for upstream
   # (see the patch header).
   - vtk-gpu-volume-finish-every-render.patch
+  # vtkOpenGLRenderer::UpdateLightingUniformsEveryRender: opt-in, on makes a renderer set
+  # its light uniforms in each shader program once per render, so it never draws with the
+  # lights of another renderer of the same window (they share the window's programs, and
+  # the uniform cache is kept per program). Default off: VTK's behaviour is unchanged.
+  # Written for upstream (see the patch header).
+  - vtk-renderer-lighting-uniforms-every-render.patch
 
 depends:
   build:
