@@ -1,0 +1,323 @@
+vtkOpenGLRenderer: UpdateLightingUniformsEveryRender, for renderers that share shader programs
+
+The renderers of a render window share its shader programs (one
+vtkOpenGLShaderCache per window). vtkOpenGLRenderer::UpdateLightingUniforms()
+skips a program when the program's LightingGroup update time is not older
+than the renderer's lights and active camera. That time is kept on the
+program, not per renderer, so it does not say whose lights the program holds.
+
+When two renderers of one window draw props that use the same program (the
+same kind of mapper, with the same number and kind of lights), the renderer
+whose lights and camera were modified first finds the program up to date
+after the other renderer has set its light uniforms. It then draws with the
+other renderer's light colors, and with light directions and positions in the
+other renderer's view coordinates. Which renderer draws wrong depends only on
+the order of the modification times, so it changes with the order in which an
+application creates or modifies cameras and lights. A main view and an inset
+view of the same props in one window show it: in libcvc's viewports the main
+view's surfaces were lit with the inset's lights, and which props were lit
+wrong differed between Linux and Windows.
+
+This adds vtkOpenGLRenderer::UpdateLightingUniformsEveryRender. Off, the
+default, nothing changes. On, UpdateLights() counts the renderer's lights as
+modified at the start of every render (a new time stamp), so the renderer
+sets its light uniforms in each program the first time it draws with that
+program in a render, and skips the program for the rest of the render as
+before. The cost is one light-uniform update per program per render.
+
+It is opt-in so that the default draw path stays as it is. Making it the
+default, or keying the cache by renderer as well as by program, would fix
+every application, at the cost of that update. A renderer that leaves it off
+can still draw with the light uniforms of one that has it on, so an
+application turns it on for every renderer of the window.
+
+TestLightingUniformsEveryRender draws a sphere in each of two renderers of
+one window, lit from the left in one and from the right in the other, and
+checks that each renderer draws as it does alone. With the property off, the
+left sphere is lit from the right from the first render with both renderers
+on.
+
+diff --git a/Rendering/OpenGL2/Testing/Cxx/CMakeLists.txt b/Rendering/OpenGL2/Testing/Cxx/CMakeLists.txt
+index 5551357..7141386 100644
+--- a/Rendering/OpenGL2/Testing/Cxx/CMakeLists.txt
++++ b/Rendering/OpenGL2/Testing/Cxx/CMakeLists.txt
+@@ -47,6 +47,7 @@ vtk_add_test_cxx(vtkRenderingOpenGL2CxxTests tests
+   TestHiddenLineRemovalPass.cxx
+   TestLightingMapLuminancePass.cxx
+   TestLightingMapNormalsPass.cxx
++  TestLightingUniformsEveryRender.cxx,NO_DATA,NO_VALID
+   TestMultiTexturing.cxx
+   TestMultiTexturingInterpolateScalars.cxx
+   TestNormalMapping.cxx
+diff --git a/Rendering/OpenGL2/Testing/Cxx/TestLightingUniformsEveryRender.cxx b/Rendering/OpenGL2/Testing/Cxx/TestLightingUniformsEveryRender.cxx
+new file mode 100644
+index 0000000..17a79be
+--- /dev/null
++++ b/Rendering/OpenGL2/Testing/Cxx/TestLightingUniformsEveryRender.cxx
+@@ -0,0 +1,178 @@
++// SPDX-FileCopyrightText: Copyright (c) Ken Martin, Will Schroeder, Bill Lorensen
++// SPDX-License-Identifier: BSD-3-Clause
++
++// Two renderers of one render window draw a sphere each, lit by one
++// directional light: from the left in the left renderer, from the right in the
++// right one. Both spheres are drawn with the same shader program. With
++// vtkOpenGLRenderer::UpdateLightingUniformsEveryRender on, each renderer must
++// draw its sphere as it does when it is the only renderer that draws.
++//
++// With it off, the renderer whose light was modified first draws its sphere
++// with the other renderer's light: here the left sphere is lit from the right,
++// from the first render with both renderers on.
++
++#include "vtkActor.h"
++#include "vtkCamera.h"
++#include "vtkLight.h"
++#include "vtkNew.h"
++#include "vtkOpenGLRenderer.h"
++#include "vtkPolyDataMapper.h"
++#include "vtkRenderWindow.h"
++#include "vtkSphereSource.h"
++#include "vtkUnsignedCharArray.h"
++
++#include <cstdlib>
++#include <iostream>
++
++namespace
++{
++// Two viewports of ViewportWidth x Height pixels, side by side.
++constexpr int ViewportWidth = 200;
++constexpr int Height = 200;
++
++struct Side
++{
++  vtkNew<vtkOpenGLRenderer> Renderer;
++  vtkNew<vtkLight> Light;
++  int X0 = 0; // the viewport's first pixel column
++};
++
++void ReadViewport(vtkRenderWindow* window, const Side& side, vtkUnsignedCharArray* pixels)
++{
++  window->GetPixelData(side.X0, 0, side.X0 + ViewportWidth - 1, Height - 1, 0, pixels);
++}
++
++// The mean of R, G and B over the left or the right half of a viewport.
++double MeanBrightness(vtkUnsignedCharArray* pixels, bool leftHalf)
++{
++  double sum = 0.0;
++  const int x0 = leftHalf ? 0 : ViewportWidth / 2;
++  for (int y = 0; y < Height; ++y)
++  {
++    for (int x = x0; x < x0 + ViewportWidth / 2; ++x)
++    {
++      for (int c = 0; c < 3; ++c)
++      {
++        sum += pixels->GetValue(3 * (y * ViewportWidth + x) + c);
++      }
++    }
++  }
++  return sum / (3.0 * Height * (ViewportWidth / 2));
++}
++
++// The number of pixels with a channel that differs by more than 8.
++int CountDifferentPixels(vtkUnsignedCharArray* a, vtkUnsignedCharArray* b)
++{
++  int count = 0;
++  for (vtkIdType p = 0; p < a->GetNumberOfTuples(); ++p)
++  {
++    for (int c = 0; c < 3; ++c)
++    {
++      if (std::abs(static_cast<int>(a->GetValue(3 * p + c)) -
++            static_cast<int>(b->GetValue(3 * p + c))) > 8)
++      {
++        ++count;
++        break;
++      }
++    }
++  }
++  return count;
++}
++
++// Returns true when each renderer draws as it does alone.
++bool DrawAsAlone(bool everyRender)
++{
++  vtkNew<vtkRenderWindow> window;
++  window->SetSize(2 * ViewportWidth, Height);
++  window->SetMultiSamples(0);
++
++  vtkNew<vtkSphereSource> sphere;
++  sphere->SetThetaResolution(48);
++  sphere->SetPhiResolution(48);
++
++  Side sides[2];
++  for (int i = 0; i < 2; ++i)
++  {
++    Side& side = sides[i];
++    side.X0 = i * ViewportWidth;
++    vtkOpenGLRenderer* renderer = side.Renderer;
++    renderer->SetViewport(0.5 * i, 0.0, 0.5 * (i + 1), 1.0);
++    renderer->SetUpdateLightingUniformsEveryRender(everyRender);
++
++    // The same kind of mapper and the same kind of light in both renderers,
++    // so that both draw with one shader program.
++    vtkNew<vtkPolyDataMapper> mapper;
++    mapper->SetInputConnection(sphere->GetOutputPort());
++    vtkNew<vtkActor> actor;
++    actor->SetMapper(mapper);
++    renderer->AddActor(actor);
++
++    side.Light->SetLightTypeToSceneLight();
++    side.Light->PositionalOff();
++    side.Light->SetPosition(i == 0 ? -1.0 : 1.0, 0.0, 0.0);
++    side.Light->SetFocalPoint(0.0, 0.0, 0.0);
++    renderer->AddLight(side.Light);
++
++    vtkNew<vtkCamera> camera;
++    camera->SetPosition(0.0, 0.0, 3.0);
++    camera->SetFocalPoint(0.0, 0.0, 0.0);
++    renderer->SetActiveCamera(camera);
++
++    window->AddRenderer(renderer);
++  }
++
++  // Each renderer alone. Its light is modified first, so that it sets its
++  // light uniforms whatever the other renderer set before.
++  vtkNew<vtkUnsignedCharArray> alone[2];
++  for (int i = 0; i < 2; ++i)
++  {
++    sides[i].Renderer->DrawOn();
++    sides[1 - i].Renderer->DrawOff();
++    sides[i].Light->Modified();
++    window->Render();
++    ReadViewport(window, sides[i], alone[i]);
++  }
++
++  // The left sphere is lit from the left, the right one from the right.
++  const bool litFromLeft[2] = { true, false };
++  for (int i = 0; i < 2; ++i)
++  {
++    const double left = MeanBrightness(alone[i], true);
++    const double right = MeanBrightness(alone[i], false);
++    if ((left > right + 10.0) != litFromLeft[i])
++    {
++      std::cerr << "Renderer " << i << " alone: mean brightness " << left << " on the left, "
++                << right << " on the right; expected it lit from the "
++                << (litFromLeft[i] ? "left" : "right") << ".\n";
++      return false;
++    }
++  }
++
++  // Both renderers, for a few renders.
++  sides[0].Renderer->DrawOn();
++  sides[1].Renderer->DrawOn();
++  bool same = true;
++  for (int render = 0; render < 3; ++render)
++  {
++    window->Render();
++    for (int i = 0; i < 2; ++i)
++    {
++      vtkNew<vtkUnsignedCharArray> both;
++      ReadViewport(window, sides[i], both);
++      const int different = CountDifferentPixels(alone[i], both);
++      if (different > 0)
++      {
++        std::cerr << "Render " << render << " with both renderers: " << different
++                  << " pixels of renderer " << i << " differ from its render alone.\n";
++        same = false;
++      }
++    }
++  }
++  return same;
++}
++}
++
++int TestLightingUniformsEveryRender(int, char*[])
++{
++  return DrawAsAlone(true) ? EXIT_SUCCESS : EXIT_FAILURE;
++}
+diff --git a/Rendering/OpenGL2/vtkOpenGLRenderer.cxx b/Rendering/OpenGL2/vtkOpenGLRenderer.cxx
+index dbdbcc2..90d0cd3 100644
+--- a/Rendering/OpenGL2/vtkOpenGLRenderer.cxx
++++ b/Rendering/OpenGL2/vtkOpenGLRenderer.cxx
+@@ -83,6 +83,7 @@ vtkOpenGLRenderer::vtkOpenGLRenderer()
+ 
+   this->LightingCount = -1;
+   this->LightingComplexity = -1;
++  this->UpdateLightingUniformsEveryRender = 0;
+ 
+   this->UseSphericalHarmonics = true;
+ 
+@@ -294,6 +295,18 @@ int vtkOpenGLRenderer::UpdateLights()
+ 
+   this->LightingUpdateTime = ltime;
+ 
++  if (this->UpdateLightingUniformsEveryRender)
++  {
++    // Another renderer of this window may have set its own light uniforms in
++    // a shader program since this renderer last drew with it, and the program
++    // does not record which renderer set them. Count the lights as modified
++    // now, so that UpdateLightingUniforms() sets them again in each program,
++    // once in this render.
++    vtkTimeStamp now;
++    now.Modified();
++    this->LightingUpdateTime = now.GetMTime();
++  }
++
+   return this->LightingCount;
+ }
+ 
+@@ -722,6 +735,8 @@ void vtkOpenGLRenderer::DeviceRenderTranslucentPolygonalGeometry(vtkFrameBufferO
+ void vtkOpenGLRenderer::PrintSelf(ostream& os, vtkIndent indent)
+ {
+   this->Superclass::PrintSelf(os, indent);
++  os << indent << "UpdateLightingUniformsEveryRender: "
++     << (this->UpdateLightingUniformsEveryRender ? "On" : "Off") << "\n";
+ }
+ 
+ namespace
+diff --git a/Rendering/OpenGL2/vtkOpenGLRenderer.h b/Rendering/OpenGL2/vtkOpenGLRenderer.h
+index c5221e6..8ab0563 100644
+--- a/Rendering/OpenGL2/vtkOpenGLRenderer.h
++++ b/Rendering/OpenGL2/vtkOpenGLRenderer.h
+@@ -122,6 +122,35 @@ public:
+   // get the number of lights turned on
+   vtkGetMacro(LightingCount, int);
+ 
++  ///@{
++  /**
++   * When on, the renderer sets its light uniforms in each shader program the
++   * first time it draws with that program in a render, even if its lights and
++   * active camera have not changed since the program's light uniforms were
++   * last set.
++   *
++   * The renderers of a render window share the window's shader programs, and a
++   * program records only when its light uniforms were last set, not which
++   * renderer set them. UpdateLightingUniforms() skips a program whose light
++   * uniforms are newer than the renderer's lights and camera. So when two
++   * renderers of one window draw props that use the same program (the same
++   * kind of mapper, with the same number and kind of lights), the renderer whose
++   * lights and camera were modified first draws with the light colors,
++   * directions and positions that the other renderer set.
++   *
++   * With it on, UpdateLights() counts the lights as modified at the start of
++   * every render, so each program gets this renderer's light uniforms once per
++   * render, before the renderer's first draw with it. Turn it on for every
++   * renderer of the window: a renderer that leaves it off can still draw with
++   * the light uniforms of another one.
++   *
++   * Off by default.
++   */
++  vtkSetMacro(UpdateLightingUniformsEveryRender, vtkTypeBool);
++  vtkGetMacro(UpdateLightingUniformsEveryRender, vtkTypeBool);
++  vtkBooleanMacro(UpdateLightingUniformsEveryRender, vtkTypeBool);
++  ///@}
++
+   ///@{
+   /**
+    * Set the user light transform applied after the camera transform.
+@@ -241,6 +270,7 @@ protected:
+   int LightingComplexity;
+   int LightingCount;
+   vtkMTimeType LightingUpdateTime;
++  vtkTypeBool UpdateLightingUniformsEveryRender;
+ 
+   /**
+    * Optional user transform for lights

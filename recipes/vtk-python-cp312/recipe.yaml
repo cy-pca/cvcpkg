@@ -41,7 +41,10 @@ recipe:
   # cvc.9: vtk-gpu-volume-finish-every-render.patch, as the base `vtk` recipe (cvc.5),
   # so the wrappers are generated from the same headers as the C++ libraries they
   # load and expose Set/GetFinishEveryRender.
-  cvc_revision: 9
+  # cvc.10: vtk-renderer-lighting-uniforms-every-render.patch, as the base `vtk`
+  # recipe (cvc.7), so the wrappers match the C++ libraries again and expose
+  # vtkOpenGLRenderer's Set/GetUpdateLightingUniformsEveryRender.
+  cvc_revision: 10
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -95,6 +98,11 @@ patches:
   # CPU and the GPU overlap. Default on: VTK's behaviour is unchanged. Written for upstream
   # (see the patch header).
   - vtk-gpu-volume-finish-every-render.patch
+  # vtkOpenGLRenderer::UpdateLightingUniformsEveryRender: opt-in, on makes a renderer set
+  # its light uniforms in each shader program once per render, so it never draws with the
+  # lights of another renderer of the same window. Default off: VTK's behaviour is
+  # unchanged. Written for upstream (see the patch header).
+  - vtk-renderer-lighting-uniforms-every-render.patch
 
 depends:
   build:
