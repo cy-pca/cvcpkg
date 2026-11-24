@@ -86,6 +86,12 @@ depends:
     - python313
 
 build:
+  # It rebuilds all of VTK with the Python wrapping, more than the vtk recipe's own
+  # build. It finished within the server's 2h default until 2026-11-24: then linux
+  # took 117 min and windows ran past it ("exceeded 7200s timeout", job 30123).
+  # 4h, as vtk and the cp311/cp312 recipes. A build-metadata change, not a
+  # cvc_revision bump: it changes no bundle.
+  timeout_seconds: 14400
   # cvcGL + VTK Python are consumed on linux + windows (the pycvc-gl platforms;
   # no macOS VTK bundle yet). Add macos when the vtk package gains a macOS build
   # that pycvc-gl consumes.
