@@ -157,14 +157,18 @@ build:
   # 4h, as vtk. A build-metadata change, not a cvc_revision bump: it changes no
   # bundle.
   timeout_seconds: 14400
-  # cvcGL + VTK Python are consumed on linux + windows (the pycvc-gl platforms;
-  # no macOS VTK bundle yet). Add macos when the vtk package gains a macOS build
-  # that pycvc-gl consumes.
+  # cvcGL + VTK Python are consumed on linux, macos and windows (pycvc-gl and the
+  # ariglx host; vtk 9.5.0 has macOS bundles). macos as vtk-python-cp311 has it.
   matrix:
     - platform: linux
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC -std=c++17"
+    - platform: macos
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -std=c++17"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
     - platform: windows
       script: build.ps1
     # GO/NO-GO SPIKE (WIP): can VTK_WRAP_PYTHON cross-compile to wasm statically?
@@ -195,10 +199,10 @@ package:
     # Python wrapping libraries (libvtkWrappingPythonCore, libvtkPythonInterpreter,
     # libvtkPythonContext2D) — linux/macOS .so, windows import .lib + bin .dll.
     # Unix name; MSVC names them vtk*Python*.lib (the .lib entry below).
-    - { glob: "lib/libvtk*Python*", platforms: [linux, wasm, wasm-mt] }
+    - { glob: "lib/libvtk*Python*", platforms: [linux, macos, wasm, wasm-mt] }
     - lib/vtk*Python*.lib
     # The wrap tools and DLLs. build-wasm.sh's prune keeps none of bin/, so not on wasm.
-    - { glob: "bin/vtk*Python*", platforms: [linux, windows] }
+    - { glob: "bin/vtk*Python*", platforms: [linux, macos, windows] }
     # wasm STATIC build: the compiled modules aggregate into _vtkmodules_static.a
     # (registered via PyImport_AppendInittab), and the pure-Python stubs ship as
     # VTK's _vtk.zip rather than an unpacked vtkmodules/ tree.
@@ -206,8 +210,8 @@ package:
     - { glob: "lib/python*/site-packages/_vtk.zip", platforms: [wasm, wasm-mt] }
     # The importable Python package (site-packages layout differs per platform). wasm ships
     # it as _vtk.zip above, and the prune drops the unpacked tree.
-    - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux] }
-    - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux] }
+    - { glob: "lib/python*/site-packages/vtkmodules/", platforms: [linux, macos] }
+    - { glob: "lib/python*/site-packages/vtk.py", platforms: [linux, macos] }
     - { glob: "Lib/site-packages/vtkmodules/", platforms: [windows] }
     - { glob: "Lib/site-packages/vtk.py", platforms: [windows] }
     # C++↔Python bridge headers (only emitted with VTK_WRAP_PYTHON=ON) — they land
