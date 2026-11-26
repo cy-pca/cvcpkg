@@ -264,6 +264,7 @@ SCRIPT_PACKAGES = {
     "autopep8": ["autopep8"],
     "black": ["black", "blackd"],
     "charset-normalizer": ["normalizer"],
+    "coverage": ["coverage", "coverage3"],
     "cython": ["cython", "cythonize", "cygdb"],
     "email-validator": ["email_validator"],
     "fabric": ["fab"],
@@ -612,6 +613,88 @@ SEED_PACKAGES = {
         "build_deps": ["trove-classifiers"],
         "files": ["_pytest/", "pytest/", "py.py", "pytest-*.dist-info/"],
         "check": "import pytest",
+    },
+    # ── pytest plugins and test helpers: cy-pca/txwtf's dev group ───────────
+    # Its CI installs the test lanes from cvcpkg rather than PyPI, at the
+    # versions its poetry.lock pins.
+    "pytest-asyncio": {
+        # typing-extensions is a python_version < "3.13" requirement; columns
+        # carry no markers, so it is a plain edge.
+        "version": "1.4.0",
+        "license": "Apache-2.0",
+        "deps": ["pytest", "typing-extensions"],
+        "files": ["pytest_asyncio/", "pytest_asyncio-*.dist-info/"],
+        "check": "import pytest_asyncio; assert pytest_asyncio.fixture",
+    },
+    "pytest-cov": {
+        "version": "7.1.0",
+        "license": "MIT",
+        "deps": ["coverage", "pluggy", "pytest"],
+        "files": ["pytest_cov/", "pytest_cov-*.dist-info/"],
+        "check": "import pytest_cov.plugin, pytest_cov.engine",
+    },
+    "pytest-timeout": {
+        "version": "2.4.0",
+        "license": "MIT",
+        "deps": ["pytest"],
+        "files": ["pytest_timeout.py", "pytest_timeout-*.dist-info/"],
+        "check": "import pytest_timeout; assert pytest_timeout.SESSION_TIMEOUT_KEY",
+    },
+    "pytest-xdist": {
+        "version": "3.8.0",
+        "license": "MIT",
+        "deps": ["execnet", "pytest"],
+        "files": ["xdist/", "pytest_xdist-*.dist-info/"],
+        "check": "import xdist.plugin, xdist.dsession",
+    },
+    "execnet": {
+        "version": "2.1.2",
+        "license": "MIT",
+        "deps": [],
+        "files": ["execnet/", "execnet-*.dist-info/"],
+        "check": "import execnet; assert execnet.makegateway",
+    },
+    "coverage": {
+        # The C tracer (coverage.tracer) is built per platform from the sdist.
+        # setup.py falls back to a pure-Python build when the compile fails,
+        # so the check insists on the compiled tracer.
+        "version": "7.16.0",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["coverage/", "a1_coverage.pth", "coverage-*.dist-info/"],
+        "check": (
+            "import coverage; from coverage.tracer import CTracer; "
+            "assert coverage.Coverage().sys_info() and CTracer"
+        ),
+    },
+    "fakeredis": {
+        # lupa (the `lua` extra) is not an edge: installers add lupa-cpXX.
+        "version": "2.36.2",
+        "license": "BSD-3-Clause",
+        "deps": ["redis", "sortedcontainers"],
+        "files": ["fakeredis/", "fakeredis-*.dist-info/"],
+        "check": (
+            "import fakeredis; r = fakeredis.FakeStrictRedis(); "
+            "r.set('k', b'v'); assert r.get('k') == b'v'"
+        ),
+    },
+    "sortedcontainers": {
+        # A legacy setup.py sdist (no pyproject.toml).
+        "version": "2.4.0",
+        "license": "Apache-2.0",
+        "deps": [],
+        "files": ["sortedcontainers/", "sortedcontainers-*.dist-info/"],
+        "check": (
+            "from sortedcontainers import SortedList; "
+            "assert list(SortedList([3, 1, 2])) == [1, 2, 3]"
+        ),
+    },
+    "asgi-lifespan": {
+        "version": "2.1.0",
+        "license": "MIT",
+        "deps": ["sniffio"],
+        "files": ["asgi_lifespan/", "asgi_lifespan-*.dist-info/"],
+        "check": "from asgi_lifespan import LifespanManager; assert LifespanManager",
     },
     "pytokens": {
         "version": "0.4.1",
@@ -2487,8 +2570,12 @@ def load_runtime_packages(lock_path: Path) -> dict[str, dict]:
 # They are compiled here (per platform) rather than forced pure: aiohttp's
 # request path runs through all of them, and each seed's check asserts the
 # compiled module is the one in use.
+#
+# coverage too: its C tracer is what makes measuring a whole test suite
+# affordable, and its seed's check imports coverage.tracer.
 _PREFER_BINARY = {
     "aiohttp",
+    "coverage",
     "cython",
     "frozenlist",
     "multidict",
