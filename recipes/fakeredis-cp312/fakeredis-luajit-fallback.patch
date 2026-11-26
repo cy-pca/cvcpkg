@@ -1,0 +1,32 @@
+cvcpkg: run scripts in LuaJIT when lupa has no Lua 5.1 module.
+
+fakeredis runs EVAL/EVALSHA/FCALL in lupa.lua51 unless FAKEREDIS_LUA_VERSION
+names another of lupa.lua51..lua54. lupa's PyPI wheels compile all of those
+in, but cvcpkg's lupa-cpXY columns link cvcpkg's own Lua 5.4 and LuaJIT 2.1
+and ship only lupa.lua54 and lupa.luajit21. Without this the import fails,
+fakeredis drops its scripting commands without a word, and every EVAL answers
+"unknown command 'eval'".
+
+Lua 5.4 is no substitute: Redis scripts are Lua 5.1 (global unpack, no
+integer subtype). LuaJIT 2.1 is the 5.1 dialect, so the default version
+falls back to lupa.luajit21. An explicit FAKEREDIS_LUA_VERSION still fails
+loudly when its module is missing.
+
+--- a/fakeredis/commands_mixins/scripting_mixin.py
++++ b/fakeredis/commands_mixins/scripting_mixin.py
+@@ -32,7 +32,14 @@
+ LUA_VERSION = os.getenv("FAKEREDIS_LUA_VERSION", "5.1")
+ 
+ with lupa.allow_lua_module_loading():
+-    LUA_MODULE = importlib.import_module(__LUA_RUNTIMES_MAP[LUA_VERSION])
++    try:
++        LUA_MODULE = importlib.import_module(__LUA_RUNTIMES_MAP[LUA_VERSION])
++    except ImportError:
++        # cvcpkg's lupa has no lupa.lua51 (see the patch header): use LuaJIT,
++        # the Lua 5.1 dialect that Redis and Valkey run scripts in.
++        if LUA_VERSION != "5.1":
++            raise
++        LUA_MODULE = importlib.import_module("lupa.luajit21")
+ 
+ LOGGER = logging.getLogger("fakeredis")
+ REDIS_LOG_LEVELS = {

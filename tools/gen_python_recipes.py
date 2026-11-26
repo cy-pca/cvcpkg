@@ -669,6 +669,10 @@ SEED_PACKAGES = {
     },
     "fakeredis": {
         # lupa (the `lua` extra) is not an edge: installers add lupa-cpXX.
+        # The columns are hand-written (as pillow's), because they carry
+        # fakeredis-luajit-fallback.patch: cvcpkg's lupa has no lupa.lua51,
+        # which fakeredis needs for EVAL, so the patch falls back to
+        # lupa.luajit21.  A regeneration keeps them.
         "version": "2.36.2",
         "license": "BSD-3-Clause",
         "deps": ["redis", "sortedcontainers"],
