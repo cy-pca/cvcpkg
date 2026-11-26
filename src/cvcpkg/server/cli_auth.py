@@ -10,7 +10,10 @@ single principal identity:
 * **loopback** (desktop default) — the CLI opens the browser to
   ``/v1/auth/authorize``, the human signs in through the identity provider, and
   a short single-use code is redirected to ``http://127.0.0.1:<port>/callback``
-  and exchanged at ``/v1/auth/token`` with PKCE.
+  and exchanged at ``/v1/auth/token`` with PKCE.  The same grant is plain
+  OAuth 2.0 (RFC 6749 + 7636, metadata per RFC 8414), so an OAuth client such
+  as Ariadne's ``oidc-sign-in`` drives it too, and a browser page that a client
+  registered (``pages``) may be the redirect.
 * **pairing** (headless default) — see ``pairing.py``.
 
 Pure helpers (loopback policy, PKCE, code hashing, the client registry) live at
@@ -24,6 +27,7 @@ import base64
 import datetime
 import hashlib
 import hmac
+import os
 import secrets
 from urllib.parse import urlsplit
 
@@ -42,11 +46,32 @@ from cvcpkg.server.db import (
 )
 
 # The only clients that may drive these grants.  A built-in constant, never a
-# database table and never a wildcard: a public CLI client with a loopback
-# redirect is the whole surface, so there is nothing to register or spoof.
+# database table and never a wildcard: public clients with a loopback redirect
+# (and, for a client with ``pages``, those exact https pages) are the whole
+# surface, so there is nothing to register or spoof.
+#
+# * ``cvcpkg-cli`` — this package's own ``cvcpkg login``; the only client of
+#   the device pairing (``pairing.py``).
+# * ``cypkg`` — cy-pca/cypkg, the registry client written as Ariadne documents.
+#   Ariadne's ``oidc-sign-in`` runs the loopback flow in a native host and the
+#   redirect flow in its browser page, which comes back to one of ``pages``.
 CLI_CLIENTS: dict[str, dict] = {
-    "cvcpkg-cli": {"public": True, "redirect": "loopback"},
+    "cvcpkg-cli": {"public": True, "redirect": "loopback", "pairing": True},
+    "cypkg": {
+        "public": True,
+        "redirect": "loopback",
+        "pages": ("https://cy-pca.github.io/cypkg/",),
+    },
 }
+
+# More pages a client with ``pages`` may be sent back to, from the operator:
+# comma-separated ``CLIENT_ID=URI`` (e.g. a cypkg page this registry serves).
+PAGE_REDIRECTS_ENV = "CVCPKG_OAUTH_PAGE_REDIRECTS"
+
+# The scopes the authorization endpoint understands: each is a role, and a
+# request gets the highest one it names (narrowed to the principal's ceiling,
+# as ``role`` is).  Anything else is ignored (RFC 6749 §3.3), except ``openid``.
+SCOPES = ("reader", "publisher", "admin")
 
 # A pairing/collection is offered for this long before it expires.
 DEFAULT_PAIRING_TTL_SECONDS = 600
@@ -83,6 +108,62 @@ def loopback_redirect_ok(uri: str) -> bool:
         and p.port is not None
         and 1024 <= p.port <= 65535
     )
+
+
+def page_redirect_ok(uri: str) -> bool:
+    """An https page with no fragment: the shape a registered page must have."""
+    try:
+        p = urlsplit(uri)
+    except ValueError:
+        return False
+    return p.scheme == "https" and bool(p.hostname) and not p.fragment
+
+
+def page_redirects(client_id: str, env: str | None = None) -> tuple[str, ...]:
+    """The https pages *client_id* may be sent back to: built in, plus the operator's.
+
+    Only a client that has ``pages`` takes them; an operator entry for any other
+    client, or one that is not an https page, is ignored.
+    """
+    client = CLI_CLIENTS.get(client_id)
+    if client is None or "pages" not in client:
+        return ()
+    pages = list(client["pages"])
+    raw = os.environ.get(PAGE_REDIRECTS_ENV, "") if env is None else env
+    for entry in raw.split(","):
+        cid, sep, uri = entry.strip().partition("=")
+        if sep and cid.strip() == client_id and page_redirect_ok(uri.strip()):
+            pages.append(uri.strip())
+    return tuple(pages)
+
+
+def redirect_ok(client_id: str, uri: str) -> bool:
+    """May *client_id* be sent back to *uri*?
+
+    Every client is a native app and may use a loopback ``/callback``; a client
+    with ``pages`` may also use one of them, matched exactly (a browser page's
+    query and path are part of what was registered).
+    """
+    if client_id not in CLI_CLIENTS:
+        return False
+    return loopback_redirect_ok(uri) or uri in page_redirects(client_id)
+
+
+def role_from_scope(scope: str) -> str:
+    """The role an authorization request's ``scope`` asks for, or "" for none.
+
+    Raises ``ValueError`` for ``openid``: this server is an OAuth 2.0
+    authorization server only.  It issues no ID token, and an OpenID Connect
+    client that asked for one would fail on its absence.
+    """
+    tokens = scope.split()
+    if "openid" in tokens:
+        raise ValueError(
+            "this registry issues no ID token: ask for the scope 'reader', 'publisher' "
+            "or 'admin', not 'openid'"
+        )
+    named = [t for t in tokens if t in SCOPES]
+    return max(named, key=SCOPES.index) if named else ""
 
 
 def _b64url(raw: bytes) -> str:
@@ -274,6 +355,7 @@ class DbCliAuthStore:
         code_challenge: str,
         redirect_uri: str,
         device_label: str,
+        client_id: str = "",
     ) -> None:
         now = _now()
         async with atomic_session() as session:
@@ -285,6 +367,7 @@ class DbCliAuthStore:
                     code_challenge=code_challenge,
                     redirect_uri=redirect_uri,
                     device_label=device_label[:128],
+                    client_id=client_id[:64],
                     used=False,
                     expires_at=now + datetime.timedelta(seconds=AUTH_CODE_TTL_SECONDS),
                 )

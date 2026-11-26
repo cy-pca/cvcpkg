@@ -2203,6 +2203,8 @@ class _PublicReadCORS:
     browser client reads: the libcvc web gallery fetches a document's data
     packages from here.  On those paths a GET or HEAD answers
     ``Access-Control-Allow-Origin: *``, and their preflight is answered here.
+    So does the OAuth metadata (``/.well-known/...``), which a browser page
+    signing in reads before anything else.
 
     * GET and HEAD only.  Publishing, yanking and deleting (POST and DELETE
       under /v1/packages) keep the allowlist (``CVCPKG_CORS_ORIGINS``).
@@ -2221,10 +2223,14 @@ class _PublicReadCORS:
         self.app = app
         self.allowlisted = frozenset(allowlisted)
 
+    _METADATA = ("/.well-known/oauth-authorization-server", "/.well-known/openid-configuration")
+
     @staticmethod
     def is_public_read(path: str) -> bool:
-        return path in ("/v1/catalog", "/v1/packages") or path.startswith(
-            ("/v1/packages/", "/v1/download/")
+        return (
+            path in ("/v1/catalog", "/v1/packages")
+            or path in _PublicReadCORS._METADATA
+            or path.startswith(("/v1/packages/", "/v1/download/"))
         )
 
     async def __call__(self, scope, receive, send) -> None:
@@ -8861,6 +8867,9 @@ def create_app(
             "token_type": "Bearer",
             "expires_in": max(0, int((minted.expires_at - now).total_seconds())),
             "refresh_token": minted.refresh,
+            # The role granted, as the OAuth scope (RFC 6749 §5.1: it may be
+            # narrower than the one asked for).
+            "scope": minted.role,
             "refresh_expires_in": max(0, int((minted.refresh_expires_at - now).total_seconds())),
             "max_lifetime_at": minted.max_lifetime_at.isoformat(),
             "principal": principal.name,
@@ -8880,7 +8889,7 @@ def create_app(
     async def auth_device_start(body: DeviceAuthRequest, request: Request):
         """Begin a device-pairing login; returns a user code to approve."""
         _require_broker_db()
-        if body.client_id not in _cli_auth_mod.CLI_CLIENTS:
+        if not _cli_auth_mod.CLI_CLIENTS.get(body.client_id, {}).get("pairing"):
             raise HTTPException(400, "unknown client_id")
         cfg = _cli_cfg()
         user_code = _pairing_mod.new_user_code()
@@ -8908,11 +8917,22 @@ def create_app(
             "interval": cfg["poll_interval"],
         }
 
-    def _oauth_error(error: str, *, interval: int | None = None, status: int = 400):
+    # RFC 6749 §5.1: a reply that carries (or refuses) tokens must not be cached.
+    _no_store = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+
+    def _oauth_error(
+        error: str,
+        *,
+        interval: int | None = None,
+        status: int = 400,
+        description: str = "",
+    ):
         body: dict = {"error": error}
+        if description:
+            body["error_description"] = description
         if interval is not None:
             body["interval"] = interval
-        return JSONResponse(status_code=status, content=body)
+        return JSONResponse(status_code=status, content=body, headers=_no_store)
 
     @app.post("/v1/auth/device/token", tags=["auth"])
     async def auth_device_token(body: DevicePollRequest):
@@ -8981,6 +9001,47 @@ def create_app(
         """
         return {"providers": _oidc_provider_choices()}
 
+    def _oauth_issuer(request: Request) -> str:
+        """This authorization server's issuer: ``CVCPKG_PUBLIC_URL``, else where it was reached.
+
+        An OAuth client compares it, exactly, with the issuer it was given and
+        with the ``iss`` of every authorization reply (RFC 8414 §3.3, RFC 9207),
+        so a deployment sets ``CVCPKG_PUBLIC_URL``.
+        """
+        public = os.environ.get("CVCPKG_PUBLIC_URL", "").strip().rstrip("/")
+        return public or str(request.base_url).rstrip("/")
+
+    @app.get("/.well-known/oauth-authorization-server", tags=["auth"])
+    @app.get("/.well-known/openid-configuration", tags=["auth"])
+    async def oauth_metadata(request: Request):
+        """OAuth 2.0 authorization server metadata (RFC 8414) for the CLI-login broker.
+
+        The same document answers at ``openid-configuration``, where OpenID
+        Connect clients look (Ariadne's ``oidc-sign-in`` among them; RFC 8414
+        §5).  It is not an OpenID provider's: no ID token, no JWKS, no
+        ``openid`` scope.  A client asks for a role as its scope instead.
+        """
+        if not (_use_db and _db_cli_auth is not None and _db_sessions is not None):
+            raise HTTPException(404, "this server has no sign-in (it needs the database backend)")
+        issuer = _oauth_issuer(request)
+        return JSONResponse(
+            {
+                "issuer": issuer,
+                "authorization_endpoint": f"{issuer}/v1/auth/authorize",
+                "token_endpoint": f"{issuer}/v1/auth/token",
+                "revocation_endpoint": f"{issuer}/v1/auth/token/revoke",
+                "response_types_supported": ["code"],
+                "response_modes_supported": ["query"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
+                "code_challenge_methods_supported": ["S256"],
+                "token_endpoint_auth_methods_supported": ["none"],
+                "revocation_endpoint_auth_methods_supported": ["none"],
+                "scopes_supported": list(_cli_auth_mod.SCOPES),
+                "authorization_response_iss_parameter_supported": True,
+            },
+            headers={"Cache-Control": "public, max-age=300"},
+        )
+
     @app.get("/v1/auth/authorize", tags=["auth"])
     async def auth_authorize(
         request: Request,
@@ -8989,20 +9050,46 @@ def create_app(
         code_challenge: str = Query(...),
         code_challenge_method: str = Query("S256"),
         state: str = Query(""),
+        response_type: str = Query("code"),
+        scope: str = Query(""),
         role: str = Query(""),
         device: str = Query(""),
         provider: str = Query(""),
     ):
-        """Loopback grant: park the request, then send the browser to sign in."""
+        """Loopback grant: park the request, then send the browser to sign in.
+
+        ``role`` (the CLI's) or ``scope`` (an OAuth client's: the highest of
+        ``reader``, ``publisher``, ``admin`` it names) picks the role asked
+        for; ``role`` wins when both are given.
+        """
         _require_broker_db()
         if client_id not in _cli_auth_mod.CLI_CLIENTS:
             raise HTTPException(400, "unknown client_id")
+        if not _cli_auth_mod.redirect_ok(client_id, redirect_uri):
+            raise HTTPException(
+                400,
+                "redirect_uri must be an http loopback-IP /callback, "
+                "or a page registered for this client",
+            )
         if code_challenge_method != "S256" or not _cli_auth_mod.valid_code_challenge(
             code_challenge
         ):
             raise HTTPException(400, "code_challenge must be S256 (43-char base64url)")
-        if not _cli_auth_mod.loopback_redirect_ok(redirect_uri):
-            raise HTTPException(400, "redirect_uri must be an http loopback-IP /callback")
+        # From here the redirect URI is known good, so errors go back to it
+        # (RFC 6749 §4.1.2.1) and the client can say why.
+        if response_type != "code":
+            return _authorize_error(
+                request,
+                redirect_uri,
+                state,
+                "unsupported_response_type",
+                "only 'code' is supported",
+            )
+        try:
+            scope_role = _cli_auth_mod.role_from_scope(scope)
+        except ValueError as exc:
+            return _authorize_error(request, redirect_uri, state, "invalid_scope", str(exc))
+        role = role or scope_role
         if role and role not in (r.value for r in TokenRole):
             raise HTTPException(400, f"unknown role: {role}")
         # A named provider is validated here so the CLI gets a clean 400 rather
@@ -9027,6 +9114,17 @@ def create_app(
             _login_next += f"&provider={quote(provider, safe='')}"
         return RedirectResponse(_login_next, status_code=303)
 
+    def _authorize_error(request: Request, redirect_uri: str, state: str, error: str, why: str):
+        """Send an authorization error back to a redirect URI already checked good."""
+        from urllib.parse import urlencode
+
+        params = {"error": error, "error_description": why}
+        if state:
+            params["state"] = state
+        params["iss"] = _oauth_issuer(request)
+        sep = "&" if "?" in redirect_uri else "?"
+        return RedirectResponse(f"{redirect_uri}{sep}{urlencode(params)}", status_code=302)
+
     @app.get("/v1/auth/resume/{txn_id}", tags=["auth"])
     async def auth_resume(request: Request, txn_id: str):
         """After the browser signs in, issue the loopback code and bounce back."""
@@ -9049,11 +9147,14 @@ def create_app(
             code_challenge=txn.code_challenge,
             redirect_uri=txn.redirect_uri,
             device_label=txn.device_label,
+            client_id=txn.client_id,
         )
         from urllib.parse import urlencode
 
         sep = "&" if "?" in txn.redirect_uri else "?"
-        params = urlencode({"code": code, "state": txn.cli_state})
+        # iss (RFC 9207) lets an OAuth client tell this server's reply from
+        # another's; the metadata says it is always sent.
+        params = urlencode({"code": code, "state": txn.cli_state, "iss": _oauth_issuer(request)})
         return RedirectResponse(f"{txn.redirect_uri}{sep}{params}", status_code=302)
 
     @app.post("/v1/auth/token", tags=["auth"])
@@ -9061,20 +9162,30 @@ def create_app(
         grant_type: str = Form(...),
         code: str = Form(""),
         code_verifier: str = Form(""),
-        client_id: str = Form("cvcpkg-cli"),
+        client_id: str = Form(""),
         redirect_uri: str = Form(""),
         refresh_token: str = Form(""),
     ):
-        """Exchange a loopback code, or rotate a refresh token, for a session."""
+        """Exchange a loopback code, or rotate a refresh token, for a session.
+
+        A public client names itself with ``client_id`` (no secret).  A code is
+        redeemed only by the client it was issued to, and a refresh only by
+        its session's client; a request without ``client_id`` is the CLI's.
+        """
         _require_broker_db()
+        if client_id and client_id not in _cli_auth_mod.CLI_CLIENTS:
+            return _oauth_error("invalid_client", status=401, description="unknown client_id")
         cfg = _cli_cfg()
         if grant_type == "authorization_code":
+            client_id = client_id or "cvcpkg-cli"
             row = await _db_cli_auth.redeem_auth_code(code)
             if row is None:
                 return _oauth_error("invalid_grant")
             if not _cli_auth_mod.verify_pkce_s256(code_verifier, row.code_challenge):
                 return _oauth_error("invalid_grant")
             if redirect_uri != row.redirect_uri:
+                return _oauth_error("invalid_grant")
+            if row.client_id and row.client_id != client_id:
                 return _oauth_error("invalid_grant")
             principal = await _db_principals.by_id(row.principal_id)
             if principal is None or principal.disabled:
@@ -9093,22 +9204,54 @@ def create_app(
                     action=AuditAction.login,
                     actor=principal.name,
                     target="cli",
-                    detail=f"loopback login (role={minted.role}, device={row.device_label})",
+                    detail=(
+                        f"loopback login (role={minted.role}, device={row.device_label}, "
+                        f"client={client_id})"
+                    ),
                 )
-            return _cli_token_response(minted, principal, device=row.device_label)
+            return JSONResponse(
+                _cli_token_response(minted, principal, device=row.device_label),
+                headers=_no_store,
+            )
         if grant_type == "refresh_token":
             minted = await _db_sessions.rotate(
                 refresh_token,
                 ttl_seconds=cfg["access_ttl"],
                 refresh_ttl_seconds=cfg["refresh_ttl"],
+                client_id=client_id,
             )
             if minted is None:
                 return _oauth_error("invalid_grant")
             principal = await _db_principals.by_name(minted.principal_name)
             if principal is None:
                 return _oauth_error("invalid_grant")
-            return _cli_token_response(minted, principal)
+            return JSONResponse(_cli_token_response(minted, principal), headers=_no_store)
         return _oauth_error("unsupported_grant_type")
+
+    @app.post("/v1/auth/token/revoke", tags=["auth"])
+    async def auth_token_revoke(
+        token: str = Form(""),
+        token_type_hint: str = Form(""),
+        client_id: str = Form(""),
+    ):
+        """Revoke a sign-in by one of its tokens (RFC 7009), for a client signing out.
+
+        The ``cvcses_`` access or ``cvcref_`` refresh token is the proof, as
+        ``/v1/auth/revoke``'s bearer is; the whole sign-in goes (every rotation
+        of it).  Any other token, or one already dead, answers 200 too
+        (RFC 7009 §2.2): an API token is revoked on the account page.
+        ``token_type_hint`` is accepted and not needed: the prefix says which.
+        """
+        _require_broker_db()
+        del token_type_hint
+        if client_id and client_id not in _cli_auth_mod.CLI_CLIENTS:
+            return _oauth_error("invalid_client", status=401, description="unknown client_id")
+        outcome = await _db_sessions.revoke_by_token(token, client_id=client_id)
+        if outcome == "other_client":
+            return _oauth_error(
+                "unauthorized_client", description="the token was issued to another client"
+            )
+        return Response(status_code=200, headers=_no_store)
 
     @app.post("/v1/auth/revoke", tags=["auth"])
     async def auth_revoke(

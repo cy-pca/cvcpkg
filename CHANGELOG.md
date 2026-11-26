@@ -30,6 +30,25 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **The CLI-login broker is a standard OAuth 2.0 authorization server.**
+  Ariadne's `oidc-sign-in` (and so cy-pca/cypkg) signs in to a registry with
+  it: the loopback flow natively, the redirect flow in a browser page.
+  - Metadata (RFC 8414) at `/.well-known/oauth-authorization-server` and
+    `/.well-known/openid-configuration`, readable from any origin. Its
+    `issuer` is `CVCPKG_PUBLIC_URL`.
+  - A second public client, `cypkg`: loopback, and the browser page
+    `https://cy-pca.github.io/cypkg/`. `CVCPKG_OAUTH_PAGE_REDIRECTS` adds pages.
+  - `/v1/auth/authorize` takes `response_type` and `scope` (a role: `reader`,
+    `publisher`, `admin`), refuses `openid` (no ID token here) back to the
+    client, and its replies carry `iss` (RFC 9207).
+  - `/v1/auth/token` redeems a code only for the client it was issued to and a
+    refresh only for its session's client, says the role granted as `scope`,
+    and answers `Cache-Control: no-store`. Migration 040 adds
+    `cli_auth_codes.client_id`.
+  - RFC 7009 revocation at `POST /v1/auth/token/revoke`, which ends the whole
+    sign-in (every rotation of it).
+  - Docs: `docs/cli-login.md` "OAuth 2.0 clients".
+
 - **The backfill no longer derives `required_deps` from `depends.build`.**
   For a recipe with no `depends.runtime` key, `runtime_dependencies_from_raw`
   falls back to `depends.build`. That yields host tools and source packages

@@ -631,3 +631,46 @@ def test_migration_038_adds_packages_conflicts(tmp_path):
         assert "conflicts" not in {r[1] for r in con.execute("PRAGMA table_info(packages)")}
     finally:
         con.close()
+
+
+def test_migration_040_adds_cli_auth_codes_client_id(tmp_path):
+    """040 adds the client a loopback code was issued to ('' on older rows), and
+    the downgrade drops it again."""
+    pytest.importorskip("aiosqlite", reason="aiosqlite required to migrate SQLite")
+    db = tmp_path / "client_id.db"
+    p = _alembic_upgrade(db, "039")
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert "client_id" not in {r[1] for r in con.execute("PRAGMA table_info(cli_auth_codes)")}
+    finally:
+        con.close()
+
+    p = _alembic_upgrade(db, "040")
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        cols = {r[1]: r for r in con.execute("PRAGMA table_info(cli_auth_codes)")}
+        assert "client_id" in cols
+        assert cols["client_id"][3] == 1  # NOT NULL, defaulting to ''
+    finally:
+        con.close()
+
+    env = {
+        **os.environ,
+        "CVCPKG_DATABASE_URL": f"sqlite+aiosqlite:///{db.as_posix()}",
+        "PYTHONPATH": str(_ROOT / "src"),
+    }
+    p = subprocess.run(
+        [sys.executable, "-m", "alembic", "downgrade", "039"],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert p.returncode == 0, p.stderr
+    con = sqlite3.connect(db)
+    try:
+        assert "client_id" not in {r[1] for r in con.execute("PRAGMA table_info(cli_auth_codes)")}
+    finally:
+        con.close()

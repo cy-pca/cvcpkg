@@ -60,5 +60,75 @@ def test_valid_code_challenge():
 
 
 def test_cli_clients_is_locked_down():
-    assert set(cli_auth.CLI_CLIENTS) == {"cvcpkg-cli"}
-    assert cli_auth.CLI_CLIENTS["cvcpkg-cli"]["public"] is True
+    assert set(cli_auth.CLI_CLIENTS) == {"cvcpkg-cli", "cypkg"}
+    assert all(c["public"] is True for c in cli_auth.CLI_CLIENTS.values())
+    # The device pairing stays the CLI's alone.
+    assert [cid for cid, c in cli_auth.CLI_CLIENTS.items() if c.get("pairing")] == ["cvcpkg-cli"]
+    # Only cypkg has browser pages, and only https ones.
+    assert "pages" not in cli_auth.CLI_CLIENTS["cvcpkg-cli"]
+    assert all(cli_auth.page_redirect_ok(u) for u in cli_auth.CLI_CLIENTS["cypkg"]["pages"])
+
+
+@pytest.mark.parametrize("client_id", ["cvcpkg-cli", "cypkg"])
+def test_every_client_may_use_a_loopback_callback(client_id, monkeypatch):
+    monkeypatch.delenv(cli_auth.PAGE_REDIRECTS_ENV, raising=False)
+    assert cli_auth.redirect_ok(client_id, "http://127.0.0.1:49812/callback")
+    assert not cli_auth.redirect_ok(client_id, "http://localhost:49812/callback")
+
+
+def test_pages_are_matched_exactly_and_per_client(monkeypatch):
+    monkeypatch.delenv(cli_auth.PAGE_REDIRECTS_ENV, raising=False)
+    page = "https://cy-pca.github.io/cypkg/"
+    assert cli_auth.redirect_ok("cypkg", page)
+    # The CLI has no pages; an unknown client has nothing.
+    assert not cli_auth.redirect_ok("cvcpkg-cli", page)
+    assert not cli_auth.redirect_ok("someone-else", page)
+    assert not cli_auth.redirect_ok("someone-else", "http://127.0.0.1:49812/callback")
+    # Exact: another path, a query, another scheme or host are all different pages.
+    for near in (
+        "https://cy-pca.github.io/cypkg",
+        "https://cy-pca.github.io/cypkg/?src=evil.ari",
+        "https://cy-pca.github.io/cypkg/other/",
+        "http://cy-pca.github.io/cypkg/",
+        "https://evil.github.io/cypkg/",
+    ):
+        assert not cli_auth.redirect_ok("cypkg", near), near
+
+
+def test_operator_pages_extend_only_a_client_that_has_pages(monkeypatch):
+    monkeypatch.setenv(
+        cli_auth.PAGE_REDIRECTS_ENV,
+        " cypkg=https://cvcpkg.example/cypkg/ , cvcpkg-cli=https://cvcpkg.example/cli/,"
+        "cypkg=http://insecure.example/,cypkg=https://frag.example/#x,nonsense",
+    )
+    assert cli_auth.page_redirects("cypkg") == (
+        "https://cy-pca.github.io/cypkg/",
+        "https://cvcpkg.example/cypkg/",
+    )
+    assert cli_auth.redirect_ok("cypkg", "https://cvcpkg.example/cypkg/")
+    # Not for the CLI (it has no pages), and never a non-https or fragment page.
+    assert not cli_auth.redirect_ok("cvcpkg-cli", "https://cvcpkg.example/cli/")
+    assert not cli_auth.redirect_ok("cypkg", "http://insecure.example/")
+    assert not cli_auth.redirect_ok("cypkg", "https://frag.example/#x")
+
+
+@pytest.mark.parametrize(
+    "scope,role",
+    [
+        ("", ""),
+        ("reader", "reader"),
+        ("publisher", "publisher"),
+        ("reader admin", "admin"),
+        ("publisher reader", "publisher"),
+        # Unknown scopes are ignored (RFC 6749 §3.3), as is a role's case.
+        ("offline_access profile", ""),
+        ("Admin", ""),
+    ],
+)
+def test_role_from_scope(scope, role):
+    assert cli_auth.role_from_scope(scope) == role
+
+
+def test_openid_scope_is_refused_with_a_reason():
+    with pytest.raises(ValueError, match="no ID token"):
+        cli_auth.role_from_scope("openid reader")
