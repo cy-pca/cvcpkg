@@ -290,6 +290,7 @@ class DbSessionStore:
         *,
         ttl_seconds: int,
         refresh_ttl_seconds: int,
+        client_id: str = "",
     ) -> MintedSession | None:
         """Exchange a refresh token for a fresh ``(access, refresh)`` pair.
 
@@ -298,6 +299,9 @@ class DbSessionStore:
         revoked), the *entire family* is revoked and None is returned, because a
         replayed refresh is the signature of a stolen credential.  The successor
         inherits the family and the original hard-reauth horizon.
+
+        A *client_id* that is not the one the session was issued to gets None,
+        and burns nothing (RFC 6749 §6: a refresh token is bound to its client).
         """
         if not refresh_raw or not refresh_raw.startswith(REFRESH_PREFIX):
             return None
@@ -314,6 +318,8 @@ class DbSessionStore:
                 .first()
             )
             if row is None:
+                return None
+            if client_id and row.client_id and row.client_id != client_id:
                 return None
             fam = row.refresh_family
             # Reuse detection: a burned or revoked refresh means the family is
@@ -428,6 +434,40 @@ class DbSessionStore:
                 stmt = stmt.where(SessionRow.principal_id == principal_id)
             result = await session.execute(stmt.values(revoked=True))
             return result.rowcount > 0
+
+    async def revoke_by_token(self, raw: str, *, client_id: str = "") -> str:
+        """Revoke the sign-in a ``cvcses_`` or ``cvcref_`` token belongs to (RFC 7009).
+
+        The whole refresh family goes: the access and refresh tokens of every
+        rotation of that one sign-in, so a refresh token revoked does not leave
+        its access tokens alive (RFC 7009 §2.1).  Returns ``"revoked"``,
+        ``"unknown"`` (no such session token, or another kind of token), or
+        ``"other_client"`` when *client_id* is not the session's client.
+        """
+        if raw.startswith(ACCESS_PREFIX):
+            column = SessionRow.token_hash
+        elif raw.startswith(REFRESH_PREFIX):
+            column = SessionRow.refresh_hash
+        else:
+            return "unknown"
+        token_hash = self._hash_bearer(raw)
+        async with atomic_session() as session:
+            row = (
+                (await session.execute(select(SessionRow).where(column == token_hash)))
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return "unknown"
+            if client_id and row.client_id and row.client_id != client_id:
+                return "other_client"
+            stmt = update(SessionRow).where(SessionRow.revoked == False)  # noqa: E712
+            if row.refresh_family:
+                stmt = stmt.where(SessionRow.refresh_family == row.refresh_family)
+            else:
+                stmt = stmt.where(SessionRow.id == row.id)
+            await session.execute(stmt.values(revoked=True))
+            return "revoked"
 
     async def revoke_all_for_principal(
         self, principal_id: int, *, except_session_id: int | None = None

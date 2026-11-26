@@ -570,6 +570,11 @@ class CliAuthCodeRow(Base):
     device_label: Mapped[str] = mapped_column(
         String(128), nullable=False, default="", server_default=""
     )
+    # The client the code was issued to; the token endpoint redeems it only for
+    # that client (RFC 6749 §4.1.3).  '' on codes issued before migration 040.
+    client_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
     used: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
