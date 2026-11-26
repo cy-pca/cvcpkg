@@ -82,4 +82,4 @@ echo "pytest-cov-cp312: built $(basename "${WHEEL}")"
 # Drop the build-prefix bridge first: the check must exercise the RUNTIME
 # closure, not accidentally import a build-only backend.
 unset PYTHONPATH
-cvc_python_check "import pytest_cov.plugin, pytest_cov.engine"
+cvc_python_check "import importlib.util, pytest_cov, pytest_cov.plugin; assert pytest_cov.__version__ == '7.1.0'; assert importlib.util.find_spec('pytest_cov.engine')"

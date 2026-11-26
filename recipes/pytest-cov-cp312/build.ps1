@@ -31,4 +31,4 @@ if ($LASTEXITCODE -ne 0) { throw "pytest-cov-cp312: pip install failed ($LASTEXI
 
 # The check must exercise the runtime closure, not the build-only backend.
 $env:PYTHONPATH = ''
-Invoke-CvcPythonCheck 'import pytest_cov.plugin, pytest_cov.engine'
+Invoke-CvcPythonCheck 'import importlib.util, pytest_cov, pytest_cov.plugin; assert pytest_cov.__version__ == ''7.1.0''; assert importlib.util.find_spec(''pytest_cov.engine'')'

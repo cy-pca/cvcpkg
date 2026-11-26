@@ -631,7 +631,15 @@ SEED_PACKAGES = {
         "license": "MIT",
         "deps": ["coverage", "pluggy", "pytest"],
         "files": ["pytest_cov/", "pytest_cov-*.dist-info/"],
-        "check": "import pytest_cov.plugin, pytest_cov.engine",
+        # Not `import pytest_cov.engine`: that imports coverage, which imports
+        # sqlite3, and a noarch build prefix has no libsqlite3 (the
+        # interpreter's native deps are not staged there).  The plugin imports
+        # the engine and coverage lazily.
+        "check": (
+            "import importlib.util, pytest_cov, pytest_cov.plugin; "
+            "assert pytest_cov.__version__ == '7.1.0'; "
+            "assert importlib.util.find_spec('pytest_cov.engine')"
+        ),
     },
     "pytest-timeout": {
         "version": "2.4.0",
