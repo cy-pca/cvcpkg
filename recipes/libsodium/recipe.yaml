@@ -14,7 +14,8 @@ recipe:
     more): X25519/Ed25519, XChaCha20-Poly1305 and XSalsa20-Poly1305,
     BLAKE2b, Argon2id, sealed boxes.  For libcvc's host-side end-to-end
     encryption (TX.WTF's X3DH + Double Ratchet DMs) on every platform its
-    hosts ship on: linux, macos, windows, and the browser (wasm, wasm-mt).
+    hosts ship on: linux, macos, windows, the BSDs, haiku, and the browser
+    (wasm, wasm-mt).
   # The tarball is upstream's 2026-04-09 release.  Its minisign signature
   # (libsodium-1.0.22.tar.gz.minisig) verifies against upstream's published
   # key RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3, and
@@ -28,7 +29,10 @@ recipe:
   #     define is what tells the headers not to dllimport, and Windows has
   #     no pkg-config.
   #
-  # linux, macos: upstream's ./configure (asm and runtime CPU dispatch on).
+  # linux, macos, freebsd, openbsd, netbsd, haiku: upstream's ./configure (asm
+  #   and runtime CPU dispatch on), as libopus builds there.  OpenBSD's libtool
+  #   installs only the versioned lib/libsodium.so.M.m, which is what the CMake
+  #   package names there.
   # windows: MSVC through CMake (msvc/CMakeLists.txt here), because cvcpkg's
   #   own MSVC has no MSBuild to run upstream's .vcxproj.  The CMake project
   #   compiles the same 141 sources, with the same defines the vs2022
@@ -76,6 +80,24 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # The BSDs and Haiku: the same script, for libcvc's E2EE on its fleet-built
+    # columns.
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     - platform: wasm
@@ -98,7 +120,7 @@ package:
     - include/sodium/
     - lib/pkgconfig/libsodium.pc
     - lib/cmake/sodium/sodiumConfig.cmake
-    - lib/libsodium*                  # .so/.dylib/.a; libsodium.lib on Windows
+    - lib/libsodium*                  # .so (.so.M.m on OpenBSD)/.dylib/.a; .lib on Windows
     - { glob: "bin/libsodium.dll", platforms: [windows] }
   cmake_packages:
     - { name: sodium, targets: ["sodium::sodium"] }
