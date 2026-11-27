@@ -6,6 +6,19 @@
 # top-level CMakeLists.txt: the runtime as one static library, libiwasm.a,
 # with the wasm-c-api (wasm_c_api.h) and the native API (wasm_export.h).
 #
+# The proposals WebAssembly guests of libcvc's use (CVC_WASM_GUEST_FEATURES in
+# libcvc's src/ariadne_wasm/ariadne_wasm.cmake) are on everywhere, named rather
+# than left to each platform's defaults: reference types (which WAMR's windows
+# build leaves off), bulk memory, tail calls and extended constants (off by
+# default everywhere).
+#
+# No WASI of WAMR's own on any platform (WAMR_BUILD_LIBC_WASI=0, as of
+# cvc.4). A host embedding WAMR defines a guest's imports itself, through the
+# wasm-c-api, and WAMR's WASI takes every wasi_snapshot_preview1 import before
+# the host's: its loader insists that such a module export a memory, and its
+# instantiation calls the module's _initialize, before the host's imports are
+# wired. libcvc's guests link libcvc's own WASI stubs.
+#
 # WAMR picks its platform layer (core/shared/platform/<name>) from the host's
 # name. linux, darwin and freebsd have one; OpenBSD, NetBSD and Haiku don't,
 # so they build on freebsd's too, which is plain POSIX over pthreads (the
@@ -17,10 +30,7 @@
 #     thread's signal setup then fails);
 #   - no SIMD: WAMR's fast interpreter runs SIMD through SIMDe, which its
 #     configure clones from GitHub, and these builds stay off the network.
-# OpenBSD, NetBSD and Haiku also build without WAMR's own WASI
-# (WAMR_BUILD_LIBC_WASI=0): its sandboxed file layer needs posix_fallocate and
-# more that OpenBSD lacks, and libcvc's guests link libcvc's WASI stubs, not
-# WAMR's. NetBSD's mremap(2) isn't Linux's (no MREMAP_MAYMOVE), so the check
+# NetBSD's mremap(2) isn't Linux's (no MREMAP_MAYMOVE), so the check
 # that would find it is answered no, and WAMR grows a memory by mmap and copy.
 # The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64.
 set -euo pipefail
@@ -34,15 +44,11 @@ if [[ -f "${CVC_SOURCE_DIR}/product-mini/CMakeLists.txt" ]]; then
 fi
 
 platform_args=()
-libc_wasi=1
 case "${CVC_PLATFORM}" in
     freebsd|openbsd|netbsd|haiku)
         platform_args+=(-DWAMR_BUILD_PLATFORM=freebsd -DWAMR_BUILD_SIMD=0
                         -DWAMR_DISABLE_HW_BOUND_CHECK=1)
         ;;
-esac
-case "${CVC_PLATFORM}" in
-    openbsd|netbsd|haiku) libc_wasi=0 ;;
 esac
 if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
     platform_args+=(-DMREMAP_EXISTS=0)
@@ -63,8 +69,12 @@ cmake -G Ninja \
     -DWAMR_BUILD_FAST_INTERP=1 \
     -DWAMR_BUILD_AOT=1 \
     -DWAMR_BUILD_LIBC_BUILTIN=1 \
-    -DWAMR_BUILD_LIBC_WASI="${libc_wasi}" \
+    -DWAMR_BUILD_LIBC_WASI=0 \
     -DWAMR_BUILD_LIB_WASI_THREADS=0 \
+    -DWAMR_BUILD_REF_TYPES=1 \
+    -DWAMR_BUILD_BULK_MEMORY=1 \
+    -DWAMR_BUILD_TAIL_CALL=1 \
+    -DWAMR_BUILD_EXTENDED_CONST_EXPR=1 \
     ${platform_args[@]+"${platform_args[@]}"}
 
 cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"

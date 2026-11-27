@@ -18,10 +18,11 @@ recipe:
   # linux, macos, windows: WAMR's own platform layers, as upstream builds them.
   #   cvc.4: the windows bundle ships the runtime, lib/libiwasm.lib (static);
   #   cvc.3's lib/iwasm.lib was the iwasm.exe CLI's import library.
+  # cvc.4 builds without WAMR's own WASI on every platform: it takes a guest's
+  #   wasi_snapshot_preview1 imports before the embedding host's (build.sh).
   # freebsd, openbsd, netbsd, haiku: WAMR's freebsd layer (OpenBSD, NetBSD and
   #   Haiku have none of their own; it is plain POSIX), with software bounds
-  #   checks, without SIMD, and on OpenBSD, NetBSD and Haiku without WAMR's own
-  #   WASI (build.sh says why).  test.sh builds check.c against libiwasm.a and
+  #   checks and without SIMD (build.sh says why).  test.sh builds check.c against libiwasm.a and
   #   runs it there, as on linux and macos.
 
 source:

@@ -6,6 +6,9 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 $wamrVer = '2.4.4'
 
+# No WASI of WAMR's own, and the guests' proposals named, as on every
+# platform (build.sh says why): product-mini's windows CMakeLists leaves
+# reference types off.
 # WAMR's product-mini has platform-specific CMakeLists.
 $wamrCmakeDir = $env:CVC_SOURCE_DIR
 $winPlatform  = Join-Path $env:CVC_SOURCE_DIR 'product-mini\platforms\windows'
@@ -24,8 +27,12 @@ if (Test-Path "$winPlatform\CMakeLists.txt") {
     '-DWAMR_BUILD_FAST_INTERP=1' `
     '-DWAMR_BUILD_AOT=1' `
     '-DWAMR_BUILD_LIBC_BUILTIN=1' `
-    '-DWAMR_BUILD_LIBC_WASI=1' `
-    '-DWAMR_BUILD_LIB_WASI_THREADS=0'
+    '-DWAMR_BUILD_LIBC_WASI=0' `
+    '-DWAMR_BUILD_LIB_WASI_THREADS=0' `
+    '-DWAMR_BUILD_REF_TYPES=1' `
+    '-DWAMR_BUILD_BULK_MEMORY=1' `
+    '-DWAMR_BUILD_TAIL_CALL=1' `
+    '-DWAMR_BUILD_EXTENDED_CONST_EXPR=1'
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 
 & cmake --build $env:CVC_BUILD_DIR -j $env:CVC_JOBS
