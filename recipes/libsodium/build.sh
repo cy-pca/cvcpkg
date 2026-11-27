@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # recipes/libsodium/build.sh -- build libsodium with upstream's ./configure on
-# linux and macos.  Asm and runtime CPU dispatch stay on (libsodium picks its
+# linux, macos, the BSDs and haiku.  Asm and runtime CPU dispatch stay on (libsodium picks its
 # AVX2/SSE kernels by CPUID at sodium_init), so one bundle runs on every
 # x86_64 and arm64 CPU.
 set -euo pipefail
@@ -36,6 +36,11 @@ rm -f "${CVC_INSTALL_DIR}/lib/libsodium.la"
 
 case "${CVC_PLATFORM}" in
     macos) shared_lib="libsodium.dylib" ;;
+    # OpenBSD's libtool installs no unversioned libsodium.so, only libsodium.so.M.m.
+    openbsd)
+        shared_lib=$(cd "${CVC_INSTALL_DIR}/lib" && ls libsodium.so.* 2>/dev/null | head -n 1)
+        [[ -n "${shared_lib}" ]] || { echo "libsodium: no lib/libsodium.so.* installed" >&2; exit 1; }
+        ;;
     *) shared_lib="libsodium.so" ;;
 esac
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then

@@ -14,7 +14,7 @@
 #
 # Every platform also checks that the consumer surface is there: sodium.h,
 # lib/pkgconfig/libsodium.pc and lib/cmake/sodium.
-#   linux, macos: cc links lib/libsodium.a (the bundle's own code, whatever the
+#   linux, macos, the BSDs, haiku: cc links lib/libsodium.a (the bundle's own code, whatever the
 #     loader would find) and runs the consumer.
 #   wasm, wasm-mt: compiled with the build's emsdk and run under node.  On
 #     wasm-mt the checks also run on four pthreads, with randomness from
@@ -92,7 +92,10 @@ CC_BIN="${CC:-cc}"
 command -v "${CC_BIN}" >/dev/null 2>&1 || { echo "FAIL: no C compiler (${CC_BIN})"; exit 1; }
 test -f "${LIB}/libsodium.a" || { echo "FAIL: lib/libsodium.a not found"; exit 1; }
 extra=()
-[[ "${CVC_PLATFORM:-}" == "linux" ]] && extra+=(-lpthread)
+# libsodium.a calls pthread_* (sodium_init's lock); Haiku and macOS have them in libc.
+case "${CVC_PLATFORM:-}" in
+    linux|freebsd|openbsd|netbsd) extra+=(-lpthread) ;;
+esac
 "${CC_BIN}" -O2 -I"${INC}" "${CHECK_C}" "${LIB}/libsodium.a" ${extra[@]+"${extra[@]}"} -o "${TMPDIR_T}/t"
 "${TMPDIR_T}/t" || { echo "FAIL: libsodium checks"; exit 1; }
 echo "libsodium test: OK"
