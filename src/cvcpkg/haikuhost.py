@@ -462,7 +462,9 @@ def _no_sigpipe(fd: int) -> None:
     default action (cli._restore_default_sigpipe), and haikuhost runs inside
     ``cvcpkg builder`` and ``cvcpkg pack``: a relay write to an ssh or a tar
     that had already exited ended the whole process, every other job of the
-    builder with it.  Linux and the BSDs raise the signal on the writing
+    builder with it.  (``builder run`` now ignores SIGPIPE process-wide, see
+    cli._builder._ignore_sigpipe; ``cvcpkg pack`` still needs this.)  Linux and
+    the BSDs raise the signal on the writing
     thread, so blocking it there leaves only EPIPE (the pending signal goes
     away with the thread).  macOS raises it on the process, so there the
     descriptor is marked F_SETNOSIGPIPE instead.  Windows has no SIGPIPE.
