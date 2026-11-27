@@ -32,7 +32,8 @@
 #     configure clones from GitHub, and these builds stay off the network.
 # NetBSD's mremap(2) isn't Linux's (no MREMAP_MAYMOVE), so the check
 # that would find it is answered no, and WAMR grows a memory by mmap and copy.
-# The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64.
+# The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64, and
+# NetBSD's <strings.h> has a popcount32 and popcount64 of its own.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -52,6 +53,14 @@ case "${CVC_PLATFORM}" in
 esac
 if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
     platform_args+=(-DMREMAP_EXISTS=0)
+    # NetBSD's <strings.h> declares popcount32 and popcount64, and WAMR's
+    # interpreters define static functions of those names (dev job 25601): theirs
+    # are renamed, in the two files that define and use them.
+    for f in core/iwasm/interpreter/wasm_interp_fast.c core/iwasm/interpreter/wasm_interp_classic.c; do
+        sed -e 's/popcount32/wamr_popcount32/g' -e 's/popcount64/wamr_popcount64/g' \
+            "${CVC_SOURCE_DIR}/${f}" > "${CVC_SOURCE_DIR}/${f}.netbsd"
+        mv "${CVC_SOURCE_DIR}/${f}.netbsd" "${CVC_SOURCE_DIR}/${f}"
+    done
 fi
 # The posix layer asks mmap for MAP_32BIT on x86_64 (a hint the AOT loader's first try passes,
 # which falls back without it); OpenBSD, NetBSD and Haiku have no such flag.
