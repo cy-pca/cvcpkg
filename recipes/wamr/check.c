@@ -3,7 +3,8 @@
  *
  * The module below (its text in the comment) imports env.twice, which this host
  * defines with an env pointer, and exports a memory of 1 to 4 pages and four
- * functions. The checks:
+ * functions. It is instantiated with InstantiationArgs and no host-managed
+ * heap, as libcvc instantiates guests. The checks:
  *   - run(10) calls env.twice(10), and the host's twice calls back into the
  *     guest's own export set(5) before it returns 20: a host import that
  *     re-enters its instance, as libcvc's pauses do (asyncify_start_unwind
@@ -116,9 +117,12 @@ int main(void) {
   wasm_extern_t *imports[1] = {wasm_func_as_extern(host_twice)};
   wasm_extern_vec_t import_vec = WASM_ARRAY_VEC(imports);
   wasm_trap_t *trap = NULL;
-  wasm_instance_t *inst = wasm_instance_new(store, module, &import_vec, &trap);
+  /* No host-managed heap: wasm_instance_new asks for 32 KiB of one, which WAMR adds to the guest's
+     memory as a page of its own. */
+  InstantiationArgs args = {0};
+  wasm_instance_t *inst = wasm_instance_new_with_args_ex(store, module, &import_vec, &trap, &args);
   if (!inst)
-    FAIL("wasm_instance_new");
+    FAIL("wasm_instance_new_with_args_ex");
 
   wasm_extern_vec_t exports;
   wasm_instance_exports(inst, &exports);

@@ -22,6 +22,7 @@
 # more that OpenBSD lacks, and libcvc's guests link libcvc's WASI stubs, not
 # WAMR's. NetBSD's mremap(2) isn't Linux's (no MREMAP_MAYMOVE), so the check
 # that would find it is answered no, and WAMR grows a memory by mmap and copy.
+# The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -46,6 +47,11 @@ esac
 if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
     platform_args+=(-DMREMAP_EXISTS=0)
 fi
+# The posix layer asks mmap for MAP_32BIT on x86_64 (a hint the AOT loader's first try passes,
+# which falls back without it); OpenBSD, NetBSD and Haiku have no such flag.
+case "${CVC_PLATFORM}" in
+    openbsd|netbsd|haiku) export CFLAGS="${CFLAGS:-} -DMAP_32BIT=0" ;;
+esac
 
 cmake -G Ninja \
     -S "${WAMR_CMAKE_DIR}" \
