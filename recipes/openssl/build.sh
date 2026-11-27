@@ -79,12 +79,16 @@ fi
 # install prefix.  If it pointed into $CVC_INSTALL_DIR/etc/ssl, any process
 # that loads our libssl via LD_LIBRARY_PATH (e.g. Python, curl) would look
 # for CA certs at that path — which ships no certs — and TLS verification
-# would fail.  All POSIX platforms agree on /etc/ssl as the default CA root.
-# Windows uses the OS certificate store so its path is handled separately.
+# would fail.  Linux, macOS, FreeBSD and OpenBSD keep it in /etc/ssl
+# (certs/ or cert.pem); NetBSD keeps it in /etc/openssl (certs/, from certctl)
+# and has no /etc/ssl at all.  Windows uses the OS certificate store so its
+# path is handled separately.
+OPENSSLDIR=/etc/ssl
+[[ "${CVC_PLATFORM}" == "netbsd" ]] && OPENSSLDIR=/etc/openssl
 ./Configure "${TARGET}" \
     --prefix="${CVC_INSTALL_DIR}" \
     --libdir=lib \
-    --openssldir=/etc/ssl \
+    --openssldir="${OPENSSLDIR}" \
     ${OPENSSL_OPTS[@]+"${OPENSSL_OPTS[@]}"} \
     no-tests
 

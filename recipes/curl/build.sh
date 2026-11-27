@@ -35,6 +35,15 @@ CONFIGURE_ARGS=(
     --disable-tftp
 )
 
+# NetBSD keeps its CA certificates in /etc/openssl/certs (certctl) and has no
+# /etc/ssl, so configure's search (/etc/ssl/certs, /etc/ssl/cert.pem,
+# /usr/local/share/certs/...) finds nothing there: the bundle reported "ca cert
+# bundle: no, ca cert path: no, ca fallback: no" and verified no peer at all
+# ("curl: (60)", which kept grpc from ever building on NetBSD).  Name the path.
+if [[ "${CVC_PLATFORM:-}" == "netbsd" ]]; then
+    CONFIGURE_ARGS+=(--without-ca-bundle --with-ca-path=/etc/openssl/certs)
+fi
+
 # Respect static/shared link mode.
 if [[ "${CVC_LINK:-shared}" == "static" ]]; then
     CONFIGURE_ARGS+=(--disable-shared --enable-static)
