@@ -4,9 +4,9 @@
 # WAT parsed, Asyncify around ari.*, the binary written and read back) builds
 # and runs.
 #
-#   linux, macos, the BSDs, haiku: wasm-opt --version, then c++ links
-#     lib/libbinaryen.a with check.cpp (-fno-rtti, as binaryen is built) and
-#     runs it.
+#   linux, macos, freebsd, openbsd, haiku: wasm-opt --version, then c++
+#     links lib/libbinaryen.a with check.cpp (C++20, which binaryen's headers
+#     are, and -fno-rtti, as binaryen is built) and runs it.
 #   windows: run under bash without vcvars (CVC_WINHOST), so the files and
 #     wasm-opt --version only.
 set -euo pipefail
@@ -53,9 +53,9 @@ CXX_BIN="${CXX:-c++}"
 command -v "${CXX_BIN}" >/dev/null 2>&1 || { echo "FAIL: no C++ compiler (${CXX_BIN})"; exit 1; }
 extra=()
 case "${CVC_PLATFORM:-}" in
-    linux|freebsd|openbsd|netbsd) extra+=(-lpthread) ;;
+    linux|freebsd|openbsd) extra+=(-lpthread) ;;
 esac
-"${CXX_BIN}" -std=c++17 -O1 -fno-rtti -I"${INC}" -I"${INC}/binaryen" "${CHECK_CPP}" \
+"${CXX_BIN}" -std=c++20 -O1 -fno-rtti -I"${INC}" -I"${INC}/binaryen" "${CHECK_CPP}" \
     "${LIB}/libbinaryen.a" ${extra[@]+"${extra[@]}"} -o "${TMPDIR_T}/t"
 "${TMPDIR_T}/t" || { echo "FAIL: binaryen checks"; exit 1; }
 echo "binaryen test: OK"

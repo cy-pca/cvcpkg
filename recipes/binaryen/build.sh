@@ -74,7 +74,7 @@ if(NOT TARGET binaryen::binaryen)
     IMPORTED_LOCATION "\${_BINARYEN_PREFIX}/lib/libbinaryen.a"
     IMPORTED_LINK_INTERFACE_LANGUAGES CXX
     INTERFACE_INCLUDE_DIRECTORIES "\${_BINARYEN_PREFIX}/include;\${_BINARYEN_PREFIX}/include/binaryen"
-    INTERFACE_COMPILE_FEATURES cxx_std_17)
+    INTERFACE_COMPILE_FEATURES cxx_std_20)
   if(NOT "${threads}" STREQUAL "")
     set_property(TARGET binaryen::binaryen APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${threads})
   endif()

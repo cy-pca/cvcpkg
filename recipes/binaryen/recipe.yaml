@@ -28,6 +28,13 @@ recipe:
   # need googletest, a submodule the tarball lacks), the other tools, and
   # binaryen.js.  LTO stays off, so the archive holds plain objects any linker
   # takes.
+  #
+  # Its headers are C++20 (std::unordered_map::contains), so a consumer is too.
+  # No netbsd row: NetBSD's C++ library is base libstdc++ from GCC 10, and
+  # binaryen's sources need libstdc++ 11's rvalue stream insertion, which gives
+  # (std::stringstream() << x).str() its stringstream back (dev job 25582).
+  # libcvc's WAMR backend runs on NetBSD without binaryen, taking guests
+  # transformed at install, which run anywhere once transformed.
 
 source:
   type: tarball
@@ -65,11 +72,6 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
         CXXFLAGS: "-O2 -fPIC"
-    - platform: netbsd
-      script: build.sh
-      env:
-        CFLAGS: "-O2 -fPIC"
-        CXXFLAGS: "-O2 -fPIC"
     - platform: haiku
       script: build.sh
       env:
@@ -98,9 +100,9 @@ package:
 toolchain:
   cxx:
     min_version: "any"
-    description: "C++17-capable compiler"
+    description: "C++20-capable compiler"
 
 abi:
-  cxx_std: 17
+  cxx_std: 20
 
 notes: []

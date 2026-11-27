@@ -42,7 +42,10 @@ try {
         '-DINSTALL_LIBS=ON'
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
 
-    & cmake --build $env:CVC_BUILD_DIR -j $env:CVC_JOBS --target binaryen wasm-opt wasm-as wasm-dis
+    # At most 4 at once: binaryen's passes are heavy translation units for cl, and a builder
+    # with many cores and less memory ran out partway (dev job 25587 stopped at 86 of 279).
+    $jobs = [Math]::Min([int]$env:CVC_JOBS, 4)
+    & cmake --build $env:CVC_BUILD_DIR -j $jobs --target binaryen wasm-opt wasm-as wasm-dis
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 } finally {
     $env:PATH = $origPath
@@ -84,7 +87,7 @@ if(NOT TARGET binaryen::binaryen)
     IMPORTED_LINK_INTERFACE_LANGUAGES CXX
     INTERFACE_INCLUDE_DIRECTORIES "${_BINARYEN_PREFIX}/include;${_BINARYEN_PREFIX}/include/binaryen"
     INTERFACE_COMPILE_DEFINITIONS BUILD_STATIC_LIBRARY
-    INTERFACE_COMPILE_FEATURES cxx_std_17)
+    INTERFACE_COMPILE_FEATURES cxx_std_20)
 endif()
 set(binaryen_FOUND TRUE)
 set(binaryen_VERSION 129)
