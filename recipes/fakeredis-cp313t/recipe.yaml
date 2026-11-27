@@ -1,0 +1,76 @@
+schema_version: 1
+recipe:
+  name: fakeredis-cp313t
+  upstream_version: "2.36.2"
+  cvc_revision: 1
+
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://pypi.org/project/fakeredis/
+  license: "BSD-3-Clause"
+  tags: [python, source]
+  description: >-
+    fakeredis 2.36.2 for CPython 3.13t: an in-process Redis for tests.
+    Built from the PyPI sdist with the prefix's own CPython 3.13t. Patched to
+    run Lua scripts in LuaJIT (lupa.luajit21) when lupa has no lupa.lua51, as
+    cvcpkg's lupa columns don't. cvcpkg has no lupa-cp313t, so this column
+    has no EVAL/EVALSHA.
+
+# Hand-written: the Python recipe generator (tools/) emits no patches, and
+# this column needs fakeredis-luajit-fallback.patch (below), so a regeneration
+# keeps it. Keep fakeredis-cp311, fakeredis-cp312, fakeredis-cp313 in step.
+source:
+  # Built from the source package fakeredis-src, which pins the upstream tarball
+  # (https://files.pythonhosted.org/packages/0a/ed/86ed74d8829c3bc565025c1c9efaf8518c9165fbf8c9cc2c026c8ed21bd9/fakeredis-2.36.2.tar.gz).
+  type: package
+  package: fakeredis-src
+
+python:
+  interpreter: python313t
+  abi: cp313t
+
+# fakeredis loads lupa.lua51 for scripting and, when that import fails,
+# silently drops EVAL/EVALSHA/FCALL. cvcpkg's lupa columns ship lupa.lua54 and
+# lupa.luajit21 only; the patch falls back to LuaJIT, the Lua 5.1 dialect
+# Redis scripts are written in. See its header.
+patches:
+  - fakeredis-luajit-fallback.patch
+
+depends:
+  build:
+    - name: fakeredis-src
+      version: "==2.36.2"
+    - name: python313t
+    - name: redis-cp313t
+    - name: sortedcontainers-cp313t
+    # PEP-517 build backend, from this sdist's [build-system] requires.
+    # --no-build-isolation means pip will NOT fetch it, so it has to be
+    # in the build prefix already (build.sh bridges it onto sys.path).
+    - name: hatchling-cp313t
+    - name: packaging-cp313t
+    - name: pathspec-cp313t
+    - name: pluggy-cp313t
+    - name: trove-classifiers-cp313t
+    - name: calver-cp313t
+  runtime:
+    - name: python313t
+    - name: redis-cp313t
+    - name: sortedcontainers-cp313t
+  host_tools:
+    - python313t
+
+build:
+  build_type_independent: true
+  matrix:
+    - platform: any
+      script: build.sh
+    - platform: windows
+      script: build.ps1
+
+package:
+  files:
+    - { glob: "lib/python3.13t/site-packages/fakeredis/", platforms: [any] }
+    - { glob: "lib/python3.13t/site-packages/fakeredis-*.dist-info/", platforms: [any] }
+    - { glob: "Lib/site-packages/fakeredis/", platforms: [windows] }
+    - { glob: "Lib/site-packages/fakeredis-*.dist-info/", platforms: [windows] }
