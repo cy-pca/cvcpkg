@@ -133,10 +133,11 @@ depends:
     # closures install with this package (freetype -> brotli, fontconfig ->
     # expat; the rest is already here), not their meson/python build closure.
     # build.sh requires both delegates.  Not on windows (prebuilt installer) or
-    # wasm/wasi (built --without-freetype).
+    # wasm/wasi (built --without-freetype).  Haiku has a freetype bundle and no
+    # fontconfig one: it builds --with-fontconfig=no and requires freetype only.
     - name: freetype
       version: "^2.13"
-      platforms: [linux, macos, freebsd, openbsd, netbsd]
+      platforms: [linux, macos, freebsd, openbsd, netbsd, haiku]
     - name: fontconfig
       version: "^2.15"
       platforms: [linux, macos, freebsd, openbsd, netbsd]
@@ -174,6 +175,10 @@ build:
       env:
         CFLAGS: "-O2 -fPIC"
     - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
       script: build.sh
       env:
         CFLAGS: "-O2 -fPIC"
