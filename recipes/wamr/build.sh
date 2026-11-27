@@ -65,10 +65,13 @@ if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
     # PaX MPROTECT keeps a mapping at most at the protection it was made with,
     # and WAMR makes a linear memory PROT_NONE, then mprotects it read-write
     # ("allocate linear memory failed", dev job 25611). Its mmap names
-    # read-write as the most a mapping may become (PROT_MPROTECT).
+    # read-write as the most a mapping may become (PROT_MPROTECT): os_mmap's
+    # line, the file's first of the two that start a protection at PROT_NONE
+    # (os_mprotect's is the second).
     m="${CVC_SOURCE_DIR}/core/shared/platform/common/posix/posix_memmap.c"
-    sed -e 's/^    int map_prot = PROT_NONE;$/    int map_prot = PROT_MPROTECT(PROT_READ | PROT_WRITE);/' \
-        "${m}" > "${m}.netbsd"
+    awk '!done && $0 == "    int map_prot = PROT_NONE;" {
+             print "    int map_prot = PROT_MPROTECT(PROT_READ | PROT_WRITE);"; done = 1; next }
+         { print }' "${m}" > "${m}.netbsd"
     mv "${m}.netbsd" "${m}"
     grep -q 'PROT_MPROTECT(PROT_READ | PROT_WRITE)' "${m}" \
         || { echo "build.sh: posix_memmap.c's map_prot line has moved" >&2; exit 1; }
