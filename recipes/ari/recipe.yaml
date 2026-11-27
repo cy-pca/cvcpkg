@@ -1,0 +1,64 @@
+# THROWAWAY (cy-pca/cvcpkg test PR, never merged): libcvc's own recipe pinned to a
+# feat/fleet-bsd-haiku commit, BSD rows only, so build-on-dev builds it on the dev BSD builders.
+schema_version: 1
+recipe:
+  name: ari
+  upstream_version: "4.0.9"
+  cvc_revision: 101
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "ari — run an Ariadne (.ari) UI document in the terminal. `ari run doc.ari` takes over the terminal through libcvc's FTXUI backend (keyboard, mouse, floating windows, menus, text entry, half-block images); `ari snapshot` prints a frame as text for CI and docs; `ari check` loads a document and reports its warnings. GL-free: no window, VTK or ImGui."
+  homepage: https://github.com/transfix/libcvc
+  license: LGPL-2.1-only
+  tags: [ui, terminal, tui, cli, tools]
+
+# `ari` is its OWN package, separate from libcvc (like cvc-cli), so the tool lands
+# deliberately in a user's PATH (`cvcpkg install ari`) rather than riding along in
+# the libcvc SDK bundle. It builds src/ari standalone against the installed libcvc
+# SDK (find_package(cvc CONFIG)) and installs just bin/ari; libcvc is never rebuilt.
+#
+# The terminal backends and the .ari loader live in libcvc itself (cvc::ariadne,
+# with FTXUI, tvision and yaml-cpp as libcvc's own optional deps), so ari needs
+# nothing but libcvc. It builds wherever libcvc declares ftxui and yaml-cpp:
+# linux, macos and windows. `--backend tvision` needs libcvc's tvision dep, also
+# declared on all three.
+
+source:
+  # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
+  # tag's tarball. In the repository this recipe builds from the checkout (vendored).
+  type: tarball
+  url: https://github.com/transfix/libcvc/archive/ed8829b6b4e2a456d92d9a9af8f7477be151efe8.tar.gz
+  sha256: "f7bffe3edd09ec481461db01234e0faf1d3efda4d5440c893328f5a6d68de22d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libcvc
+      version: "==4.0.9"
+  runtime:
+    - name: libcvc
+      version: "==4.0.9"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  # Just the `ari` executable (bin/ari, bin/ari.exe on Windows). No cmake package
+  # config — ari is an application.
+  files:
+    - bin/ari*
+
+abi:
+  cxx_std: 20

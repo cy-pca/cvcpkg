@@ -1,3 +1,4 @@
+# THROWAWAY touch (test PR, never merged): makes build-on-dev build grpc cvc.7 on the dev BSDs.
 schema_version: 1
 recipe:
   name: grpc

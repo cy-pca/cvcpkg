@@ -1,0 +1,523 @@
+# THROWAWAY (cy-pca/cvcpkg test PR, never merged): libcvc's own recipe pinned to a
+# feat/fleet-bsd-haiku commit, BSD rows only, so build-on-dev builds it on the dev BSD builders.
+schema_version: 1
+recipe:
+  name: libcvc
+  upstream_version: "4.0.9"
+  # Bumped 1 -> 2: the host-only libcvc ABI changed (voxels::_cuda_unified_ptr is
+  # now always std::shared_ptr<void>, +8 bytes, to match the CUDA build and make
+  # cvc::volume's layout variant-invariant). The new CPU bundle is not ABI-
+  # compatible with the published 3.2.4+cvc.1, so it must publish as +cvc.2.
+  # (libcvc-cuda already had the wide member, so it did not need the ABI bump —
+  # but it does bump to +cvc.2 for the CLI-packaging change below.)
+  #
+  # This same +cvc.2 bundle ALSO drops the bundled `cvc` CLI: it now ships as its
+  # own package (the cvc-cli / cvc-cli-cuda recipes) so it lands deliberately in
+  # a user's PATH.
+  #
+  # And it enables the XMLRPC module (build.{sh,ps1} now pass
+  # -DCVC_USING_XMLRPC=ON) so the bundle exports the cvc::xmlrpc target and ships
+  # libxmlrpc — the published +cvc.1 was built with the default OFF and so was
+  # missing cvc::xmlrpc, which downstream consumers (VolumeRover 2.x) require.
+  #
+  # The +cvc.2 republish carries all three changes.
+  # Bumped 2 -> 3: coordinated FAMILY republish for post-#152 master. libcvc core
+  # moved forward since +cvc.2 (e.g. geometry views pin their container, COW-safe
+  # across append/clear, #127), and the downstream cvcgl/pycvc-gl changed (cvcGL
+  # shared build + faithful colors + expanded GraphicsNode API; pycvc-gl
+  # direct-wraps the scene graph). Per cvcpkg policy a new UPSTREAM revision can
+  # break downstream, so every downstream rebuilds + republishes against it — the
+  # whole family (libcvc/cvcgl/pycvc/pycvc-gl) bumps together to a consistent,
+  # tested-together set.
+  # Reset to 1 for the 3.3.0 upstream version: cvc_revision counts revisions OF
+  # an upstream version, so a version bump restarts it. This supersedes the
+  # 3.2.4 +cvc.4 coordinated FAMILY republish for the material-aware navigation
+  # work (GRL-SNAM #31/#34-37, libcvc #230-247) — those new cvc::nav symbols (the
+  # material force field / witness gate / material-coupled drive, the torch-free
+  # CoefEnergyNetMaterial forward+backward, and the self-supervised material
+  # trainer) ship as part of 3.3.0 rather than as a 3.2.4 revision. The whole
+  # family (libcvc/cvcgl/pycvc/pycvc-gl) rebuilds + republishes together.
+  # Bumped 1 -> 2: the +cvc.1 bundle STILL shipped without cvc::xmlrpc. The
+  # build.sh fix recorded above never reached the artifact, because the publish
+  # workflow does not run build.sh -- it inlines its own configure, which left
+  # CVC_USING_XMLRPC at its OFF default. The workflow now passes it on all four
+  # lanes, and lib/xmlrpc* is packed alongside lib/libxmlrpc* for the MSVC
+  # spelling. Verified against the published bundle: 0 occurrences of
+  # cvc::xmlrpc in cvcTargets.cmake and no archive, while include/xmlrpc/
+  # headers shipped.
+  # Bumped 2 -> 4 (not 3: the catalog already has 3.3.0+cvc.3, and a revision
+  # at or below the published max is a silent no-op / 409). The +cvc.3 bundle
+  # STILL ships include/xmlrpc/ headers with no lib/libxmlrpc* archive and no
+  # cvc::xmlrpc in cvcTargets.cmake -- verified by installing it:
+  #     cvcpkg install libcvc --prefix p --config release --link shared
+  #     grep -c cvc::xmlrpc p/lib/cmake/cvc/cvcTargets.cmake   ->  0
+  #     ls p/lib | grep -i xmlrpc                              ->  (nothing)
+  # publish-cvcpkg.yml now passes -DCVC_USING_XMLRPC=ON on every lane AND hard-
+  # fails when the archive or the exported target is missing, but +cvc.3 was
+  # published before those guards landed, so the artifact never picked them up.
+  # This bump is what actually carries the fix to consumers.
+  #
+  # It is load-bearing downstream: transfix/F2Dock hard-requires cvc::xmlrpc
+  # (src/CMakeLists.txt FATAL_ERRORs without it, and its _libcvc_check_usable
+  # rejects any libcvc package lacking it). That rejection is why F2Dock has
+  # always fallen through to building libcvc FROM SOURCE -- which is the only
+  # reason CGAL and the platform toolchains enter its build at all, and hence
+  # why CGAL 6.2 (macOS/Windows) and the VS18 v180 CL.exe crash (Windows) break
+  # it. A bundle that actually exports cvc::xmlrpc removes the source build,
+  # and those failures with it.
+  # Bumped 4 -> 5: libcvc no longer links FFTW. volume_ops' filtered
+  # back-projection now goes through PocketFFT (BSD-3), so the bundle is
+  # LGPL-2.1 rather than a GPL combined work, and consumers stop inheriting a
+  # GPL library on their link line. Verified on the built artifact: ldd
+  # libcvc.so reports zero fftw references, and volume_ops_test passes 42/42
+  # including the apply_filter=true back-projection cases.
+  # Bumped 1 -> 2 (3.4.0 lineage): republish the family so the bundle ships the
+  # nav::sim_world::set_material_lam live setter (#433). It is an inline header
+  # method (no exported symbol / ABI change), but consumers that compile against
+  # the SDK headers need it present -- notably a downstream wasm-mt app's live
+  # force-bias control, whose build installs cvc/libcvc from the catalog
+  # and will not compile until 3.4.0+cvc.2 (with the setter) is published. The
+  # published 3.4.0+cvc.1 predates #433. cvcgl already sits at +cvc.2, so this
+  # brings the tested-together family back to a single revision.
+  # Bumped 2 -> 3 (3.4.0 lineage): republish the family carrying the coef_mlp .cvcnav format v2
+  # (two-head sigmoid λ_soft/λ_hard, #436). The wasm-mt republish also (a) turns CVC_STATE_EXEC back
+  # ON for wasm (it was wrongly forced OFF — the state_exec evaluator has no gRPC dependency and must
+  # always build), and (b) picks up the gRPC/xmlrpc dep guard above so `cvcpkg install cvc/libcvc
+  # --platform wasm-mt` resolves again. A v2 .cvcnav hard-fails on a pre-v2 host, so every host that
+  # loads .cvcnav blobs must land 3.4.0+cvc.3 before any v2 blob ships.
+  # Bumped 3 -> 4 (3.4.0 lineage): the +cvc.3 comment above was WRONG — wasm-mt did NOT resolve. The
+  # +cvc.3 gRPC/xmlrpc guard only scoped abseil/protobuf/grpc; `pack` bakes a bundle's required_deps
+  # from depends.runtime FILTERED BY the target platform (builder.py generate_manifest), so the wasm-mt
+  # bundle still baked 12 native-only deps that have NO wasm-mt candidate — cgal/gmp/mpfr/gsl/pocketfft/
+  # hdf5/log4cplus/expat/yaml/yaml-cpp/levmar/libiimod — and the catalog install kept failing on cgal
+  # etc. This revision scopes those 12 to [linux, macos, windows] (the wasm build links none of them:
+  # DISABLE_CGAL=ON, USING_HDF5=OFF, FFT_PROVIDER=none, IMOD_MRC=OFF, no find_package for gsl/levmar,
+  # log4cplus/yaml/yaml-cpp optional-and-absent on wasm) and ADDS wasm-mt to assimp (CVC_ENABLE_ASSIMP=ON
+  # links it and it HAS a wasm-mt candidate, but it was scoped off wasm, so its symbols were omitted from
+  # the baked closure and a wasm consumer's link would fail). zlib + the ImageMagick codec closure stay
+  # declared for wasm (they DO have wasm-mt candidates and are linked). A recipe edit alone can't fix the
+  # already-published +cvc.3 bundle — this republishes a clean +cvc.4 wasm-mt closure.
+  # Bumped 4 -> 5 (3.4.0 lineage): the +cvc.4 wasm-mt bundle resolved cleanly but its EXPORTED
+  # cvcTargets.cmake baked 15 build-machine absolute paths into cvc::cvc's INTERFACE_LINK_LIBRARIES
+  # (libMagick++/libMagickCore + the codec delegates + libzstd, all under /home/runner/.../wasm-deps),
+  # so a relocated consumer's link died with "libMagick++-7.Q16HDRI.a ... missing" — which is why a
+  # downstream wasm app could never link. libcvc #453 makes the STATIC wasm export relocatable
+  # (synthesise ImageMagick::Magick++/::MagickCore + PkgConfig::ZSTD imported targets so the export
+  # names targets, not paths; cvcConfig.cmake.in re-resolves them per-consumer). A recipe edit can't
+  # fix the already-published +cvc.4 bundle — this reships a clean +cvc.5 wasm-mt export. Native is
+  # unaffected (publish-cvcpkg auto-bumps above this floor). cvcgl bumps in lockstep (5 -> 6) so it
+  # rebuilds against +cvc.5 and re-pins it (cvcgl exact-pins its built-against libcvc).
+  # Bumped 5 -> 6 (3.4.0 lineage): +cvc.5 made the export relocatable, but a wasm CONSUMER
+  # then failed to LINK with undefined BZ2_*/lzma_*/xml* symbols — cvcConfig.cmake.in only
+  # appended the ImageMagick static codec-delegate closure to a SYNTHESISED MagickCore
+  # (`_cvc_im_synth`), but on a wasm consumer the STOCK FindImageMagick tier wins (finds the
+  # static libs in the prefix) and creates a delegate-LESS MagickCore, so the append was
+  # skipped. This ships a cvcConfig.cmake.in that appends the closure whenever the MagickCore
+  # target exists (self-guarding find_library; harmless dedup for a shared ImageMagick).
+  # Reships to embed the corrected consumer config. cvcgl bumps in lockstep (6 -> 7).
+  # Bumped 6 -> 12 (3.4.0 lineage): ships the LOD family -- metric simplify + seam-aware QEM
+  # and progressive pyramids (#505), tiled partitioning (#497), the hardened scene.cvch5 store
+  # with opt-in blob authentication (#504), LodGraphicsNode visibility/lifetime fixes (#496),
+  # the exact-EDT speedup (#503) -- plus the hdf5_utils string-attribute overflow fix (#500).
+  # ABI: SceneNode gained virtuals (#496) and sim_world dropped a member (#503), so dependents
+  # must rebuild. 12, not 7: native builds were already auto-bumped to +cvc.11 on the catalog,
+  # and the wasm publish packs verbatim at this revision, so 12 keeps every platform monotonic.
+  # cvcgl bumps in lockstep (8 -> 12) and re-pins this build.
+  # Bumped 12 -> 14: ships cvc::async_lane (#509, the persistent FIFO worker lane for
+  # state_exec) and the pycvc LOD bindings (#511) to every platform, with cvcGL's
+  # setPoseMatrix (#508) in lockstep. 14, not 13: native was already auto-bumped to +cvc.13
+  # (from #508) while the wasm publish packs verbatim at this revision.
+  # Bumped 14 -> 15: ships the stream/image zero-copy family -- the image adopt-ctor and
+  # stream to_image bridge (#516), stream_channel::publish_external (#517) -- with cvcGL's
+  # L3 streaming overlay geometry (#512: StreamingGeometryNode/RibbonNode/DrapedLinkNode,
+  # HeightFieldTexture, coalesced scene events), StreamTextureBinding (#518), the pycvc
+  # stream bindings (#519), stream scoping (#520) and the cvcGL frame-cost fixes (the
+  # metadata mirror, the idle-camera skip + SceneGraph::contentVersion, texture_modified_rows,
+  # caster-aware shadow baking, the cheaper bounds walk). ABI: SceneGraph, GraphicsNode and
+  # NullGraphicNode layouts changed (#512 and the frame-cost fixes) with the SOVERSION
+  # unchanged, so dependents must rebuild. cvcgl bumps in lockstep (14 -> 15).
+  # Bumped 15 -> 17 (16 went out as a native publish of master without this):
+  # lockstep with cvcgl's fast-draw low-memory mapper
+  # (LowMemoryPolyDataMapper, ~2/3 fewer GL calls per frame on WebGL2) and the expanded
+  # THIRD_PARTY_NOTICES.md. libcvc's own sources are unchanged by it; the bump keeps the pair's
+  # revisions aligned for consumers that pin both.
+  # Bumped 1 -> 3 (3.7.0 lineage): the wasm-mt SDK was compiled with MAGICKCORE_HDRI_ENABLE=0
+  # against the Q16HDRI static ImageMagick (an emcmake configure has no pkg-config answer, and
+  # the Q16/HDRI=0 defaults stood), so cvc and every consumer saw an integer Quantum where the
+  # library uses float. src/cvc/CMakeLists.txt now reads the ABI from the library name. The
+  # build also hangs MagickCore's static codec closure off every static link, whichever
+  # FindImageMagick tier ran. Native bundles are unchanged. 3, not 2: native is already at
+  # +cvc.2 on the catalog and the wasm-mt publish packs verbatim at this revision. cvcgl bumps
+  # in lockstep (1 -> 3) and re-pins this build.
+  # Reset to 1 for the 3.7.1 upstream version: a version bump restarts cvc_revision.
+  cvc_revision: 101
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "Center for Computational Visualization core C++ library — volumetric data structures, distributed state, geometry & image processing, DSL runtime."
+  homepage: https://github.com/transfix/libcvc
+  license: LGPL-2.1-only
+  tags: [scientific, volumetric, state, dsl, geometry]
+
+# Declares the `libcvc` provider slot so the CUDA peer libcvc-cuda (which also
+# `provides: [libcvc]`) is a mutually-exclusive alternative, and a future
+# hardware-aware resolver (cvcpkg Roadmap Phase 10) can tie-break CPU vs GPU for
+# a dependency on the virtual name `libcvc`. The selection that acts on this is
+# not implemented yet (see the libcvc-cuda recipe).
+provides: ["libcvc"]
+
+source:
+  # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
+  # tag's tarball. In the repository this recipe builds from the checkout (vendored).
+  type: tarball
+  url: https://github.com/transfix/libcvc/archive/ed8829b6b4e2a456d92d9a9af8f7477be151efe8.tar.gz
+  sha256: "f7bffe3edd09ec481461db01234e0faf1d3efda4d5440c893328f5a6d68de22d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  # The BSD columns (freebsd, openbsd, netbsd) build on the cvcpkg.org fleet from the release
+  # tag's tarball (publish-cvcpkg.yml: fleet-bsd-haiku), against the bundles those same builders
+  # made. A dep scoped off a BSD below has no bundle there yet: googletest (tests stay off on the
+  # fleet) and tvision on openbsd; openmp on all three (the base clangs ship no libomp, so the
+  # OpenMP loops build serially there).
+  #
+  # Build-only: GoogleTest for the test suite (CVC_BUILD_TESTS=ON). Listed so
+  # `cvcpkg install-deps cvcpkg/recipes/libcvc` (ci-recipe.yml, and the
+  # fetch-libcvc-deps action behind ci.yml's package-* jobs) puts the catalog's
+  # googletest in the deps prefix, where CMake/SetupGTest.cmake finds it with
+  # find_package(GTest CONFIG) instead of downloading GoogleTest at configure
+  # time. As a build dep it is never baked into the bundle's required_deps, and
+  # no test is installed, so none of it ships. A dep cannot be gated on
+  # CVC_BUILD_TESTS, so test-less builds fetch the ~1 MB bundle too. Scoped to
+  # the platforms this recipe builds (googletest has no wasm build). The catalog
+  # has no linux/arm64 or macos/x86_64 googletest yet; those experimental publish
+  # lanes' install-deps already fail on other missing packages.
+  build:
+    - name: googletest
+      platforms: [linux, macos, windows]
+    # taocpp/PEGTL 3.x (header-only, MIT), the grammar engine of the state_exec
+    # s-expression reader. Build-only: cvc links it as
+    # $<BUILD_INTERFACE:taocpp::pegtl>, and no installed header includes it
+    # (src/cvc/CMakeLists.txt checks). So it is never baked into required_deps,
+    # and consumers of the bundle do not install it. Unscoped: state_exec builds
+    # on every platform, wasm included, and find_package(pegtl) is REQUIRED.
+    - name: pegtl
+    # tvision (magiblot Turbo Vision), the Ariadne native-desktop terminal backend
+    # (CVC_ARIADNE_TVISION, §16.5). Build-only: it is a static archive linked
+    # PRIVATE and BUILD_INTERFACE-only into the shared libcvc, so nothing of it
+    # reaches the bundle's exports or a consumer's link. Optional at the CMake
+    # level (found by path; absent -> TvisionBackend is a stub). Scoped to the
+    # platforms this recipe builds; on Windows tvision uses the Win32 console
+    # (cy-pca/cvcpkg tvision cvc.3), elsewhere ncursesw (runtime, below).
+    - name: tvision
+      platforms: [linux, macos, windows, freebsd, netbsd]
+    # The VolumeRover ports' permissive geometry (docs/roadmap/VOLROVER-LIBRARY-PORTS-ROADMAP.md
+    # §1.2), build-only:
+    #  - CDT (2D constrained Delaunay) and Shewchuk's predicates are header-only and linked
+    #    $<BUILD_INTERFACE:...>, as PEGTL is;
+    #  - Clipper2 is a static library that a shared cvc absorbs.
+    # So none is baked into required_deps. Scoped to the platforms their bundles are published
+    # for. macOS has had them (arm64 and x86_64) since 2026-11-12, so CVC_WITH_CLIPPER2 / CDT /
+    # SHEWCHUK are on there too, and permissive_libs_test runs every section. A dep is scoped by
+    # platform, never by arch, so each listed platform needs a bundle for every arch it builds.
+    - name: clipper2
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: cdt
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    - name: shewchuk-predicates
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+  # libcvc is a pure C++ SDK — no Python. The pycvc bindings (SWIG, Python,
+  # numpy) are a separate `pycvc` recipe that depends on libcvc.
+  runtime:
+    - name: zlib
+    - name: boost
+    # PocketFFT (BSD-3, header-only) replaces FFTW for volume_ops' filtered
+    # back-projection. libcvc is LGPL-2.1 and FFTW is GPL-2.0-or-later, so
+    # linking FFTW made every libcvc bundle -- and everything downstream of it
+    # -- a combined work under the GPL. It was also exported PUBLIC, so it
+    # landed on consumers' link lines whether they used the feature or not.
+    # Build-only: nothing in libcvc's public headers mentions it.
+    - name: pocketfft
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # Eigen 5 + libigl's MPL-2.0 core module, both header-only, back
+    # mesh_ops.h / fem.h (CVC_ENABLE_LIBIGL). Build-only like pocketfft: nothing
+    # under inc/cvc includes them, they compile into the private cvc_igl helper,
+    # and cvcTargets.cmake never names them. Declared under runtime for the same
+    # reason as pocketfft (build.sh only reads CVC_DEPS_PREFIX). Without them the
+    # option flips OFF and every mesh_ops/fem entry point throws
+    # mesh_ops_unavailable; CI asserts that did not happen.
+    - name: eigen
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: libigl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: gsl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # No cgal, gmp or mpfr: libcvc does not use CGAL. Its only uses were CGAL's
+    # Spatial Searching (GPL-3+), now the vendored nanoflann (BSD-2-Clause,
+    # src/cvc/third_party), and gmp/mpfr were here only because CGAL needs them.
+    - name: hdf5
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: log4cplus
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # The conference's Opus mics (media_opus.h): without libopus every mic stays f32, 1.5 Mbit/s
+    # against 32 kbit/s. Linked from its shared library natively, so a runtime dep; wasm links the
+    # static libopus.a (cvc.8 on, cy-pca/cvcpkg#467). No wasm-mt bundle exists yet, and Emscripten
+    # will not link a single-threaded archive into a -pthread build, so wasm-mt goes without.
+    - name: libopus
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm]
+    # The host-side end-to-end encryption (cvc::net::E2eeStore, the e2ee-* verbs, --e2ee-store):
+    # TX.WTF's X3DH + Double Ratchet over libsodium (cy-pca/cvcpkg#612). Without it CVC_HAVE_SODIUM
+    # is off and the verbs are absent, so a document shows encrypted conversations locked.
+    # Shared natively; wasm and wasm-mt link the static libsodium.a (wasm-mt seeds its randomness
+    # from getentropy: libsodium's emscripten default throws on a pthread).
+    - name: libsodium
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm, wasm-mt]
+    - name: tiff
+    - name: imagemagick
+    # ImageMagick delegates + libtiff codecs. `cvcpkg install` installs each
+    # named bundle FLAT — a bundle's own required_deps are NOT auto-pulled — so
+    # every transitive codec libtiff / MagickCore link must be listed HERE or the
+    # installed prefix is missing it and the dylib only loads where a matching
+    # SYSTEM library happens to exist (macOS: dyld `Library not loaded:
+    # @rpath/<lib> ... no such file`). libtiff links the FULL codec set —
+    # jpeg + zlib(base) + xz(lzma) + zstd + webp + lerc — so all of those must be
+    # present. (libsharpyuv ships inside the libwebp bundle so it needs no
+    # separate entry.)
+    - name: libjpeg-turbo
+    - name: libpng
+    - name: libwebp
+    # libtiff codecs beyond jpeg/webp — separate bundles, so declare them or
+    # macOS libtiff.dylib fails to load (@rpath/libLerc.4.dylib / libzstd /
+    # liblzma not found).
+    - name: lerc
+    - name: zstd
+    - name: xz
+    - name: freetype
+    # Two more MagickCore links, found by scanning the installed macOS prefix
+    # for @rpath deps nothing in it provides (rather than one CI round-trip per
+    # missing dylib):
+    #   libMagickCore-7.Q16HDRI.dylib -> @rpath/libfontconfig.1.dylib
+    #   animate/compare/composite     -> @rpath/libbz2.1.0.8.dylib
+    # The fontconfig one is what actually broke package-macos: it surfaced as a
+    # gtest `discover_tests` failure, because discovery RUNS the test binary and
+    # dyld resolves MagickCore's whole chain at that point — so an undeclared
+    # delegate looks like a broken test harness, not a missing package.
+    #
+    # fontconfig is scoped: it has linux/macos bundles only, and libcvc also
+    # builds windows, where an unconditional dep would fail the deps-install
+    # outright (same trap as assimp/openblas above). bzip2 is unscoped — it is
+    # published for every platform libcvc builds.
+    - name: fontconfig
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    # fontconfig's own link — flat install means adding a dep can reveal the
+    # next layer, so the prefix was re-scanned after adding fontconfig and
+    # libfontconfig.dylib -> @rpath/libexpat.1.10.0.dylib turned up. Unscoped:
+    # expat is published for every platform libcvc builds.
+    - name: expat
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: bzip2
+    - name: libxml2
+    - name: yaml
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # yaml-cpp (the C++ parser, distinct from the `yaml` C libYAML above) is
+    # linked by cvc::ariadne's .ari loader — the Ariadne UI/scene DSL parses
+    # documents into the widget tree (src/cvc/ariadne/loader.cpp). It is OPTIONAL
+    # at the CMake level (find_package(yaml-cpp CONFIG); absent -> the loader
+    # compiles a stub), but declared here so the packaged libcvc's build has the
+    # headers (real parser, CVC_ARIADNE_HAVE_YAML) and the bundle ships
+    # libyaml-cpp.so. wasm-mt too: publish-cvcgl-wasm.yml installs it, so the
+    # static wasm-mt libcvc has the real loader and names yaml-cpp among the
+    # packages its cvcConfig.cmake finds for a consumer (cy-pca/cvcpkg#387
+    # published the threaded bundle).
+    - name: yaml-cpp
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm-mt]
+    # The other Ariadne optional deps (cvc::ariadne in libcvc core): nlohmann-json
+    # + json-schema-validator power the .ari Layer-2 JSON-Schema validation (§15);
+    # ftxui is the terminal backend (§16.4). All OPTIONAL at the CMake level
+    # (find_package; absent -> stubs), declared here so the packaged libcvc's build
+    # compiles the real paths and ships the libs. Scoped to the platforms this
+    # recipe builds, where all three are published (linux, macOS arm64 and
+    # x86_64, windows x86_64). ftxui also has wasm/wasm-mt bundles
+    # (cy-pca/cvcpkg#378), and the wasm-mt libcvc links it
+    # (publish-cvcgl-wasm.yml), so it is declared there too.
+    - name: nlohmann-json
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: json-schema-validator
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: ftxui
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd, wasm-mt]
+    # ncurses: the Unix tvision backend links libncursesw (tvision, above, is
+    # build-only), and ncurses ships the terminfo database (share/terminfo) that
+    # TvisionBackend::run points ncurses at. A runtime dep so the flat install
+    # puts both in the consumer's prefix. Not Windows: no ncurses there.
+    - name: ncurses
+      platforms: [linux, macos, freebsd, openbsd, netbsd]
+    - name: levmar
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: libiimod
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # Native mesh/model import (Phase 3: cvc::model + read_model/read_geometry for
+    # obj/ply/stl/fbx/gltf/... via Assimp). Guarded by CVC_ENABLE_ASSIMP; the
+    # bundle links libassimp so it must be present in the flat prefix. (libcvc's
+    # CMake rewrites assimp's exported absolute-zlib-path quirk to ZLIB::ZLIB.)
+    #
+    # Scoped to the platforms assimp is published for (linux/macos-arm64/freebsd/
+    # netbsd/windows). `cvcpkg install-deps` reads THIS recipe's closure to set up
+    # the build prefix, so an assimp dep on a platform without a bundle would fail
+    # the deps-install. Where assimp is absent, find_package(assimp CONFIG) misses
+    # and CVC_ENABLE_ASSIMP flips OFF, so libcvc still builds (without the model
+    # loader). Windows added now that an assimp windows bundle is published
+    # (assimp 6.0.5+cvc.2) — this is what lets read_model parse buildings.glb, i.e.
+    # nav_finale / nav_city_swarm --bundle load a real Austin city on Windows.
+    - name: assimp
+      platforms: [linux, macos, freebsd, netbsd, windows, openbsd, wasm-mt]
+    # Jolt Physics, the cvc::physics backend (src/cvc/physics/jolt). Without it
+    # find_package(Jolt CONFIG) misses, CVC_WITH_JOLT turns OFF and libcvc builds
+    # with the null backend only. Linked PRIVATE into the cvc target: a shared
+    # libcvc absorbs it, a static (wasm-mt) libcvc names it in cvcConfig.cmake.
+    # joltphysics 5.6.0+cvc.5 is cross-platform deterministic and published for
+    # these platforms (macOS: arm64 only so far, like the rest of this list).
+    - name: joltphysics
+      platforms: [linux, macos, freebsd, netbsd, windows, openbsd, wasm-mt]
+    # Reentrant Qhull (libqhull_r), the VolumeRover ports' 3D Delaunay in place of CGAL's GPL
+    # triangulations (docs/roadmap/VOLROVER-LIBRARY-PORTS-ROADMAP.md §1.2). A shared cvc links
+    # the shared libqhull_r PRIVATE, so it is a runtime dependency; without the package
+    # find_package(Qhull) misses and CVC_WITH_QHULL turns OFF. Scoped to the platforms qhull
+    # 8.0.2+cvc.2 is published for (clipper2, cdt and shewchuk-predicates are build deps,
+    # above). Not yet listed:
+    #  - qhull's wasm-mt row, until libcvc's wasm publish builds with it;
+    #  - nanoflann (cy-pca/cvcpkg#597), which replaces src/cvc/third_party/nanoflann once its
+    #    macOS bundle exists, because nav needs it on every platform.
+    # install-deps is all-or-nothing, so a dependency with no build fails every lane.
+    - name: qhull
+      platforms: [linux, macos, freebsd, openbsd, netbsd, windows]
+    # Scoped for the same reason as assimp above, but the other way round:
+    # openblas deliberately has NO macOS build. macOS ships BLAS/LAPACK in the
+    # Accelerate framework, so libcvc-deps uses the system libraries there —
+    # see the "No macOS entry" comment on openblas's own build matrix, and
+    # levmar, which already scopes its openblas dep the same way.
+    #
+    # Unconditional, this failed EVERY macos deps-install outright:
+    #     Error: requested component(s) not found in the catalog for this
+    #     platform tuple: openblas
+    # and because install-deps is all-or-nothing, nothing else got installed
+    # either — so the visible symptom was a bogus `find_package(libiimod)`
+    # failure at src/cvc/CMakeLists.txt:279, naming an innocent package. That
+    # red predates 2026-07-27 and was mistaken for the Xcode 26.5 breakage.
+    #
+    # Nothing needs openblas by name on macOS: libcvc reaches BLAS through
+    # levmar, whose config tries `find_dependency(OpenBLAS CONFIG QUIET)` and
+    # falls back to `find_dependency(LAPACK)` — which resolves to Accelerate.
+    - name: openblas
+      platforms: [linux, freebsd, openbsd, netbsd, windows]
+    # libcurl, for cvc::net's HTTP backend (Ariadne's http(s):// URIs): the
+    # find_package(CURL) in src/cvc/CMakeLists.txt, without which http(s)://
+    # compiles to a stub. Nothing declared it on Linux, so the Linux bundle and
+    # SDK always shipped the stub ("cvc::net: no HTTP backend" in release.yml's
+    # linux configure), and ci.yml only tested the backend against a libcurl
+    # that apt -dev packages happened to pull in. Windows already got curl
+    # through cmake's closure; declared here so it no longer depends on that.
+    # macOS too: the SDK's libcurl (/usr/lib/libcurl.4.dylib, which libcvc linked
+    # there until 2026-11) is built without WebSockets, so cvc::net's WebSocket
+    # client and Ariadne's ws-* verbs were missing on macOS. cvcpkg's curl has
+    # them, and its dylib is @rpath-relocatable like the other deps.
+    # curl's own closure is openssl (declared below) and zlib.
+    - name: curl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # The gRPC/xmlrpc network state-transport stack (CVC_USING_XMLRPC + CVC_ENABLE_GRPC).
+    # Scoped to the platforms this recipe actually BUILDS the transport on (the build matrix
+    # below: linux/macos/windows). The wasm-mt bundle (built separately by publish-cvcgl-wasm.yml,
+    # xmlrpc/grpc OFF) links none of these, so declaring them for wasm made
+    # `cvcpkg install cvc/libcvc --platform wasm-mt` fail to resolve (abseil/protobuf/grpc are not
+    # published for wasm). The state_exec evaluator is independent of this stack (always built).
+    - name: openssl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: c-ares
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: re2
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: abseil
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: protobuf
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: grpc
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - name: pthreads4w
+      platforms: [windows]
+    # LLVM's OpenMP runtime (libomp), redistributable.
+    #  - macOS: AppleClang ships no OpenMP runtime, so without this bundle
+    #    find_package(OpenMP) fails ("Could NOT find OpenMP_CXX"), the top-level
+    #    CMakeLists.txt turns CVC_ENABLE_OPENMP OFF, and the voxels / filtering /
+    #    smoothing loops build serially. With lib/libomp.dylib and include/omp.h
+    #    on CMAKE_PREFIX_PATH, FindOpenMP uses them with '-Xclang -fopenmp'. The
+    #    dylib's install name is @rpath/libomp.dylib, so it ships in the SDK and
+    #    loads beside libcvc like every other bundle.
+    #  - Windows: MSVC builds of cvc use -openmp:llvm, and cvc links this instead
+    #    of MSVC's libomp140, which Microsoft does not allow redistributing
+    #    (src/cvc/CMakeLists.txt).
+    # Not Linux: GCC finds its own libgomp, and no Linux lane builds with clang.
+    - name: openmp
+      platforms: [macos, windows]
+    # libmcfgthread-2.dll: added for cvcpkg's MinGW-built Windows mpfr, which needs
+    # it for thread-local state. mpfr is no longer a dependency (no CGAL), but gsl
+    # is MinGW-built too (_common/env-windows.ps1), so this stays until a Windows
+    # package is checked without it. cvc does not link it directly.
+    - name: mingw-w64-runtime
+      platforms: [windows]
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  files:
+    # NB: no bin/cvc* — the `cvc` CLI is a separate package (cvc-cli /
+    # cvc-cli-cuda). This bundle is the pure SDK: libs, cmake config, headers.
+    - lib/libcvc*
+    - lib/cvc*
+    # The XMLRPC module (CVC_USING_XMLRPC=ON) installs its STATIC archive as
+    # lib/libxmlrpc.a — it does not match lib/libcvc*/lib/cvc*, so it must be
+    # listed explicitly or downstream links to cvc::xmlrpc fail with a missing
+    # archive.
+    #
+    # Native platforms only: the wasm-mt build (publish-cvcgl-wasm.yml) leaves
+    # CVC_USING_XMLRPC OFF, so it has no xmlrpc archive, and cvcpkg's strict
+    # package.files check refused the v3.6.0 wasm-mt bundle for declaring one
+    # ("2 entries that match nothing in the staged tree").
+    - glob: lib/libxmlrpc*
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    # ...and the MSVC spelling. add_library(xmlrpc STATIC) yields libxmlrpc.a on
+    # Unix but xmlrpc.lib on MSVC, which matches neither lib/libcvc* nor
+    # lib/cvc* nor the glob above -- the same reason lib/cvc* sits beside
+    # lib/libcvc* here. Without it the Windows bundle exports cvc::xmlrpc while
+    # shipping no archive for it.
+    - glob: lib/xmlrpc*
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+    - lib/cmake/cvc/
+    - include/cvc/
+    - include/xmlrpc/
+    # The Ariadne component library (cvc://components/*.ari: room_users, chat, ...).
+    # src/cvc installs it on every platform, and cvc:// looks for it beside the installed
+    # library (<bin or lib>/../share/libcvc/ariadne), so a native host resolves
+    # cvc://components/... with no CVC_ARIADNE_PATH. Up to 3.7.9 no bundle carried it: a
+    # document importing a component (the conference's Users and Chat windows) loaded
+    # without it everywhere but the browser pages, which embed the directory.
+    - share/libcvc/ariadne/
+  cmake_packages:
+    - name: cvc
+      targets:
+        - cvc::cvc
+        - cvc::xmlrpc
+
+abi:
+  cxx_std: 17

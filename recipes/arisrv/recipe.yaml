@@ -1,0 +1,74 @@
+# THROWAWAY (cy-pca/cvcpkg test PR, never merged): libcvc's own recipe pinned to a
+# feat/fleet-bsd-haiku commit, BSD rows only, so build-on-dev builds it on the dev BSD builders.
+schema_version: 1
+recipe:
+  name: arisrv
+  upstream_version: "4.0.9"
+  cvc_revision: 101
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "arisrv — the headless Ariadne conference relay. `arisrv --room NAME --state-listen 0.0.0.0:7700 --media-listen 0.0.0.0:7701 --ws-listen 0.0.0.0:7702` hosts a room: native clients (arigl) join over gRPC and browser clients (arigl-web) over WebSocket, and every client connects only to the relay, so a room works across home NAT. It relays the room tree, the camera and microphone streams (each viewer's video sized to its link, re-encoded with libjpeg-turbo) and the room chat, and runs the room's avatars as Jolt rigid bodies on its own clock. No window, GL, VTK or cvcGL: it runs on a plain headless VM."
+  homepage: https://github.com/transfix/libcvc
+  license: LGPL-2.1-only
+  tags: [conference, server, relay, grpc, websocket, cli, tools]
+
+# `arisrv` is its OWN package, separate from the libcvc SDK (like ari and cvc-cli), so a relay
+# lands deliberately in a server's PATH (`cvcpkg install arisrv`) rather than riding along in the
+# SDK bundle. It builds src/arisrv standalone against the installed libcvc SDK
+# (find_package(cvc CONFIG)) and installs just bin/arisrv; libcvc is never rebuilt.
+#
+# Everything the relay is made of is libcvc's: the gRPC and WebSocket state transports
+# (CVC_ENABLE_GRPC, CVC_ENABLE_WS), the media hub and its libjpeg-turbo video rungs, the room
+# chat, and the server-authoritative avatar holon on cvc::physics' Jolt backend (CVC_WITH_JOLT).
+# Those are libcvc's build options and libcvc's runtime deps (grpc, protobuf, joltphysics,
+# libjpeg-turbo, ...), so arisrv needs nothing but libcvc. It needs a libcvc built with gRPC (its
+# planes are gRPC; WebSocket adds its browser clients): the libcvc recipe and publish-cvcpkg.yml
+# turn both on (#943), and src/arisrv's standalone configure stops on an SDK without gRPC. Jolt
+# and libjpeg-turbo are PRIVATE to cvc, so the binary reports them when it starts ("avatar
+# physics: Jolt rigid bodies", "transcode libjpeg-turbo"); publish-cvcpkg.yml checks both before
+# it packs.
+#
+# arisrv is built against the libcvc of its own tree (the conference API moves with every
+# release), so publish it with that libcvc, as ari is.
+#
+# Platforms: wherever libcvc builds its transports: linux, macos and windows.
+
+source:
+  # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
+  # tag's tarball. In the repository this recipe builds from the checkout (vendored).
+  type: tarball
+  url: https://github.com/transfix/libcvc/archive/ed8829b6b4e2a456d92d9a9af8f7477be151efe8.tar.gz
+  sha256: "f7bffe3edd09ec481461db01234e0faf1d3efda4d5440c893328f5a6d68de22d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - name: libcvc
+      version: "==4.0.9"
+  runtime:
+    - name: libcvc
+      version: "==4.0.9"
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  matrix:
+    - platform: freebsd
+      script: build.sh
+    - platform: openbsd
+      script: build.sh
+    - platform: netbsd
+      script: build.sh
+
+package:
+  # Just the `arisrv` executable (bin/arisrv, bin/arisrv.exe on Windows). No cmake package
+  # config — arisrv is an application.
+  files:
+    - bin/arisrv*
+
+abi:
+  cxx_std: 20
