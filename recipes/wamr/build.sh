@@ -32,8 +32,9 @@
 #     configure clones from GitHub, and these builds stay off the network.
 # NetBSD's mremap(2) isn't Linux's (no MREMAP_MAYMOVE), so the check
 # that would find it is answered no, and WAMR grows a memory by mmap and copy.
-# The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64, and
-# NetBSD's <strings.h> has a popcount32 and popcount64 of its own.
+# The three have no MAP_32BIT either, which WAMR's mmap passes on x86_64.
+# NetBSD's <strings.h> has a popcount32 and popcount64 of its own, and its PaX
+# MPROTECT needs WAMR's mmap to say what a mapping may later become.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -61,6 +62,16 @@ if [[ "${CVC_PLATFORM}" == "netbsd" ]]; then
             "${CVC_SOURCE_DIR}/${f}" > "${CVC_SOURCE_DIR}/${f}.netbsd"
         mv "${CVC_SOURCE_DIR}/${f}.netbsd" "${CVC_SOURCE_DIR}/${f}"
     done
+    # PaX MPROTECT keeps a mapping at most at the protection it was made with,
+    # and WAMR makes a linear memory PROT_NONE, then mprotects it read-write
+    # ("allocate linear memory failed", dev job 25611). Its mmap names
+    # read-write as the most a mapping may become (PROT_MPROTECT).
+    m="${CVC_SOURCE_DIR}/core/shared/platform/common/posix/posix_memmap.c"
+    sed -e 's/^    int map_prot = PROT_NONE;$/    int map_prot = PROT_MPROTECT(PROT_READ | PROT_WRITE);/' \
+        "${m}" > "${m}.netbsd"
+    mv "${m}.netbsd" "${m}"
+    grep -q 'PROT_MPROTECT(PROT_READ | PROT_WRITE)' "${m}" \
+        || { echo "build.sh: posix_memmap.c's map_prot line has moved" >&2; exit 1; }
 fi
 # The posix layer asks mmap for MAP_32BIT on x86_64 (a hint the AOT loader's first try passes,
 # which falls back without it); OpenBSD, NetBSD and Haiku have no such flag.
