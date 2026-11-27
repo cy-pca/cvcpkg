@@ -13,7 +13,18 @@ source "${SCRIPT_DIR}/../_common/env-wasi.sh"
 
 cd "${CVC_SOURCE_DIR}"
 
+# Libraries only (no-apps).  The openssl CLI is a POSIX program -- signals in
+# apps.h, times() for its timers, fork + <sys/wait.h> in speed.c -- and wasip1
+# has none of those, so the wasi package ships no bin/openssl (recipe.yaml
+# scopes it off).  no-ui-console keeps libcrypto's own console prompt
+# (crypto/ui/ui_openssl.c, sigaction + termios) out, and no-secure-memory the
+# secure heap (crypto/mem_sec.c: mmap, mlock, mprotect guard pages), so
+# OPENSSL_secure_malloc() falls back to plain malloc.  The EH flags come from
+# env-wasi.sh (CFLAGS/LDFLAGS), which Configure reads.  wasi-compat.h, forced
+# into every translation unit, gives libcrypto's getpid() calls a constant pid
+# so the archive needs no getpid emulation from its consumers.
 WASI_TARGET_FLAGS="--target=wasm32-wasip1 --sysroot=${_WASI_SYSROOT}"
+export CPPFLAGS="-include ${SCRIPT_DIR}/wasi-compat.h${CPPFLAGS:+ ${CPPFLAGS}}"
 
 CC="${CC}" \
 CXX="${CXX}" \
@@ -31,6 +42,9 @@ perl Configure \
     no-dso \
     no-tests \
     no-sock \
+    no-ui-console \
+    no-secure-memory \
+    no-apps \
     -DNO_FORK \
     ${WASI_TARGET_FLAGS}
 

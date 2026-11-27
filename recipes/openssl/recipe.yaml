@@ -147,8 +147,9 @@ package:
     # whole install tree is staged regardless -- so a shared build that does emit
     # them still ships them; this just stops asserting them where a static build
     # omits them. (Linux static openssl does still build the engine modules.)
-    - { glob: "lib/engines-3/", platforms: [linux, freebsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
-    - { glob: "lib/ossl-modules/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, wasi, cosmo] }
+    # wasi (no-engine, no-dso, no-shared) leaves both directories empty.
+    - { glob: "lib/engines-3/", platforms: [linux, freebsd, netbsd, haiku, wasm, wasm-mt, cosmo] }
+    - { glob: "lib/ossl-modules/", platforms: [linux, macos, freebsd, netbsd, haiku, windows, wasm, wasm-mt, cosmo] }
     - lib/cmake/OpenSSL/
     # Windows openssl does not install pkg-config .pc files (static least of
     # all); the schema has no link scope, so assert them on every target
@@ -157,7 +158,8 @@ package:
     - { glob: "lib/pkgconfig/libssl*",    platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - { glob: "lib/pkgconfig/libcrypto*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, wasm, wasm-mt, wasi, cosmo] }
     - include/openssl/
-    - bin/openssl*
+    # wasi builds the libraries only (build-wasi.sh: no-apps).
+    - { glob: "bin/openssl*", platforms: [linux, macos, freebsd, openbsd, netbsd, haiku, windows, wasm, wasm-mt, cosmo] }
     # Only build.ps1 installs the license so far (see cvc_revision 10).
     - { glob: "share/licenses/openssl/", platforms: [windows] }
   cmake_packages:

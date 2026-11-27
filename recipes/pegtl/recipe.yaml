@@ -60,10 +60,12 @@ build:
     - platform: haiku
       script: build.sh
     # Cross targets reuse build.sh, which sources env-${CVC_PLATFORM}.sh
-    # (env-wasm.sh / env-wasm-mt.sh) and so builds with the Emscripten
-    # toolchain.  Nothing is compiled except PEGTL's std::filesystem probe, so
-    # every bundle is the same headers; the toolchain decides only which
-    # filesystem implementation the exported target asks for (none, below).
+    # (env-wasm.sh / env-wasm-mt.sh, or env-wasi.sh for wasi-sdk) and so
+    # builds with the cross toolchain.  Nothing is compiled except PEGTL's
+    # std::filesystem probe, so every bundle is the same headers; the
+    # toolchain decides only which filesystem implementation the exported
+    # target asks for (none, below).  wasi is there for libcvc, whose
+    # state_exec grammar includes it.
     # The Windows-host entries are what windows-recipe-check's
     # platform=wasm / wasm-mt runs.
     - platform: wasm
@@ -80,6 +82,9 @@ build:
       script: build-wasm.ps1
       env:
         CVC_WASM_THREADS: "1"
+    - platform: wasi
+      host_platform: linux
+      script: build.sh
 
 package:
   # Header-only: no library, just the headers, the CMake package config and

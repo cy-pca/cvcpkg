@@ -151,14 +151,14 @@ notes:
   - title: "Wasi-excluded libraries"
     platforms: [wasi]
     description: >-
-      wasm32-wasip1 is single-threaded and has no signal handlers, no
-      process control, no BSD sockets and no dynamic loading, so the wasi
-      build excludes everything the wasm build excludes plus thread,
-      contract, test, locale, wave and filesystem.  BOOST_HAS_PTHREADS is
-      deliberately NOT defined here: unlike Emscripten, wasi-libc's
-      pthread_create fails at runtime on wasip1, so Boost is left to pick
-      its single-threaded code paths.  Boost.Filesystem is dropped because
-      wasip1 resolves every path relative to a preopened directory, which
-      does not match the absolute-path semantics the library assumes.
-      CGAL — the only cvcpkg consumer of boost on wasi — uses Boost
-      header-only (graph, property_map, variant, multiprecision).
+      wasm32-wasip1 has no signal handlers, no process control, no BSD
+      sockets and no dynamic loading, so the wasi build excludes everything
+      the wasm build excludes plus contract, test, locale and wave.  thread
+      and filesystem are built (libcvc links them): mutexes and condition
+      variables work on wasi-libc's single-threaded pthreads, starting a
+      boost::thread throws thread_resource_error, and filesystem paths
+      resolve through the runtime's preopened directories.  Like the rest
+      of the wasi column it uses wasm exception handling, so a program
+      linking it runs with `wasmtime run -W exceptions=y`.  mapped_file
+      and process_cpu_clock link wasi-libc's mman and process-clock
+      emulations (-lwasi-emulated-mman, -lwasi-emulated-process-clocks).
