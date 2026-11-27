@@ -4104,7 +4104,10 @@ def builder_run(
         *identity* names the reporter as the job's claim did, when that was
         not this process (_report_stranded_claims); by default, job_identity.
         """
-        payload = {**fields, **(identity or job_identity)}
+        payload = {**fields, **job_identity}
+        if identity:
+            # A previous process's claim: named as that claim named it.
+            payload = {**fields, **identity}
         why = ""
         for attempt in range(_REPORT_ATTEMPTS):
             if attempt:
