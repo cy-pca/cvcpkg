@@ -187,6 +187,17 @@ _accept_license_opt = click.option(
         "of it, install the nearest variant published for this platform/arch."
     ),
 )
+@click.option(
+    "--as-deps",
+    "as_deps",
+    is_flag=True,
+    hidden=True,
+    help=(
+        "The requested components are another package's dependencies (install-deps "
+        "passes this), so a debug install may take their release bundles where the "
+        "platform allows, as it does for any dependency."
+    ),
+)
 def install(
     components: tuple[str, ...],
     from_file: str | None,
@@ -214,6 +225,7 @@ def install(
     accept_licenses: tuple[str, ...] = (),
     build_tools: tuple[str, ...] = (),
     with_deps: bool = True,
+    as_deps: bool = False,
 ) -> None:
     """Install component bundles into a prefix.
 
@@ -252,7 +264,7 @@ def install(
     from cvcpkg.builder import _detect_arch_for_platform
     from cvcpkg.cache import default_cache_dir
     from cvcpkg.catalog import (
-        catalog_entries,
+        entries_with_config_fallback,
         fetch_catalog,
         load_catalog_from_file,
         newer_revision_available,
@@ -268,7 +280,11 @@ def install(
     )
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.manifest import ComponentReq, Requirements, parse_component_spec
-    from cvcpkg.platform import detect_platform, is_static_only_platform
+    from cvcpkg.platform import (
+        detect_platform,
+        is_static_only_platform,
+        runtime_config_fallback,
+    )
 
     ctx = click.get_current_context()
     prefix_path = Path(prefix).resolve()
@@ -472,8 +488,14 @@ def install(
         c.name: (c.org or org) for c in reqs.components if (c.org or org)
     }
 
+    # A debug install takes a dependency's release bundle when it has no debug
+    # one, where debug and release share an ABI (entries_with_config_fallback).
+    # The names asked for are installed in the config asked for, unless they
+    # are themselves another package's deps (install-deps: --as-deps).
+    config_fallen_back: set[str] = set()
+    config_held_back: set[str] = set()
     if not catalog_failed:
-        entries = catalog_entries(
+        entries, config_fallen_back, config_held_back = entries_with_config_fallback(
             cat,
             platform=plat,
             arch=arc,
@@ -484,6 +506,7 @@ def install(
             # flag would outlive this command and silently reinstate bundles an
             # upstream withdrew for every later resolution in the same process.
             trust_mirror=trust_mirror,
+            protected=set() if as_deps else set(requested_names),
         )
 
         # Group candidate entries by component name for the resolver, scoping
@@ -653,6 +676,16 @@ def install(
                         f"cache and report BOTH versions plus the catalog source below.",
                         err=True,
                     )
+    fell_back = sorted(
+        n for n, e in picked.items() if n in config_fallen_back and e.build_type != reqs.config
+    )
+    if fell_back:
+        other = runtime_config_fallback(plat, reqs.config)
+        click.echo(
+            f"cvcpkg: {len(fell_back)} dep(s) have no {plat}/{arc}/{reqs.config}/{reqs.link} "
+            f"bundle; using their {other} ones ({reqs.config} and {other} builds share an "
+            f"ABI on {plat}): {', '.join(fell_back)}"
+        )
     if not with_deps:
         # Say what --no-deps left out, so a missing library is not a mystery
         # later.  A dep this install picks anyway (requested too, or provided by
@@ -699,6 +732,14 @@ def install(
             hint = " (--no-deps installs prebuilt bundles only)"
         else:
             hint = " (pass --fallback-to-source to build it from source instead)"
+        release_only = sorted(c.display_name for c in reqs.components if c.name in config_held_back)
+        if release_only:
+            other = runtime_config_fallback(plat, reqs.config)
+            hint += (
+                f"; {', '.join(release_only)} only publish(es) {other} bundles for "
+                f"{plat}/{arc}: a {reqs.config} install takes those for dependencies, "
+                f"not for a package asked for by name"
+            )
         raise click.ClickException(
             "requested component(s) not found in the catalog for this platform tuple: "
             + ", ".join(unresolved)
@@ -1569,6 +1610,8 @@ def install_deps(
             trust_mirror=trust_mirror,
             accept_licenses=accept_licenses,
             build_tools=tuple(sorted(run_only_tools.intersection(comps))),
+            # Every name here is the recipe's dependency, never the deliverable.
+            as_deps=True,
         )
 
 
@@ -2284,7 +2327,7 @@ def upgrade(
       cvcpkg upgrade --prefix ./deps --dry-run       # preview
     """
     from cvcpkg.cache import default_cache_dir
-    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
+    from cvcpkg.catalog import entries_with_config_fallback, fetch_catalog, load_catalog_from_file
     from cvcpkg.installer import install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
     from cvcpkg.resolver import _sort_candidates
@@ -2304,7 +2347,9 @@ def upgrade(
     else:
         cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
 
-    entries = catalog_entries(
+    # A debug prefix holds release bundles of the deps with no debug one (see
+    # install), so those upgrade within release.
+    entries, _, _ = entries_with_config_fallback(
         cat,
         platform=lock.platform,
         arch=lock.arch,

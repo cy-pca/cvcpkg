@@ -30,6 +30,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **A debug install takes a dependency's release bundle when it has no debug one.**
+  libcvc publishes debug bundles for linux and macOS, built against release
+  deps (eigen, ftxui, joltphysics, ... publish release only). `cvcpkg install
+  libcvc --config debug` resolved every runtime dep in debug, so the resolver
+  backtracked to libcvc 3.4.0+cvc.8, the last debug libcvc whose deps all had
+  debug bundles, and printed only a stale-revision warning.
+  - On every platform but Windows a dep with no bundle in the requested config
+    comes from release, and install names them. Debug and release builds share
+    an ABI there. On Windows, MSVC's debug CRT differs, so the tuple stays strict.
+  - A dep with any debug bundle stays debug. A package named on the command
+    line (or in `--from`) is installed in the config asked for, or the install
+    fails and says it publishes release only. A release bundle never outranks
+    a debug provider of a virtual name.
+  - `install-deps` passes its recipe's deps as `--as-deps` (hidden), so they
+    may fall back too. `upgrade` upgrades the fallen-back deps within release.
+  - `cvcpkg.platform.runtime_config_fallback`,
+    `cvcpkg.catalog.entries_with_config_fallback`.
+
 - **The CLI-login broker is a standard OAuth 2.0 authorization server.**
   Ariadne's `oidc-sign-in` (and so cy-pca/cypkg) signs in to a registry with
   it: the loopback flow natively, the redirect flow in a browser page.

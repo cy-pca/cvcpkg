@@ -222,6 +222,22 @@ def variant_for(
     return config, link
 
 
+def runtime_config_fallback(platform: str, config: str) -> str | None:
+    """The config a *config* install may take a dependency's bundle from instead.
+
+    A debug build links release builds of its dependencies on every platform but
+    Windows: on ELF and Mach-O a debug build (-O0 -g) and a release one share one
+    ABI, so a debug libcvc links the release eigen or ftxui as it would its own
+    (libcvc's debug publish lanes build exactly that way). MSVC's debug CRT
+    (/MDd, _ITERATOR_DEBUG_LEVEL=2) is not the release one (/MD), so a debug
+    binary there needs debug builds of its C++ dependencies. Returns ``None``
+    when there is no fallback.
+    """
+    if config == "debug" and platform != "windows":
+        return "release"
+    return None
+
+
 def config_matches(bundle_config: str, requested: str) -> bool:
     """True when a bundle's config (``build_type``) satisfies a *requested* one.
 

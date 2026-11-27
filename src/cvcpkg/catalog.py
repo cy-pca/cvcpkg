@@ -415,6 +415,66 @@ def catalog_entries(
     return _prefer_exact_noarch_variant(entries, build_type=build_type, link=link)
 
 
+def entries_with_config_fallback(
+    catalog: dict,
+    *,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    trust_mirror: bool | None = None,
+    protected: set[str] | frozenset[str] = frozenset(),
+) -> tuple[list[CatalogEntry], set[str], set[str]]:
+    """:func:`catalog_entries` for this tuple, plus fallback-config bundles for the rest.
+
+    A debug install on a platform whose debug and release builds share an ABI
+    (:func:`cvcpkg.platform.runtime_config_fallback`) also takes the release
+    bundles of every package with no debug bundle for this platform/arch/link:
+    libcvc's debug bundles depend on eigen, ftxui and others that publish
+    release only, so a debug install could not resolve them.
+
+    A package with a bundle in *build_type* never falls back, and neither does
+    a name in *protected* (the names a user asked for: a debug request installs
+    that package in debug or fails) or a bundle providing such a name, so a
+    fallback bundle never outranks a provider of the requested config.
+
+    Returns ``(entries, fallen_back, held_back)``: the entries to resolve
+    against, the names whose candidates come from the fallback config, and the
+    *protected* names that only the fallback config publishes.
+    """
+    from cvcpkg.platform import runtime_config_fallback
+
+    entries = catalog_entries(
+        catalog,
+        platform=platform,
+        arch=arch,
+        build_type=build_type,
+        link=link,
+        trust_mirror=trust_mirror,
+    )
+    fallback = runtime_config_fallback(platform, build_type)
+    if fallback is None:
+        return entries, set(), set()
+    have = {e.name for e in entries} | {p for e in entries for p in e.provides}
+    blocked = have | set(protected)
+    extra: list[CatalogEntry] = []
+    held_back: set[str] = set()
+    for e in catalog_entries(
+        catalog,
+        platform=platform,
+        arch=arch,
+        build_type=fallback,
+        link=link,
+        trust_mirror=trust_mirror,
+    ):
+        if e.name in blocked or blocked.intersection(e.provides):
+            if e.name in protected and e.name not in have:
+                held_back.add(e.name)
+            continue
+        extra.append(e)
+    return entries + extra, {e.name for e in extra}, held_back
+
+
 def exclusive_with(
     relations: dict[str, tuple[list[str] | tuple[str, ...], list[str] | tuple[str, ...]]],
 ) -> dict[str, set[str]]:
