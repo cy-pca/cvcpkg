@@ -1,0 +1,106 @@
+schema_version: 1
+recipe:
+  name: binaryen
+  upstream_version: "129"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://github.com/WebAssembly/binaryen
+  license: Apache-2.0
+  tags: [wasm, compiler, tools]
+  description: >-
+    Binaryen, the WebAssembly compiler and toolchain infrastructure library:
+    libbinaryen as a static library with its C and C++ headers, and the
+    wasm-opt, wasm-as and wasm-dis tools.  libcvc's WAMR backend
+    (src/ariadne_wasm) links it to read a guest's WAT and to run Asyncify on a
+    guest that wasn't transformed at install; wasm-opt is the install-time
+    transform's (cvc_ariadne_wasm_transform) on hosts with no emsdk.
+  # 129 is the binaryen emsdk 5.0.7 ships (wasm-opt version 129), so a guest
+  # transformed here is the one emsdk's wasm-opt makes.
+  #
+  # One static library on every platform, whatever CVC_LINK asks for: binaryen
+  # exports only its C API from a DLL (MSVC builds it static only), and libcvc
+  # uses the C++ API, whose errors are exceptions where the C API's are exit().
+  # The C++ headers are src/'s tree under include/binaryen, which a consumer puts
+  # on its include path; FP16's header (src/wasm-interpreter.h includes it) goes
+  # there too.  The tools link the same library.  Not built: the tests (they
+  # need googletest, a submodule the tarball lacks), the other tools, and
+  # binaryen.js.  LTO stays off, so the archive holds plain objects any linker
+  # takes.
+
+source:
+  type: tarball
+  url: https://github.com/WebAssembly/binaryen/archive/refs/tags/version_129.tar.gz
+  sha256: "0bbfc0f414a18235f47a3e13a333cc14f702ab3324fb10653ab08865680fcbb8"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    - cmake
+    - ninja
+  runtime: []
+  host_tools: []
+
+build:
+  matrix:
+    - platform: linux
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: macos
+      script: build.sh
+      env:
+        MACOSX_DEPLOYMENT_TARGET: "13.0"
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+        CXXFLAGS: "-O2 -fPIC"
+    - platform: windows
+      script: build.ps1
+
+test:
+  script: test.sh
+
+package:
+  files:
+    - lib/libbinaryen.a
+    - lib/binaryen.lib
+    - lib/cmake/binaryen/
+    - include/binaryen-c.h
+    - include/wasm-delegations.def
+    - include/binaryen/
+    - bin/wasm-opt*
+    - bin/wasm-as*
+    - bin/wasm-dis*
+  cmake_packages:
+    - { name: binaryen, targets: ["binaryen::binaryen"] }
+
+toolchain:
+  cxx:
+    min_version: "any"
+    description: "C++17-capable compiler"
+
+abi:
+  cxx_std: 17
+
+notes: []

@@ -36,10 +36,14 @@ New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\lib" | Out-Null
 New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\include" | Out-Null
 New-Item -ItemType Directory -Force -Path "$env:CVC_INSTALL_DIR\bin" | Out-Null
 
-# Copy libraries.
-Get-ChildItem $env:CVC_BUILD_DIR -Recurse -Include 'vmlib*','iwasm*' -File |
-    Where-Object { $_.Extension -in '.lib','.dll','.a' } |
-    Copy-Item -Destination "$env:CVC_INSTALL_DIR\lib" -Force
+# Copy the runtime library: product-mini's vmlib, a static library named
+# libiwasm.lib.  Not iwasm.lib: that is the import library of the iwasm.exe CLI
+# (whose sources dllexport the API), which no consumer can link, and which is
+# all cvc.3 shipped.
+$runtimeLib = Get-ChildItem $env:CVC_BUILD_DIR -Recurse -Filter 'libiwasm.lib' -File |
+    Select-Object -First 1
+if (-not $runtimeLib) { throw "no libiwasm.lib (vmlib) under $env:CVC_BUILD_DIR" }
+Copy-Item $runtimeLib.FullName -Destination "$env:CVC_INSTALL_DIR\lib" -Force
 
 # Copy iwasm CLI if built.
 Get-ChildItem $env:CVC_BUILD_DIR -Recurse -Include 'iwasm.exe' -File |
@@ -57,15 +61,16 @@ New-Item -ItemType Directory -Force -Path $cmakeDir | Out-Null
 
 @"
 get_filename_component(_IWASM_PREFIX "`${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
-add_library(iwasm::iwasm UNKNOWN IMPORTED)
-find_library(_IWASM_LIB NAMES vmlib iwasm PATHS "`${_IWASM_PREFIX}/lib" NO_DEFAULT_PATH)
+if(NOT TARGET iwasm::iwasm)
+add_library(iwasm::iwasm STATIC IMPORTED)
 set_target_properties(iwasm::iwasm PROPERTIES
-    IMPORTED_LOCATION "`${_IWASM_LIB}"
+    IMPORTED_LOCATION "`${_IWASM_PREFIX}/lib/libiwasm.lib"
     INTERFACE_INCLUDE_DIRECTORIES "`${_IWASM_PREFIX}/include"
+    INTERFACE_LINK_LIBRARIES "ntdll;ws2_32"
 )
+endif()
 set(iwasm_FOUND TRUE)
 unset(_IWASM_PREFIX)
-unset(_IWASM_LIB)
 "@ | Set-Content "$cmakeDir\iwasmConfig.cmake"
 
 @"

@@ -150,10 +150,16 @@ jobs:
           #    (exit 1); "still building, nothing failed" exits 75, which we treat
           #    as a soft pass (the build finishes on the cluster and is picked up
           #    by --skip-existing next time).
+          # haiku: the dev cluster has Haiku cross-builders (dev-builder-02 and
+          #    phm-10-66-77-207 serve haiku/x86_64), and submit-dag stages haiku
+          #    only for recipes whose matrix has a `- platform: haiku` row, so a
+          #    PR that adds or changes one is built there instead of first on
+          #    cvcpkg.org.  Haiku jobs are slow (the build runs on a Haiku box
+          #    over SSH); past --wait-timeout they soft-pass like any other.
           set +e
           cvcpkg builds submit-dag \
             --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
-            --platform linux,freebsd,openbsd,netbsd,windows,wasm,wasi \
+            --platform linux,freebsd,openbsd,netbsd,haiku,windows,wasm,wasi \
             --arch x86_64,wasm32 \
             --config release --link shared \
             --recipes-dir recipes \
