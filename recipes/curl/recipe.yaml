@@ -90,7 +90,12 @@ recipe:
   # kept build-machine paths (/tmp/cvcpkg-builder/...) in them, so pkg-config,
   # find_package or the -config script handed consumers dead -I/-L paths
   # (2026-10-13 scan of every published linux bundle).
-  cvc_revision: 10  # licence texts in share/licenses/curl/ (cvcpkg#576)
+  # cvc.10: licence texts in share/licenses/curl/ (cvcpkg#576).
+  # cvc.11: NetBSD's CA path, /etc/openssl/certs.  configure finds no CA bundle
+  # or path there (NetBSD has no /etc/ssl), so the NetBSD bundle verified no TLS
+  # peer: "curl: (60) unable to get local issuer certificate".  Other platforms
+  # rebuild unchanged.
+  cvc_revision: 11
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
