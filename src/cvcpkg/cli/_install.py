@@ -245,8 +245,8 @@ def install(
       # Override config for a debug build (file says release)
       cvcpkg install --from cvc-requirements.yaml --config debug
 
-      # Debug libcvc; its deps with no debug bundle come from release
-      # (debug and release share an ABI everywhere but Windows)
+      # Debug libcvc; other orgs' deps come from release, as its debug
+      # bundles link them (debug and release share an ABI but on Windows)
       cvcpkg install libcvc --config debug --prefix ./deps
 
       # Install individual components by name
