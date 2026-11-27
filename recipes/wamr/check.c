@@ -29,6 +29,10 @@
 
 #include "wasm_c_api.h"
 
+/* wasm_export.h's, declared here: that header and wasm_c_api.h can't share a file (both declare
+   wasm_module_t). 4 is WASM_LOG_LEVEL_VERBOSE. */
+void wasm_runtime_set_log_level(int level);
+
 static const unsigned char kModule[] = {
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0a, 0x02, 0x60, 0x01, 0x7f, 0x01,
     0x7f, 0x60, 0x01, 0x7f, 0x00, 0x02, 0x0d, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x05, 0x74, 0x77,
@@ -121,8 +125,22 @@ int main(void) {
      memory as a page of its own. */
   InstantiationArgs args = {0};
   wasm_instance_t *inst = wasm_instance_new_with_args_ex(store, module, &import_vec, &trap, &args);
-  if (!inst)
-    FAIL("wasm_instance_new_with_args_ex");
+  if (!inst) {
+    /* Once more with WAMR's log at its most verbose, for its own reason. */
+    wasm_runtime_set_log_level(4);
+    trap = NULL;
+    inst = wasm_instance_new_with_args_ex(store, module, &import_vec, &trap, &args);
+  }
+  if (!inst) {
+    char why[256] = "no trap";
+    if (trap) {
+      wasm_message_t msg;
+      wasm_trap_message(trap, &msg);
+      snprintf(why, sizeof why, "%.*s", (int)msg.size, msg.data);
+      wasm_byte_vec_delete(&msg);
+    }
+    FAIL("wasm_instance_new_with_args_ex: %s", why);
+  }
 
   wasm_extern_vec_t exports;
   wasm_instance_exports(inst, &exports);
