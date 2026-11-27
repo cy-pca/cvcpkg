@@ -50,7 +50,15 @@ recipe:
   # openssl.exe and its symlinks failed silently without the privilege.
   # build.ps1 fails if any packaged file but a PDB names the build tree.  Other
   # platforms rebuild unchanged.
-  cvc_revision: 12  # licence texts in share/licenses/openssl/ (cvcpkg#576)
+  #
+  # 12: licence texts in share/licenses/openssl/ (cvcpkg#576).
+  #
+  # Bumped 12 -> 13: NetBSD's OPENSSLDIR is /etc/openssl, where NetBSD keeps its
+  # CA certificates (/etc/openssl/certs, from certctl); it has no /etc/ssl.  With
+  # /etc/ssl nothing linking this libssl could verify a TLS peer there: cvcpkg's
+  # curl, which cmake pulls into a build prefix, failed grpc's source downloads
+  # with "(60) SSL certificate problem".  Other platforms rebuild unchanged.
+  cvc_revision: 13
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
