@@ -492,10 +492,12 @@ def install(
         c.name: (c.org or org) for c in reqs.components if (c.org or org)
     }
 
-    # A debug install takes a dependency's release bundle when it has no debug
-    # one, where debug and release share an ABI (entries_with_config_fallback).
-    # The names asked for are installed in the config asked for, unless they
-    # are themselves another package's deps (install-deps: --as-deps).
+    # A debug install takes each dependency in the config its dependents were
+    # built against, where debug and release share an ABI: its own org's
+    # packages in debug (release where none is published), other orgs' in
+    # release (entries_with_config_fallback).  The names asked for install in
+    # the config asked for, unless they are another package's deps
+    # (install-deps: --as-deps), which all stay in that config where published.
     config_fallen_back: set[str] = set()
     config_held_back: set[str] = set()
     if not catalog_failed:
@@ -510,7 +512,8 @@ def install(
             # flag would outlive this command and silently reinstate bundles an
             # upstream withdrew for every later resolution in the same process.
             trust_mirror=trust_mirror,
-            protected=set() if as_deps else set(requested_names),
+            asked=None if as_deps else set(requested_names),
+            requested_org=requested_org,
         )
 
         # Group candidate entries by component name for the resolver, scoping
@@ -686,9 +689,10 @@ def install(
     if fell_back:
         other = runtime_config_fallback(plat, reqs.config)
         click.echo(
-            f"cvcpkg: {len(fell_back)} dep(s) have no {plat}/{arc}/{reqs.config}/{reqs.link} "
-            f"bundle; using their {other} ones ({reqs.config} and {other} builds share an "
-            f"ABI on {plat}): {', '.join(fell_back)}"
+            f"cvcpkg: {len(fell_back)} dep(s) from {other}, as {reqs.config} bundles link them: "
+            f"other orgs' packages, and those with no {plat}/{arc}/{reqs.config}/{reqs.link} "
+            f"bundle ({reqs.config} and {other} builds share an ABI on {plat}): "
+            f"{', '.join(fell_back)}"
         )
     if not with_deps:
         # Say what --no-deps left out, so a missing library is not a mystery
@@ -2331,9 +2335,10 @@ def upgrade(
       cvcpkg upgrade --prefix ./deps --dry-run       # preview
     """
     from cvcpkg.cache import default_cache_dir
-    from cvcpkg.catalog import entries_with_config_fallback, fetch_catalog, load_catalog_from_file
+    from cvcpkg.catalog import catalog_entries, fetch_catalog, load_catalog_from_file
     from cvcpkg.installer import install_entry
     from cvcpkg.lockfile import LockEntry, Lockfile
+    from cvcpkg.platform import config_matches
     from cvcpkg.resolver import _sort_candidates
 
     prefix_path = Path(prefix).resolve()
@@ -2351,15 +2356,12 @@ def upgrade(
     else:
         cat = fetch_catalog(catalog_url, cache_dir=default_cache_dir())
 
-    # A debug prefix holds release bundles of the deps with no debug one (see
-    # install), so those upgrade within release.
-    entries, _, _ = entries_with_config_fallback(
-        cat,
-        platform=lock.platform,
-        arch=lock.arch,
-        build_type=lock.config,
-        link=lock.link,
-    )
+    # Each installed bundle upgrades within its own config: a debug prefix holds
+    # release bundles of the deps its debug packages link (see install).  The
+    # config comes from the catalog row with the installed bundle's sha256,
+    # else the prefix's.
+    entries = catalog_entries(cat, platform=lock.platform, arch=lock.arch, link=lock.link)
+    installed_config = {e.sha256: e.build_type for e in entries if e.sha256}
     by_name: dict[str, list] = {}
     for e in entries:
         by_name.setdefault(e.name, []).append(e)
@@ -2377,7 +2379,8 @@ def upgrade(
     for b in lock.bundles:
         if wanted and b.name not in wanted:
             continue
-        cands = by_name.get(b.name, [])
+        cfg = installed_config.get(b.sha256, lock.config) if b.sha256 else lock.config
+        cands = [e for e in by_name.get(b.name, []) if config_matches(e.build_type, cfg)]
         if not cands:
             continue
         newest = _sort_candidates(cands, "")[0]
