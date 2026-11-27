@@ -150,7 +150,7 @@ recipe:
   # +cvc.2 on the catalog and the wasm-mt publish packs verbatim at this revision. cvcgl bumps
   # in lockstep (1 -> 3) and re-pins this build.
   # Reset to 1 for the 3.7.1 upstream version: a version bump restarts cvc_revision.
-  cvc_revision: 102
+  cvc_revision: 103
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -170,8 +170,8 @@ source:
   # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
   # tag's tarball. In the repository this recipe builds from the checkout (vendored).
   type: tarball
-  url: https://github.com/transfix/libcvc/archive/17c4258aed32da681221dd15215d7b0df383880d.tar.gz
-  sha256: "7b9411ce92c38028f6750e46f693714139a7a8da781bc370aee04e6efa22256d"
+  url: https://github.com/transfix/libcvc/archive/80083876444e3994c0bb9c1b9e0ff59c14e0a196.tar.gz
+  sha256: "5e900008acb26726cddfb52a67c68c1e5ad11cdacb84493571515762086af7e8"
   strip_components: 1
 
 patches: []
@@ -476,10 +476,7 @@ depends:
 
 build:
   matrix:
-    - platform: freebsd
-      script: build.sh
-    - platform: openbsd
-      script: build.sh
+    # THROWAWAY round 4: NetBSD only (800838764 changes nothing the FreeBSD/OpenBSD builds use).
     - platform: netbsd
       script: build.sh
 package:

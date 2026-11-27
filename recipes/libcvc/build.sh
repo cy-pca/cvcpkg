@@ -109,7 +109,8 @@ if [[ "$(uname -s)" == Darwin ]]; then
 fi
 
 cmake "${CMAKE_ARGS[@]}"
-cmake --build "$CVC_BUILD_DIR" -j "$CVC_JOBS"
+# THROWAWAY (#642): keep going past the first error, so one dev round shows every NetBSD gap.
+cmake --build "$CVC_BUILD_DIR" -j "$CVC_JOBS" -- -k 0
 
 # Build-and-run tests, never install them: no test target has an install()
 # rule and package.files selects only lib/ and include/, so nothing test-
