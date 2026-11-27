@@ -4,7 +4,7 @@ schema_version: 1
 recipe:
   name: arisrv
   upstream_version: "4.0.9"
-  cvc_revision: 102
+  cvc_revision: 103
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -38,8 +38,8 @@ source:
   # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
   # tag's tarball. In the repository this recipe builds from the checkout (vendored).
   type: tarball
-  url: https://github.com/transfix/libcvc/archive/17c4258aed32da681221dd15215d7b0df383880d.tar.gz
-  sha256: "7b9411ce92c38028f6750e46f693714139a7a8da781bc370aee04e6efa22256d"
+  url: https://github.com/transfix/libcvc/archive/ffb4485abd83fb2612d2332ea7e8f62c91931cf1.tar.gz
+  sha256: "267e849c5ae21e8c25067638cec44def99918d52110edc207b5cdd924e9a9986"
   strip_components: 1
 
 patches: []
@@ -72,3 +72,7 @@ package:
 
 abi:
   cxx_std: 20
+
+# Run by `cvcpkg build` (the fleet): see test.sh.
+test:
+  script: test.sh
