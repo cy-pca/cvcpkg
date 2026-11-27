@@ -1,10 +1,10 @@
-# THROWAWAY (cy-pca/cvcpkg test PR, never merged): libcvc's own recipe pinned to a
-# feat/fleet-bsd-haiku commit, BSD rows only, so build-on-dev builds it on the dev BSD builders.
+# THROWAWAY (cy-pca/cvcpkg#642, never merged): transfix/libcvc's recipe pinned to a
+# feat/fleet-bsd-haiku commit, its dev-testable BSD rows only, so build-on-dev builds it there.
 schema_version: 1
 recipe:
   name: arisrv
   upstream_version: "4.0.9"
-  cvc_revision: 101
+  cvc_revision: 102
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -38,8 +38,8 @@ source:
   # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
   # tag's tarball. In the repository this recipe builds from the checkout (vendored).
   type: tarball
-  url: https://github.com/transfix/libcvc/archive/ed8829b6b4e2a456d92d9a9af8f7477be151efe8.tar.gz
-  sha256: "f7bffe3edd09ec481461db01234e0faf1d3efda4d5440c893328f5a6d68de22d"
+  url: https://github.com/transfix/libcvc/archive/17c4258aed32da681221dd15215d7b0df383880d.tar.gz
+  sha256: "7b9411ce92c38028f6750e46f693714139a7a8da781bc370aee04e6efa22256d"
   strip_components: 1
 
 patches: []

@@ -1,0 +1,209 @@
+# THROWAWAY (cy-pca/cvcpkg#642, never merged): transfix/libcvc's recipe pinned to a
+# feat/fleet-bsd-haiku commit, its dev-testable BSD rows only, so build-on-dev builds it there.
+schema_version: 1
+recipe:
+  name: cvcgl
+  upstream_version: "4.0.9"
+  # Bumped 1 -> 2: republish from post-#136 master. cvcGL gained the injected-app
+  # SceneGraph(cvc::app&, statePrefix) ctor (no cvc:: singleton), and it links the
+  # +cvc.2 libcvc (ABI change, #134). The published +cvc.1 predates all of this,
+  # so the new bundle must supersede it as +cvc.2.
+  # Bumped 2 -> 3: hermetic republish. cvcGL links VTK, which is now vtk
+  # 9.5.0+cvc.2 (built against the cvcpkg X11/OpenGL recipes, libcvc-deps #368) —
+  # so this bundle links the hermetic VTK and its build no longer needs the
+  # apt-get X11/GL step (removed from publish-cvcpkg.yml). Source unchanged.
+  # Bumped 3 -> 4: post-#152 republish. cvcGL now honors BUILD_SHARED_LIBS (a single
+  # libcvcGL.so.3 shared by volrover3 + pycvc-gl — no two-copies hazard), stores
+  # per-vertex colors as direct uchar (faithful colors, texture-ready), grew the
+  # GraphicsNode API (transforms/bounds/parenting/metadata/callbacks) + world-bounds
+  # recompute, and rebuilds against libcvc +cvc.3. Part of the family republish.
+  # Reset to 1 for the 3.3.0 upstream version: cvc_revision counts revisions OF
+  # an upstream version, so a version bump restarts it. This supersedes the
+  # 3.2.4 +cvc.5 family republish — cvcGL source is unchanged; it rebuilds
+  # against the new libcvc so the tested-together family stays consistent.
+  # Bumped 1 -> 2: the SDK bundle is now built WITH Dear ImGui (CVC_ENABLE_IMGUI=ON),
+  # so cvc::gl::ImGuiOverlay actually renders for downstream GUI consumers instead of
+  # being an inert stub. imgui is now a runtime dep (the export links the relocatable
+  # $<INSTALL_INTERFACE:imgui>). Prior bundles shipped imgui-less, forcing consumers
+  # that draw an overlay to rebuild cvcGL from source.
+  # Bumped 2 -> 3: republish cvcGL against libcvc 3.4.0+cvc.3. The published +cvc.2 was built
+  # against libcvc +cvc.2 and leaks an EXACT pin to it (cvcpkg records the built-against dep
+  # version); that dragged the pre-guard libcvc +cvc.2 into wasm-mt consumer installs, so
+  # `cvcpkg install cvc/libcvc cvc/cvcgl --platform wasm-mt` failed to resolve abseil (the gRPC
+  # deps that +cvc.3 guards off wasm). Rebuilding cvcGL against +cvc.3 re-points that pin to the
+  # guarded libcvc. cvcGL source itself is unchanged.
+  # Bumped 3 -> 4: SDL3 is now a build + runtime dep (CVC_ENABLE_SDL=ON) — cvcGL's export
+  # links SDL3::SDL3, the input + peripheral seam (keyboard/mouse/gamepad + audio/mic/camera,
+  # native and wasm/wasm-mt). A consumer of cvc::cvcGL must now have sdl3 in its prefix.
+  # Bumped 4 -> 5: packaging fix — the +cvc.4 Windows-release publish FAILED because
+  # package.files globbed only lib/libcvcGL*, but MSVC stages the static lib as lib/cvcGL.lib
+  # (no `lib` prefix). Added lib/cvcGL* (see package.files below). cvcGL source is unchanged;
+  # this republishes so a Windows-release cvcgl bundle exists at all. No-op on Unix.
+  # Bumped 5 -> 6: rebuild against the relocatable-export libcvc +cvc.5 (libcvc #453). cvcGL source
+  # is unchanged, but cvcgl exact-pins the libcvc it built against — the published +cvc.5 pins the
+  # broken-export libcvc +cvc.4, so `cvcpkg install cvc/libcvc cvc/cvcgl --platform wasm-mt` dragged
+  # +cvc.4 back in and a consumer's wasm link still failed. This reships cvcgl +cvc.6 built against (and
+  # re-pinning) libcvc +cvc.5, so the wasm consumer install stays on the clean export end-to-end.
+  # Bumped 6 -> 7: rebuild against + re-pin libcvc +cvc.6 (the consumer-side ImageMagick
+  # delegate-closure fix in cvcConfig.cmake.in). cvcGL source unchanged; the exact-pin means
+  # cvcgl +cvc.6 still pins the +cvc.5 libcvc whose consumer config skipped the delegate append,
+  # so a fresh install must land on +cvc.7 -> libcvc +cvc.6 to link cleanly end-to-end.
+  # Bumped 7 -> 8: wasm SDL3. Every prior wasm-mt cvcgl bundle shipped the VTK-interactor fallback
+  # because publish-cvcgl-wasm's $WASM_DEPS closure never installed sdl3, so find_package(SDL3)
+  # failed under emcmake and CVC_ENABLE_SDL was off. That workflow now installs sdl3 (wasm-mt has a
+  # published bundle, and no Emscripten -sUSE_SDL port is in play to clash), so cvcGL links
+  # SDL3::SDL3 and ships the real input/peripheral seam on wasm. publish-cvcgl-wasm packs cvcgl
+  # VERBATIM at this cvc_revision, so a bump is required to republish the SDL3-linked wasm bundle;
+  # +cvc.8 builds against (and re-pins) the current relocatable-export libcvc +cvc.6. Source unchanged.
+  # Bumped 8 -> 12: lockstep with libcvc 3.4.0+cvc.12 (the LOD family: LodGraphicsNode
+  # visibility/lifetime fixes, make_view_params, selectLOD stats, ortho view_params -- #496 --
+  # on top of #483-#505). SceneNode gained virtuals, so the published +cvc.8 is ABI-stale.
+  # 12, not 9: native cvcgl is already at +cvc.11 on the catalog; this keeps platforms monotonic.
+  # Bumped 12 -> 14: lockstep with libcvc 3.4.0+cvc.14 -- GraphicsNode::setPoseMatrix + the
+  # coalesced scene-bounds walk (#508), the fast per-frame pose path the change-driven demo
+  # overlays need on wasm (a setTransform there costs ~1.4 ms of posted-event drain). 14, not
+  # 13: native cvcgl is already at +cvc.13 on the catalog.
+  # Bumped 14 -> 15: lockstep with libcvc 3.4.0+cvc.15 -- the L3 streaming overlay geometry
+  # (#512: StreamingGeometryNode/RibbonNode/DrapedLinkNode with partial uploads, the
+  # HeightFieldTexture drape, coalesced scene events via SceneEventSink), StreamTextureBinding
+  # (#518), and the frame-cost fixes (perf/cvcgl-frame-costs): the metadata mirror that follows
+  # its node, CameraController's idle skip (SceneGraph::contentVersion), texture_modified_rows /
+  # _rect partial texture uploads, caster-aware shadow baking (setCastsShadow), and the cheaper
+  # scene-bounds walk deferred under hidden chrome. ABI-stale: SceneGraph/GraphicsNode/
+  # NullGraphicNode layouts changed, so the published +cvc.14 must not be mixed with this build.
+  # Bumped 15 -> 18 (16 published, 17 is #522's): cvcgl_wasm_app(), the WebGL state shim, FrameYield.
+  # Bumped 18 -> 19 (16 went out as a native publish of master without this, 18 is master's wasm
+  # app contract above, and the 17 set aside for this change sits below it): the fast-draw
+  # low-memory mapper (LowMemoryPolyDataMapper: skips empty cell-type agents and re-binds the
+  # cached shader program; ~2/3 fewer GL calls per frame on WebGL2 with byte-identical pixels;
+  # CVCGL_LOWMEM_DRAW / setDrawPath for A/B), now the base of StreamingLowMemoryPolyDataMapper;
+  # late shader replacements reach the GPU on the low-memory path. License metadata now
+  # LGPL-2.1-only AND BSD-3-Clause (VTK 9.5.0-derived code).
+  # Bumped 1 -> 3 (3.7.0 lineage): lockstep with libcvc 3.7.0+cvc.3, whose wasm-mt SDK fixes
+  # the ImageMagick HDRI define (cvc::cvc's public MAGICKCORE_HDRI_ENABLE was 0 against the
+  # Q16HDRI library). cvcGL source unchanged; it rebuilds against and re-pins that libcvc.
+  # 3, not 2: native cvcgl is already at +cvc.2 on the catalog.
+  # Reset to 1 for the 3.7.1 upstream version: a version bump restarts cvc_revision.
+  cvc_revision: 102
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  description: "cvcGL — the Qt-free VTK scene-graph library extracted from volrover3: a reactive SceneGraph of GraphicsNode/GeometryNode/VolumeNode over cvc::state that renders cvc::geometry / cvc::volume via VTK. Ships libcvcGL (shared libcvcGL.so in --link shared, the libcvcGL.a archive in --link static) + headers + a cmake package config; provides the cvcGL cmake package (cvc::cvcGL target). Consumed by pycvc-gl and other non-Qt scene consumers."
+  homepage: https://github.com/transfix/libcvc
+  # BSD-3-Clause: libcvcGL carries code derived from VTK 9.5.0
+  # (LowMemoryPolyDataMapper.cpp); THIRD_PARTY_NOTICES.md ships in share/doc/cvcGL.
+  license: "LGPL-2.1-only AND BSD-3-Clause"
+  tags: [scientific, volumetric, scene, vtk, graphics]
+
+# cvcGL is its OWN package, separate from libcvc: a plain libcvc bundle is a
+# pure C++ SDK with no VTK dependency. cvcGL adds the VTK scene graph and so
+# pulls in VTK. It builds src/cvcGL standalone against the installed libcvc SDK
+# (find_package(cvc CONFIG)) + VTK, and installs a cvcGLConfig.cmake so
+# consumers can find_package(cvcGL CONFIG) and link cvc::cvcGL.
+#
+# This CPU build links the CPU libcvc. It is ABI-safe against EITHER libcvc
+# variant because cvc::volume's layout is variant-invariant (voxels::
+# _cuda_unified_ptr is always a shared_ptr<void>). cvcGL's own GL <-> CUDA
+# interop paths are `#ifdef CVC_USING_CUDA`-gated, so they compile only in the
+# GPU build — the separate `cvcgl-cuda` recipe (provides: [cvcgl]) — which GPU
+# hosts install instead of this one.
+
+# Declares the `cvcgl` provider slot so the CUDA peer cvcgl-cuda (which also
+# `provides: [cvcgl]`) is a mutually-exclusive alternative and a hardware-aware
+# resolver (cvcpkg Roadmap Phase 10) can tie-break CPU vs GPU for a dependency on
+# the virtual name `cvcgl`. Selection is not implemented yet — see cvcgl-cuda.
+provides: ["cvcgl"]
+
+source:
+  # Pinned by .github/scripts/pin-recipe-source.py for the cvcpkg.org fleet: the release
+  # tag's tarball. In the repository this recipe builds from the checkout (vendored).
+  type: tarball
+  url: https://github.com/transfix/libcvc/archive/17c4258aed32da681221dd15215d7b0df383880d.tar.gz
+  sha256: "7b9411ce92c38028f6750e46f693714139a7a8da781bc370aee04e6efa22256d"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build:
+    # libcvc SDK (find_package(cvc CONFIG)) + VTK (the scene backend).
+    - name: libcvc
+      version: "==4.0.9"
+    - name: vtk
+    # Dear ImGui — cvcGL's overlay (cvc::gl::ImGuiOverlay), the imgui-w32 package's build (a
+    # 32-bit ImWchar, so its text holds emoji). find_package(imgui-w32) in
+    # src/cvcGL/CMakeLists.txt finds it; with it present CVC_ENABLE_IMGUI=ON.
+    - name: imgui-w32
+    # SDL3 — the input + peripheral seam (keyboard / mouse / gamepad, and audio /
+    # microphone / camera), native AND wasm/wasm-mt (verified with VTK).
+    # find_package(SDL3 CONFIG) in src/cvcGL/CMakeLists.txt links it; with it present
+    # CVC_ENABLE_SDL=ON. This is the foundation for the §4.6 input handlers
+    # (on_key / on_click / on_drag / …) and later audio/peripheral support.
+    - name: sdl3
+    # FFmpeg, its LGPL build: cvcMedia (built and shipped beside cvcGL) decodes Ariadne's video:
+    # and audio: widgets with it (docs/ARIADNE.md §5.13), so arigl plays them. Linked SHARED,
+    # which keeps the LGPL's terms. No wasm build exists or is wanted: the pages play through the
+    # browser's own <video> / <audio>.
+    - name: ffmpeg-lgpl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+  runtime:
+    # cvcGL's public interface links cvc::cvc and the VTK modules.
+    - name: libcvc
+      version: "==4.0.9"
+    - name: vtk
+    # cvcGL's export links imgui-w32::imgui (re-found via find_dependency(imgui-w32) in
+    # cvcGLConfig.cmake), so a consumer of cvc::cvcGL must have imgui-w32 in its prefix.
+    - name: imgui-w32
+    # cvcGL's export links SDL3::SDL3 (re-found via find_dependency(SDL3) in
+    # cvcGLConfig.cmake), so a consumer of cvc::cvcGL must have sdl3 in its prefix.
+    - name: sdl3
+    # cvcMedia's FFmpeg libraries (private, shared): loaded at run time.
+    - name: ffmpeg-lgpl
+      platforms: [linux, macos, windows, freebsd, openbsd, netbsd]
+  host_tools:
+    - cmake
+    - ninja
+
+build:
+  # VTK has bundles for linux, windows and macos/arm64 (none for macos/x86_64 yet).
+  matrix:
+    - platform: freebsd
+      script: build.sh
+package:
+  files:
+    - lib/libcvcGL*
+    # MSVC names the static lib `cvcGL.lib` (no `lib` prefix), which matches
+    # neither lib/libcvcGL* nor any glob above -- the same MSVC-spelling reason
+    # the libcvc recipe packs lib/cvc* beside lib/libcvc*. Without this the
+    # Windows-release bundle stages lib/cvcGL.lib fine but package.files matches
+    # nothing there, and `cvcpkg pack` fails with "no archive found for recipe
+    # cvcgl". No-op on Unix (libcvcGL.a/.so/.dylib already match lib/libcvcGL*).
+    #
+    # Two link variants are published: --link shared carries libcvcGL.so.3 (cvcGL.dll
+    # + its cvcGL.lib import library on Windows), --link static the libcvcGL.a /
+    # cvcGL.lib archive. bin/cvcGL.dll is deliberately NOT declared: pack ships the
+    # whole install tree regardless, and a declaration must match in every variant,
+    # which the static one cannot. lib/libcvcGL* + lib/cvcGL* match in both.
+    - lib/cvcGL*
+    - lib/cmake/cvcGL/
+    - include/cvc/gl/
+    # cvcMedia, the GL-free media library cvcGL links (its SDL3 audio output, which moved out of
+    # cvcGL): src/cvcGL builds it beside itself and installs it as its own package.
+    - lib/libcvcMedia*
+    - lib/cvcMedia*
+    - lib/cmake/cvcMedia/
+    - include/cvc/media/playback/
+    # The browser-side half of cvcGL: webgl_state_shadow.js, which cvcgl_wasm_app() (from
+    # lib/cmake/cvcGL/cvcGLWasm.cmake) links into a wasm app as a --pre-js. Installed on every
+    # platform so the layout is uniform; only Emscripten consumers use it.
+    - share/cvcGL/
+  cmake_packages:
+    - name: cvcGL
+      targets:
+        - cvc::cvcGL
+    - name: cvcMedia
+      targets:
+        - cvc::cvcMedia
+
+abi:
+  cxx_std: 17
