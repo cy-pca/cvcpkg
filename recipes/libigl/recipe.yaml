@@ -78,6 +78,8 @@ build:
       script: build.sh
     - platform: netbsd
       script: build.sh
+    - platform: haiku
+      script: build.sh
     - platform: windows
       script: build.ps1
     # Single-threaded wasm cannot spawn std::threads, so the exported igl::core

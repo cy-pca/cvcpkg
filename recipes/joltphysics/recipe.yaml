@@ -111,6 +111,10 @@ build:
       script: build.sh
       env:
         CXXFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CXXFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
     - platform: wasm

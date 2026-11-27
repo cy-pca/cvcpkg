@@ -95,6 +95,15 @@ _im_undeclared_delegates=(
 _im_openmp=()
 [ "${CVC_PLATFORM}" != "macos" ] || _im_openmp=(--disable-openmp)
 
+# Haiku: no fontconfig bundle (recipe.yaml declares only freetype there), so no
+# fontconfig delegate; with "yes" configure would take one the host has.
+_im_fontconfig=yes
+_im_delegates=(FREETYPE FONTCONFIG)
+if [[ "${CVC_PLATFORM}" == "haiku" ]]; then
+    _im_fontconfig=no
+    _im_delegates=(FREETYPE)
+fi
+
 ./configure \
     --prefix="${CVC_INSTALL_DIR}" \
     --enable-shared \
@@ -111,7 +120,7 @@ _im_openmp=()
     --with-lzma=yes \
     --with-bzlib=yes \
     --with-freetype=yes \
-    --with-fontconfig=yes \
+    --with-fontconfig="${_im_fontconfig}" \
     --without-perl \
     --without-x \
     --without-jbig \
@@ -126,7 +135,7 @@ _im_openmp=()
 # freetype and fontconfig are declared (recipe.yaml), so their delegates must be
 # on: --with-freetype=yes does not make configure fail when the library is not
 # found, it just builds without text rendering.
-for _delegate in FREETYPE FONTCONFIG; do
+for _delegate in "${_im_delegates[@]}"; do
     if ! grep -Eq "^[[:space:]]*#[[:space:]]*define[[:space:]]+MAGICKCORE_${_delegate}_DELEGATE([[:space:]]|$)" \
             MagickCore/magick-baseconfig.h; then
         echo "imagemagick build.sh: configure did not enable the declared ${_delegate} delegate" >&2
