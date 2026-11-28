@@ -30,6 +30,19 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **A second `builder run` no longer deletes a live builder's job dirs.** At
+  startup a builder removes every job dir in its work dir ("reclaimed N
+  orphaned job dir(s)"). That is safe only because the pidfile guard keeps a
+  second builder off a live one's work dir, but the sweep ran before the guard.
+  So a second `cvcpkg builder run` on the same work dir removed the live
+  builder's in-flight job dirs, and only then refused to start. The guard now
+  runs first. Under `--daemon` it runs in the foreground, before the fork, and
+  so does the sweep. A refused start now exits 1 with its message on the
+  terminal, instead of the parent exiting 0 while the detached child refused
+  into /dev/null. The "reclaimed" line still reaches the terminal, or the
+  journal of a `Type=forking` unit. After the fork, the daemon checks the
+  pidfile again and writes it.
+
 - **A builder survives a reset connection, and a restarted one fails the jobs
   it lost.** Dev job 25560 (grpc, netbsd) stopped at `[652/1760]`, sat
   "running" until its 2 h build timeout, and was reaped as `timed_out`. Every
