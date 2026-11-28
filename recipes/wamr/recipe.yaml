@@ -2,7 +2,7 @@ schema_version: 1
 recipe:
   name: wamr
   upstream_version: "2.4.4"
-  cvc_revision: 3
+  cvc_revision: 4
   maintainer: "cvcpkg group"
   maintainer_email: "info@cvcpkg.org"
   maintainer_url: "https://cvcpkg.org"
@@ -12,7 +12,18 @@ recipe:
   description: >-
     WAMR — WebAssembly Micro Runtime from the Bytecode Alliance.
     Extremely lightweight and embeddable, targets resource-constrained
-    environments.  CMake-based C project.
+    environments.  CMake-based C project.  libcvc's wasm guests run on it
+    where wasmtime has no build: the BSDs and Haiku (src/ariadne_wasm,
+    wamr_runtime.cpp, through the wasm-c-api).
+  # linux, macos, windows: WAMR's own platform layers, as upstream builds them.
+  #   cvc.4: the windows bundle ships the runtime, lib/libiwasm.lib (static);
+  #   cvc.3's lib/iwasm.lib was the iwasm.exe CLI's import library.
+  # cvc.4 builds without WAMR's own WASI on every platform: it takes a guest's
+  #   wasi_snapshot_preview1 imports before the embedding host's (build.sh).
+  # freebsd, openbsd, netbsd, haiku: WAMR's freebsd layer (OpenBSD, NetBSD and
+  #   Haiku have none of their own; it is plain POSIX), with software bounds
+  #   checks and without SIMD (build.sh says why).  test.sh builds check.c against libiwasm.a and
+  #   runs it there, as on linux and macos.
 
 source:
   type: tarball
@@ -39,8 +50,29 @@ build:
       script: build.sh
       env:
         MACOSX_DEPLOYMENT_TARGET: "13.0"
+    # The BSDs and Haiku: the same script, for libcvc's wasm guests in arix and
+    # ariglx on their fleet-built columns (no wasmtime there).
+    - platform: freebsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: openbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: netbsd
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
+    - platform: haiku
+      script: build.sh
+      env:
+        CFLAGS: "-O2 -fPIC"
     - platform: windows
       script: build.ps1
+
+test:
+  script: test.sh
 
 package:
   files:
