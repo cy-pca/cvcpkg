@@ -169,6 +169,7 @@ jobs:
           set -o pipefail
           poetry run pytest -v --tb=short -rs \
             tests/unit/test_search_relevance.py \
+            tests/unit/test_search_sort.py \
             tests/unit/test_build_job_races.py \
             tests/unit/test_build_job_endpoint_hardening.py \
             tests/unit/test_builder_ws_job_auth.py | tee pg-tests.log
