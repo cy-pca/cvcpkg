@@ -1,0 +1,49 @@
+schema_version: 1
+recipe:
+  name: xterm-js-addon-image
+  upstream_version: "0.8.0"
+  cvc_revision: 1
+  maintainer: "cvcpkg group"
+  maintainer_email: "info@cvcpkg.org"
+  maintainer_url: "https://cvcpkg.org"
+  homepage: https://xtermjs.org
+  license: MIT
+  tags: [javascript, web, terminal, data]
+  description: >-
+    xterm.js's image addon 0.8.0, the release for xterm.js 5.5: its browser build (addon-image.js),
+    from the npm package, installed into share/xterm.js/ with its licence in
+    share/doc/xterm-js-addon-image/. It draws Sixel and iTerm2 inline images in an xterm.js
+    Terminal (xterm-js), so a terminal program's pictures show in real pixels. A page serves it
+    from its own origin instead of a CDN, so the page needs no other origin in its
+    Content-Security-Policy; libcvc's ari pages (an Ariadne document in an FTXUI terminal) do, and
+    draw a document's pictures with it when their page config asks (--graphics iterm or sixel).
+    Its Sixel and base64 decoders are WebAssembly built into the file, so the page's policy needs
+    script-src 'wasm-unsafe-eval'.
+
+source:
+  # The npm registry's tarball (package/ inside, stripped). The sha256 pins the bytes, which match
+  # the registry's sha512 integrity for the same version.
+  type: tarball
+  url: https://registry.npmjs.org/@xterm/addon-image/-/addon-image-0.8.0.tgz
+  sha256: "002f7492884300c0ed691bbe7381263d066b6b074d531b131466d8c774565fc0"
+  strip_components: 1
+
+patches: []
+
+depends:
+  build: []
+  runtime:
+    - name: xterm-js
+  host_tools: []
+
+build:
+  build_type_independent: true
+  matrix:
+    # noarch: JavaScript, identical on every platform.
+    - platform: any
+      script: build.sh
+
+package:
+  files:
+    - share/xterm.js/addon-image.js
+    - share/doc/xterm-js-addon-image/
