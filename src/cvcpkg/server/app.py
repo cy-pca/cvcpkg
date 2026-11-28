@@ -33,6 +33,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Annotated
 
 import yaml
 from fastapi import (
@@ -48,6 +49,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
@@ -59,6 +61,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from pydantic import AfterValidator
 from starlette.datastructures import Headers, MutableHeaders
 
 from cvcpkg import __version__
@@ -163,6 +166,13 @@ from cvcpkg.server.oidc import OidcConfig as _OidcConfig
 from cvcpkg.server.oidc import load_providers as _oidc_load_providers
 from cvcpkg.server.oidc import validate_registry as _oidc_validate_registry
 from cvcpkg.server.search_rank import group_sort_key, relevance_rank, summarize_group
+from cvcpkg.server.search_sort import (
+    check_sort_group,
+    parse_sort,
+    sort_bundles,
+    sort_groups,
+    validate_sort_param,
+)
 
 # ── State ───────────────────────────────────────────────────────
 
@@ -4316,6 +4326,27 @@ def create_app(
                 "(org/name) in `groups` and leaves `packages` empty."
             ),
         ),
+        # Query inside Annotated, not as the default: with `= Query(...)`,
+        # FastAPI silently skips the AfterValidator (an unknown key passed).
+        sort: Annotated[
+            str,
+            Query(
+                description=(
+                    "Order the whole result by one key before limit/offset page "
+                    "it; a leading '-' sorts descending (`sort=-size`). Empty: "
+                    "best match first with a `q`, else by name. group=build "
+                    "keys: name, version, platform, arch, build_type, link, "
+                    "size (size_bytes), published (published_at), org. "
+                    "group=package keys: name, org, version (the newest "
+                    "matching one), builds, size (their total size_bytes). "
+                    "Text compares case-insensitively; versions in version "
+                    "order (1.10 after 1.9). Ties keep the default order, then "
+                    "a unique id, so pages never repeat or skip a row. Facets "
+                    "and totals do not depend on it. An unknown key is a 422."
+                ),
+            ),
+            AfterValidator(validate_sort_param),
+        ] = "",
         caller: TokenRecord | None = Depends(optional_token),
     ):
         """Search the package catalog with optional facets.
@@ -4327,10 +4358,22 @@ def create_app(
         containing it, tags containing it, and last the packages that only
         mention it (``cvcpkg.server.search_rank``).  The search page asks for
         ``group=package`` so that each "Load more" adds whole packages.
+
+        ``sort`` orders the whole result by one key instead, before it is
+        paged (``cvcpkg.server.search_sort``), so a table sorted by a column
+        header pages through every match in that order.
         """
         q = q.strip()
         db_release = "" if release == "live" else release
         by_package = group == "package"
+        order = parse_sort(sort)
+        try:
+            check_sort_group(order, group)
+        except ValueError as exc:
+            raise RequestValidationError(
+                [{"type": "value_error", "loc": ("query", "sort"), "msg": str(exc), "input": sort}]
+            ) from None
+        sort_echo = str(order) if order else ""
 
         def _facets_model(raw_facets: dict) -> SearchFacets:
             return SearchFacets(
@@ -4377,6 +4420,7 @@ def create_app(
                     caller_token_name=(caller.name if caller else ""),
                     limit=limit,
                     offset=offset,
+                    sort=order,
                 )
             )
             facets_model = SearchFacets()
@@ -4401,6 +4445,7 @@ def create_app(
                 packages=[],
                 groups=[SearchPackageGroup(**g) for g in groups],
                 group=group,
+                sort=sort_echo,
                 limit=limit,
                 offset=offset,
                 query=q,
@@ -4422,6 +4467,7 @@ def create_app(
                 org_slug=org,
                 caller_token_name=(caller.name if caller else ""),
                 relevance=True,
+                sort=order,
             )
             if release == "live":
                 packages = [p for p in packages if not p.release_tag]
@@ -4445,6 +4491,7 @@ def create_app(
                     org_slug=org,
                     caller_token_name=(caller.name if caller else ""),
                     relevance=True,
+                    sort=order,
                 )
                 more = _apply_tag_filter(more)
                 total = len(more)
@@ -4491,6 +4538,7 @@ def create_app(
                 package_count=package_count,
                 total_size_bytes=total_size_bytes,
                 packages=packages,
+                sort=sort_echo,
                 limit=limit,
                 offset=offset,
                 query=q,
@@ -4533,6 +4581,10 @@ def create_app(
             bundles = _local_search_filter(bundles, q)
         if q or by_package:
             bundles = _local_rank_bundles(bundles, q)
+        if order is not None and not by_package:
+            # Stable: rows that tie on the key keep the order above, and then
+            # their place in the index.
+            bundles = sort_bundles(bundles, order)
 
         total = len(bundles)
         package_count = len({b.get("name", "") for b in bundles})
@@ -4544,11 +4596,16 @@ def create_app(
             for b in bundles:
                 by_key.setdefault((b.get("org") or "", b.get("name") or ""), []).append(b)
             package_count = len(by_key)
-            page_keys = list(by_key)[offset : offset + limit] if limit else []
-            groups = [
-                SearchPackageGroup(**summarize_group(name, org, by_key[(org, name)]))
-                for org, name in page_keys
-            ]
+            summaries: dict[tuple[str, str], dict] = {}
+
+            def _summary(key: tuple[str, str]) -> dict:
+                if key not in summaries:
+                    summaries[key] = summarize_group(key[1], key[0], by_key[key])
+                return summaries[key]
+
+            ordered = list(by_key) if order is None else sort_groups(by_key, _summary, order)
+            page_keys = ordered[offset : offset + limit] if limit else []
+            groups = [SearchPackageGroup(**_summary(key)) for key in page_keys]
         else:
             page = bundles[offset : offset + limit] if limit else []
             packages = [_index_package_info(b) for b in page]
@@ -4564,6 +4621,7 @@ def create_app(
             packages=packages,
             groups=groups,
             group=group,
+            sort=sort_echo,
             limit=limit,
             offset=offset,
             query=q,

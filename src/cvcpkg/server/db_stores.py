@@ -90,6 +90,7 @@ from cvcpkg.server.search_rank import (
     normalize_query,
     summarize_group,
 )
+from cvcpkg.server.search_sort import SearchSort, sort_by_version
 
 # ── HMAC key management ────────────────────────────────────────
 
@@ -1406,6 +1407,31 @@ def _relevance_rank(search: str):
     )
 
 
+# What ``/v1/search?sort=<key>`` orders build rows by in SQL: the same order as
+# :mod:`cvcpkg.server.search_sort`'s, text case-insensitively then exactly.
+# ``version`` is not here: SQL cannot order versions, so get_bundles sorts them
+# with version_sort_key.
+_BUILD_SORT_COLUMNS = {
+    "name": (sa_func.lower(PackageRow.name), PackageRow.name),
+    "platform": (sa_func.lower(PackageRow.platform), PackageRow.platform),
+    "arch": (sa_func.lower(PackageRow.arch), PackageRow.arch),
+    "build_type": (sa_func.lower(PackageRow.build_type), PackageRow.build_type),
+    "link": (sa_func.lower(PackageRow.link), PackageRow.link),
+    "size": (PackageRow.size_bytes,),
+    "published": (PackageRow.published_at,),
+    "org": (sa_func.lower(PackageRow.org_slug), PackageRow.org_slug),
+}
+
+# Ids per ``id IN (...)`` when loading a page by id: under SQLite's oldest
+# bound-parameter limit (999).
+_ID_CHUNK = 500
+
+
+def _sort_columns(columns, sort: SearchSort) -> list:
+    """*columns* as ORDER BY terms, each descending when *sort* is."""
+    return [c.desc() if sort.descending else c.asc() for c in columns]
+
+
 class DbPackageIndex:
     """Package catalog backed by the ``packages`` table."""
 
@@ -1508,6 +1534,7 @@ class DbPackageIndex:
         caller_token_name: str | None = None,
         order: str = "version",
         relevance: bool = False,
+        sort: SearchSort | None = None,
     ) -> tuple[list[PackageInfo], int]:
         """Matching bundle rows, a page of them, and how many match in all.
 
@@ -1515,6 +1542,10 @@ class DbPackageIndex:
         *search*, packages come best match first instead (tiers in
         :mod:`cvcpkg.server.search_rank`), so ``search="vtk"`` lists the
         ``vtk`` package ahead of packages that merely mention VTK.
+
+        A *sort* (``/v1/search?sort=``, :mod:`cvcpkg.server.search_sort`)
+        orders every matching row by its key before the page is cut, and rows
+        that tie on it keep the order above.  *order* then does not apply.
         """
         filters = _search_filters(
             name=name,
@@ -1556,14 +1587,35 @@ class DbPackageIndex:
                 ordering = (PackageRow.name,)
             # published_at can tie (a batch publish); the id keeps pages from
             # repeating or skipping rows across a tie.
-            q = (
-                q.order_by(*ordering, PackageRow.published_at.desc(), PackageRow.id.desc())
-                .offset(offset)
-                .limit(limit)
-            )
-            result = await session.execute(q)
+            ordering = (*ordering, PackageRow.published_at.desc(), PackageRow.id.desc())
+            if sort is not None and sort.key == "version":
+                # SQL cannot order versions (1.10 after 1.9, +cvc.N, ...), so
+                # order the matching rows' versions here, then load the page's
+                # rows by id.  The rows come in the order above, which the
+                # stable sort keeps among equal versions.
+                keyed = (
+                    await session.execute(
+                        select(PackageRow.id, PackageRow.version)
+                        .where(*filters)
+                        .order_by(*ordering)
+                    )
+                ).all()
+                keyed = sort_by_version(keyed, lambda r: r.version, sort)
+                page_ids = [r.id for r in keyed[offset : offset + limit]] if limit else []
+                rows = []
+                for start in range(0, len(page_ids), _ID_CHUNK):
+                    chunk = page_ids[start : start + _ID_CHUNK]
+                    rows += (await session.execute(q.where(PackageRow.id.in_(chunk)))).all()
+                place = {row_id: n for n, row_id in enumerate(page_ids)}
+                rows.sort(key=lambda t: place[t[0].id])
+            else:
+                if sort is not None:
+                    ordering = (*_sort_columns(_BUILD_SORT_COLUMNS[sort.key], sort), *ordering)
+                rows = (
+                    await session.execute(q.order_by(*ordering).offset(offset).limit(limit))
+                ).all()
             packages = []
-            for row_tuple in result.all():
+            for row_tuple in rows:
                 row = row_tuple[0]
                 pub_email = row_tuple[1] or ""
                 packages.append(
@@ -1600,7 +1652,7 @@ class DbPackageIndex:
                         conflicts=json.loads(row.conflicts or "[]"),
                     )
                 )
-            if order == "version":
+            if order == "version" and sort is None:
                 # SQL orders by (name, published_at DESC); re-order the versions
                 # WITHIN each name newest-first by the canonical key so callers
                 # don't get published-time order masquerading as version order.
@@ -1726,6 +1778,7 @@ class DbPackageIndex:
         caller_token_name: str | None = None,
         limit: int = 50,
         offset: int = 0,
+        sort: SearchSort | None = None,
     ) -> tuple[list[dict], int, int, int]:
         """One page of matching packages, best match first, and the totals.
 
@@ -1733,6 +1786,10 @@ class DbPackageIndex:
         holds *limit* packages however many builds each one has.  Returns
         ``(groups, package_count, build_count, total_size_bytes)``, each group
         a :func:`~cvcpkg.server.search_rank.summarize_group` dict.
+
+        A *sort* (:mod:`cvcpkg.server.search_sort`) orders every matching
+        package by its key before the page is cut; packages that tie on it
+        keep the order above, which org/name makes unique.
         """
         filters = _search_filters(
             platform=platform,
@@ -1774,19 +1831,46 @@ class DbPackageIndex:
             if not limit or offset >= package_count:
                 return [], package_count, build_count, total_size
 
-            page = (
-                await session.execute(
-                    select(per_package)
-                    .order_by(
-                        per_package.c.rank,
-                        sa_func.lower(per_package.c.name),
-                        per_package.c.name,
-                        per_package.c.org,
+            # Best match first, then by name; org/name is unique per package.
+            ordering = (
+                per_package.c.rank,
+                sa_func.lower(per_package.c.name),
+                per_package.c.name,
+                per_package.c.org,
+            )
+            if sort is not None and sort.key == "version":
+                # A package's version is its newest matching one by
+                # version_sort_key (summarize_group), which SQL cannot compute:
+                # order all the matching packages here.  One row per package
+                # and one per distinct version, not per build.
+                every = (await session.execute(select(per_package).order_by(*ordering))).all()
+                versions: dict[tuple[str, str], list[str]] = {}
+                for org, pkg_name, version in (
+                    await session.execute(
+                        select(PackageRow.org_slug, PackageRow.name, PackageRow.version)
+                        .where(*filters)
+                        .distinct()
                     )
-                    .offset(offset)
-                    .limit(limit)
-                )
-            ).all()
+                ).all():
+                    versions.setdefault((org or "", pkg_name), []).append(version)
+                newest = {k: max(v, key=version_sort_key) for k, v in versions.items()}
+                page = sort_by_version(
+                    every, lambda r: newest.get((r.org or "", r.name), ""), sort
+                )[offset : offset + limit]
+            else:
+                if sort is not None:
+                    columns = {
+                        "name": (sa_func.lower(per_package.c.name), per_package.c.name),
+                        "org": (sa_func.lower(per_package.c.org), per_package.c.org),
+                        "builds": (per_package.c.builds,),
+                        "size": (per_package.c.size,),
+                    }[sort.key]
+                    ordering = (*_sort_columns(columns, sort), *ordering)
+                page = (
+                    await session.execute(
+                        select(per_package).order_by(*ordering).offset(offset).limit(limit)
+                    )
+                ).all()
             detail = await session.execute(
                 select(
                     PackageRow.org_slug,

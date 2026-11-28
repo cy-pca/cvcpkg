@@ -207,12 +207,14 @@ caller belongs to).
 | `offset` | int | `0` | Offset for pagination, in units of `group` |
 | `facets` | bool | `true` | Compute facet buckets over the filtered result set |
 | `group` | string | `"build"` | `build`: page bundle rows in `packages`. `package`: page packages (org/name) in `groups`, one summary each, and leave `packages` empty |
+| `sort` | string | `""` | Order the whole result by one key before `limit`/`offset` page it; a leading `-` sorts descending. See [Sorting](#sorting-a-search) |
 
 **Response** `200 OK`: `total` (matching bundle rows), `package_count`
 (distinct packages), `total_size_bytes`, `packages` (same shape as
-`GET /v1/packages`), `groups`, `group`, `limit`, `offset`, `query`, and
-`facets` with bucket lists for `platforms`, `archs`, `build_types`,
-`links`, `releases`, `orgs`, `tags`, and `licenses`.
+`GET /v1/packages`), `groups`, `group`, `sort` (the sort applied, `""` for
+the default order), `limit`, `offset`, `query`, and `facets` with bucket
+lists for `platforms`, `archs`, `build_types`, `links`, `releases`, `orgs`,
+`tags`, and `licenses`.
 
 Each entry of `groups` (with `group=package`) is `{name, org, version,
 platforms, archs, builds, size_bytes}`: the newest matching version, the
@@ -220,6 +222,38 @@ sorted platforms and architectures, and the number and total size of the
 matching bundle rows. A page of `limit` packages is full however many
 builds each one has, which is why the search page asks for
 `group=package`.
+
+#### Sorting a search
+
+`sort` is one key, with a leading `-` for descending: `sort=name`,
+`sort=-size`. Empty or absent keeps the default order: best match first
+with a `q`, by name without one. The sort applies to every matching row or
+package before `limit` and `offset` cut the page, so a table that pages
+through the result sees all of it in that order.
+
+| `group` | Keys |
+|---|---|
+| `build` | `name`, `version`, `platform`, `arch`, `build_type`, `link`, `size` (`size_bytes`), `published` (`published_at`), `org` |
+| `package` | `name`, `org`, `version` (the newest matching version), `builds` (number of matching rows), `size` (their total `size_bytes`) |
+
+- **Text** keys compare case-insensitively, then exactly.
+- **Versions** compare in version order, the order that picks a package's
+  latest: `1.10` after `1.9`, `+cvc.10` after `+cvc.2`, a pre-release before
+  its release, and an unparseable version before every parseable one.
+- **Ties** keep the default order, in both directions: `-` reverses the key
+  only. After that a unique id decides: on the database backend the row id
+  (rows of one package come newest-published first), for packages their
+  org/name, on the file index (and a mirror) a bundle's place in the index.
+  So paging with `limit`/`offset` never repeats or skips a row.
+- **Totals and facets** are the same with or without a sort.
+- A key the group does not have is a `422` whose `detail[0].msg` names the
+  keys, e.g. `sort=platform&group=package` or `sort=bogus`.
+
+On the database backend every key but `version` is an SQL `ORDER BY`.
+SQL cannot order version strings, so `sort=version` reads the versions of
+all matching rows (for `group=package`, each package's distinct versions),
+orders them in the server, then loads the page's rows. It costs one more
+query over the matching rows, like the one the facets already make.
 
 ### `GET /v1/deps`
 
