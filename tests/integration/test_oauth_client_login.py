@@ -39,7 +39,7 @@ from cvcpkg.server.app import create_app
 from cvcpkg.server.models import TokenRole
 
 PUBLIC = "https://registry.example"
-PAGE = "https://cy-pca.github.io/cypkg/"
+PAGE = "https://cy-pca.github.io/cypkg/ari.html"
 PAGE_ORIGIN = "https://cy-pca.github.io"
 LOOPBACK = "http://127.0.0.1:53117/callback"
 

@@ -78,16 +78,19 @@ def test_every_client_may_use_a_loopback_callback(client_id, monkeypatch):
 
 def test_pages_are_matched_exactly_and_per_client(monkeypatch):
     monkeypatch.delenv(cli_auth.PAGE_REDIRECTS_ENV, raising=False)
-    page = "https://cy-pca.github.io/cypkg/"
-    assert cli_auth.redirect_ok("cypkg", page)
+    page = "https://cy-pca.github.io/cypkg/ari.html"
+    for client_page in ("arigl.html", "ari.html", "ari_tvision.html"):
+        assert cli_auth.redirect_ok("cypkg", f"https://cy-pca.github.io/cypkg/{client_page}")
     # The CLI has no pages; an unknown client has nothing.
     assert not cli_auth.redirect_ok("cvcpkg-cli", page)
     assert not cli_auth.redirect_ok("someone-else", page)
     assert not cli_auth.redirect_ok("someone-else", "http://127.0.0.1:49812/callback")
     # Exact: another path, a query, another scheme or host are all different pages.
     for near in (
+        "https://cy-pca.github.io/cypkg/",  # the landing page: it runs no client
         "https://cy-pca.github.io/cypkg",
-        "https://cy-pca.github.io/cypkg/?src=evil.ari",
+        "https://cy-pca.github.io/cypkg/ari.html?src=evil.ari",
+        "https://cy-pca.github.io/cypkg/index.html",
         "https://cy-pca.github.io/cypkg/other/",
         "http://cy-pca.github.io/cypkg/",
         "https://evil.github.io/cypkg/",
@@ -102,7 +105,9 @@ def test_operator_pages_extend_only_a_client_that_has_pages(monkeypatch):
         "cypkg=http://insecure.example/,cypkg=https://frag.example/#x,nonsense",
     )
     assert cli_auth.page_redirects("cypkg") == (
-        "https://cy-pca.github.io/cypkg/",
+        "https://cy-pca.github.io/cypkg/arigl.html",
+        "https://cy-pca.github.io/cypkg/ari.html",
+        "https://cy-pca.github.io/cypkg/ari_tvision.html",
         "https://cvcpkg.example/cypkg/",
     )
     assert cli_auth.redirect_ok("cypkg", "https://cvcpkg.example/cypkg/")
