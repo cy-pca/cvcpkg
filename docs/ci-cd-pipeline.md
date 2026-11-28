@@ -6,27 +6,31 @@ This document describes the automated deployment pipelines for cvcpkg.
 
 | Environment | Tracks | Server | Deploy runner | Scope |
 |------------|--------|--------|---------|-------|
-| **Production** | `prod` branch | cvcpkg.org + pkg.tx.wtf | `cvcpkg-prod` (catx-03) | Public-facing package registry |
+| **Production** | `prod` branch (a record of what is live) | cvcpkg.org + pkg.tx.wtf | cy-pca's ops deploy VM | Public-facing package registry |
 | **Dev/Test** | `master` (every push) | cvcpkg-server (incus VM) | `star-01` | QA, recipe PR builds, local testing |
 
-## Production Deployment (`deploy-prod.yml`)
+## Production Deployment
 
-**Trigger:** Push to `prod` branch or manual `workflow_dispatch` (optional `sha` input, defaults to the dispatched ref's HEAD; optional `base_sha`, the previously deployed commit, to push only the recipes changed since it). The workflow checks out and deploys exactly that commit; it must be on `prod` or `master`.
+Since 2026-11-28 production deploys run from cy-pca's private ops repository
+(cy-pca/ops), not from this repo: its `cvcpkg-deploy.yml` workflow, by
+dispatch, on a deploy VM that runs nothing else. This repo's `deploy-prod.yml`
+was removed; a push to `prod` no longer deploys anything.
 
-**Runner:** `[self-hosted, Linux, cvcpkg-prod]` (catx-03)
+What a deploy does, per host (cvcpkg.org first, then the pkg.tx.wtf mirror):
+the job SSHes to the host with a key whose `authorized_keys` line forces a
+fixed wrapper, which fetches this public repo, refuses a commit on neither
+`prod` nor `master`, checks it out (keeping `.env.production` and `backups/`),
+backs up the database, rebuilds the backend container, runs migrations
+(`cvcpkg-server migrate upgrade head`) and waits up to 300 s for `/healthz`.
+Then the job checks the builder WebSocket route through the public URL
+(`403`/`401` expected; see
+[deployment-guide.md](deployment-guide.md#checking-the-websocket-route)),
+tells connected builders to self-update (`POST /v1/admin/update-builders`),
+and pushes the recipes that changed since the previous deploy
+(`scripts/changed_recipes.py`, `cvcpkg recipe push-all --only NAME ...`).
 
-### Flow
-
-The `deploy` job:
-
-0. **Resolve and check out the target SHA** — a short SHA is resolved to the full commit, a commit on neither `prod` nor `master` is refused, and the workspace is moved to it before anything is synced (the `sha` input used to be only the image label while the dispatched ref's HEAD was deployed)
-1. **Deploy to cvcpkg.org** — SSH to the primary host (`vars.PROD_SERVER_SSH`): reap stale build dirs and prune Docker, rsync the checkout, back up the database, rebuild the backend container, run migrations (`cvcpkg-server migrate upgrade head`), health-check `/healthz`
-2. **Deploy to pkg.tx.wtf** — same flow, executed locally on the runner host
-3. **Check the builder WebSocket route** — an unauthenticated RFC 6455 handshake to `/v1/builders/0/ws` through the public URL must be refused by the route (`403`/`401`). A `404` means the reverse proxy is not forwarding WebSocket upgrades (or the image lacks `websockets`): builders cannot connect and the notify step would reach none of them, so the job fails. See [deployment-guide.md](deployment-guide.md#checking-the-websocket-route).
-4. **Notify builders to self-update** — `POST /v1/admin/update-builders` (needs `CVCPKG_ADMIN_TOKEN`): every connected builder pulls its checkout, reinstalls cvcpkg and restarts. It runs as soon as the route check passes, before the recipe push, because builders need the new server, not the new recipes. A failure is a warning.
-5. **Push recipes to cvcpkg.org** — refresh the DB-backed `/v1/recipes/*` store so builders fetch the deployed recipe revision (needs `CVCPKG_PUBLISHER_TOKEN`). It runs whenever both servers are up, is capped at 30 minutes, and never fails the job. It pushes the recipes that changed between the previously deployed commit and this one (`scripts/changed_recipes.py`; the previous commit is the push event's `before`, or the `base_sha` dispatch input) with `cvcpkg recipe push-all --only NAME ...`. It pushes every recipe when `recipes/_common` changed, or when there is no base commit: a dispatch without `base_sha`, a new branch, or a commit the checkout lacks. A failed or cancelled push is not retried by the next deploy (which compares with this one): dispatch deploy-prod without `base_sha`, or run populate-server, to push everything.
-
-The `report-fleet` job then lists any builder or platform that is offline.
+After a deploy, `prod` is fast-forwarded to the deployed commit, so it keeps
+naming what is live.
 
 > **Extras matter on every host these pipelines touch.** A bare
 > `pip install .` now gets the core client only (`click` + `PyYAML`). Each
@@ -39,11 +43,8 @@ The `report-fleet` job then lists any builder or platform that is offline.
 ### Deploying to Production
 
 ```bash
-# From master, push to prod:
-git push origin master:prod
-
-# Or deploy (or roll back to) a specific commit on prod or master:
-gh workflow run deploy-prod -f sha=abc1234
+# Ops repo access needed; sha may be master, prod, a tag or a full sha:
+gh workflow run cvcpkg-deploy.yml -R cy-pca/ops -f sha=master
 ```
 
 ## Dev/Test Deployment (`deploy-dev.yml`)
@@ -154,22 +155,22 @@ Self-hosted runner labels targeted by the workflows:
 
 | Label | Host | Used by |
 |-------|------|---------|
-| `cvcpkg-prod` | catx-03 | deploy-prod server deploy; cvcpkg-ci Docker integration tests |
-| `star-00` | star incus cluster host | deploy-prod builder updates (BSD/Windows/CUDA over SSH from their LAN; itself in the Linux matrix) |
-| `star-01` | star incus cluster host | deploy-dev, pr-recipe-build-dev, populate-dev, health-check dev probe; deploy-prod Linux matrix |
-| `lat` | laptop | deploy-prod Linux builder matrix |
-| `rebota` | rebota | deploy-prod Linux builder matrix |
+| `cvcpkg-prod` | catx-03 | cvcpkg-ci Docker integration tests |
+| `star-00` | star incus cluster host | itself in the Linux builder matrix |
+| `star-01` | star incus cluster host | deploy-dev, pr-recipe-build-dev, populate-dev, health-check dev probe; Linux builder matrix |
+| `lat` | laptop | Linux builder matrix |
+| `rebota` | rebota | Linux builder matrix |
 | `cvcpkg-builder` | star cluster | cvcpkg-standalone BSD binary builds (drives the BSD VMs over SSH) |
 
 Package builds on GitHub-hosted runners (`windows-2022`, `macos-latest`, `macos-15-intel`, arm64 Linux) go through `windows-build.yml` / `macos-build.yml` / `linux-arm-build.yml`. Note that the remote builder fleet (BSD guests, the Windows builder, prettyhatemachine) is *not* made of Actions runners — those machines run the cvcpkg builder daemon and are updated over SSH by the deploy workflows. See [builder-fleet.md](builder-fleet.md).
 
 ## Concurrency
 
-Deploy and populate workflows use non-cancelling `concurrency` groups (`deploy-prod`, `deploy-dev`, `populate-server`, `populate-dev`, `macos-drain`):
+Deploy and populate workflows use non-cancelling `concurrency` groups (`deploy-dev`, `populate-server`, `populate-dev`, `macos-drain`; production's `cvcpkg-deploy` in cy-pca/ops):
 
 ```yaml
 concurrency:
-  group: deploy-prod   # or deploy-dev, populate-server, ...
+  group: deploy-dev   # or populate-server, populate-dev, ...
   cancel-in-progress: false
 ```
 
