@@ -30,6 +30,27 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **`/v1/search` sorts the whole result: `sort=<key>`, `-<key>` descending.**
+  cypkg's search table sorts by a column header and pages 10 rows at a time,
+  so the sort has to reorder every match, not the page on screen. Empty or
+  absent keeps today's order (best match first with a `q`).
+  - `group=build` keys: `name`, `version`, `platform`, `arch`, `build_type`,
+    `link`, `size` (`size_bytes`), `published` (`published_at`), `org`.
+  - `group=package` keys: `name`, `org`, `version` (the newest matching one),
+    `builds`, `size` (their total).
+  - Versions sort in version order (`version_sort_key`, the one that picks
+    "latest"): `1.10` after `1.9`. SQL cannot order versions, so on the
+    database backend `sort=version` reads the matching rows' versions, orders
+    them in the server and loads the page by id. Every other key is an SQL
+    `ORDER BY`.
+  - Ties keep today's order, then a unique id (row id, a package's org/name,
+    a bundle's place in the file index), in both directions, so paging never
+    repeats or skips a row. Facets and totals do not change.
+  - An unknown key, or one the group lacks (`sort=platform&group=package`), is
+    a 422 that names the keys. The response says the sort applied in `sort`.
+  - Database, file-index and mirror backends alike. Docs: `docs/api-reference.md`
+    "Sorting a search".
+
 - **A builder survives a reset connection, and a restarted one fails the jobs
   it lost.** Dev job 25560 (grpc, netbsd) stopped at `[652/1760]`, sat
   "running" until its 2 h build timeout, and was reaped as `timed_out`. Every

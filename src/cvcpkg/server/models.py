@@ -437,11 +437,15 @@ class SearchResponse(BaseModel):
     )
     groups: list[SearchPackageGroup] = Field(
         default_factory=list,
-        description="The page of matching packages, best match first (group=package only).",
+        description="The page of matching packages, best match first or by sort (group=package).",
     )
     group: str = Field(
         default="build",
         description="What limit and offset count: 'build' rows or 'package' groups.",
+    )
+    sort: str = Field(
+        default="",
+        description="The sort applied, e.g. 'name' or '-size'; empty for the default order.",
     )
     limit: int = 0
     offset: int = 0
