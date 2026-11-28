@@ -2550,21 +2550,6 @@ def builder_run(
         # daily clean, tmpwatch) can later delete it out from under us; each job
         # re-ensures it before mkdtemp (see _execute_job).
         work_root.mkdir(parents=True, exist_ok=True)
-        # Reclaim job dirs stranded by a PREVIOUS incarnation.  _execute_job
-        # removes its own tree in a finally, but that never runs when the
-        # builder is killed mid-job -- which is what every deploy restart does,
-        # so the leak grows until a build dies with ENOSPC (28 GiB on the dev
-        # cluster, 2026-08-02).  Anything here at startup is an orphan: the
-        # single-instance pidfile guard means no other builder shares this work
-        # dir, and this process owns nothing yet -- so no age heuristic.
-        from cvcpkg.builder_gc import sweep_work_dir
-
-        _startup_gc = sweep_work_dir(work_root)
-        if _startup_gc:
-            click.echo(
-                f"cvcpkg-builder: reclaimed {_startup_gc.removed} orphaned job "
-                f"dir(s), {_startup_gc.freed_mib:.0f} MiB"
-            )
     # Under the work dir when there is one (the volume the builder measures and
     # sweeps; builder_gc never deletes this name), not the system temp dir.
     cache_dir = (
@@ -2585,33 +2570,6 @@ def builder_run(
         with _recipe_fetch_locks_guard:
             return _recipe_fetch_locks.setdefault(name, threading.Lock())
 
-    # -- Daemonize -------------------------------------------
-    import os as _os
-
-    pid_path = (
-        Path(pidfile)
-        if pidfile
-        else (work_root or Path(tempfile.gettempdir())) / "cvcpkg-builder.pid"
-    )
-
-    if daemon:
-        import sys as _sys
-
-        if _sys.platform == "win32":
-            raise click.ClickException("--daemon is not supported on Windows.")
-
-        click.echo(f"cvcpkg-builder: daemonizing (pidfile {pid_path})...")
-        if _os.fork() > 0:
-            raise SystemExit(0)
-        _os.setsid()
-        if _os.fork() > 0:
-            raise SystemExit(0)
-        devnull = _os.open(_os.devnull, _os.O_RDWR)
-        _os.dup2(devnull, _sys.stdin.fileno())
-        _os.dup2(devnull, _sys.stdout.fileno())
-        _os.dup2(devnull, _sys.stderr.fileno())
-        _os.close(devnull)
-
     # -- Single-instance guard -------------------------------
     # The builder must be a singleton per host.  A second concurrent
     # ``cvcpkg builder run`` would register a duplicate builder, race on the
@@ -2619,14 +2577,15 @@ def builder_run(
     # "a ton of cvcpkg processes".  If the pidfile names a still-live builder,
     # refuse to start; a stale pidfile (dead PID, or PID recycled by an
     # unrelated program) is silently reclaimed.
+    import os as _os
+
     from cvcpkg.selfexec import is_frozen
 
-    if is_frozen():
-        # What an earlier registry self-update left: a binary moved aside on
-        # Windows, a download interrupted part-way.
-        from cvcpkg.registry_update import remove_stale_binaries
-
-        remove_stale_binaries(_running_binary())
+    pid_path = (
+        Path(pidfile)
+        if pidfile
+        else (work_root or Path(tempfile.gettempdir())) / "cvcpkg-builder.pid"
+    )
 
     def _pid_is_live_builder(pid: int) -> bool:
         if pid <= 0 or pid == _os.getpid():
@@ -2661,19 +2620,79 @@ def builder_run(
             return True
         return True
 
-    pid_path.parent.mkdir(parents=True, exist_ok=True)
-    if pid_path.exists():
+    def _refuse_if_running() -> None:
+        if not pid_path.exists():
+            return
         try:
-            _existing_pid = int(pid_path.read_text().strip() or "0")
+            existing_pid = int(pid_path.read_text().strip() or "0")
         except ValueError:
-            _existing_pid = 0
-        if _pid_is_live_builder(_existing_pid):
+            existing_pid = 0
+        if _pid_is_live_builder(existing_pid):
             raise click.ClickException(
-                f"another cvcpkg builder is already running (pid {_existing_pid}, "
+                f"another cvcpkg builder is already running (pid {existing_pid}, "
                 f"pidfile {pid_path}); refusing to start a second instance. "
                 f"Stop it first, or delete the pidfile if it is stale."
             )
         pid_path.unlink(missing_ok=True)  # stale - reclaim it
+
+    # Before the startup sweep below, which deletes every job dir in the work
+    # dir: a second ``builder run`` pointed at a live builder's work dir must
+    # refuse before it removes that builder's in-flight jobs, not after.  And
+    # before daemonizing, so that a refused ``--daemon`` start fails in the
+    # foreground, where its message and exit status are seen -- not in a
+    # detached child writing to /dev/null while the parent exits 0.
+    _refuse_if_running()
+
+    if work_root is not None:
+        # Reclaim job dirs stranded by a PREVIOUS incarnation.  _execute_job
+        # removes its own tree in a finally, but that never runs when the
+        # builder is killed mid-job -- which is what every deploy restart does,
+        # so the leak grows until a build dies with ENOSPC (28 GiB on the dev
+        # cluster, 2026-08-02).  Anything here at startup is an orphan: the
+        # guard above found no live builder holding this work dir, and this
+        # process owns nothing yet -- so no age heuristic.  Swept before
+        # daemonizing, so that the line below reaches the terminal (or the
+        # journal of a Type=forking unit): a daemon's output goes to /dev/null.
+        from cvcpkg.builder_gc import sweep_work_dir
+
+        _startup_gc = sweep_work_dir(work_root)
+        if _startup_gc:
+            click.echo(
+                f"cvcpkg-builder: reclaimed {_startup_gc.removed} orphaned job "
+                f"dir(s), {_startup_gc.freed_mib:.0f} MiB"
+            )
+
+    # -- Daemonize -------------------------------------------
+    if daemon:
+        import sys as _sys
+
+        if _sys.platform == "win32":
+            raise click.ClickException("--daemon is not supported on Windows.")
+
+        click.echo(f"cvcpkg-builder: daemonizing (pidfile {pid_path})...")
+        if _os.fork() > 0:
+            raise SystemExit(0)
+        _os.setsid()
+        if _os.fork() > 0:
+            raise SystemExit(0)
+        devnull = _os.open(_os.devnull, _os.O_RDWR)
+        _os.dup2(devnull, _sys.stdin.fileno())
+        _os.dup2(devnull, _sys.stdout.fileno())
+        _os.dup2(devnull, _sys.stderr.fileno())
+        _os.close(devnull)
+
+    if is_frozen():
+        # What an earlier registry self-update left: a binary moved aside on
+        # Windows, a download interrupted part-way.
+        from cvcpkg.registry_update import remove_stale_binaries
+
+        remove_stale_binaries(_running_binary())
+
+    # Claim the pidfile, from the process that will own it (--daemon's forks
+    # changed the PID).  Checked again right before the write: the sweep above
+    # can take a while, and a builder started meanwhile may hold it by now.
+    _refuse_if_running()
+    pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(_os.getpid()))
 
     # The jobs this builder holds, on disk beside the pidfile's default, so
