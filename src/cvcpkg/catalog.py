@@ -415,6 +415,102 @@ def catalog_entries(
     return _prefer_exact_noarch_variant(entries, build_type=build_type, link=link)
 
 
+def entries_with_config_fallback(
+    catalog: dict,
+    *,
+    platform: str,
+    arch: str,
+    build_type: str,
+    link: str,
+    trust_mirror: bool | None = None,
+    asked: set[str] | frozenset[str] | None = None,
+    requested_org: dict[str, str] | None = None,
+) -> tuple[list[CatalogEntry], set[str], set[str]]:
+    """:func:`catalog_entries` for this tuple, each dependency in the config it is linked in.
+
+    Only a debug install on a platform whose debug and release builds share an
+    ABI (:func:`cvcpkg.platform.runtime_config_fallback`) changes anything.
+    A debug bundle is built against debug builds of its own org's packages,
+    and the release builds of everything else that its publisher installs.
+    The cvcpkg fleet builds a public debug bundle against debug public deps.
+    libcvc's publish lanes build the ``cvc`` org's debug libcvc against release
+    public deps. Several debug deps rename their libraries
+    (``libassimpd.so.6``, ``libhdf5_debug.so.310``, ``libprotobufd.so.28.3.0``),
+    so a debug libcvc cannot load those.
+
+    *asked* holds the names the user asked for. Each one installs in
+    *build_type* or not at all. A dependency in the org of an asked-for package
+    keeps *build_type*, falling back to release where it publishes no
+    *build_type* bundle. A dependency from any other org comes from release
+    where it publishes one. ``None`` (install-deps: a build links what it
+    installs) keeps every dependency in *build_type*, with the same fallback.
+    Config-neutral bundles serve either way. A fallback bundle never stands in
+    for a name the kept entries provide, so a release ``libcvc-cuda`` cannot
+    outrank the debug ``libcvc``.
+
+    Returns ``(entries, fallen_back, held_back)``. *entries* are the entries to
+    resolve against. *fallen_back* names the packages whose candidates come from
+    the fallback config. *held_back* names the asked-for packages that only the
+    fallback config publishes.
+    """
+    from cvcpkg.platform import NEUTRAL_CONFIG, is_noarch_bundle, runtime_config_fallback
+
+    entries = catalog_entries(
+        catalog,
+        platform=platform,
+        arch=arch,
+        build_type=build_type,
+        link=link,
+        trust_mirror=trust_mirror,
+    )
+    fallback = runtime_config_fallback(platform, build_type)
+    if fallback is None:
+        return entries, set(), set()
+    others = catalog_entries(
+        catalog,
+        platform=platform,
+        arch=arch,
+        build_type=fallback,
+        link=link,
+        trust_mirror=trust_mirror,
+    )
+    protected = set(asked or ())
+    wanted_org = requested_org or {}
+
+    def _is_asked(e: CatalogEntry) -> bool:
+        names = {e.name, *e.provides} & protected
+        return any(not wanted_org.get(n) or wanted_org[n] == e.org for n in names)
+
+    config_orgs = None if asked is None else {e.org for e in entries + others if _is_asked(e)}
+
+    def _neutral(e: CatalogEntry) -> bool:
+        return e.build_type == NEUTRAL_CONFIG or is_noarch_bundle(e.platform, e.arch)
+
+    def _stays(e: CatalogEntry) -> bool:
+        return config_orgs is None or e.org in config_orgs or e.name in protected
+
+    # A config-neutral bundle serves every config and decides nothing: a name can
+    # also have concrete bundles (the noarch Python protobuf beside the C++ one).
+    neutral = [e for e in entries if _neutral(e)]
+    kept = [e for e in entries if not _neutral(e) and _stays(e)]
+    have = {e.name for e in kept} | {p for e in kept for p in e.provides}
+    blocked = have | protected
+    extra: list[CatalogEntry] = []
+    held_back: set[str] = set()
+    for e in others:
+        if _neutral(e):
+            continue
+        if e.name in blocked or blocked.intersection(e.provides):
+            if e.name in protected and e.name not in have:
+                held_back.add(e.name)
+            continue
+        extra.append(e)
+    # A dependency from another org that publishes no fallback bundle keeps its own.
+    named = {e.name for e in kept} | {e.name for e in extra}
+    rest = [e for e in entries if not _neutral(e) and not _stays(e) and e.name not in named]
+    return neutral + kept + extra + rest, {e.name for e in extra}, held_back
+
+
 def exclusive_with(
     relations: dict[str, tuple[list[str] | tuple[str, ...], list[str] | tuple[str, ...]]],
 ) -> dict[str, set[str]]:
