@@ -36,8 +36,10 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
   - Metadata (RFC 8414) at `/.well-known/oauth-authorization-server` and
     `/.well-known/openid-configuration`, readable from any origin. Its
     `issuer` is `CVCPKG_PUBLIC_URL`.
-  - A second public client, `cypkg`: loopback, and the browser page
-    `https://cy-pca.github.io/cypkg/`. `CVCPKG_OAUTH_PAGE_REDIRECTS` adds pages.
+  - A second public client, `cypkg`: loopback, and the browser pages of its
+    three clients, `https://cy-pca.github.io/cypkg/arigl.html`, `ari.html` and
+    `ari_tvision.html` (since cy-pca/cypkg#16 the site's root is a landing page
+    that links them). `CVCPKG_OAUTH_PAGE_REDIRECTS` adds pages.
   - `/v1/auth/authorize` takes `response_type` and `scope` (a role: `reader`,
     `publisher`, `admin`), refuses `openid` (no ID token here) back to the
     client, and its replies carry `iss` (RFC 9207).

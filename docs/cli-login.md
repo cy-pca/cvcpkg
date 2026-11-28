@@ -95,8 +95,10 @@ which cvcpkg is an OIDC client of.
 - **Clients** are a built-in list (`cli_auth.CLI_CLIENTS`), all public: no
   secret, and `token_endpoint_auth_method` `none`.
   - `cvcpkg-cli` — `cvcpkg login`; loopback only; the only device-pairing client.
-  - `cypkg` — cy-pca/cypkg; loopback, and the browser page
-    `https://cy-pca.github.io/cypkg/` (exactly: path and query are part of it).
+  - `cypkg` — cy-pca/cypkg; loopback, and the browser pages
+    `https://cy-pca.github.io/cypkg/arigl.html`, `ari.html` and `ari_tvision.html`
+    (exactly: path and query are part of each). The site's landing page,
+    `https://cy-pca.github.io/cypkg/`, links them and signs nobody in.
     An operator adds pages with `CVCPKG_OAUTH_PAGE_REDIRECTS`.
 - **`scope` is a role**: `reader`, `publisher` or `admin`; the highest one
   named is asked for, narrowed as `role` is (no scope: `reader`). `role`, the

@@ -54,13 +54,19 @@ from cvcpkg.server.db import (
 #   the device pairing (``pairing.py``).
 # * ``cypkg`` — cy-pca/cypkg, the registry client written as Ariadne documents.
 #   Ariadne's ``oidc-sign-in`` runs the loopback flow in a native host and the
-#   redirect flow in its browser page, which comes back to one of ``pages``.
+#   redirect flow in its browser page, which comes back to one of ``pages``:
+#   the page it started from.  The Pages site's landing page links three, one
+#   per Ariadne host (arigl, and ari with FTXUI or tvision).
 CLI_CLIENTS: dict[str, dict] = {
     "cvcpkg-cli": {"public": True, "redirect": "loopback", "pairing": True},
     "cypkg": {
         "public": True,
         "redirect": "loopback",
-        "pages": ("https://cy-pca.github.io/cypkg/",),
+        "pages": (
+            "https://cy-pca.github.io/cypkg/arigl.html",
+            "https://cy-pca.github.io/cypkg/ari.html",
+            "https://cy-pca.github.io/cypkg/ari_tvision.html",
+        ),
     },
 }
 
