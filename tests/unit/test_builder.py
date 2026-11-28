@@ -501,6 +501,9 @@ class TestPlatformAny:
     def test_detect_arch_other_platforms_unchanged(self):
         """Other platforms return their normal arch, not 'noarch'."""
         assert _detect_arch_for_platform("wasm") == "wasm32"
+        assert _detect_arch_for_platform("wasm-mt") == "wasm32"
+        # wasi bundles are wasm32 as well; a from-prefix pack once tagged them with the host's arch
+        assert _detect_arch_for_platform("wasi") == "wasm32"
         # linux/macos etc. return detect_arch() -- just verify not noarch
         result = _detect_arch_for_platform("linux")
         assert result != "noarch"

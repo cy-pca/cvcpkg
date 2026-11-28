@@ -9,7 +9,10 @@ cd "${CVC_SOURCE_DIR}"
 WASI_FLAGS="--target=wasm32-wasip1 --sysroot=${CVC_WASI_SDK_DIR}/share/wasi-sysroot"
 export CFLAGS="${WASI_FLAGS} ${CFLAGS:-} -D_FILE_OFFSET_BITS=64"
 
-make -j "${CVC_JOBS}" libbz2.a bzip2 bzip2recover \
+# The library only, as on wasm: the bzip2 and bzip2recover tools need
+# signal(), fchown() and times(), which wasip1 does not have, and the package
+# ships no bin/ on the cross targets anyway.
+make -j "${CVC_JOBS}" libbz2.a \
     CC="${CC}" AR="${AR}" RANLIB="${RANLIB}"
 
 mkdir -p "${CVC_INSTALL_DIR}/lib" "${CVC_INSTALL_DIR}/include" "${CVC_INSTALL_DIR}/lib/pkgconfig"

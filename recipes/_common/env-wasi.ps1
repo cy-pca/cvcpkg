@@ -19,8 +19,19 @@ $env:CXX = Join-Path $env:CVC_WASI_SDK_DIR 'bin\clang++.exe'
 $env:AR = Join-Path $env:CVC_WASI_SDK_DIR 'bin\llvm-ar.exe'
 $env:RANLIB = Join-Path $env:CVC_WASI_SDK_DIR 'bin\llvm-ranlib.exe'
 
+# Wasm exception handling (exnref) for the whole wasi column: see env-wasi.sh.
+$env:CVC_WASI_EH_FLAGS = '-fwasm-exceptions -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false'
+$env:CFLAGS = ("$env:CVC_WASI_EH_FLAGS $env:CFLAGS").Trim()
+$env:CXXFLAGS = ("$env:CVC_WASI_EH_FLAGS $env:CXXFLAGS").Trim()
+$env:CVC_WASI_STACK_FLAGS = '-Wl,-z,stack-size=8388608'
+$env:LDFLAGS = ("$env:CVC_WASI_EH_FLAGS -lunwind -lsetjmp $env:CVC_WASI_STACK_FLAGS $env:LDFLAGS").Trim()
+
 # Locate the wasi-sdk CMake toolchain file.
-$wasiToolchain = Join-Path $env:CVC_WASI_SDK_DIR 'share\cmake\wasi-sdk.cmake'
+# wasi-sdk-p1.cmake (wasm32-wasip1) first: see env-wasi.sh.
+$wasiToolchain = Join-Path $env:CVC_WASI_SDK_DIR 'share\cmake\wasi-sdk-p1.cmake'
+if (-not (Test-Path $wasiToolchain)) {
+    $wasiToolchain = Join-Path $env:CVC_WASI_SDK_DIR 'share\cmake\wasi-sdk.cmake'
+}
 $hasToolchainFile = Test-Path $wasiToolchain
 $wasiSysroot = Join-Path $env:CVC_WASI_SDK_DIR 'share\wasi-sysroot'
 
@@ -121,7 +132,7 @@ function Invoke-CvcWasiAutotoolsBuild {
     $buildTriplet = $buildTriplet.Trim()
     if (-not $buildTriplet) { $buildTriplet = 'x86_64-pc-msys' }
 
-    $wasiTargetFlags = "--target=wasm32-wasip1 --sysroot=$msysWasiSysroot"
+    $wasiTargetFlags = "--target=wasm32-wasip1 --sysroot=$msysWasiSysroot $env:CVC_WASI_EH_FLAGS"
 
     $extras   = ($ConfigureArgs -join ' ')
     $depsFlag = if ($msysDeps) { "PATH='$msysDeps/bin:'`$PATH" } else { '' }
@@ -135,7 +146,7 @@ function Invoke-CvcWasiAutotoolsBuild {
         "RANLIB='$msysWasiRANLIB'",
         "CFLAGS='$wasiTargetFlags'",
         "CXXFLAGS='$wasiTargetFlags'",
-        "LDFLAGS='$wasiTargetFlags'",
+        "LDFLAGS='$wasiTargetFlags -lunwind -lsetjmp $env:CVC_WASI_STACK_FLAGS'",
         "./configure",
         "--prefix='$msysPrefix'",
         "--host=wasm32-wasi",

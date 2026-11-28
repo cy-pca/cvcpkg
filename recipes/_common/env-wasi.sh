@@ -17,8 +17,13 @@ BUILD_SHARED_LIBS=OFF
 CVC_LINK=static
 export CVC_LINK
 
-# Locate the wasi-sdk toolchain file.
-_WASI_TOOLCHAIN="${CVC_WASI_SDK_DIR}/share/cmake/wasi-sdk.cmake"
+# Locate the wasi-sdk toolchain file.  Prefer wasi-sdk-p1.cmake (triple
+# wasm32-wasip1): wasi-sdk.cmake still says wasm32-wasi, which clang 22 warns
+# is deprecated, and a project building with -Werror (Boost.Nowide) fails on it.
+_WASI_TOOLCHAIN="${CVC_WASI_SDK_DIR}/share/cmake/wasi-sdk-p1.cmake"
+if [[ ! -f "${_WASI_TOOLCHAIN}" ]]; then
+    _WASI_TOOLCHAIN="${CVC_WASI_SDK_DIR}/share/cmake/wasi-sdk.cmake"
+fi
 if [[ ! -f "${_WASI_TOOLCHAIN}" ]]; then
     # Older wasi-sdk versions may not ship a CMake toolchain file.
     # Fall back to manual cross-compilation flags.
@@ -35,8 +40,33 @@ export RANLIB="${CVC_WASI_SDK_DIR}/bin/llvm-ranlib"
 export NM="${CVC_WASI_SDK_DIR}/bin/llvm-nm"
 export STRIP="${CVC_WASI_SDK_DIR}/bin/llvm-strip"
 
-# Re-define cvc_cmake_build to inject the wasi-sdk toolchain.
-cvc_cmake_build() {
+# The wasi column is built with WebAssembly exception handling, the standard
+# (exnref) encoding, so C++ exceptions and setjmp/longjmp work.  Without it
+# wasi-libc's <setjmp.h> is an #error (libpng, libjpeg-turbo, ImageMagick's
+# coders) and C++ code cannot throw.  wasi-sdk >= 26 ships the eh multilib
+# (lib/<triple>/eh/libc++abi.a + libunwind.a) and libsetjmp.a; clang 22 still
+# emits the legacy encoding unless told otherwise, and Wasmtime runs only the
+# standard one.  One flavour for the whole closure, as -pthread is for wasm-mt.
+# A program built against these bundles runs on an engine with the
+# exception-handling proposal: `wasmtime run -W exceptions=y` (Wasmtime >= 37).
+# wasm-ld resolves archives in any order, so the -l flags can sit in LDFLAGS.
+#
+# Executables get an 8 MiB stack, the usual native default.  wasm-ld's is
+# 64 KiB, below the data in linear memory, and a C program that keeps a few
+# PATH_MAX buffers per frame overruns it (ImageMagick's magick CLI did in its
+# first call); the stack pointer then wraps below 0 and the next store faults
+# at an address past 4 GiB.  Libraries are unaffected: only a link sets it.
+CVC_WASI_EH_FLAGS="-fwasm-exceptions -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false"
+export CVC_WASI_EH_FLAGS
+export CVC_WASI_STACK_FLAGS="-Wl,-z,stack-size=8388608"
+export CFLAGS="${CVC_WASI_EH_FLAGS}${CFLAGS:+ ${CFLAGS}}"
+export CXXFLAGS="${CVC_WASI_EH_FLAGS}${CXXFLAGS:+ ${CXXFLAGS}}"
+export LDFLAGS="${CVC_WASI_EH_FLAGS} -lunwind -lsetjmp ${CVC_WASI_STACK_FLAGS}${LDFLAGS:+ ${LDFLAGS}}"
+
+# Configure only, with the wasi-sdk toolchain: for a recipe that builds and
+# installs part of a project (e.g. a library without its command-line tools).
+# cvc_cmake_build below is configure + build + install of everything.
+cvc_wasi_cmake_configure() {
     local _find_root_path_args=()
     if [[ -n "${CVC_DEPS_PREFIX:-}" ]]; then
         _find_root_path_args+=(-DCMAKE_FIND_ROOT_PATH="${CVC_DEPS_PREFIX}")
@@ -72,6 +102,11 @@ cvc_cmake_build() {
         ${_toolchain_args[@]+"${_toolchain_args[@]}"} \
         ${_find_root_path_args[@]+"${_find_root_path_args[@]}"} \
         "$@"
+}
+
+# Re-define cvc_cmake_build to inject the wasi-sdk toolchain.
+cvc_cmake_build() {
+    cvc_wasi_cmake_configure "$@"
     cmake --build "${CVC_BUILD_DIR}" -j "${CVC_JOBS}"
     cmake --install "${CVC_BUILD_DIR}"
     cvc_rewrite_install_paths

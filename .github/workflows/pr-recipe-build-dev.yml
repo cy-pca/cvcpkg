@@ -80,6 +80,19 @@ jobs:
           echo "Changed recipes: ${names[*]:-<none>}"
           # space-joined for the CLI, newline-joined for the report
           printf 'names=%s\n' "${names[*]:-}" >> "$GITHUB_OUTPUT"
+          # The wasi lanes too, when the PR touches a wasi file (a build-wasi.*, the shared
+          # _common/env-wasi.*, a wasi-compat/ shim): the release/shared DAG below stages no
+          # static job, and wasi is static-only, so a wasi fix was otherwise never built here.
+          # Only the changed recipes that declare a wasi matrix row; their missing wasi deps
+          # come in through submit-dag's auto-deps.
+          wasi=()
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- recipes/ | grep -qi 'wasi'; then
+            for r in "${names[@]}"; do
+              grep -qE '^\s*-\s*platform:\s*wasi\s*$' "recipes/$r/recipe.yaml" && wasi+=("$r")
+            done
+          fi
+          echo "Changed recipes with a wasi lane to build: ${wasi[*]:-<none>}"
+          printf 'wasi_names=%s\n' "${wasi[*]:-}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve dev server URL + DAG id
         id: dev
@@ -108,6 +121,7 @@ jobs:
           CVCPKG_SERVER_URL: ${{ env.DEV_URL }}
           CVCPKG_TOKEN: ${{ secrets.CVCPKG_DEV_ADMIN_TOKEN }}
           NAMES: ${{ steps.changed.outputs.names }}
+          WASI_NAMES: ${{ steps.changed.outputs.wasi_names }}
         run: |
           set -uo pipefail
           echo "Dev server: $CVCPKG_SERVER_URL   DAG: $DAG_BASE"
@@ -150,7 +164,25 @@ jobs:
           #    (exit 1); "still building, nothing failed" exits 75, which we treat
           #    as a soft pass (the build finishes on the cluster and is picked up
           #    by --skip-existing next time).
+          #
+          # The wasi lanes (WASI_NAMES, from the detect step) build as a second DAG
+          # (submit-dag names it $DAG_BASE-release-static), at the same time and in
+          # the same window as the first, so the job's timeout still holds.
           set +e
+          wasi_pid=""
+          if [ -n "${WASI_NAMES:-}" ]; then
+            cvcpkg builds submit-dag \
+              --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
+              --platform wasi --arch wasm32 \
+              --config release --link static \
+              --recipes-dir recipes \
+              --dag-id "$DAG_BASE" \
+              --skip-existing \
+              --online-only \
+              --wait --wait-timeout 1500 \
+              $WASI_NAMES > build-wasi.log 2>&1 &
+            wasi_pid=$!
+          fi
           cvcpkg builds submit-dag \
             --server "$CVCPKG_SERVER_URL" --token "$CVCPKG_TOKEN" \
             --platform linux,freebsd,openbsd,netbsd,windows,wasm,wasi \
@@ -163,6 +195,21 @@ jobs:
             --wait --wait-timeout 1500 \
             $NAMES | tee build.log
           rc=$?
+          if [ -n "$wasi_pid" ]; then
+            wait "$wasi_pid"
+            wasi_rc=$?
+            { echo ""; echo "===== wasi lanes (release/static): $WASI_NAMES ====="; cat build-wasi.log; } \
+              | tee -a build.log
+            # A failure in either DAG fails the check; else still-building (75) in either
+            # is the soft pass.
+            if [ "$rc" = "0" ] || [ "$rc" = "75" ]; then
+              if [ "$wasi_rc" != "0" ] && [ "$wasi_rc" != "75" ]; then
+                rc=$wasi_rc
+              elif [ "$wasi_rc" = "75" ]; then
+                rc=75
+              fi
+            fi
+          fi
           set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           # On failure, append the tail of each failed job's build log so the PR

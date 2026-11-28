@@ -5375,7 +5375,10 @@ def _detect_arch_for_platform(platform: str) -> str:
     """Return the architecture string for a given platform."""
     if platform == "any":
         return "noarch"
-    if platform in ("wasm", "wasm-mt"):
+    # wasi too: every wasi bundle is wasm32 (the fleet's jobs say so), and without it a local
+    # `pack --platform wasi` or a `pack --from-prefix --platform wasi` was tagged with the host's
+    # arch, which no `install --platform wasi --arch wasm32` ever matches.
+    if platform in ("wasm", "wasm-mt", "wasi"):
         return "wasm32"
     from cvcpkg.platform import detect_arch
 
