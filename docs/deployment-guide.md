@@ -244,7 +244,8 @@ curl --http1.1 -sS -o /dev/null -w '%{http_code}\n' --max-time 15 \
 which refuses it for the missing token.  `404` means the upgrade never
 reached it — the proxy is not forwarding upgrades, or the server image has
 no WebSocket library (`websockets`; it is part of the `server` and
-`production` extras).  `deploy-prod` runs this check after every deploy.
+`production` extras).  The production deploy (cy-pca/ops `cvcpkg-deploy.yml`)
+runs this check after every deploy.
 
 ## Database Migrations
 
