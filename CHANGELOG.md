@@ -30,6 +30,24 @@ documented per-recipe in `recipes/<name>/recipe.yaml`.
 
 ## Unreleased
 
+- **A builder survives a reset connection, and a restarted one fails the jobs
+  it lost.** Dev job 25560 (grpc, netbsd) stopped at `[652/1760]`, sat
+  "running" until its 2 h build timeout, and was reaped as `timed_out`. Every
+  job downstream of it was cancelled only then.
+  - The worker had died of SIGPIPE (`exited (code -13)`) just after the server
+    dropped its WebSocket. The CLI restores SIGPIPE's default action for every
+    command, and a write to a connection the server had reset killed the
+    process. `builder run` now ignores SIGPIPE, so such a write raises
+    BrokenPipeError into the handler that already keeps the builder up. Build
+    scripts still get the default action.
+  - The fleet supervisor restarted the worker five seconds later. The new
+    process removed the job's work dirs ("reclaimed 2 orphaned job dir(s)") and
+    said nothing to the server, which never saw the builder go offline.
+    A builder now records each job it claims in `<work dir>/.cvcpkg-claims/`
+    until the job's thread is done with it. At startup it reports every job a
+    previous process left there as failed, under that claim's identity, before
+    it takes any work. The failure cascades to the job's dependents at once.
+
 - **The CLI-login broker is a standard OAuth 2.0 authorization server.**
   Ariadne's `oidc-sign-in` (and so cy-pca/cypkg) signs in to a registry with
   it: the loopback flow natively, the redirect flow in a browser page.

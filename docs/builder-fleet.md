@@ -105,6 +105,11 @@ tokens supplied as `Environment=` / `EnvironmentFile=` entries
   pidfile -- waits twice as long each time, up to 5 minutes, so a crash loop
   does not unpack a fresh 85 MB binary every few seconds; a worker that ran
   for a minute or more starts over at `--restart-delay`.
+- A restarted worker fails the jobs its previous process claimed and never
+  reported, before it takes new work. Each claim is recorded in
+  `<work dir>/.cvcpkg-claims/` until its job is reported. The server never sees
+  a worker that is back within seconds go offline, so without this such a job
+  stays "running" until its build timeout, and its dependents wait for it.
 - Windows: each worker runs in its own console process group and is stopped
   with Ctrl+Break, which `builder run` drains on like Ctrl+C. A worker still
   running after the 120 s drain is killed with its whole process tree

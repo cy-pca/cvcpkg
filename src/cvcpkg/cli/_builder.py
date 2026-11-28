@@ -2177,6 +2177,53 @@ def _stop_requested(stop: Callable[[], bool] | None, what: str) -> bool:
     return False
 
 
+def _ignore_sigpipe() -> Callable[[], None]:
+    """Make a write to a closed socket or pipe raise in the builder, not kill it.
+
+    The cvcpkg CLI restores SIGPIPE's default action for every command
+    (``cli._restore_default_sigpipe``), so ``cvcpkg recipes | head`` ends
+    quietly like a Unix filter.  ``builder run`` is no filter: it is a
+    long-lived network client, and with the default action any write to a
+    connection its peer has reset ends the whole process -- every build in it,
+    with nothing reported to the server.  Python's sockets do not pass
+    MSG_NOSIGNAL; Python relies on SIGPIPE being ignored, as it is by default.
+
+    Dev job 25560 (grpc, netbsd, 2026-11-27): the server dropped the worker's
+    WebSocket ("keepalive ping timeout") and the worker went on writing to the
+    server -- the build log it streams with each 8 KiB of output (a pooled
+    keep-alive connection), heartbeats, the next-job poll, the socket's close
+    frame -- and one of those writes met a reset connection.  The worker died
+    of signal 13 (the fleet log: ``exited (code -13)``), at ``[652/1760]`` of
+    the build per the server's copy of its log.  Every one of those writes is
+    already inside an ``except Exception`` that keeps the builder going; with
+    SIGPIPE ignored the write raises BrokenPipeError into it instead.
+
+    Build and test scripts are unaffected: ``subprocess`` restores SIGPIPE's
+    default action in every child it starts (``restore_signals``).  Returns a
+    callable that puts the previous action back.  A no-op where there is no
+    SIGPIPE (Windows) or off the main thread.
+    """
+    import signal
+
+    sigpipe = getattr(signal, "SIGPIPE", None)
+    if sigpipe is None:
+        return lambda: None
+    try:
+        previous = signal.signal(sigpipe, signal.SIG_IGN)
+    except (ValueError, OSError):  # not the main thread
+        return lambda: None
+
+    def _restore() -> None:
+        if previous is None:  # not installed from Python: nothing to put back
+            return
+        try:
+            signal.signal(sigpipe, previous)
+        except (ValueError, OSError, TypeError):
+            pass
+
+    return _restore
+
+
 def _pip_install(
     checkout: Path,
     found: str,
@@ -2447,6 +2494,13 @@ def builder_run(
 
     httpx = require_httpx("builder")
 
+    # Before anything talks to the server: see _ignore_sigpipe.  Put back
+    # when this command ends, for whatever embeds the CLI (tests, a parent).
+    _restore_sigpipe = _ignore_sigpipe()
+    _sigpipe_ctx = click.get_current_context(silent=True)
+    if _sigpipe_ctx is not None:
+        _sigpipe_ctx.call_on_close(_restore_sigpipe)
+
     from cvcpkg import proctree
     from cvcpkg.builder import (
         Recipe,
@@ -2621,6 +2675,13 @@ def builder_run(
             )
         pid_path.unlink(missing_ok=True)  # stale - reclaim it
     pid_path.write_text(str(_os.getpid()))
+
+    # The jobs this builder holds, on disk beside the pidfile's default, so
+    # that a restarted builder can fail the ones its previous process never
+    # reported (see cvcpkg.builder_claims and _report_stranded_claims).
+    from cvcpkg.builder_claims import ClaimLedger
+
+    claims = ClaimLedger(work_root or Path(tempfile.gettempdir()), server=base, builder=name)
 
     # -- Build cross-platform/arch pairs ---------------------
     _cross_arch_defaults = {
@@ -4025,7 +4086,7 @@ def builder_run(
             click.echo(f"  [{job_id}] claim error: {exc}", err=True)
             return False
 
-    def _report_job(job_id: int, verb: str, fields: dict) -> str:
+    def _report_job(job_id: int, verb: str, fields: dict, *, identity: dict | None = None) -> str:
         """Tell the server a job finished (*verb* ``complete``) or failed (``fail``).
 
         Returns ``"ok"`` (the server took it), ``"refused"`` (it answered 4xx:
@@ -4039,8 +4100,14 @@ def builder_run(
         server (it answers 200 with the job as it stands).  Before this, a
         timeout on /complete -- after the bundle was published -- fell into
         the job's own failure handler and reported a good build as failed.
+
+        *identity* names the reporter as the job's claim did, when that was
+        not this process (_report_stranded_claims); by default, job_identity.
         """
         payload = {**fields, **job_identity}
+        if identity:
+            # A previous process's claim: named as that claim named it.
+            payload = {**fields, **identity}
         why = ""
         for attempt in range(_REPORT_ATTEMPTS):
             if attempt:
@@ -4072,6 +4139,45 @@ def builder_run(
             err=True,
         )
         return "lost"
+
+    def _report_stranded_claims() -> None:
+        """Fail the jobs a previous process of this builder claimed and never reported.
+
+        Runs once, after registration and before this process takes any work.
+        Such a job is ``running`` here as far as the server knows, and nothing
+        will ever finish it: its build died with that process, and the startup
+        sweep has just removed what was left of its work dir.  A supervisor
+        restarts a dead worker within seconds, under the same builder row, so
+        the server never sees the builder go offline and only the build
+        timeout (2 h by default) would end the job -- with every dependent in
+        its DAG waiting that long, to be cancelled (dev job 25560).  A failure
+        report ends it now and cancels its dependents with it.
+
+        Each job is reported under the identity its claim used.  A record whose
+        report the server refused (the job already finished, timed out or moved
+        on) is dropped as well; one whose report got no answer is kept, for the
+        next start.
+        """
+        for rec in claims.stranded():
+            job_id = rec["job_id"]
+            recipe = rec.get("recipe") or "this job"
+            prev = f"pid {rec['pid']}" if rec.get("pid") else "its previous process"
+            error_message = (
+                f"builder {name} restarted while running this job: its previous process "
+                f"({prev}) stopped mid-job without reporting it, so the build of "
+                f"{recipe} was lost and nothing was published. Retry the job to build it."
+            )
+            click.echo(
+                f"  [{job_id}] {recipe}: claimed by this builder's previous process "
+                f"({prev}), never reported; reporting it failed"
+            )
+            outcome = _report_job(
+                job_id, "fail", {"error_message": error_message}, identity=rec["identity"]
+            )
+            if outcome != "lost":
+                claims.forget(job_id)
+            if outcome == "refused":
+                click.echo(f"  [{job_id}] the server had already ended it; nothing to do")
 
     def _execute_job(job: dict) -> None:
         """Execute a single build job.  The slot is released by the calling
@@ -4115,6 +4221,10 @@ def builder_run(
             return
         with jobs_lock:
             claimed_job_ids.add(job_id)
+            claim_identity = dict(job_identity)
+        # Until the finally below forgets it: a builder that dies before then
+        # leaves the record, and its next process fails the job at startup.
+        claims.record(job_id, identity=claim_identity, recipe=recipe_name)
 
         error_message = ""
         archive_path: Path | None = None
@@ -4348,6 +4458,8 @@ def builder_run(
                             f"{f' (+{len(leftover) - 1} more)' if len(leftover) > 1 else ''}",
                             err=True,
                         )
+            # Reported, or stopped because the server is done with it.
+            claims.forget(job_id)
             # NB: the slot count is released by _run_job_guarded's finally,
             # not here — so an early return from the claim step above (which
             # never reaches this try) still frees the slot.
@@ -4958,6 +5070,10 @@ def builder_run(
     ws_wanted = not no_websocket and not exit_when_empty and builder_id is not None
     ws_backoff = _ReconnectBackoff(ws_retry_min, ws_retry_max)
     ws_next_attempt = 0.0  # first attempt straight away
+
+    # Before taking work: fail what a previous process of this builder left
+    # running on the server, so its DAG fails now rather than at the timeout.
+    _report_stranded_claims()
 
     try:
         # One loop for both transports.  While a socket is up, _run_ws_loop
